@@ -377,6 +377,9 @@ fn measured_regular(level: &str, diff: u32, dist: f32, weapon: u32) -> Option<Ta
 /// join-reds-a: re-measured on the stream join (join-final 3c94fa9ea, the same fixed-stream harness):
 /// the cells moved with the joined guard changes (not bisected to one change); the two-sided
 /// chance test above still holds on every cell, and the per-hit pins are unchanged.
+/// aim-stop-root: re-measured once AimStandFire drops the stand's root step (+0x38 [M 0x166328:117-123
+/// → 0x13b490; L 07000011 the guard stops dead on the 0x68 entry]) - the shooter no longer slides
+/// on into Bond on its stop, so the 5-u cells and the d1 20-u approach moved (the chance test holds).
 /// Sister: the old chain (accuracy 5, aggression 0, the pistol at ×1) — its 0x12 cells landed
 /// 8/2/7/11/16/16 at 5/20 u (60 in all) and its 0x0E hits cost half — fails the totals and the per-hit.
 #[test]
@@ -384,9 +387,9 @@ fn hits_per_10s_and_damage_per_hit_are_pinned() {
     if iso().is_none() { eprintln!("NF_ISO not set — skipping"); return; }
     // (archive, level, weapon, raw × +0x100, diff, dist, pinned hits / 10 s)
     const PINS: &[(&str, u32, u32, f32, u32, f32, usize)] = &[
-        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 5.0, 13), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 10.0, 14), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 20.0, 7),
-        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 5.0, 22), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 10.0, 18), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 20.0, 19),
-        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 5.0, 27), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 10.0, 21), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 20.0, 24),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 5.0, 16), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 10.0, 14), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 20.0, 14),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 5.0, 15), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 10.0, 18), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 20.0, 19),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 5.0, 21), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 10.0, 21), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 20.0, 24),
         ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 1, 5.0, 0), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 2, 5.0, 4), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 3, 5.0, 4),
         ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 5.0, 2), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 10.0, 0), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 20.0, 1),
         ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 5.0, 1), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 10.0, 1), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 20.0, 1),

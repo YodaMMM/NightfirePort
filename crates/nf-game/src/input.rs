@@ -357,6 +357,19 @@ impl PadDriver {
         let newly = pad.buttons & !self.prev_buttons;
         self.prev_buttons = pad.buttons;
         let mut input = Input::default();
+        // The move axes [M Player_Move 0x191dd0:65-66: `Input_Actionf(slot, 2, 1)` forward and
+        // `Input_Actionf(slot, 1, 1)` strafe, read straight into the forward/side curves]: the
+        // port's Input carries those two actions as they are (the keyboard writes ±1 into the
+        // same fields; strafe + = toward A / stick left, action 1 = −LX in style 0).
+        input.forward = a[2];
+        input.strafe = a[1];
+        // Weapon and gadget switching [M Player_Weapon 0x1a24c8:232-267, mode 4 = the newly-pressed
+        // read]: action 0x10 / 0xf step the weapons (Player_WeaponChange kind 0, ids 0..0x48) and
+        // 0xb / 0xa the gadgets (kind 1, 0x49..0x5f) [M Player_WeaponChange 0x1a6f80:66-94]; the
+        // first of each pair wins, like the game's if/else.
+        let edge = |act: u8| a[act as usize] != 0.0 && newly & self.mask_of(pad, act) != 0;
+        input.weapon_cycle = if edge(0x10) { 1 } else if edge(0xf) { -1 } else { 0 };
+        input.gadget_cycle = if edge(0xb) { 1 } else if edge(0xa) { -1 } else { 0 };
         // Style 0's button actions [M the case 0 table; the port's conventions: 7 jump, 8 crouch,
         // 9 fire, 19 (0x13) aim mode]. Jump/crouch press on the newly-pressed edge, like the
         // keyboard path and the game's +0x120 "newly pressed" word [M ps2_handle_pad 0x10c738:89].
@@ -434,6 +447,52 @@ mod tests {
     /// The dead zone's exact outputs [M 0x10ca78:38-55, f32 arithmetic: threshold 40, scale
     /// 1.4597701, trunc-then-char-wrap]. G-012: the raw byte exists only between `scePadRead`
     /// and this loop — the code pins the behaviour the live check would observe.
+    /// The left stick walks: actions 2 and 1 reach `Input::forward` / `Input::strafe` [M Player_Move
+    /// 0x191dd0:65-66], with style 0's signs (act 2 = −LY: stick up is forward; act 1 = −LX: stick
+    /// left is +, the keyboard's A) [M psiInput_MapInputs 0x10cd80 case 0, styles_gen act 1/2].
+    #[test]
+    fn the_left_stick_moves_bond() {
+        let cfg = PadConfig { curve: (0..=128u32).map(|i| (i * 2).min(255) as u8).collect(), style: 0, invert_look: false, player0: true };
+        let tuning = nf_formats::tuning::Tuning::default();
+        let run = |lx: u8, ly: u8| {
+            let mut d = PadDriver::new(cfg.clone());
+            let pad = PadState { buttons: 0, rx: 0x7f, ry: 0x7f, lx, ly, connected: true };
+            d.tick(&pad, &tuning, 1.0, false, false).0
+        };
+        let up = run(0x7f, 0);
+        assert!(up.forward > 0.5 && up.strafe == 0.0, "stick up walks forward: {:?}", (up.forward, up.strafe));
+        assert!(run(0x7f, 255).forward < -0.5, "stick down walks back");
+        let left = run(0, 0x7f);
+        assert!(left.strafe > 0.5 && left.forward == 0.0, "stick left strafes toward A: {:?}", (left.forward, left.strafe));
+        assert!(run(255, 0x7f).strafe < -0.5, "stick right strafes toward D");
+        let still = run(0x7f, 0x7f);
+        assert_eq!((still.forward, still.strafe), (0.0, 0.0), "the centred stick inside the dead zone is still");
+    }
+
+    /// The pad's d-pad weapon/gadget steps on the press edge only [M Player_Weapon 0x1a24c8:232-267
+    /// mode 4]: style 0 maps 16 = Right|L2, 15 = Left, 11 = Up, 10 = Down [M psiInput_MapInputs case 0].
+    #[test]
+    fn the_dpad_steps_weapons_and_gadgets_on_the_press() {
+        let cfg = PadConfig { curve: (0..=128u32).map(|i| (i * 2).min(255) as u8).collect(), style: 0, invert_look: false, player0: true };
+        let tuning = nf_formats::tuning::Tuning::default();
+        let mut d = PadDriver::new(cfg);
+        let mut press = |buttons: u16| {
+            let pad = PadState { buttons, rx: 0x7f, ry: 0x7f, lx: 0x7f, ly: 0x7f, connected: true };
+            let i = d.tick(&pad, &tuning, 1.0, false, false).0;
+            (i.weapon_cycle, i.gadget_cycle)
+        };
+        assert_eq!(press(0x2000), (1, 0), "Right: next weapon");
+        assert_eq!(press(0x2000), (0, 0), "held: no repeat");
+        assert_eq!(press(0), (0, 0));
+        assert_eq!(press(0x8000), (-1, 0), "Left: previous weapon");
+        assert_eq!(press(0), (0, 0));
+        assert_eq!(press(0x1), (1, 0), "L2: next weapon too");
+        assert_eq!(press(0), (0, 0));
+        assert_eq!(press(0x1000), (0, 1), "Up: next gadget");
+        assert_eq!(press(0), (0, 0));
+        assert_eq!(press(0x4000), (0, -1), "Down: previous gadget");
+    }
+
     #[test]
     fn dead_zone_matches_the_decomp_constants() {
         // (raw, dead-zoned): centre, the ±40 thresholds (inside -> 0, first step -> ±1), the

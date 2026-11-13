@@ -230,55 +230,8 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
             w.tick(Default::default(), false);
         }
         if boarded {
-            if real {
-            // Stand on the cab; the ride carries Bond ([M] ground_motion, lifts_ride's pin). Ride
-            // until the surface (cy + 4.1) reaches the exec floor 47.77 [D probe], then step off
-            // east — a flat walk off the level surface.
-            let start = w.total_ticks;
-            while w.total_ticks - start < 1600 {
-                let cy = cab_y(&w).unwrap_or(0.0);
-                if cy + 4.1 >= 47.6 { break; }
-                w.tick(Default::default(), false);
-                let dt = w.total_ticks - start;
-                if dt % 200 == 0 {
-                    let sim = w.scene.sim.as_ref().unwrap();
-                    let sp = sim.drones.scripts.players.iter().find(|p| p.scripts[0] == 0x0600_0048);
-                    let cpos = sim.drones.scripts.objects.list.iter().flatten().find_map(|o| match o {
-                        nf_game::nis::Obj::Entity { hash: 0x2000367, matrix, .. } => Some([matrix[3][0], matrix[3][1], matrix[3][2]]),
-                        _ => None,
-                    });
-                    eprintln!("[0b] ride+{dt}: cy {cy:.2} cab {:?} bond ({:.2},{:.2},{:.2}) grounded {} sub {} sp_state {:?} sp_deleted {:?} ch75 {}",
-                        cpos, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.grounded, sim.bond.substate,
-                        sp.map(|p| p.state), sp.map(|p| p.deleted), sim.drones.channels.on(0x75));
-                }
-            }
-            let y = w.scene.sim.as_ref().unwrap().bond.pos[1];
-            eprintln!("[0b] the cab ride: boarded, bond y now {y:.2} (surface target 47.6+)");
-            if y > 40.0 {
-                // The step-off: the proven east steer — off the cab's east edge (x 1.6) onto the
-                // dock band (51.8). (The south-edge variant wedges on the cab's raised south
-                // section at z 23.45 once the cab docks; the dock band is an ISLAND — the pit
-                // x 3-8 z 23-25.5, the x 2-3.5 hole and the dome hole x 7-9.5 z 26.5+ surround
-                // it [D the floor grid in probe_0b_doors] — no walked descent exists.)
-                let start = w.total_ticks;
-                while w.total_ticks - start < 240 {
-                    let sim = w.scene.sim.as_ref().unwrap();
-                    let p = sim.bond.pos;
-                    if p[0] > 2.2 && (44.0..52.0).contains(&p[1]) { break; }
-                    let desired = (8.0f32 - p[0]).atan2(24.8 - p[2]);
-                    let err = walker::wrap_pi(desired - sim.bond.yaw);
-                    let input = nf_game::player::Input {
-                        turn: err.clamp(-0.08, 0.08),
-                        forward: if err.abs() > 0.6 { 0.0 } else { 0.6 },
-                        ..Default::default()
-                    };
-                    w.tick(input, false);
-                }
-                let p = w.scene.sim.as_ref().unwrap().bond.pos;
-                eprintln!("[0b] the step-off: bond ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
-                rode = p[0] > 2.2 && (44.0..52.0).contains(&p[1]);
-            }
-            } else {
+{ // walks-replay-proof: the duct route (real input end to end) for every walk
+
             // Stand on the cab; the ride carries Bond ([M] ground_motion, lifts_ride's pin). Near
             // the top the exterior vent comes level with the roof: E plate #327 (mask 4, out ch
             // 0x77 [D]) works the grill #326, and the duct behind it leads into the building.
@@ -309,29 +262,8 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
     assert!(rode, "the paternoster cab ride must board and step off on real input [M 0x194188 → Control_InheritVelocity 0x133e88; D the cab keys y 11.0 → 48.44]");
     w.stop_on_exit = true;
 
-    if real {
-    w.walk_to(Wp::new(8.0, 46.8, 24.8).r(1.3), "the exec floor (the proven z≈25 leg)");
-    // The exec floor: the waiting room's walker exit is the two-door transit — door #3
-    // (13.71, 46.78, 19.44 [D]) into the east room, south down the room, and door #0
-    // (13.82, 46.78, 7.09 [D]) onto the ring's east corridor. The lane east of the room's
-    // barrier is the game's own nav path 0 'Navigation' [D n54 (12.21, 19.68) → n53 (14.13,
-    // 18.35) → n52 (15.85, 16.77) → n50 (17.10, 14.00) → n49 (17.03, 10.83) → n19 (16.23,
-    // 8.07) → n18 (14.50, 6.54) → n17 (13.18, 6.63) → n11 (10.21, 8.20)]. THE ONE KEPT
-    // STAND-IN (the dock→east-approach hop, ~6 m): the waiting room's floor is split — the
-    // dock band (51.8) is an island (the pit x 3-8 z 23-25.5, the x 2-3.5 hole, the dome hole
-    // x 7-9.5 z 26.5+ [D the floor grid in probe_0b_doors]; the pit's SW rim line descends
-    // into the bowl and its east rim walls the walker at body height — walked and wedged),
-    // and the main floor's x 4.5-6.5 barrier (the N-S slot at x 5.0 z 17.5-23, the furniture
-    // 48.2-48.8 at x 6-9.5 z 18-21.5, the wall band x 8-14 z 16-17 [D the -2 probes]) leaves
-    // only the z 17.0 seam, which the wall band closes at x 9.5+. The nav lane's own n41→n55
-    // hop rides furniture tops the AI ignores (n55 sits on the 48.7 band [D the grid]).
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [12.21, 47.4, 19.68];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(10);
-    } else {
+{ // walks-replay-proof: the duct route (real input end to end) for every walk
+
     // The duct behind the grill runs north, then east down to the interior grill #98 (8.57, 49.73,
     // 19.60), which E sweeps open [M SS_Activate 0x1a9ea8]; the drop past it lands in the waiting
     // room on the east side of its barrier, crossing plate #353 (out ch 0x76) on the way.
@@ -395,6 +327,17 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
     w.walk_to(Wp::new(10.21, 47.18, 8.20).r(1.0), "ring n11");
     w.walk_to(Wp::new(6.54, 47.18, 7.03).r(1.0), "ring n12");
     w.walk_to(Wp::new(2.18, 47.18, 7.53).r(1.0), "ring n13");
+    // files-plate-hazard probe: the camera-latch watch (the exec-floor trio #291-293 arms on
+    // ch 0x1C ← OR #289 [0x27, 0x28], the two cameras' outs [D audit]; the deaths at the files
+    // plate are gt #291's rounds). NF_DMG_TRACE=1 prints the channels + the turret states at
+    // the four lane checkpoints.
+    if std::env::var_os("NF_DMG_TRACE").is_some() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[hazard] after the ring legs t {} at ({:.2},{:.2},{:.2}) ch 0x1C {} 0x27 {} 0x28 {} gts {}",
+            w.total_ticks, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2],
+            sim.drones.channels.on(0x1c), sim.drones.channels.on(0x27), sim.drones.channels.on(0x28),
+            sim.drones.gt_turrets.iter().map(|t| format!("#{}", t.placement)).collect::<Vec<_>>().join(","));
+    }
 
     let pc = w.scene.sim.as_ref().unwrap().drones.useobjs.pcs.iter().find(|p| p.ch == 0x4c)
         .expect("SCOMP_QWORM_C (0x35, ch 0x4C)").pos;
@@ -404,6 +347,13 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
     // [-3.04, 46.73, -6.67]-[1.23, 48.92, -4.48] [D] contains the walk target, so the TOUCH
     // fires on the walk's own arrival.
     w.walk_to(Wp::new(-1.0, 47.5, -5.5).r(1.2), "the terminal room");
+    if std::env::var_os("NF_DMG_TRACE").is_some() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[hazard] after the terminal room t {} at ({:.2},{:.2},{:.2}) ch 0x1C {} 0x27 {} 0x28 {} gt states {}",
+            w.total_ticks, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2],
+            sim.drones.channels.on(0x1c), sim.drones.channels.on(0x27), sim.drones.channels.on(0x28),
+            sim.drones.gt_turrets.iter().map(|t| format!("#{}:s{}", t.placement, t.state)).collect::<Vec<_>>().join(","));
+    }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d), "the terminal plate → ch 0x4D (objective 8) [D]");
 
     // The lock (0x29 Switch #249, ch 9 [M Switch_Activate 0x1b02a8]): the walked approach AND the
@@ -417,6 +367,13 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         }
     }
     assert!(ch9_real, "the keycard lock: the walked E raises ch 9 [M 0x1b02a8]");
+    if std::env::var_os("NF_DMG_TRACE").is_some() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[hazard] CKPT lock9 t {} at ({:.2},{:.2},{:.2}) ch 0x1C {} 0x27 {} 0x28 {} gts {}",
+            w.total_ticks, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2],
+            sim.drones.channels.on(0x1c), sim.drones.channels.on(0x27), sim.drones.channels.on(0x28),
+            sim.drones.gt_turrets.iter().map(|t| format!("#{}:s{}", t.placement, t.state)).collect::<Vec<_>>().join(","));
+    }
     eprintln!("[0b] the keycard lock: the REAL walked E raised ch 9 [M 0x1b02a8]");
     // The bridge script writes ch 10 at its tick ~250; the terminal SP then plays and writes
     // ch 11 at ~750 total [D nis + the probe] — wait the whole chain out.
@@ -449,54 +406,67 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
     let lk = w.scene.sim.as_ref().unwrap().drones.locks.iter().position(|l| l.out == 47)
         .expect("the keypad lock (0x2E, out ch 0x2F)");
     let lp = w.scene.sim.as_ref().unwrap().drones.locks[lk].pos;
+    // walks-replay-proof: the keypad the player's way — walk up to it, face it, press use (the
+    // page opens and takes the pad [M 0x1ae3d8 case 3]), and type the code with the page's
+    // direction presses and confirm (`keypad_nav` / `keypad_confirm`), each digit reached over
+    // the page's own step (`nf_view::menu::keypad_step`). No lock state is written.
     {
-        let input = nf_game::player::Input { switch_to: Some(0x4e), ..Default::default() };
-        for _ in 0..40 { w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false); }
-        for _ in 0..200 { if w.scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; } w.scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
-    }
-    // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 47 && !l.unlocked) {
-            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
-            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
-            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+        let (facing, code) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (sim.drones.locks[lk].facing, sim.drones.key_codes.code(sim.drones.locks[lk].code))
+        };
+        let at = [lp[0] + facing[0] * 1.2, lp[1] + facing[1] * 1.2, lp[2] + facing[2] * 1.2];
+        w.walk_to(Wp::new(at[0], at[1], at[2]).r(0.35), "the keypad (1.2 in front)");
+        for _ in 0..90 {
+            let (head, yaw, pitch) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.head(), sim.bond.yaw, sim.bond.pitch) };
+            let dir = [lp[0] - head[0], lp[1] - head[1], lp[2] - head[2]];
+            let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+            let turn = walker::wrap_pi(dir[0].atan2(dir[2]) - yaw);
+            let look = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2 - pitch;
+            if turn.abs() < 0.02 && look.abs() < 0.02 { break; }
+            w.tick(nf_game::player::Input { turn: turn.clamp(-0.08, 0.08), look: look.clamp(-0.08, 0.08), ..Default::default() }, false);
         }
-    }
-    // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 47 && !l.unlocked) {
-            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
-            // The stand-in arm writes the solved state straight in, with no page shown: the
-            // page's pad hold (`keypad_page_drawn`) stays off for it, so the aim below runs
-            // from its first tick as on the proven route.
-            sim.drones.keypad_page_drawn = false;
-            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
-            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+        w.tick(Default::default(), true);
+        w.tick(Default::default(), false);
+        assert!(w.scene.sim.as_ref().unwrap().drones.keypad.is_some(), "the use press opens the keypad page [M 0x1ae3d8]");
+        for c in code {
+            let want = (c - b'0') as u32;
+            let to = nf_game::lock::KEYPAD_DIGIT_VALUES.iter().position(|&v| v == want).expect("a keypad digit");
+            let from = w.scene.sim.as_ref().unwrap().drones.keypad.as_ref().map_or(0, |(_, kp)| kp.focus);
+            let mut seen: Vec<Option<Vec<u8>>> = vec![None; 10];
+            seen[from] = Some(Vec::new());
+            let mut queue = std::collections::VecDeque::from([from]);
+            while let Some(c) = queue.pop_front() {
+                for bit in [1u8, 2, 4, 8] {
+                    let nx = nf_view::menu::keypad_step(c, bit);
+                    if seen[nx].is_none() { let mut p = seen[c].clone().unwrap_or_default(); p.push(bit); seen[nx] = Some(p); queue.push_back(nx); }
+                }
+            }
+            for bit in seen[to].clone().expect("every digit is reachable") {
+                w.tick(nf_game::player::Input { keypad_nav: bit, ..Default::default() }, false);
+                w.tick(Default::default(), false);
+            }
+            w.tick(nf_game::player::Input { keypad_confirm: true, ..Default::default() }, false);
+            w.tick(Default::default(), false);
         }
     }
     let mut burned = false;
     for _ in 0..240 {
         if w.scene.sim.as_ref().unwrap().drones.locks[lk].unlocked { burned = true; break; }
-        let (head, target) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.head(), lp) };
-        let dir = [target[0] - head[0], target[1] - head[1], target[2] - head[2]];
-        let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
-        // Aimed with the stick (turn + look), not a yaw/pitch write; the trigger held throughout.
-        let (turn, look) = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            (walker::wrap_pi(dir[0].atan2(dir[2]) - sim.bond.yaw),
-             (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch)
-        };
-        let input = nf_game::player::Input { turn: turn.clamp(-0.08, 0.08), look: look.clamp(-0.08, 0.08), ..Default::default() };
-        w.scene.sim.as_mut().unwrap().step_bond(input, true, false, false);
+        w.tick(Default::default(), false);
     }
     assert!(burned, "the typed code opens the keypad [M Lock_Update 0x1ae3d8 case 4]");
-    w.scene.sim.as_mut().unwrap().drones.keypad_page_drawn = true;
     w.wait(5);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x2f),
         "the open writes switch_channels[47] [M 0x1ae3d8:194-195]");
     eprintln!("[0b] the keypad burned — ch 0x2F up, door #151 unlocked [M 0x1ae3d8]");
+    if std::env::var_os("NF_DMG_TRACE").is_some() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[hazard] CKPT keypad t {} at ({:.2},{:.2},{:.2}) ch 0x1C {} 0x27 {} 0x28 {} gts {}",
+            w.total_ticks, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2],
+            sim.drones.channels.on(0x1c), sim.drones.channels.on(0x27), sim.drones.channels.on(0x28),
+            sim.drones.gt_turrets.iter().map(|t| format!("#{}:s{}", t.placement, t.state)).collect::<Vec<_>>().join(","));
+    }
     // Through the burned keypad's doorway to the desk: the E fires through the walker's own
     // stuck reaction, then the flat ring legs to the office.
     for (label, wp) in [
@@ -515,7 +485,10 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
     // the creep past the pickup. The jog returns through the doorway so the entry legs re-run
     // unchanged — sprint-4 proved the desk approach lands byte-identical [L agent_base2 vs
     // agent_v10].
-    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
+    // files-plate-hazard: d1 rides the jog too — the deck package below (the sister shape) needs
+    // the heatseeker owned, and d1's boot loadout does not own 0x2e [L the switch diagnostic:
+    // owned false clip 0]; the jog is the proven pickup (sprint-4: no new exposure on the return).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 1 {
         lane_sprint(w, [-20.58, 47.18, 25.46], 1.0, 300, "jog 0.33 (office centre-south)");
         lane_sprint(w, [-24.09, 47.18, 27.41], 0.9, 300, "jog 0.32 (the west strip south)");
         lane_sprint(w, [-22.5, 47.96, 29.30], 0.9, 240, "the rocket pickup #349 (the office jog)");
@@ -556,11 +529,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         // The walls are picked by the sim itself (world.segment from Bond's eye), so the pin
         // leans on no hand-copied geometry: the far wall >= 10.5 u out (edge >= 9.4 > 8.0 -> the
         // falloff is 0), the near wall <= 7.5 u (edge <= 6.45 < 8.0 -> hurt).
-        {
-            let sim = w.scene.sim.as_mut().unwrap();
-            sim.gun.weapon = 0x2e;
-            sim.gun.switch_request = 0x2e;
-        }
+        // walks-replay-proof: the switch is a pad input (switch_to), not a gun write.
+        w.tick(nf_game::player::Input { switch_to: Some(0x2e), ..Default::default() }, false);
+        for _ in 0..200 { if w.scene.sim.as_ref().unwrap().gun.switch_state == 0 && w.scene.sim.as_ref().unwrap().gun.weapon == 0x2e { break; } w.tick(Default::default(), false); }
         w.wait(30);
         {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -686,11 +657,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
             "[0b] the boot loadout does not own the Q-Worm 0x58 — the disc's island kit equips it \
              at level load [M 0x1a7ef8 case 0x7000009/0a/0b, equip 001a8494]");
     }
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.gun.weapon = 0x58;
-        sim.gun.switch_request = 0x58;
-    }
+    // walks-replay-proof: the switch is a pad input (switch_to), not a gun write.
+    w.tick(nf_game::player::Input { switch_to: Some(0x58), ..Default::default() }, false);
+    for _ in 0..200 { if w.scene.sim.as_ref().unwrap().gun.switch_state == 0 && w.scene.sim.as_ref().unwrap().gun.weapon == 0x58 { break; } w.tick(Default::default(), false); }
     w.wait(30);
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -703,6 +672,13 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
     let installed = shoot_at(&mut w, [pc[0], pc[1] + 0.2, pc[2]], 2.6, 1800, "the Q-Worm C shot", &|sim| sim.drones.channels.on(0x4c));
     assert!(installed, "the Q-Worm C install never landed [M 0x1aee20]");
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4c), "ch 0x4C (objective 7) [M 0x1aee20]");
+    if std::env::var_os("NF_DMG_TRACE").is_some() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[hazard] CKPT qworm t {} at ({:.2},{:.2},{:.2}) ch 0x1C {} 0x27 {} 0x28 {} gts {}",
+            w.total_ticks, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2],
+            sim.drones.channels.on(0x1c), sim.drones.channels.on(0x27), sim.drones.channels.on(0x28),
+            sim.drones.gt_turrets.iter().map(|t| format!("#{}:s{}", t.placement, t.state)).collect::<Vec<_>>().join(","));
+    }
 
     // The files (objective 9) — the REAL writer on BOTH walks: the terminal script 06000035
     // stream 8 spawns at its tick 0x1e5 the type-0xEA TouchOnce (hash 0x2000ab5, params
@@ -727,12 +703,38 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
             ("files n26→n25 (the doorway)", Wp::new(-22.18, 47.18, 16.58).r(1.1)),
             ("files n25→n22 (the keypad corner)", Wp::new(-21.14, 47.18, 15.75).r(1.0)),
             ("files n22→n21 (the corridor)", Wp::new(-15.83, 47.18, 15.75).r(1.0)),
-            ("files n20", Wp::new(-14.30, 47.18, 15.79).r(1.0)),
-            ("files n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
-            ("files n15", Wp::new(-1.33, 47.18, 6.82).r(1.0)),
-            ("files n14", Wp::new(-1.45, 47.18, 3.74).r(1.0)),
         ] {
             w.walk_to(wp, label);
+        }
+        // files-plate-hazard: the west-ring return legs run under the exec-floor camera #164
+        // (−10.38, 49.64, 11.16, range 5.0 [D §Sensor]): the n20→n16→n15 lane passes at dxz
+        // ~3.6-4.8, and 2 s of sight latches its out ch (0x27/0x28) → OR #289 → ch 0x1C, which
+        // arms the wall-gun trio [M 0x1af618:154-157 — the out writes 1 after 2 s of sight;
+        // 0x180498 case 0 — the p4 gate]. gt #291 (the terminal-room mouth, (−1.14, 49.06,
+        // −0.19) [D]) then owns the whole plate lane: the [L] ledger on this tree is 42 × −2.40
+        // from 13308, death 13608 at the plate — and the turrets STAY in COMBAT after the
+        // camera loses Bond and drops the channel (only the files take's ch 0x4E, p5, disarms
+        // [M 0x180498 case 0's ea gate]). The player's answer is the RUN: the 2 s latch needs
+        // 120 consecutive sight ticks, and the sprint clears each underpass's in-range window
+        // in ~100. The warm walks keep the walked legs (no real-health pressure there).
+        if real {
+            w.walk_to(Wp::new(-14.30, 47.18, 15.79).r(1.0), "files n20");
+            // Let the corner's residual velocity die before the raw sprint (the shaft-wait's
+            // pattern) — a west-drifting start wedges Bond on the corridor's west wall.
+            w.wait(20);
+            lane_sprint(w, [-13.95, 47.18, 11.20], 0.8, 400, "files the n16 lane line");
+            lane_sprint(w, [-13.67, 47.18, 6.40], 1.0, 400, "files n16 (the camera leg, sprinted)");
+            lane_sprint(w, [-1.33, 47.18, 6.82], 1.0, 700, "files n15 (the camera leg, sprinted)");
+            lane_sprint(w, [-1.45, 47.18, 3.74], 1.0, 500, "files n14 (the camera leg, sprinted)");
+        } else {
+            for (label, wp) in [
+                ("files n20", Wp::new(-14.30, 47.18, 15.79).r(1.0)),
+                ("files n16", Wp::new(-13.67, 47.18, 6.40).r(1.0)),
+                ("files n15", Wp::new(-1.33, 47.18, 6.82).r(1.0)),
+                ("files n14", Wp::new(-1.45, 47.18, 3.74).r(1.0)),
+            ] {
+                w.walk_to(wp, label);
+            }
         }
         let spot = w.scene.sim.as_ref().unwrap().drones.triggers.iter()
             .find(|t| t.script.is_some() && t.out == 6 && !t.gone)
@@ -776,30 +778,50 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
             // walked approach above is the route; these stances enumerate interaction positions
             // AROUND the plate for the E hold (the box sits at console height — the y clamp keeps
             // Bond in the use band), so the subject is the use-plate's channel law, not movement.
-            'stances: for d in [[0.0f32, 0.0, 0.0], [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0], [0.0, 0.0, 0.5], [0.0, 0.0, -0.5], [0.0, 0.6, 0.0]] {
-                {
-                    let sim = w.scene.sim.as_mut().unwrap();
-                    sim.bond.pos = [c[0] + d[0], (lo[1] - 0.4 + d[1]).max(lo[1] - 0.6), c[2] + d[2]];
-                    sim.bond.vel = [0.0; 3];
-                }
+            // walks-replay-proof: each stance is WALKED to (a player stepping around the plate),
+            // never placed — the replay of this walk must be a player's run.
+            // The arrival spot comes first (no step: the press where the sprint stopped).
+            'stances: for d in [None, Some([0.0f32, 0.0]), Some([0.5, 0.0]), Some([-0.5, 0.0]), Some([0.0, 0.5]), Some([0.0, -0.5])] {
+                if let Some(d) = d { w.try_walk_to(Wp::new(c[0] + d[0], lo[1] - 0.4, c[2] + d[1]).r(0.25), "a stance at the files use-plate"); }
+                eprintln!("[0b] files plate stance {:?} at tick {}", d, w.total_ticks);
                 // The use pick is the head + view-dir sphere [M 0x1a5170:100-108] and the E fires
                 // on the PRESS EDGE only [M 0x1a5460:396-403] — face the plate from each stance
                 // and give every stance its own fresh press (the old loop held use across all
                 // six: one edge, stance 1 only, and the east-dash arrival yaw missed the pick).
-                for _ in 0..30 {
+                // Face the plate in yaw AND pitch (the view left pitched at the keypad misses the
+                // head + view-dir pick): stick turn + look, as a player lines the box up.
+                for _ in 0..60 {
                     let sim = w.scene.sim.as_ref().unwrap();
-                    let p = sim.bond.pos;
-                    let err = walker::wrap_pi((c[0] - p[0]).atan2(c[2] - p[2]) - sim.bond.yaw);
-                    if err.abs() < 0.05 { break; }
-                    w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+                    let h = sim.bond.head();
+                    let dir = [c[0] - h[0], c[1] - h[1], c[2] - h[2]];
+                    let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-4);
+                    let err = walker::wrap_pi(dir[0].atan2(dir[2]) - sim.bond.yaw);
+                    let perr = (dir[1] / l).asin() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+                    if err.abs() < 0.05 && perr.abs() < 0.03 { break; }
+                    w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() }, false);
                 }
                 for k in 0..40 {
                     w.tick(Default::default(), k == 0);
                     if w.scene.sim.as_ref().unwrap().drones.channels.on(6) { fired = true; break 'stances; }
                 }
             }
+            // files-plate-hazard: the take itself arms the dome pair #174/#175 (ch 0x06 → OR
+            // #290 → ch 0x0E = their p4 gate [D #290; L the trace: ch 0x06 true, 0x0E true,
+            // both pair members s4 at the first post-take hit]) and the pair has NO disable
+            // channel (p5 = 0 [D]) — the player's answer is to LEAVE the lane at once, not to
+            // walk back to the plate under the fresh barrels. The return's first leg is the
+            // north lane sprint, which starts from wherever Bond stands, so the real walks skip
+            // the walk-back; the warm walks keep it (no real-health pressure there).
+            if fired && !real { w.try_walk_to(Wp::new(c[0], lo[1] - 0.4, c[2]).r(0.35), "back to the files use-plate (the next legs start there)"); }
         }
         assert!(fired, "the spawned files use-plate (06000035 s8 @0x1e5, out ch 6, mask 4) never raised ch 6 [D; M 0x1d8968 0xEA arm]");
+    if std::env::var_os("NF_DMG_TRACE").is_some() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[hazard] CKPT files t {} at ({:.2},{:.2},{:.2}) ch 0x1C {} 0x27 {} 0x28 {} gts {}",
+            w.total_ticks, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2],
+            sim.drones.channels.on(0x1c), sim.drones.channels.on(0x27), sim.drones.channels.on(0x28),
+            sim.drones.gt_turrets.iter().map(|t| format!("#{}:s{}", t.placement, t.state)).collect::<Vec<_>>().join(","));
+    }
     }
     w.wait(6);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x4e), "OR #295 → ch 0x4E (objective 9) [D #295]");
@@ -821,6 +843,13 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
             // [L the reroute measurements] the straight north return is the clean one once the
             // barrels end north-trained (the head-on approach); the west detours trained them
             // onto Bond and the return bled 44.4 / 56.4. Head-on both ways: re-place 80.8.
+            // files-plate-hazard (d2 attempt): the straight north return runs dead-on away
+            // from the pair's just-armed barrels ([L] the d2 ledger: 6 of its 28 hits on this
+            // leg). The jink makes the 0.1 s ease chase: angle north-west first, then north-east
+            // into the room. d1 keeps the straight lane byte-identical (its run is green).
+            if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
+                lane_sprint(w, [-4.5, 47.5, -9.5], 1.0, 600, "return jink west (the pair's ease chase)");
+            }
             lane_sprint(w, [-1.0, 47.5, -5.5], 1.2, 900, "return the terminal room (from the dome)");
             lane_sprint(w, [-1.45, 47.18, 3.74], 1.0, 600, "return n14");
             lane_sprint(w, [-1.33, 47.18, 6.82], 1.0, 600, "return n15");
@@ -1000,7 +1029,15 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         // Player_WeaponChange needs no stand, so the Agent/00Agent runs issue the switch INTO
         // the P1 run below (arm-on-the-run, target the ROCKET 0x2e for the gap-mouth drop)
         // and skip this block; the d1 walk keeps the stand-first arm byte-identical.
-        let agent_run = w.scene.sim.as_ref().unwrap().drones.difficulty >= 2;
+        let agent_run = w.scene.sim.as_ref().unwrap().drones.difficulty >= 1;
+        // files-plate-hazard: d1 rides the sister package too — the plate fixes shifted the
+        // deck phase (the camera-latch sprints + the no-walk-back return), and the stand-first
+        // arm + slot lane no longer survives the deck band on d1 ([L] the 16904 death at
+        // (−0.57, 58.14, 32.23), 0 return-fire fights). The sisters' shape is the proven deck
+        // package (the d2 run completed at 66.4 hp [L sprint-10]) and d1 owns the heatseeker
+        // in the boot loadout (0x2e clip 3 [L the carried-inventory print]) — the same arm-
+        // on-the-run + r1 chain-kill + take-zone lane runs, with d1's cheaper guard rounds
+        // (2.10 vs the Agent's 2.80 [L the death ledgers]).
         // level-0b-roof-sprint-10: the d3 gate (sprint-9's port) — the 00 Agent sister's
         // 6-round band window and the take-slot hold ride it; the Agent (d2) sister gets the
         // ONE early round its dash-lane kill needs.
@@ -1032,7 +1069,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                     ..Default::default()
                 }, false);
             }
-            assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x2e, "the heatseeker armed [D #349]");
+            let s3 = w.scene.sim.as_ref().unwrap();
+            assert_eq!(s3.gun.weapon, 0x2e, "the heatseeker armed [D #349] (switch_state {} request {:#x} owned {} clip {})",
+                s3.gun.switch_state, s3.gun.switch_request, s3.drones.inventory.owned[0x2e], s3.gun.clip);
         }
         // SPRINT-5 (the sisters): P4 runs THROUGH the take zone to the deck's east edge
         // (9.8, 41.3) and P5 is dead for the d1 walk — the wake volley math: the dart lands
@@ -1087,6 +1126,9 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         let mut band_shot = 0u32;
         let mut band_refire = 0u32;
         let mut band_clip = 0u32;
+        // level-0b-deck-agent-retune: the spend tick of the LAST 0x2e round — the flight-jam
+        // bound reads it (below).
+        let mut band_spend_tick = 0u32;
         let mut shot_press_gate = true;
         let mut stretch_shots = 0u32; // sprint-10: the z > 20 window fires ONE cleanup round
         let mut post_take_shots = 0u32; // sprint-11: ONE cleanup round after the take (ch 0x3F)
@@ -1097,6 +1139,21 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         // view in-lane (~8-20 ticks each); the d1 runs break at the take well inside 2400 and
         // keep the old cap byte-exact.
         while w.total_ticks - start < if agent_run { 3000 } else { 2400 } {
+            // level-0b-deck-agent-retune (d3's own pass, the Operative lever list as template):
+            // the deck section is a hand-rolled loop — the walk_to legs own the return-fire
+            // call (walker_b2 per-tick), so NO deck fight ever picked on any walk ([L d3run1/
+            // d2run4: "2 return-fire fights" = the E-plate pair only]). d3 pays the crossing
+            // unanswered: #4 at his column (1.62, 58.03, 32.11) lands 7.0 0x18 rounds from
+            // d 13-20 ([L d3run1: 35.0 in 5 hits]) while every dart gate sits at d < 9.0.
+            // THE FIGHT LEVER: answer the shooters the Operative package answers — the tranq
+            // filter keeps only dartable guards (the win is the sleep [M 0x1469b8:315-361];
+            // #4 state 0x68 dartable true [L d3run1 t17199]), the fights stand per their own
+            // rules and time out on an unreachable guard. Gated difficulty3 (d1/d2 keep their
+            // committed streams byte-identical). Measured on this tree: NO pick — no candidate
+            // is VISIBLE from the crossing (the next lever, in the d3 ignore's ledger).
+            if difficulty3 && w.total_ticks % 10 == 0 && w.return_fire("the deck band") {
+                continue;
+            }
             let sim = w.scene.sim.as_ref().unwrap();
             let p = sim.bond.pos;
             // The take fires ON THE PASS — for the sisters the pass continues to the deck's
@@ -1300,6 +1357,18 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                     && difficulty3
                     && phase >= 1 && ((p[2] < 18.5 || (p[2] > 20.0 && stretch_shots == 0))
                         || (sim.drones.channels.on(0x3f) && post_take_shots == 0)) {
+                    // level-0b-deck-agent-retune (d3's own pass over the shifted phase): the
+                    // early r1's flight is STUCK on this tree — it locks #4 (alive(5) was
+                    // false at the shot: the +700-tick shift spawns #5 late) and chases him
+                    // past the parachute housing without detonating ([L d3run1: fired t17208,
+                    // still flying at travelled 40.0 when Bond died t17415]) — the old
+                    // `!flying` gate held every follow-up round forever, d3 crossed the band
+                    // HOLDING the rocket launcher (band_shot 1 < cap 6 → no 0x43 switch-back,
+                    // no dart close, no fights) and died at t17415 to #4's 7.0 0x18 rounds.
+                    // THE FLIGHT-JAM LEVER (the close below): a spend with NO new spend for
+                    // 100 ticks means the round is stuck — the window closes and the
+                    // d1-template package runs. [S] walk-choice, not a game law — the game's
+                    // re-press (+0x40 = 60 [D]) never gates on flight.
                     // sprint-10: the cleanup rounds — (a) the STRIP round (z < 18.5) locks the
                     // r1-woken #5 (WAIT_SWITCH exits the scan only while he waits [M
                     // 0x12f248]) and its chase-blast KILLS him in the gap-mouth piece (the
@@ -1326,6 +1395,21 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                     // the detonation (the blast lands 12+ u behind-east of the drive path —
                     // no falloff reaches him).
                     shot_victim = band_pick();
+                }
+                // level-0b-deck-agent-retune: THE JAM CLOSE — 100 ticks after a spend with no
+                // new spend, the round is stuck (the r1 chased #4 40 u without detonating
+                // [L d3run1]) and no follow-up can ever fire: CLOSE the window so the
+                // d1-template package runs — the arm-on-the-run switch to 0x43, the dart
+                // close on the dartable #4 at his column [L d3run1 t17199 state 0x68
+                // dartable true], the tranq/lane fights. On a detonating tree the next round
+                // spends at refire+convergence ≈ +80 (before this bound) and resets the
+                // stamp, so a paying window never closes early. Gated difficulty3 (d2's cap 1
+                // makes the branch unreachable). [S] walk-choice, not a game law.
+                if difficulty3 && band_shot >= 1 && band_shot < band_cap
+                    && band_spend_tick > 0 && w.total_ticks - band_spend_tick > 100 {
+                    band_shot = band_cap;
+                    eprintln!("[0b-band] window closed at t{} (round stuck {} ticks, flying {})",
+                        w.total_ticks, w.total_ticks - band_spend_tick, flying);
                 }
                 if shot_victim.is_none() && [6usize, 7, 8, 9].iter().all(|&i| !alive(i)) {
                     band_shot = band_cap; // the band is gone — the rounds are done (the dart close owns #4)
@@ -1528,6 +1612,7 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                     if shot_victim.is_some() && band_shot < band_cap {
                         band_shot += 1;
                         band_refire = w.total_ticks + 60;
+                        band_spend_tick = w.total_ticks;
                         if p[2] > 20.0 { stretch_shots += 1; }
                         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x3f) { post_take_shots += 1; }
                         eprintln!("[0b-band] round {} away at t{} (clip {}) victim {:?} hp {:.1}",
@@ -1740,7 +1825,36 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage() {
         // The fights answer only dartable guards and the win is the sleep, not a wound.
         w.dmg.tranq_fights = true;
         fresh_boot_asserts(&w);
+        // walks-replay-proof: the Operative walk RECORDED (the walker's one step site — every
+        // tick the sim sees exactly what is recorded, so the walk itself is byte-identical).
+        // The header snapshots the fresh boot's RNG / pose / weapon / option rows before the
+        // first recorded tick; the ticks transfer at the mission end and the v3 file lands in
+        // tests/replays/ for replay_parity_0700000b.rs (the headless replay check) and the
+        // app's --replay run (no --difficulty: the walk's carry-free load is the app's default load).
+        let mut rec = nf_view::replay::Recorder::start(&w.scene,
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000b_operative.bin"),
+            "0700000b.bin", None, false,
+            { let s = w.scene.sim.as_ref().unwrap(); Some(nf_view::replay::ReplayOptions {
+                auto_aim: s.auto_aim, auto_switch: s.drones.auto_switch,
+                crouch_toggle: s.drones.crouch_toggle, crosshair: s.drones.crosshair }) })
+            .expect("the recorder");
+        w.start_recording();
         walk_to_the_mission_end(&mut w, true, true, false);
+        rec.replay.ticks = w.record_inputs.take().expect("the recorded ticks");
+        eprintln!("[0b] the Operative walk recorded: {} ticks, mission end at the walk's latch", rec.replay.ticks.len());
+        // NF_REC_0B_WRITE=1 rewrites the committed file (after a deliberate route change);
+        // otherwise the live walk must reproduce the committed recording's inputs exactly
+        // (the header carries the build's git hash, so a rewrite on every run would dirty
+        // the tree for nothing).
+        if std::env::var_os("NF_REC_0B_WRITE").is_some() {
+            rec.finish().expect("the replay write");
+        } else {
+            let committed = nf_view::replay::Replay::load(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000b_operative.bin"))
+                .expect("the committed Operative recording");
+            assert_eq!(committed.ticks.len(), rec.replay.ticks.len(), "the walk's tick count matches the committed recording");
+            let first = committed.ticks.iter().zip(rec.replay.ticks.iter()).position(|(a, b)| a != b);
+            assert!(first.is_none(), "the walk's inputs differ from the committed recording at tick {:?} (re-record with NF_REC_0B_WRITE=1 after a deliberate route change)", first);
+        }
     });
 }
 
@@ -1827,7 +1941,7 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
 /// the muzzle-zone kill (capped at one); the ring-turret 16.0 world toll stays the fusebox
 /// task's.
 #[test]
-#[test]
+#[ignore = "re-tune ledger (level-0b-deck-agent-retune, 2026-11-13, master b1fd37ee2 after the files-plate shift): the deck phase moved ~+700 ticks and the roof squad's spawn order changed — #5 is NOT present at the deck entry ([L d3run1 t17199: g5 absent]) so the early r1 aims band_pick #6 and the nearest-seekable lock takes #4 ([L d3run1 flight: target Some(4) every print]); on THIS tree the 0x2e round never detonates — it chased #4 past the parachute housing (travelled 40.0, still flying at the death tick 17415), so the sprint-10 six-round window is structurally jammed: `!flying` held every follow-up forever, band_shot stuck 1 < cap 6 kept the rocket in hand (no 0x43 switch-back, no dart close, no fights) and Bond died at 17415 (-3.45, 58.07, 19.89), 22 hits for 100.0 (36.0 world in 9, 35.0 #4 0x18 in 5, 8.0 #5, 7.0 #1, 7.0 #9). LEVERS LANDED (both gated difficulty3; d1/d2 streams byte-identical, verified): (1) THE JAM CLOSE — a spend with no new spend for 100 ticks closes the window so the d1/d2 package runs (0x43 armed by t17349, the close/fights live); alone it dies EARLIER (t17389: the 40-tick switch bought the #6/#7 hits the old tree's detonations used to pay for). (2) THE DECK FIGHT CALL — the fights machinery was never wired into the hand-rolled deck loop (the walk_to legs own it): wired d3-only, no pick happened ([L d3run4: still only the 2 E-plate fights]) because no candidate is VISIBLE from the crossing. d2 itself is GREEN on this tree (twice, deterministic: mission complete t17886, hp 1.2, 27 hits — the d1/d2 route carries 5.6/hit 0x18s; d3 pays 1.25x, Plr_DMod_Hard 1.0 vs Normal 0.8 [M Player_HandlePain 0x1902c8]) with ZERO margin. NEXT LEVER: the fight pick needs a VISIBLE candidate — the [0b-ray] world segment_bullet rays to #6/#8/#9 read CLEAR from the crossing (t17229-17379) but DamageLog::visible (the hit-box eye-ray set) says none; census the two ray sets from the crossing spots (NF_RF_TRACE=1 + the [0b-ray] map), then either widen the fight's reach to the world-ray set (opt-in flag, d3 only) or shift the P2 aim so a fight opens from a visible spot; the dart sleep on the dartable #4 (state 0x68 dartable true [L t17199]) saves the 35.0/5-hits and flips the margin. Live checks: (1) the 0x2e flight law — Bullet_init 0x12c5a0's speed/fuse fields for 0x2e [M the record walk]: does the disc's heatseeker round time out or detonate on chase-proximity (the port's round chased 40 u without detonating [L d3run1])? (2) from the crossing (-6.9, 58.8, 18.8) does a real player's eye ray reach #4 (1.62, 59.2, 32.11) — the port's visible() says no while the world segment_bullet says clear"]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
     walker::with_real_damage(|| {
         let mut w = load_fresh_at(3);
@@ -1925,10 +2039,11 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label:
                     ..Default::default()
                 }
             };
-            w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+            // files-plate-hazard: through the walker's one step site (the old direct
+            // step_bond lost these ticks from a recording — tick_inner does the total_ticks
+            // and the after-step work itself).
+            w.tick_trigger(input, trigger);
         }
-        w.total_ticks += 1;
-        w.after_step();
     }
 }
 

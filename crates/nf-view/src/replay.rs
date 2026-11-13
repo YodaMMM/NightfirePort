@@ -15,7 +15,15 @@ use anyhow::{bail, Context, Result};
 
 // ── magic + version ───────────────────────────────────────────────────────────
 const MAGIC: &[u8; 8] = b"NFREPLAY";
-const VERSION: u16 = 1;
+
+/// v1: the original per-tick lanes. v2: the keypad pad lanes. v3 (walks-replay-proof): the
+/// per-tick cut-scene `skip` bit (bit 7 of the bits byte — v1/v2 writers never set it) and the
+/// player's option rows in the header (the sim-affecting ones: auto aim, weapon auto switch,
+/// crouch toggle, crosshair) so `--replay` runs the recorded session under the recorded
+/// options — a headless Sim defaults `auto_aim: false` where the game's profile defaults ON
+/// [M profile.rs:131], and the same inputs then diverge (measured: the bullets leave in a
+/// different direction from tick 926).
+const VERSION: u16 = 3;
 
 // ── per-tick input ─────────────────────────────────────────────────────────────
 
@@ -38,6 +46,16 @@ pub struct TickInput {
     pub trigger: bool,
     pub reload: bool,
     pub use_key: bool,
+    /// Format v2: the keypad page's pad lanes (`Input::keypad_nav` direction bits, confirm, back) —
+    /// a keypad opened and typed on in a recording replays (walks-replay-proof).
+    pub keypad_nav: u8,
+    pub keypad_confirm: bool,
+    pub keypad_back: bool,
+    /// Format v3: the cut-scene skip press. The app's skip key sets `scripts.skip_request` the
+    /// way a player's press does [M the app's cutscene_skip_key handler], and a walk's
+    /// `skip_cutscenes`/`settle_start_draw` steps carry the same request — the recording must
+    /// carry it or the replayed run sits through scenes the recorded run skipped.
+    pub skip: bool,
 }
 
 impl TickInput {
@@ -55,6 +73,11 @@ impl TickInput {
             aiming: input.aiming,
             zoom: input.zoom,
             trigger, reload, use_key,
+            keypad_nav: input.keypad_nav, keypad_confirm: input.keypad_confirm, keypad_back: input.keypad_back,
+            // The skip press is not an Input lane (it is the scripts' request flag, applied by
+            // the feed — the app's skip key, settle_start_draw_rec, or a walk's skip_cutscenes);
+            // a recorder that carries it sets the field on the TickInput afterwards.
+            skip: false,
         }
     }
 
@@ -83,11 +106,10 @@ impl TickInput {
             zoom_axis: 0.0,
 
         goggles_action: false,
-        // keypad-entry: the page's lanes are live input (the replay format
-        // predates the keypad page; no recording carries them).
-        keypad_confirm: false,
-        keypad_back: false,
-        keypad_nav: 0,
+        // keypad-entry: the page's lanes (format v2; v1 recordings carry none).
+        keypad_confirm: self.keypad_confirm,
+        keypad_back: self.keypad_back,
+        keypad_nav: self.keypad_nav,
     };
         (input, self.trigger, self.reload, self.use_key)
     }
@@ -112,6 +134,31 @@ pub struct TickState {
 
 // ── header ─────────────────────────────────────────────────────────────────────
 
+/// The player's option rows that reach the Sim, recorded in the header (format v3) so a replay
+/// runs under the recorded options. The app's option bank applies these per level load
+/// [M the app's option apply: sim.auto_aim from row 0x1000_011b, drones.auto_switch from
+/// 0x1000_01cb, drones.crouch_toggle from 0x1000_0125, drones.crosshair from 0x1000_0124];
+/// the headless Sim's defaults differ (auto_aim false [M drone.rs], crosshair on), so an
+/// unrecorded replay of a recorded session diverges the moment a bullet fires.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReplayOptions {
+    pub auto_aim: bool,
+    pub auto_switch: bool,
+    pub crouch_toggle: bool,
+    pub crosshair: bool,
+}
+
+impl ReplayOptions {
+    fn to_byte(self) -> u8 {
+        self.auto_aim as u8 | (self.auto_switch as u8) << 1 | (self.crouch_toggle as u8) << 2 | (self.crosshair as u8) << 3
+    }
+    fn from_byte(b: u8) -> ReplayOptions {
+        ReplayOptions {
+            auto_aim: b & 1 != 0, auto_switch: b & 2 != 0, crouch_toggle: b & 4 != 0, crosshair: b & 8 != 0,
+        }
+    }
+}
+
 /// The recording's header: enough to re-create the exact starting state and to identify the build.
 #[derive(Clone, Debug)]
 pub struct Header {
@@ -127,6 +174,8 @@ pub struct Header {
     pub start_weapon: u8,
     pub start_clip: u32,
     pub start_spare: u32,
+    /// Format v3: the player's option rows at record time (`None` in v1/v2 files).
+    pub options: Option<ReplayOptions>,
 }
 
 // ── recording (the parsed file) ────────────────────────────────────────────────
@@ -151,7 +200,7 @@ impl Replay {
         let mut r = Reader::new(buf);
         if r.take(8) != MAGIC { bail!("not an NFREPLAY file (bad magic)"); }
         let version = r.u16();
-        if version != VERSION { bail!("unsupported replay version {version} (expected {VERSION})"); }
+        if version != 1 && version != VERSION { bail!("unsupported replay version {version} (expected 1..={VERSION})"); }
         let flags = r.u16();
         let level = r.string();
         let scenario = (flags & 2 != 0).then(|| r.string());
@@ -161,19 +210,27 @@ impl Replay {
         let bond_yaw = r.f32(); let bond_pitch = r.f32();
         let start_weapon = r.u8();
         let start_clip = r.u32(); let start_spare = r.u32();
+        // Format v3's header carries the option rows (one packed byte, written before the tick
+        // count). v1/v2 files predate it.
+        let options = if version >= 3 { Some(ReplayOptions::from_byte(r.u8())) } else { None };
         let tick_count = r.u32() as usize;
         let mut ticks = Vec::with_capacity(tick_count);
         for _ in 0..tick_count {
             let forward = r.f32(); let strafe = r.f32(); let turn = r.f32(); let look = r.f32();
             let weapon_cycle = r.i8(); let gadget_cycle = r.i8(); let switch_to = r.i16();
             let bits = r.u8();
+            let kp = if version >= 2 { r.u8() } else { 0 };
             ticks.push(TickInput {
                 forward, strafe, turn, look, weapon_cycle, gadget_cycle, switch_to,
                 jump: bits & 1 != 0, crouch: bits & 2 != 0, aiming: bits & 4 != 0,
                 zoom: bits & 8 != 0, trigger: bits & 16 != 0, reload: bits & 32 != 0, use_key: bits & 64 != 0,
+                keypad_nav: kp & 0xf, keypad_confirm: kp & 0x10 != 0, keypad_back: kp & 0x20 != 0,
+                // The skip press rides bit 7; v1/v2 writers never set it (their sessions had no
+                // recorded skip lane), so reading it unconditionally is safe for old files.
+                skip: bits & 128 != 0,
             });
         }
-        Ok(Replay { header: Header { flags, level, scenario, git_hash, rng_x, rng_y, bond_pos, bond_yaw, bond_pitch, start_weapon, start_clip, start_spare }, ticks })
+        Ok(Replay { header: Header { flags, level, scenario, git_hash, rng_x, rng_y, bond_pos, bond_yaw, bond_pitch, start_weapon, start_clip, start_spare, options }, ticks })
     }
 
     /// Serialise to bytes (the inverse of `from_bytes`).
@@ -191,13 +248,17 @@ impl Replay {
         w.f32(self.header.bond_yaw); w.f32(self.header.bond_pitch);
         w.u8(self.header.start_weapon);
         w.u32(self.header.start_clip); w.u32(self.header.start_spare);
+        // Format v3's header byte: the recorded option rows (v1/v2 readers never look here).
+        w.u8(self.header.options.map_or(0, |o| o.to_byte()));
         w.u32(self.ticks.len() as u32);
         for t in &self.ticks {
             w.f32(t.forward); w.f32(t.strafe); w.f32(t.turn); w.f32(t.look);
             w.i8(t.weapon_cycle); w.i8(t.gadget_cycle); w.i16(t.switch_to);
             let bits = t.jump as u8 | (t.crouch as u8) << 1 | (t.aiming as u8) << 2 | (t.zoom as u8) << 3
-                | (t.trigger as u8) << 4 | (t.reload as u8) << 5 | (t.use_key as u8) << 6;
+                | (t.trigger as u8) << 4 | (t.reload as u8) << 5 | (t.use_key as u8) << 6
+                | (t.skip as u8) << 7;
             w.u8(bits);
+            w.u8(t.keypad_nav & 0xf | (t.keypad_confirm as u8) << 4 | (t.keypad_back as u8) << 5);
         }
         w.buf
     }
@@ -210,7 +271,7 @@ impl Replay {
     /// Build a `Replay` from a scene's CURRENT state (the header captures the starting RNG / Bond pose / weapon) and a
     /// fixed list of tick inputs. Used by tests to synthesise a recording without a window (B-5 determinism test).
     pub fn from_scene_and_ticks(scene: &Scene, level: &str, scenario: Option<&str>, dev: bool, ticks: Vec<TickInput>) -> Result<Replay> {
-        let r = Recorder::start(scene, ":memory:", level, scenario, dev)?;
+        let r = Recorder::start(scene, ":memory:", level, scenario, dev, None)?;
         let mut replay = r.replay;
         replay.ticks = ticks;
         Ok(replay)
@@ -228,8 +289,9 @@ pub struct Recorder {
 
 impl Recorder {
     /// Begin a recording. Captures the starting state (RNG, Bond pos/weapon) from the scene NOW — call after the
-    /// scene is loaded and the scenario applied, before the first tick.
-    pub fn start(scene: &Scene, path: &str, level: &str, scenario: Option<&str>, dev: bool) -> Result<Recorder> {
+    /// scene is loaded and the scenario applied, before the first tick. `options` records the player's option
+    /// rows the app applied to this Sim (format v3), so a replay can restore them.
+    pub fn start(scene: &Scene, path: &str, level: &str, scenario: Option<&str>, dev: bool, options: Option<ReplayOptions>) -> Result<Recorder> {
         let sim = scene.sim.as_ref().ok_or_else(|| anyhow::anyhow!("cannot record without a Sim (no level loaded)"))?;
         let header = Header {
             flags: (dev as u16) | (scenario.is_some() as u16) << 1,
@@ -239,6 +301,7 @@ impl Recorder {
             rng_x: sim.drones.rng.x, rng_y: sim.drones.rng.y,
             bond_pos: sim.bond.pos, bond_yaw: sim.bond.yaw, bond_pitch: sim.bond.pitch,
             start_weapon: sim.gun.weapon, start_clip: sim.gun.clip, start_spare: sim.gun.spare,
+            options,
         };
         Ok(Recorder { replay: Replay { header, ticks: Vec::new() }, path: path.to_string() })
     }
@@ -288,9 +351,20 @@ pub fn replay_headless(scene: &mut Scene, replay: &Replay) -> Result<Vec<TickSta
         bail!("replay start mismatch: bond {:?} vs header {:?}", sim.bond.pos, h.bond_pos);
     }
     let mut out = Vec::with_capacity(replay.ticks.len() + 1);
+    // The recorded option rows go on BEFORE the first tick: the replayed run must play under the
+    // options the recorder's session played under (the headless defaults differ).
+    if let Some(o) = replay.header.options {
+        sim.auto_aim = o.auto_aim;
+        sim.drones.auto_switch = o.auto_switch;
+        sim.drones.crouch_toggle = o.crouch_toggle;
+        sim.drones.crosshair = o.crosshair;
+    }
     out.push(snapshot(sim));
     for t in &replay.ticks {
         let (input, trigger, reload, use_key) = t.to_parts();
+        // The cut-scene skip press: the same lane the app's skip key drives (the request is a
+        // scripts flag, not an Input lane, so the replay feed applies it before the step).
+        if t.skip { sim.drones.scripts.skip_request = true; }
         sim.step_bond(input, trigger, reload, use_key);
         out.push(snapshot(sim));
     }

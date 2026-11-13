@@ -182,11 +182,23 @@ fn investigate_stands_down_to_idle_when_nothing_is_found() {
     assert!(entered(&sim, gi, state::IDLE), "no pick, share < 0.66 → Idle 0x04 [M 0x168070 case 3]; log {:x?}", sim.list[gi].log);
     // Sister: with an opponent in sight (the game's `+0x170 != 0`) the pick wins over the idle
     // gate — Investigate leaves for Attack instead [M 0x168070 case 3, `iVar4 != 0` arm].
+    // Investigate's UPDATE calls DroneVision_EnemyLookForOpponent [M 0x168070 case 3 → 0x177ed0],
+    // whose gate is the per-tick sight bit +0x228 & 4 [M 0x177ed0:26-28] — set only behind the
+    // reaction accumulation [M 0x175ef0:41-44] and cleared with the counter reset on the first
+    // pass without held sight [M 0x176a28:200-202]. The old setup (`seen = true`, the
+    // ever-sighted latch) does not reach the gate: corrected to the held-sight state
+    // (guard-castle-chat-gate-3).
     let (mut sim2, g2) = guard_sim(&l);
     let near = bond_near(&sim2, g2, 6.0);
     enter(&mut sim2, &d, g2, state::INVESTIGATE, &near);
     sim2.list[g2].ever_seen = true;
-    sim2.list[g2].seen = true;
+    // The pointer drop makes the vision pass skip the probe (the port's eligible fold [M
+    // 0x176a28:153-179 — the round robin probes opponent-pointer drones]) so the held-sight
+    // state survives to the UPDATE — the game keeps bit 2 (and re-stamps bit 4) on a tick the
+    // round robin did not probe [M 0x175cb8 clears bit 2 only inside the probe].
+    sim2.list[g2].opp_bond = false;
+    sim2.list[g2].los = true;
+    sim2.list[g2].seen_ticks = 600;
     sim2.tick(&d, &near);
     assert!(entered(&sim2, g2, state::ATTACK), "a sighted opponent → Attack 0x56 [M 0x168070 case 3 / EnemyLookForOpponent]; log {:x?}", sim2.list[g2].log);
 }

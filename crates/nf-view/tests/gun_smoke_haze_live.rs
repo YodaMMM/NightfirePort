@@ -72,7 +72,11 @@ fn four_pistol_shots_make_the_games_puffs_at_the_04_start() {
         let fire = t % 10 == 0 && t < 40;
         scene.sim.as_mut().unwrap().step_bond(Input { fire, ..Default::default() }, fire, false, false);
         let sim = scene.sim.as_ref().unwrap();
-        for g in sim.drones.gas.puffs.iter().filter(|g| g.mesh == MUZZLE || g.mesh == IMPACT) {
+        // Bond's puffs only: a guard's own gun smoke (kind 9, `init_gunimp_smoke` at its muzzle)
+        // can land on the same tick once the woken guards see Bond, and is not his.
+        let bp = sim.bond.pos;
+        let near = |g: &nf_game::gas::Gas| g.mesh == IMPACT || ((g.pos[0] - bp[0]).powi(2) + (g.pos[2] - bp[2]).powi(2)).sqrt() < 2.0;
+        for g in sim.drones.gas.puffs.iter().filter(|g| (g.mesh == MUZZLE || g.mesh == IMPACT) && near(g)) {
             // A puff's identity: its mesh + its spawn-time spin draw (unique per Gas_Init).
             let key = (g.mesh, g.spin.to_bits());
             if seen.contains(&key) { continue; }

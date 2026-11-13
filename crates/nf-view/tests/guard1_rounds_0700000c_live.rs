@@ -289,6 +289,15 @@ fn real_health_body() {
     // The ring-corner stands: the master's "A player shoots the guard standing in front of
     // him before walking on" — the fight that kills guard #1 [L walkreal0c.rs].
     walker::yard_sniper_stands(&mut w, "ring-corner", 3);
+    // The drawn gate's real-gait patrollers shifted the ring-corner fight economy (guard #1's
+    // returned-fire stand no longer kills him), and the west-edge walk's flank/back-off then
+    // strayed ~5 u SOUTH of the rim line and fell at (6.95,1.06,-210.35) with the target
+    // (4.0,11.1,-207.5) 4.1 u away [L this run — same fall the -2 sweep dumped]. The
+    // los-mask-repins-0c-3 lever (real input only, no writes): two mid-rim stops pulled
+    // NORTH of the fall line re-pin Bond between the fight rounds so the back-off cannot
+    // carry him over the open south rim.
+    walk_sampled(&mut w, di, Wp::new(9.0, 11.1, -204.5).r(1.4), "the rim mid 1", &mut samples);
+    walk_sampled(&mut w, di, Wp::new(6.5, 11.1, -206.0).r(1.4), "the rim mid 2", &mut samples);
     walk_sampled(&mut w, di, Wp::new(4.0, 11.1, -207.5).r(1.2), "the ring west edge", &mut samples);
     walker::yard_sniper_stands(&mut w, "west-edge", 3);
     // The hold window (the fight continues while Bond stands at the west edge).

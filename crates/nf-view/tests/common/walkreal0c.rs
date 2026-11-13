@@ -88,6 +88,33 @@ pub fn with_strip_p2k_shot<R>(f: impl FnOnce() -> R) -> R {
     let _reset = Reset;
     f()
 }
+thread_local! {
+    /// los-mask-repins-0c-3 (OPT-IN, set by walkreal_0700000c_live's real_damage sister and,
+    /// level-0a-civilian-slide-cels-2, by walkreal_0700000c_eastroute_live's ground route):
+    /// the post-#282-ride thin-floor legs get the real-damage tree's own mid-ledge stops. The
+    /// fights' RNG draws shift every guard/round draw downstream, so the real-damage tree's
+    /// ride lands at its own spot ((4.9831,−223.2948) [L this round's run] vs the plain run's
+    /// (4.9688,−223.3107)) and the plain tree's single long "the ledge to the arc" leg then
+    /// overshoots its arrival circle off the ledge's east edge — the measured fall to y 2.01
+    /// at (8.99,−222.09) at +114 ticks (the walk_to arrival check is dxz-only, so it read
+    /// "arrived" MID-FALL and the next leg started from the yard floor [L the run]). The eastroute
+    /// sister lands at the SAME shifted spot under the drawn gate's room rule (the ring patrollers
+    /// #405/#404 walk their real danim gait where the ray gate held them at the no-gait slide —
+    /// `NDrone2_DoAnimation` 0x149f88's not-drawn arm [M] — and the shifted fights shift the ride
+    /// [L the level-0a branch's run]) and hits the same fall. The fix
+    /// is the 0c-2 ledger's lever: mid-ledge stops placed POST-ride (they cannot re-time the
+    /// ride), breaking the long eastward runs so each arrival circle is met at walking speed.
+    /// Off = master behaviour for every other caller.
+    static STRIP_RD_POST_RIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+#[allow(dead_code)]
+pub fn with_strip_rd_post_ride<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { STRIP_RD_POST_RIDE.with(|c| c.set(false)); } }
+    STRIP_RD_POST_RIDE.with(|c| c.set(true));
+    let _reset = Reset;
+    f()
+}
 /// Trace helpers (scratch): the gun's state for the no-bullet-spawned line.
 fn s_gun_debug(w: &Walker) -> String { format!("{:?}", w.scene.sim.as_ref().unwrap().gun.weapon) }
 fn s_gun_fire_state(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().gun.fire_state }
@@ -811,8 +838,15 @@ pub fn walk_spawn_to_the_yard_ladder_base_at(iso: &str, difficulty: u32) -> Walk
     // arm returns code 99; Intersect_CylGeom 0x109da0 skips the face on 99]; the hall side stays
     // shut. Standing, the lintel at z -111.89 stops the body [L 2026-10-31 c8-stand], so Bond
     // crouches once [M Player_SSCrouch 0x1924c0:84-105], holds south and drops to the hall floor.
-    // The real-health walk keeps its tuned timing here: the same 463 ticks in the shaft, then a
-    // placement where the crawl lands (its fights are a pinned sequence; see mezzanine_door_leg).
+    // walks-replay-proof ATTEMPTED (this session): making BOTH walks crawl for real (deleting
+    // the 463-tick wait + the [5.0, 12.35, -112.9] placement) — the crawl itself walks fine
+    // (the real-input vent-exit test pins it against the 2026-11-11 live numbers), but the
+    // real-health walk then DIES far downstream: at tick 9660 the yard's west-edge wire #284
+    // grab froze with level_exit already Some(0x0700000c) — a LOAD_LEVEL trigger the shifted
+    // route crosses early (Bond's exit state moves from (5.0, 12.35, -112.9) to the real
+    // (5.69, 11.92, -113.54) and every later leg's timing shifts). The placement stays until
+    // mezzanine_door_leg (itself a documented stand-in) and the yard triggers are re-tuned on
+    // real input — the 0c de-teleport is filed as walks-replay-proof's remaining work.
     if YARD_AIMED_STANDS.with(|c| c.get()) {
         for _ in 0..463 { w.tick(nf_game::player::Input::default(), false); }
         let sim = w.scene.sim.as_mut().unwrap();
@@ -1034,6 +1068,15 @@ pub fn walk_spawn_to_the_band(iso: &str) -> Walker {
 pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     // Legs 1-6 (unchanged — now shared with the yard-deck-sentry test).
     let mut w = walk_spawn_to_the_yard_ladder_base_at(iso, difficulty);
+    // walker-sidestep-decay-2: the stuck-ladder decay + the ride/grab boundary resets are
+    // OPT-IN now (the walker default re-timed the 0b real-damage roof walks' legs and all
+    // four sisters died in the roof fights — 5/4 vs master's 9/0 [L the run] — so every
+    // other level stays master-timed). The real-damage tree (STRIP_RD_POST_RIDE, set by the
+    // whole-mission rd test around this call) is the caller that needs them: its fights
+    // shift the ride landings, and with the counter undecayed the crossing leg measured
+    // sidestep −753 strafe-pinned [L the NF_WALKTRACE run]. Set before leg 1 so the decay
+    // rides from the first steered tick, as the walker-default green run did.
+    w.sidestep_decays = STRIP_RD_POST_RIDE.with(|c| c.get());
     // The far-sniper opt-in (with_far_sniper_stands, the real-health walks only): the flags
     // ride the walk from the first leg — the d 61-90 0x1e snipers open up on the band
     // approach INSIDE this prologue (the measured 13461 death), so a block after the return
@@ -1158,6 +1201,10 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
         got
     };
     assert!(grabbed, "the west-edge jump never grabbed wire #284 (icon ctx 3 [D #4] or the body sphere [D probe blk])");
+    // Ride scope BEGIN (walker-sidestep-decay, the `sidestep_decays` opt-in): the grab ends a
+    // steered stretch mid-nudge — the counter cannot carry into the ride's direct `step_bond`
+    // stretches. Off = master-exact (the plain walks).
+    if w.sidestep_decays { w.reset_sidestep(); }
     // Ride to B (−8.47, −216.52): strafe +1 faces wire.yaw + 3π/2 = toward B [M Player_Wire's
     // mode-7 facing]; drop with the action press inside 0.9 of B.
     let dropped = {
@@ -1201,6 +1248,10 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             "the #284 ride must drop onto the west ledge (11.24-11.38 [D probe blk2 west map]), got {p:?} dropped {dropped}");
     }
     eprintln!("[0c] the west gap crossed on wire #284 — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    // Ride scope END (walker-sidestep-decay, the `sidestep_decays` opt-in): the ride's direct
+    // `step_bond` stretches never decrement the stuck ladder's counter — clear it before the
+    // next steered leg. Off = master-exact.
+    if w.sidestep_decays { w.reset_sidestep(); }
     // Leg 8c (OPT-IN, `with_yard_aimed_stands`): the west-ledge sweep, before the ledge
     // diagonals — the west sniper #13 patrols to (-3.0, 12.2, -221.1), d ~6 LEVEL across the
     // gap [L this session's death log: 2 × -16 + the fatal -1.6 graze at 14308], and the
@@ -1637,6 +1688,9 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
         got
     };
     assert!(grabbed, "walking east at wire #282's B end never grabbed it (sphere r 5.05 [D probe blk])");
+    // Ride scope BEGIN (walker-sidestep-decay, the `sidestep_decays` opt-in): see the #284
+    // note — the grab boundary clears the pre-grab carry. Off = master-exact.
+    if w.sidestep_decays { w.reset_sidestep(); }
     // Ride EAST to A (5.85, −223.15): strafe −1 (mode 8 faces wire.yaw + π/2 = +X toward A) [M
     // Player_Wire's mode-8 facing]; drop inside 0.9 of A.
     let dropped = {
@@ -1665,11 +1719,37 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             "the #282 ride must drop onto the (4..8, −221..−226) ledge (11.24 [D probe blk2]), got {p:?} dropped {dropped}");
     }
     eprintln!("[0c] wire #282 ridden east — landed {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+    // Ride scope END (walker-sidestep-decay): the boundary reset the 0c-3 patch did POST-ride
+    // (its `reset_sidestep` call under the STRIP_RD_POST_RIDE scope, one caller) now lives at
+    // the ride scope itself — every ride that ends here starts the next steered leg straight,
+    // plain and real-damage alike. The mid-ledge STOPS below stay (the 0c-2 ledger's lever:
+    // they break the thin-floor arrival circles' coast, not the sidestep).
+    w.reset_sidestep();
     walker::strip_fights_resume();
     // los-mask-repins-0c-2: the flag scope's return-fire suppression lifts here (the strip
     // crossing is over; the SW arc and everything east fight normally).
+    // los-mask-repins-0c-3 (OPT-IN STRIP_RD_POST_RIDE, the real_damage sister only): the
+    // real-damage tree's ride lands at its own shifted spot and the plain tree's single long
+    // "the ledge to the arc" leg overshoots its arrival circle off the ledge's east edge —
+    // the measured fall to y 2.01 at (8.99,−222.09) at +114 ticks [L this branch's run; the
+    // plain run holds the same leg at +55]. The stops sit POST-ride so they cannot re-time
+    // the #282 grab: the mid-ledge stop at the plain run's own hold spot ((7.10,12.71,−222.42)
+    // [L the plain run] — the arrival circle's west side), then a mid-stop before the arc
+    // west end, so every thin-floor arrival circle is met at walking speed with no coast to
+    // carry Bond past the edge.
+    if STRIP_RD_POST_RIDE.with(|c| c.get()) {
+        // The sidestep half of the 0c-3 patch is the ride scope's own reset now (above);
+        // walker-sidestep-decay replaced the level patch with the walker change. The stops
+        // (the 0c-2 ledger's route lever) stay:
+        w.walk_to(Wp::new(7.1, 12.4, -222.42).r(0.5), "the mid-ledge stop (rd)");
+    }
     // The SW arc: the ledge to the arc's west end and east along it [D probes].
     w.walk_to(Wp::new(8.0, 12.4, -222.0).r(1.0), "the ledge to the arc");
+    if STRIP_RD_POST_RIDE.with(|c| c.get()) {
+        // The same treatment for the arc west end (the 0c-2 ledger's lever): the (8,−222) →
+        // (13,−218.5) leg is 5.2 u of thin arc — a mid-stop at its midpoint breaks the run.
+        w.walk_to(Wp::new(10.5, 12.4, -220.25).r(0.8), "the arc west end mid-stop (rd)");
+    }
     w.walk_to(Wp::new(13.0, 12.4, -218.5).r(1.2), "the arc west end");
     w.walk_to(Wp::new(24.0, 12.4, -218.0).r(1.5), "the ring south-west arc");
     // The grab line: the 1.5 arrival can stop anywhere on the arc's bend (a guard fight on the arc
@@ -1702,6 +1782,9 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
         got
     };
     assert!(grabbed, "walking east at the arc's end never grabbed wire #283 (the sphere HIT [D probe blk])");
+    // Ride scope BEGIN (walker-sidestep-decay, the `sidestep_decays` opt-in): see the #284
+    // note. Off = master-exact.
+    if w.sidestep_decays { w.reset_sidestep(); }
     // Ride to B (35.89, −209.44): strafe +1 (mode 7 faces wire.yaw + 3π/2 = north-east toward B)
     // [M Player_Wire]. The ride must run to the wire's END before the jump: the corner floor's
     // west edge is x ≈ 35.8 (10.89 step at z −210..−209.8, the 11.06..11.09 corner east of it
@@ -1756,6 +1839,9 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
             sim.drones.health.health, sim.bond.substate);
     }
     eprintln!("[0c] the south gap crossed on wire #283 — landed {:?}; the flag scope's return-fire suppression lifts past the thin floors", w.scene.sim.as_ref().unwrap().bond.pos);
+    // Ride scope END (walker-sidestep-decay, the `sidestep_decays` opt-in): see the #284
+    // note. Off = master-exact.
+    if w.sidestep_decays { w.reset_sidestep(); }
 
 
     // Leg 9 (REAL from the SE corner through the door): the district's true geometry [D, probe

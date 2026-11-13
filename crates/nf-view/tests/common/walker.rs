@@ -99,6 +99,18 @@ pub struct Report {
     pub falls: Vec<String>,
 }
 
+/// The per-tick snapshot the replay-parity test compares (walker-side; the replay side captures
+/// the same fields right after each replayed `step_bond`). Captured by `step_recorded` when
+/// recording is on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WalkTickState {
+    pub pos: [f32; 3],
+    pub yaw: f32,
+    pub health: f32,
+    pub frame: u32,
+    pub mission_end: Option<u32>,
+}
+
 /// The walker over one loaded scene.
 pub struct Walker {
     pub scene: Scene,
@@ -219,6 +231,16 @@ pub struct Walker {
     /// which plate a walked route actually crossed first.
     pub rise_watch: Vec<u8>,
     pub rises: Vec<(u8, u32, V3, Vec<usize>)>,
+    /// replay-parity (opt-in, `start_recording`): every stepped tick's exact input, appended by
+    /// `step_recorded` in the replay file's own form. While recording, the sim is stepped with
+    /// `to_parts()` of the just-pushed record — the sim sees exactly what is recorded — so a
+    /// fresh load replaying this Vec is tick-for-tick identical. `None` (default): no recording,
+    /// and the step is exactly the old direct `step_bond`.
+    pub record_inputs: Option<Vec<nf_view::replay::TickInput>>,
+    /// replay-parity (opt-in): the per-tick state the parity test compares — Bond pos/yaw,
+    /// health, the drone frame and the mission_end latch, captured right after each recorded
+    /// step. One entry per recorded tick, same order as `record_inputs`.
+    pub record_states: Option<Vec<WalkTickState>>,
 }
 
 /// The stuck dump, public for the walkreal tests' own aim loops (walkreal-b2).
@@ -300,6 +322,44 @@ impl Walker {
             no_grenade_throws: false,
             grenade_downgrade_logged: false,
             flank_hold_x: None,
+            record_inputs: None,
+            record_states: None,
+        }
+    }
+
+    /// replay-parity: start recording every stepped tick's input and per-tick state. The
+    /// recording rides the ONE step site (`step_recorded`, reached only through `tick_inner`),
+    /// so every walker-stepped tick — nav legs, fights (the shared damage_log's reload branch
+    /// included), waits, the recovery hops — lands in the record.
+    pub fn start_recording(&mut self) {
+        self.record_inputs = Some(Vec::new());
+        self.record_states = Some(Vec::new());
+    }
+
+    /// The walker's ONE step site. `tick_inner` steps every walker tick through here, so every
+    /// walker-stepped tick — and nothing else — goes through this function. Recording on: the
+    /// tick's input is appended in the replay file's own form and the sim is stepped with
+    /// `to_parts()` of it (the sim sees exactly what is recorded); the per-tick state is
+    /// captured right after the step. Recording off: byte-identical to the old direct
+    /// `step_bond` (replay-parity-walker-side-effects).
+    fn step_recorded(&mut self, input: Input, fire: bool, reload: bool, use_key: bool) {
+        let (input, fire, reload, use_key) = if let Some(rec) = self.record_inputs.as_mut() {
+            let ti = nf_view::replay::TickInput::from_parts(&input, fire, reload, use_key);
+            rec.push(ti);
+            ti.to_parts()
+        } else {
+            (input, fire, reload, use_key)
+        };
+        self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
+        if let Some(st) = self.record_states.as_mut() {
+            let sim = self.scene.sim.as_ref().unwrap();
+            st.push(WalkTickState {
+                pos: sim.bond.pos,
+                yaw: sim.bond.yaw,
+                health: sim.drones.health.health,
+                frame: sim.drones.frame,
+                mission_end: sim.drones.mission_end,
+            });
         }
     }
 
@@ -490,7 +550,7 @@ impl Walker {
             self.rise_watch.iter().map(|&c| sim.drones.channels.on(c as u32)).collect()
         };
         let feet_before = self.scene.sim.as_ref().unwrap().bond.pos;
-        self.scene.sim.as_mut().unwrap().step_bond(input, fire, reload, use_key);
+        self.step_recorded(input, fire, reload, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
         self.total_ticks += 1;
         for (k, &c) in self.rise_watch.iter().enumerate() {
@@ -575,9 +635,9 @@ impl Walker {
                     .filter(|b| b.state < 2)
                     .map(|b| format!("d{}:w{}", b.owner, b.weapon))
                     .collect();
-                eprintln!("[hp] t{} d#{i} skin {:#x} team {} {prev:.1}->{:.1} st {:#x} mode {} alt {:#x} dtype {} at ({:.2},{:.2},{:.2}) last_dmg {:.1} hit {:?} by_player {} blast {:?} opp {:?} bullets [{}]",
+                eprintln!("[hp] t{} d#{i} skin {:#x} team {} {prev:.1}->{:.1} st {:#x} mode {} alt {:#x} dtype {} at ({:.2},{:.2},{:.2}) last_dmg {:.1} hit {:?} by_player {} by_drone {:?} blast {:?} opp {:?} bullets [{}]",
                     self.total_ticks, d.skin, d.team, d.health, d.state, d.mode, d.alt_state, d.dtype,
-                    d.pos[0], d.pos[1], d.pos[2], d.last_damage, d.hit, d.hit_by_player, d.blast, d.opp_drone, live.join(" "));
+                    d.pos[0], d.pos[1], d.pos[2], d.last_damage, d.hit, d.hit_by_player, d.hit_by_drone, d.blast, d.opp_drone, live.join(" "));
             }
         }
         if sim.bond.pos[1] < y_before - 0.4 && !sim.bond.grounded {
@@ -684,6 +744,54 @@ impl Walker {
     /// units away, which is the guardroom-guard "invulnerability" the 07000006 walkreal fought
     /// (probe_guard438 evidence, level-06-guardroom-guard).
     pub fn switch_to_armed(&mut self, label: &str) -> bool {
+        // quiet_rearm (opt-in, the 07000002 00 Agent walk, the hearing fold): the discipline's
+        // shared arm — the silenced P99 (0x02) ends the cycle when the wheel carries it with
+        // rounds (the game's own weapon cycle; the same law the 02 file's QUIET_DISCIPLINE
+        // helpers apply to their own re-arms). The plain cycle's loudest pick would put a
+        // guard's dropped 0x1c in hand and its shots re-run the west-end rifles' measured
+        // alert chain (los-mask-repins-02-2). GATED ON THE P99'S OWN ROUNDS (the v11 lesson:
+        // an unconditional sweep cycled AWAY from the armed 0x1c hunting a dry P99, wedged on
+        // the 0x47 gadget slot — the gadget's draw eats the presses — and left the wheel dry:
+        // the fight was skipped and Bond died standing at tick 12424): the inventory is read
+        // first and NO press happens unless the P99 is owned with rounds somewhere (the clip
+        // slot or the carried ammo); then the sweep stops on it, with a same-weapon break so
+        // a wedged draw cannot eat the bound. Otherwise the plain cycle below runs untouched
+        // (any armed gun still beats the cuffs; the flag is false everywhere else).
+        if self.dmg.quiet_rearm {
+            let p99_ready = {
+                let sim = self.scene.sim.as_ref().unwrap();
+                let inv = &sim.drones.inventory;
+                let in_hand = sim.gun.weapon == 0x02 && sim.gun.clip + sim.gun.spare > 0;
+                let owned = inv.owned.get(0x02).copied().unwrap_or(false) && {
+                    let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, 0x02);
+                    inv.clip.get(slot).copied().unwrap_or(0) > 0
+                        || inv.carried.get(sim.weapons.ammo_type(0x02)).copied().unwrap_or(0) > 0
+                };
+                in_hand || owned
+            };
+            if p99_ready {
+                let mut last = 0u8;
+                for k in 0..12 {
+                    let (w, c, s) = {
+                        let sim = self.scene.sim.as_ref().unwrap();
+                        (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
+                    };
+                    if w == 0x02 && c + s > 0 { return true; }
+                    eprintln!("[walk] {label}: cycling to the silenced P99 ({k}) (weapon {w:#x} clip {c} spare {s})");
+                    self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
+                    for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
+                    let now = { let sim = self.scene.sim.as_ref().unwrap(); sim.gun.weapon };
+                    if now == last { eprintln!("[walk] {label}: the wheel cycle wedged on {now:#x} — the plain armed cycle"); break; }
+                    last = now;
+                }
+                {
+                    let sim = self.scene.sim.as_ref().unwrap();
+                    let (w, c, s) = (sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+                    if w == 0x02 && c + s > 0 { return true; }
+                    eprintln!("[walk] {label}: the silenced P99 never came up ({w:#x} clip {c} spare {s}) — the plain armed cycle");
+                }
+            }
+        }
         for k in 0..12 {
             let (w, c, s) = {
                 let sim = self.scene.sim.as_ref().unwrap();
@@ -942,10 +1050,11 @@ impl Walker {
                     strafe: if backing { 0.0 } else if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
                     ..Default::default()
                 };
-                self.scene.sim.as_mut().unwrap().step_bond(input, trigger, reload, false);
+                // replay-parity-walker-side-effects: the fight's step is a real walker-stepped
+                // tick — through `tick_inner` like every other (the old direct `step_bond` here
+                // skipped the walker's per-tick work, and a recorded walk fell through it).
+                self.tick_inner(input, false, trigger, reload);
             }
-            self.total_ticks += 1;
-            self.after_step();
             // Out of ammo: give up (the caller resupplies and retries).
             if self.scene.sim.as_ref().unwrap().gun.clip == 0
                 && self.scene.sim.as_ref().unwrap().gun.spare == 0 && t > 60 {

@@ -1728,7 +1728,13 @@ fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
     // order byte-for-byte: the loot pass, then the torso loose gate.
     let loot = w.tops_up();
     let home = w.scene.sim.as_ref().unwrap().bond.pos;
+    // Where each fight started: the walk home retraces them (with the guards' aim stop
+    // (Drone+0x38) one loot pass led east to (-34.4, 27.3) and the fights there left Bond at
+    // the door jamb (-33.1, 28.6), from where the nav's direct hop home hit the wall at 6 %
+    // for 3 x 6000 ticks).
+    let mut trail: Vec<[f32; 3]> = Vec::new();
     for _ in 0..10 {
+        trail.push(w.scene.sim.as_ref().unwrap().bond.pos);
         let sim = w.scene.sim.as_ref().unwrap();
         let Some(di) = sim.drones.list.iter().position(|d| {
             d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
@@ -1770,6 +1776,14 @@ fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
     // The fights displace Bond (the backpedal inside 3.0) — walk home over the NAV web (the
     // direct steer hits the door-wall jambs) so the caller's position pins and next legs start
     // where they would have without the clear.
+    let mut last = w.scene.sim.as_ref().unwrap().bond.pos;
+    for p in trail.into_iter().rev() {
+        if walker::dxz(p, last) < 1.0 { continue; }
+        w.lenient = true;
+        w.walk_nav_to(p, "back along the clear's trail", 1.0);
+        w.lenient = false;
+        last = p;
+    }
     w.walk_nav_to(home, "back to the clear's home spot", 1.0);
 }
 

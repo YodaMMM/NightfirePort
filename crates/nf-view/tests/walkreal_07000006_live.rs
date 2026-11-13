@@ -184,6 +184,28 @@ fn fight_through(w: &mut Walker) {
 /// killed the unarmed crossing), so the nook clears take `exposed_only` at 00: a target with
 /// NO exposed part at pick time is skipped without his budget and re-checked by the next
 /// clear from wherever Bond stands next.)
+/// castle-chat-real-path lever, ported to the gate-2 tree: the balcony-level pre-clear — live
+/// hostiles within 9 u at ANY height with an exposed part, dropped by the game's own fire path.
+/// File-local (the shared `clear_the_spot` skips y >= 46 guards by design — the 00 clear is a
+/// ground clear), and exposed-only so a blocked line never sprays the wall.
+fn pre_clear_balcony_guard(w: &mut Walker, label: &str) {
+    w.switch_to_armed(label);
+    for _ in 0..4 {
+        let target = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (0..sim.drones.list.len()).find(|&i| {
+                let d = &sim.drones.list[i];
+                !d.corpse && d.health > 0.0 && d.team == 1
+                    && dxz(d.pos, sim.bond.pos) < 9.0
+                    && w.exposed_aim(i).is_some()
+            })
+        };
+        let Some(di) = target else { return };
+        eprintln!("[06] {label}: clearing guard {di} at {:?}", w.scene.sim.as_ref().unwrap().drones.list[di].pos);
+        if !w.shoot_bounded(di, label, 1200) { return; }
+    }
+}
+
 fn clear_the_spot(w: &mut Walker, radius: f32, exposed_only: bool) {
     w.switch_to_armed("the 00 clear");
     let mut skipped: Vec<usize> = Vec::new();
@@ -446,8 +468,29 @@ fn walk_to_the_courtyard_at(w: &mut Walker, cut: bool, difficulty: u32) {
     walk_from_the_guardhouse_court_at(w, cut, difficulty);
 }
 
+/// The dock guard beside the driver (skin 0x500002e at (68.8, 27.3), the driver (66.1, 28.9)
+/// between him and the south dismount): he opens fire the moment Bond stands on the dismount, and
+/// rounds aimed there pass ~0.8 u from the driver (hp 1) - the driver dies and ch 0x60 (civilian
+/// killed) fails the mission, in the game too [L PCSX2 07000006 d1: Bond held at the dismount, the
+/// driver 0x17778b0 dies at frame 384, ch 0x60 = 1]. From the bed's west edge (58.2, 25.3) the line
+/// to him clears the driver by ~2.3 u: Bond answers him there first.
+fn answer_the_dock_guard(w: &mut Walker) {
+    w.walk_nav_to([58.2, 38.3, 25.3], "the truck bed's west edge", 1.0);
+    let dock = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.list.iter().position(|d| d.present && d.health > 0.0 && d.team == 1 && d.skin == 0x0500_002e
+            && dxz(d.pos, [68.8, 39.0, 27.3]) < 3.0)
+    };
+    if let Some(di) = dock {
+        w.switch_to_armed("the dock guard by the driver");
+        let killed = w.shoot_bounded(di, "the dock guard by the driver", 1500);
+        eprintln!("[06] the dock guard #{di} from the bed: killed {killed}");
+    }
+}
+
 /// The spawn → the guardhouse court east of the searchlight courtyard, with its idle guard down.
 fn walk_to_the_guardhouse_court(w: &mut Walker, difficulty: u32) {
+    answer_the_dock_guard(w);
     // THE DISMOUNT: off the truck bed's open south side (the spawn's own facing walks onto the
     // bed; the probe drops grounded at z≈29).
     w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
@@ -722,6 +765,10 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         // (the wedge-luck is gone).
         w.try_walk_to(Wp::new(21.0, 42.0, -23.5).r(1.2), "the ramp's lower lane");
         w.try_walk_to(Wp::new(14.0, 44.8, -23.5).r(1.2), "the ramp's upper lane");
+        // The balcony pre-clear (castle-chat-real-path lever; the gate-2 ledger re-measured the
+        // same death: the y-47 grenade guard's 54.0 toss at the crest, Bond dead t3964 in the
+        // tunnel). The player clears the balcony guard from the ramp's upper lane BEFORE cresting.
+        pre_clear_balcony_guard(w, "the balcony's grenade guard pre-clear");
         w.try_walk_to(Wp::new(9.5, 46.0, -23.0).r(1.0), "the balcony's west reach");
         // The drop target sits WELL west of the edge with a tight radius: a nearer/wider target
         // arrived ON the edge lip (the first cut's r 2.0 fired at x 6.44 while Bond was still on
@@ -1314,6 +1361,7 @@ fn the_wellhead_seals_the_shaft_on_real_input() {
     w.wait_enabled(3000, "the intro NIS");
     w.wait(30);
     // walk_to_the_guardhouse_court's prefix, minus the hedge legs that leave the courtyard.
+    answer_the_dock_guard(&mut w);
     w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
     w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
     w.walk_nav_to([24.3, 38.3, 27.6], "the dock's west end", 1.6);
@@ -1387,4 +1435,83 @@ fn the_wellhead_seals_the_shaft_on_real_input() {
     assert!(sim.drones.health.health > 0.0 && !sim.drones.channels.on(0x62),
         "the well takes no health and raises no death channel on real input (health {:.1} ch62 {})",
         sim.drones.health.health, sim.drones.channels.on(0x62));
+}
+
+/// THE CASTLE CHAT PAIR ON REAL INPUT (castle-chat-real-path): the two placements that carry the
+/// chat start-script specials on the whole disc [D census of the kind-0x0f placements — #487 skin
+/// 0x05000030 param 1 = 0x06000124 at (31.369, 39.502, 22.053) and #488 skin 0x0500002e param 1 =
+/// 0x06000126 at (30.457, 39.329, 23.081)] spawn AT LOAD (flags exactly 0x0000000f [D raw 0x1a
+/// block, map 48 records 487/488] — no 0xa000 deferral bits, so `parsemap_block_map_data_dynamic`
+/// 0x1d1b68 passes them to `Drone_Create` [M 0x1d04f0 case 0xf]) and stand in CastleChatGuard1
+/// 0x36 from creation: the specials give mode 0x18 [M 0x14c600:147-158] and PlayScript's ENTER
+/// redirects on `+0xC5 == 0x18` before any script plays [M 0x15ba68:26-30].
+///
+/// The chat script plays only once the chat channel (+0x13D = 0x11) is UP [M 0x1612e0:57-65]: the
+/// level raises it through the OR trigger #512 (type 0xc out 0x11, list [0x3a, 0x3b] [D census]) —
+/// the area plate #528 (type 0x1 out 0x3b, box x 49.7-51.2, z 26.0-30.3 [D census]) at the truck's
+/// west end feeds it (plate #513 out 0x3a at z 44.7-46.6 is the south approach's input). Bond
+/// crosses #528 on the dock walk, ch 0x3b rises, the OR raises 0x11, and the pair's UPDATE plays
+/// their start scripts (measured: `anim.script` = Some(0x06000124)/Some(0x06000126), anim.time
+/// advancing 1:1, both holding 0x36 with the positions pinned for 900+ ticks at the watch spot).
+///
+/// The watch spot is the greeting-plates leg's end (45.0, 38.3, 24.0), 15 u east of the pair on
+/// the same dock: closer approaches BREAK the chat (the chat state's UPDATE runs
+/// EnemyLookForOpponent [M 0x1612e0] — measured: at 11-12 u east the pair left 0x36, charged and
+/// died to return fire; the chat only holds beyond ~13 u). A sustained burst from the watch spot
+/// breaks the chat off — the alert group folds both guards into EnemyAlerts [M 0x1612e0:83-98].
+/// Real input only; no health or channel writes.
+#[test]
+fn the_castle_chat_pair_stands_chatting_and_breaks_off_when_alerted() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000006.bin", false,
+        Some(&carry(&[0x1d, 0x45, 0x70])), 1).expect("load 07000006"));
+    w.top_up_health = false;
+    w.wait_enabled(3000, "the intro NIS");
+    w.wait(30);
+    // The proven route's first legs to the greeting plates: leg 2 crosses plate #528 (x 49.7-51.2,
+    // z 26.0-30.3 [D census]) which raises ch 0x3b; the OR trigger #512 raises the chat ch 0x11.
+    answer_the_dock_guard(&mut w);
+    w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
+    w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates, onto the pair's watch spot", 1.6);
+    let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.drones.channels.on(0x11), "the chat channel 0x11 rose through the type-0xc list-OR #512 after the plate #528 crossing [D census placements 512/513/528; M Trigger_Update 0x1b1a78 case 0xc — the +0x26 input list ORed into the out channel]");
+    let pair: Vec<(usize, usize)> = sim.drones.list.iter().enumerate()
+        .filter(|(_, dr)| dr.present && matches!(dr.placement, 487 | 488))
+        .map(|(i, dr)| (i, dr.placement))
+        .collect();
+    assert!(pair.len() == 2, "both chat guards present at their placements, got {pair:?}");
+    for (i, pl) in &pair {
+        let dr = &sim.drones.list[*i];
+        assert_eq!(dr.state, 0x36, "chat guard (drone {i}, placement {pl}) stands in CastleChatGuard1 0x36 [M 0x15ba68:26-30 + 0x14c600:147-158]");
+        assert_eq!(dr.chat_channel, 0x11, "chat guard (drone {i}) listens on the chat channel 0x11 [M 0x14c600:147-158]");
+        assert!(dr.chat_channel_on, "chat guard (drone {i}) sees the chat channel up (the per-tick switch_channels cache) [M Drones::tick's +0x13D cache]");
+    }
+    // The chat plays: the scripts the placements carry are the scripts the animators run.
+    w.wait(60);
+    let sim = w.scene.sim.as_ref().unwrap();
+    for (i, pl) in &pair {
+        let dr = &sim.drones.list[*i];
+        assert_eq!(dr.state, 0x36, "chat guard (drone {i}) still in the chat after the wait [M 0x1612e0]");
+        let want = if *pl == 487 { 0x06000124 } else { 0x06000126 };
+        assert_eq!(dr.anim.script, Some(want), "chat guard (drone {i}) is playing its start script on the up ch 0x11 [M 0x1612e0:57-65; D census script ids 0x06000124/0x06000126, 1244/1204 frames]");
+    }
+    // The chat break: a sustained burst from inside their hearing. The alert group runs
+    // EnemyAlerts [M 0x1612e0:83-93]; a produced state leaves the chat for good.
+    // The burst's target is the SOUTH guard (#488, drone 14): from the watch spot the north
+    // guard's (#487) box rays are occluded by #488 standing on the line (the game's bullets hit
+    // ANY drone [M Drone_CollisionHandler 0x140968:85-95] — measured: exposed_aim(13) = None from
+    // the watch spot, the whole 10800-tick stand found no exposed part).
+    let (idx, pl) = pair[1];
+    let other = pair[0].0;
+    w.switch_to_armed("break the chat");
+    w.shoot_bounded(idx, "break the chat", 40);
+    w.wait(40);
+    let sim = w.scene.sim.as_ref().unwrap();
+    for (i, pl) in [(idx, pl), (other, sim.drones.list[other].placement)] {
+        let dr = &sim.drones.list[i];
+        assert_ne!(dr.state, 0x36, "chat guard (drone {i}, placement {pl}) broke the chat off when alerted [M 0x1612e0:83-98]");
+    }
+    let survivor = &sim.drones.list[other];
+    assert!(survivor.present && survivor.health > 0.0, "the un-shot guard (drone {other}) lives the alert [M 0x1612e0:83-98 — the group fold, not a death]");
+    assert_ne!(survivor.state, 0x36, "the un-shot guard (drone {other}) left the chat with the group [M 0x1612e0:83-98]");
 }

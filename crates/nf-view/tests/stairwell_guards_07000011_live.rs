@@ -198,3 +198,26 @@ fn the_mode_1c_abseiler_hangs_within_the_game_s_3_0_of_the_opponent() {
     assert!(y <= 29.37 + 3.0 && y >= 29.37 - 1.0,
         "the hang stops within the game's 3.0 of the opponent [M 0x169730:55-58]: Bond 29.37, hung at {y:.2}");
 }
+
+/// The flight's 0x0A panel (z -4.05, x 22.44..25.43) does not hold a guard: the game's stairwell
+/// guard walks from (22.98, 44.24, -3.82) through it to (20.78, 44.20, -5.13) in 30 frames, his
+/// body push (HITTEST+0x10) 0 every frame, and Bond walks through it both ways [L PCSX2 07000011,
+/// 2026-11-12]. The body query only meets the cels `Collide_Pick` gathers from the guard's own
+/// cel, and the panel is not among them (the port's `capsule_push_scoped` from cel 128 pushes 0
+/// there), so the step probe is scoped the same way. The flight's side walls (x 21.7 and 24.4)
+/// are in scope and still hold him.
+#[test]
+fn the_flight_panel_does_not_hold_the_stairwell_guard() {
+    let scene = nf_view::load(&iso(), "07000011.bin", false).expect("load 07000011");
+    let w = &scene.sim.as_ref().unwrap().world;
+    let from = [23.0f32, 44.24, -3.77];
+    let cel = w.find_cel(from);
+    assert!(cel.is_some(), "the flight is in a cel");
+    let across = [23.0, 44.24, -4.97];
+    assert!(w.move_probe_clear_scoped(cel, from, across), "the step across the panel is clear [L]");
+    assert!(w.move_probe_clear_scoped(cel, [23.0, 44.74, -3.77], [23.0, 44.74, -4.97]), "at chest height too [L]");
+    // Sisters: the unscoped ray still meets the panel (the old stall), and the side walls hold.
+    assert!(!w.move_probe_clear(from, across), "the unscoped probe hits the panel");
+    assert!(!w.move_probe_clear_scoped(cel, from, [26.0, 44.24, -3.77]), "the +x wall holds");
+    assert!(!w.move_probe_clear_scoped(cel, from, [20.0, 44.24, -3.77]), "the -x wall holds");
+}

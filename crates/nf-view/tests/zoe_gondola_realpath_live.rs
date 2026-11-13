@@ -170,8 +170,10 @@ fn zoe_rides_the_carriage_and_never_targets_bond() {
         w.tick(Input::default(), false);
         {
             let sim = w.scene.sim.as_ref().unwrap();
-            // player_hits holds THIS tick's hits (the sim clears it per tick — read it whole).
-            for &(_, shooter, dmg) in &sim.drones.player_hits {
+            // player_hits is the run's cumulative log (never cleared), each entry stamped with its
+            // frame: this tick's hits are the entries stamped with the current frame.
+            let now = sim.drones.frame;
+            for &(_, shooter, dmg) in sim.drones.player_hits.iter().filter(|h| h.0 == now) {
                 let team = sim.drones.list[shooter].team;
                 if shooter == ai || team == 2 { ally_hits += 1; }
                 else { guard_hits += 1; }
@@ -242,7 +244,11 @@ fn zoe_rides_the_carriage_and_never_targets_bond() {
     // ── the assertions ──────────────────────────────────────────────────────────────────────────
     // The positive control first: the sisters (team 1) DID engage Bond on the walked descent — the
     // harness sees guard fire (their ambush is the level's own combat [D the 5 spawners]).
-    assert!(guard_hits > 0, "no guard (team 1) round hit Bond on the walked descent — the observation harness saw no guard combat");
+    // The descent's hits live in the cumulative log (the ride loop above counts the ride's own).
+    let descent_guard_hits = end.drones.player_hits.iter()
+        .filter(|h| h.1 < end.drones.list.len() && end.drones.list[h.1].team == 1).count();
+    eprintln!("[zoe] guard hits over the whole run (descent + ride): {descent_guard_hits} (ride only {guard_hits})");
+    assert!(descent_guard_hits > 0, "no guard (team 1) round hit Bond on the walked descent — the observation harness saw no guard combat");
     // (b) she rides the carriage: inside the band for the whole ride.
     if let Some((t, car, pos, state)) = left_volume_at {
         panic!("Zoe left the carriage band at ride t{} (carriage {car:?} ally {pos:?} state {state:#x}) — the game's standing drone moves with its ground object [M 0x140660 → 0x133e88]", t);

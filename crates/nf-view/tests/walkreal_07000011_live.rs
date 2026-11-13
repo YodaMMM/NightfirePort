@@ -92,6 +92,39 @@ fn loot_the_drops_up_to(w: &mut Walker, label: &str, up: f32) {
     w.switch_to_armed(label); // anything armed beats the fists
 }
 
+/// los-mask-repins-11 (00 Agent): the visible-guard answer. Live, enabled, non-WAIT_SWITCH
+/// hostiles the eye rays can reach, nearest first, a `stand_and_fire` each — Bond HOLDS his
+/// spot (the shoot loop's opening strafe drifts him 2 u west: the measured mouth run died at
+/// d 1.1 of #19 after two stands drifted him off the mouth [L NF_RF_TRACE this task]). A
+/// player clears the guards he can SEE from a strong spot before he walks into their
+/// crossfire; a guard the stand cannot drop is left to the leg's own return-fire gate.
+fn answer_visible_guards(w: &mut Walker, label: &str, reach: f32) {
+    for _ in 0..6 {
+        let g = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            sim.drones.list.iter().enumerate()
+                .filter(|&(i, d)| d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                    && d.state != nf_game::drone::state::WAIT_SWITCH
+                    && walker::dxz(d.pos, b) < reach && (d.pos[1] - b[1]).abs() < 6.0
+                    && walker::DamageLog::visible(sim, i))
+                .min_by(|x, y| walker::dxz(x.1.pos, b).total_cmp(&walker::dxz(y.1.pos, b)))
+                .map(|(i, _)| i)
+        };
+        let Some(g) = g else { break };
+        eprintln!("[011] {label}: answering guard #{g}");
+        if w.scene.sim.as_ref().unwrap().gun.clip < 5 {
+            // A player reloads between guards (the measured #18 stand emptied the clip and the
+            // #19 stand opened on clip 1 [L NF_RF_TRACE this task]).
+            w.reload_full();
+        }
+        let k = w.stand_and_fire(g, 600);
+        eprintln!("[011] {label}: guard #{g} killed {k} health {}",
+            w.scene.sim.as_ref().unwrap().drones.health.health);
+        if !k { break; }
+    }
+}
+
 /// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent / 3 00
 /// Agent ride the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
 fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
@@ -196,6 +229,13 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         // None while the volleys kept landing). Answer what he sees (the opt-in flag; every
         // other walk keeps the lane gun-ray pick).
         w.dmg.eye_ray_stands = true;
+        // los-mask-repins-11: the guard-sight fights MIX. The run's death stand (fight#29) held
+        // a shooter the eye rays never saw (aim None the whole stand — he was walking the 23.0
+        // strip above the flight lip) while #19 (2.6 u) and #36 (the connector above) burst
+        // health 39 → 0 in 90 ticks [L NF_RF_TRACE this task]. The hurting-first laws (the
+        // 07000008 Agent sisters' opt-in): the pick answers the shooter who is actually HURTING
+        // Bond, drops the cooled candidates, and the fight retargets every 30 ticks.
+        w.dmg.hurting_first = true;
     }
 
     // THE 00 AGENT PRE-LEG (real-health-00agent-11-2): take the top-floor BodyArmour BEFORE the
@@ -254,6 +294,10 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
                 // unmasked run won the same stand by a few ticks]. A player reloads before he
                 // opens the door.
                 w.reload_full();
+                // 00 Agent with the drawn room gate and the guards' aim stop (Drone+0x38): the
+                // unarmed #1 now meets Bond ON the wall lane (one 40.0 punch at (20.07, 15.96)
+                // before the doorway stand began). The same stand from the jog, 6.5 u back.
+                if difficulty >= 3 { armour_room_stand(&mut w, difficulty, 12.0); }
             }
             if *label == "the east wall north" {
                 // The armour room's pair, held at its doorway: #1 (placement 122, unarmed) and #2
@@ -268,25 +312,7 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
                 // hits [L NF_RF_TRACE run: fight#2 aim None, creep true, death t2427]. A player
                 // facing a shotgun captain he cannot see holds back: the stand keeps 4 u off a
                 // live guard (DamageLog::back_off — the crowd arm steps back and stops the creep).
-                let prev_back_off = w.dmg.back_off;
-                if difficulty >= 3 { w.dmg.back_off = Some(4.0); } // the Agent sister passes as she is
-                let start = w.total_ticks;
-                while w.total_ticks - start < 900 {
-                    let (near, far) = {
-                        let sim = w.scene.sim.as_ref().unwrap();
-                        let live = |d: &&nf_game::drone::Drone| d.present && !d.corpse && d.health > 0.0 && d.team == 1
-                            && (d.pos[1] - sim.bond.pos[1]).abs() < 2.0;
-                        (sim.drones.list.iter().position(|d| live(&d) && walker::dxz(d.pos, sim.bond.pos) < 7.0),
-                         sim.drones.list.iter().any(|d| live(&d) && walker::dxz(d.pos, sim.bond.pos) < 12.0))
-                    };
-                    if let Some(di) = near {
-                        let k = w.stand_and_fire(di, 600);
-                        eprintln!("[011] d3 armour-room stand: #{di} killed {k} health {}", w.scene.sim.as_ref().unwrap().drones.health.health);
-                    } else if far {
-                        w.tick(nf_game::player::Input::default(), false);
-                    } else { break; }
-                }
-                w.dmg.back_off = prev_back_off;
+                armour_room_stand(&mut w, difficulty, 7.0);
                 // The doorway stand's own turns and recoil can carry Bond off the wall lane
                 // (join-reds2-0, 00 Agent on the stream join: the run east then started from the
                 // desk side and wedged on a desk top at (20.87, 48.28, 14.89), grounded false).
@@ -330,6 +356,11 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     // Leg 1: east across the top floor to the stairwell door (the nav web [D paths 0/1] has no
     // cross-floor route — the direct chain), then through the doorway's south band — walked.
     w.stop_on_exit = false;
+    // Operative: a fight on the doorway leg can send the resupply 17 u east to the far drops
+    // ((23.8, 22.4)); the leg's straight walk back then crossed the desk rows and climbed the desk
+    // at (21.5, 15.9) (grounded=false, the 6000-tick cap) once the room drawn gate moved the
+    // fights. The errand walks home first (the opt-in the 13 chain uses).
+    if difficulty == 1 { w.resupply_home = true; }
     w.follow_nav_route([12.7, 47.4, 6.4], "across the top floor to the stairwell door");
     w.walk_to(Wp::new(16.0, 47.4, 6.4).r(0.9), "through the doorway (the south band)");
     {
@@ -549,8 +580,31 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, [22.4, 23.2, -3.0]) > 2.0 {
         w.walk_nav_to([22.4, 23.2, -3.0], "back along the 23.0 strip", 1.0);
     }
+    if difficulty >= 3 {
+        // los-mask-repins-11 (00 Agent): the connector-2 TOP. The guard sight turned the
+        // connector's own ends into a crossfire: the measured run died at its bottom with the
+        // top guard #29 (23.6, 23.8, −1.4, 4.6 u — 17.5 in 5 hits) and the elevated well guard
+        // #36 (19.7, ~21, 0.4, 3.7 u — 39.0 in 11 hits) shooting from above while the flight's
+        // lip blocked every eye ray back up at them [L NF_RF_TRACE this task]. A player answers
+        // what he can see from the strip's east end BEFORE he commits to the flight: from here
+        // the top guard is 1.7 u and the well guard is a down-look over the same lip that
+        // blocks the up-look.
+        answer_visible_guards(&mut w, "d3 the connector-2 top", 12.0);
+    }
     w.walk_to(Wp::new(23.0, 19.3, 3.8).r(1.0), "the east connector down (23.0→18.9)");
     band(&w, 18.2, 21.3, "connector 2's bottom");
+    if difficulty >= 3 {
+        // los-mask-repins-11 (00 Agent): the 18.9 strip's MOUTH. With the game's sight the
+        // strip's cluster engages across the mouth itself: the run's fight#18 opened with the
+        // melee charger #18 already 1.1 u in (the kill cost 35.0 in 5 punches), and after it
+        // the unseen-fight fallback stood blind on the north-strip shooter #29 (aim None the
+        // whole stand) while #19 (2.6 u on the strip, weapon 0x19, never damaged) and #36 (the
+        // connector above, 5.6 u) burst health 39 → 0 — death tick 19894 at the mouth's east
+        // end [L NF_RF_TRACE this task]. A player stops at the connector's foot and answers the
+        // guards he can see on the strip BEFORE he crosses (the flight-B mouth idiom above):
+        // the stands killed #18/#19/#28 from here on the measured run [L this task].
+        answer_visible_guards(&mut w, "d3 the 18.9 strip mouth", 12.0);
+    }
     w.walk_to(Wp::new(15.0, 19.2, 4.8).r(1.0), "the south strip 18.9 west");
     // The strip's return-fire fights (#13/#14 on the d1 walk with the game's sight round robin
     // and the own-cel boundary push) can turn Bond onto the flight-B foot; the straight leg
@@ -813,11 +867,52 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
 /// and are REMOVED: the lip occludes the blast from above too (zero guard damage each time,
 /// 21-63 self-cost) — the grenade lever is dead against lip-covered strips. Round 2's ledger
 /// lives in docs/reports/real-health-00agent-11-2.md.
+/// UN-IGNORED AGAIN (los-mask-repins-11, 2026-11-10): GREEN under the game's guard sight —
+/// the fights moved onto the stairwell's connector-2 ends and the 18.9 strip (the round-3
+/// ledger: Bond reached the strip at 46 health and died at tick 19894 to #19 and #36 at
+/// 2.6-5.6 u). Three walk-local levers, all real input, all d3-gated:
+/// 1. `hurting_first` (the 07000008 Agent sisters' opt-in): the run's death stand (fight#29)
+///    held a shooter the eye rays never saw (he was walking the 23.0 strip above the flight
+///    lip) while #19 (2.6 u) and #36 (the connector above) burst health 39 → 0 in 90 ticks
+///    [L NF_RF_TRACE this task] — the pick now answers the shooter who is actually HURTING
+///    Bond and the fight retargets every 30 ticks.
+/// 2. The connector-2 TOP stands (`answer_visible_guards`): from the 23.0 strip's east end the
+///    top guard is 1.7 u and the elevated well guard (#36, (19.7, ~21, 0.4)) is a down-look
+///    over the same flight lip that blocks the up-look — the measured run killed #27/#26/#18
+///    there before committing to the flight.
+/// 3. The 18.9 strip MOUTH stands after the descent: the strip cluster (#18 the melee charger
+///    at 1.6 u, #19 weapon 0x19, #28) dies from the connector's foot instead of mid-strip —
+///    the stands killed #18/#19/#28 on the measured run [L this task]. `stand_and_fire`, not
+///    `shoot_bounded`: the shoot loop's opening strafe drifts Bond 2 u off the mouth (the
+///    second measured run died at d 1.1 of #19 that way); a player reloads between guards.
 #[test]
-#[ignore = "los-mask-repins-11: Bond reaches the 18.9 strip at 46 health and dies at tick 19894 to #19 and #36 (weapon 0x19) at 2.6-5.6 u"]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
                 walk_spawn_to_the_lower_floor_load_point_at(3))))
+}
+
+/// The armour room's doorway stand (see its first call site): any guard on Bond's floor within 7
+/// is fought, one within 12 waited for (bounded 900 ticks); 00 Agent keeps 4 u off a live guard.
+fn armour_room_stand(w: &mut Walker, difficulty: u32, near_r: f32) {
+    let prev_back_off = w.dmg.back_off;
+    if difficulty >= 3 { w.dmg.back_off = Some(4.0); } // the Agent sister passes as she is
+    let start = w.total_ticks;
+    while w.total_ticks - start < 900 {
+        let (near, far) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let live = |d: &&nf_game::drone::Drone| d.present && !d.corpse && d.health > 0.0 && d.team == 1
+                && (d.pos[1] - sim.bond.pos[1]).abs() < 2.0;
+            (sim.drones.list.iter().position(|d| live(&d) && walker::dxz(d.pos, sim.bond.pos) < near_r),
+             sim.drones.list.iter().any(|d| live(&d) && walker::dxz(d.pos, sim.bond.pos) < 12.0))
+        };
+        if let Some(di) = near {
+            let k = w.stand_and_fire(di, 600);
+            eprintln!("[011] d3 armour-room stand: #{di} killed {k} health {}", w.scene.sim.as_ref().unwrap().drones.health.health);
+        } else if far {
+            w.tick(nf_game::player::Input::default(), false);
+        } else { break; }
+    }
+    w.dmg.back_off = prev_back_off;
 }
