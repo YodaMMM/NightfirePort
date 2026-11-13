@@ -746,10 +746,10 @@ fn open_the_pad_lid(w: &mut Walker) {
 /// dump]) for the whole 2400-tick cap. The player drops past him on the north side, z 34.9.
 fn drop_aim_z(w: &Walker) -> f32 {
     let sim = w.scene.sim.as_ref().unwrap();
-    // 00 Agent real health: the drop-band guard is shot from the landing (below), and his body
+    // Real health: the drop-band guard is shot from the landing (below), and his body
     // lies in the band at (32.2, 33.2); the 34.0 line then wedges under the overhang at
     // (33.71, 1.20, 34.23) while the 33.4 line clears to the low floor [L the 11-13 runs].
-    if sim.drones.difficulty >= 3 && !w.tops_up() && sim.drones.list.iter().any(|d| d.corpse
+    if !w.tops_up() && sim.drones.list.iter().any(|d| d.corpse
         && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2])) { return 33.4; }
     let blocked = sim.drones.list.iter().any(|d| d.present && !d.corpse && d.health > 0.0 && d.pos[1] < 2.3
         && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2]));
@@ -826,12 +826,12 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         // clear segment to the target is the overhang catch), so the westing is the player's own
         // push: steer south-west around the slab's corner, hop when grounded (the walker's wedge
         // recovery), until clear of the overhang zone on the low floor.
-        // 00 Agent real health: a d3-only guard (#6, 28 health, 0x14) stands asleep in the drop
-        // band at (32.2, 1.8, 33.2); the drop steers into the overhang around him and wedges, and
+        // Real health: a guard (00 Agent #6 / Operative #5, 28 health, 0x14) stands asleep in the
+        // drop band at (32.2, 1.8, 33.2); the drop steers into the overhang around him and wedges, and
         // walking past wakes him (point-blank death). Bond still holds the vent-lid item here, so
         // the pistol comes out first, then the guard is shot from the landing (killed, no hits
         // taken [L the 11-13 run]).
-        if !w.tops_up() && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+        if !w.tops_up() {
             let _ = w.switch_to_armed("the drop-band guard");
             for _ in 0..3 {
                 let di = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
@@ -1688,7 +1688,6 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// write no health/armour/ammo; the exit load into 07000015 is the game's own Trigger_Activate
 /// path [M 0x1b2318 → warm_exit_save → Player_RamLoad 0x1957a8].
 #[test]
-#[ignore = "re-tune after the claw wall fix: the route's SkyBridge crossing is a stand-in now (the claw bolt dies on the duct wall) and the shifted clock lands the descent at (29.63, 0.65, 29.25) instead of the leg-2 start (29.99, 0.61, 38.00); the plain walk passes the same legs"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }
@@ -1712,7 +1711,7 @@ fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
             && walker::dxz(d.pos, sim.bond.pos) < radius;
         // 00 Agent real health: nearest first - the list-order pick spent 900 ticks on #3 at
         // 18.2 u while #9 shot Bond from 1.2 u (65.0 in 13, the t7051 corridor death).
-        let nearest = sim.drones.difficulty >= 3 && !w.tops_up();
+        let nearest = !w.tops_up();
         let pick = if nearest {
             sim.drones.list.iter().enumerate().filter(|(_, d)| live(d))
                 .min_by(|a, b| walker::dxz(a.1.pos, sim.bond.pos).total_cmp(&walker::dxz(b.1.pos, sim.bond.pos))).map(|(i, _)| i)
