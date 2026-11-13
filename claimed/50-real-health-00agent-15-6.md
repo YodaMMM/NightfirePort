@@ -25,3 +25,6 @@ claimed-by: main agent at 2026-11-12T12:05:16Z
 ---
 ## Main agent (2026-11-12, released back)
 On s/real-health-00agent-15-5 + master 729f9694e the d3 walk dies at t5527 (13 hits for 100, 10 fights). Lever 1 measured: pre_throw_stands ALONE at d3 (no switch_dry) dies at t1048 at the aperture (81.53, 41.41, -0.49), 11 hits - identical to the earlier both-flags run, so the stand itself is the cost at 00, not switch_dry. Rule it out; go to the plank cover-edge stand or the fight pick reaching #8 before the arc lands.
+
+---
+claimed-by: sandbox7 at 2026-11-13T04:16Z
