@@ -23,3 +23,5 @@ walkreal_07000014_live: Bond died at tick 4104 (frame 4104) at (31.42,2.35,33.43
 
 ---
 claimed-by: sandbox5 at 2026-11-13T13:02Z
+
+Measured on master 631388054: the walk now stops EARLIER - the landing west drop (line ~812) wedges at (33.70, 1.19, 35.21), health 100. A d3-only guard g6 (28 health, state 0x4) stands at (32.2, 1.8, 33.2) inside the drop band, so drop_aim_z steers to z 34.9 into the overhang and Bond never moves. Bond reaches the landing with clip 0 / spare 0, so shooting g6 wakes him (he lands 70 in 14 hits, death t5203). Blocked-aim z 34.0 walks into him (death t3860); 34.5/35.3/35.8 wedge. Lever: arrive with ammo (find where the d3 route spends it) or a drop line that skirts g6 without waking him.
