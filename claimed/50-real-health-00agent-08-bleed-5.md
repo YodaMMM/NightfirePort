@@ -21,3 +21,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-11-14T14:18Z
+
+Main 11-14 (master 06db4a156, NF_DMG_TRACE): on the merged bleed-4 stream the Hind fight (t0 at frame 20137, health 24, armour 50 from the secure-room + ledge armours) dies at t20428 to "world" -2.0 hits every ~6 ticks from frame 20332 (the trace flags 0x1C 0x27 0x28 0x06), Bond at (111.17,13.52,-179.81) = the bleed-4 ANCHOR; line_ok false the whole fight, ZERO rocket launches. Moving the start spot / the ANCHOR to (110.98,-179.31) or (110.6,-179.0): the same -2.0 cadence, deaths t20379-t20530, still 0 launches. Open question first: is this -2.0 the terminal volume or the Hind gun attributed to the world (it starts ~190 ticks into the fight); the old master stream (t34277) launched rocket 1 at t531 from (110.98,-179.31).
