@@ -92,3 +92,19 @@ test's ignore message.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three notification methods failed from this sandbox (10:0x-10:4x UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "... urllib.request ..."`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → hung on `Connecting to ntfy.sh|159.203.148.75|:443...`, killed by timeout (exit 124), no output.
+
+The finish step itself succeeded: `finish.sh` reported `OK done 50-real-health-00agent-1b-8`
+(the report path arg is repo-relative and the script runs from the queue worktree, so the
+first pass attached only a stub) — the full report was then attached to
+`done/50-real-health-00agent-1b-8.md` and pushed to `origin/queue` (9fdf77b04).
