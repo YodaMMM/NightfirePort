@@ -23,3 +23,6 @@
   band (d3-only). Update-5 ledger + the next levers in the ignore message. The test stays
   ignored; the sisters/interactables not run (all edits d3-gated, no shared helper touched);
   the suite did not fit. Report: docs/reports/level-13-warm-chain-margin-7.md.
+- (06:20) Rule-10 coverage run: walkreal_07000013_live whole binary — the d2 agent sister 1/0,
+  the d1 operative sister 1/0, the plain sister 1/0 (all d3-gated blocks skip, legs
+  byte-identical); interactables_07000013_live 10/0. Report updated with the results.

@@ -54,11 +54,14 @@ writes anywhere; the only inputs are the view drives, the trigger taps and the l
   evidence for every claim above. The test itself stays `#[ignore]`d with the update-5 ledger
   (the walk is not green yet — see below). It compiles (`cargo build --offline --release -p
   nf-view --test walkreal_07000013_live` clean).
-- The d2/d1/plain sisters and `interactables_07000013_live` were NOT run this session: every
-  change is inside `real_damage && difficulty == 3` blocks those tests never enter, and no
-  shared helper changed, so their legs are byte-identical by construction. The next session
-  must run them (rule 10).
-- The full 4-crate suite did not fit in the sandbox window.
+- Whole binaries run this session (`--test-threads=1`, release, NF_ISO set), all green:
+  - `walkreal_07000013_live`: the d2 agent sister 1/0 (12.3 s), the d1 operative sister 1/0
+    (8.4 s), the plain sister 1/0 (11.0 s) — every new block is inside
+    `real_damage && difficulty == 3` gates those tests never enter, and the runs confirm the
+    legs stayed byte-identical;
+  - `interactables_07000013_live`: 10/0 (16.5 s).
+- The full 4-crate suite did not fit in the sandbox window; the binaries above are the
+  substitute coverage (no shared helper changed, so no other level's walk can shift).
 
 ## What's left (the next session's first levers, also in the ignore message)
 
