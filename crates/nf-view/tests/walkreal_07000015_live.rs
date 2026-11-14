@@ -1312,6 +1312,18 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             // machinery answers him with its own positioning (the fights' return fire killed the
             // corridor's #19 at this very threshold in ~60 ticks); the legs' push keeps Bond
             // out of the thrown frags' rest points.
+            if difficulty >= 3 && !w.tops_up() {
+                // 00 Agent: #4 (skin 0x5000087) is dormant at (0.0, 26.4) in the hall south (enabled
+                // false at the door[38] stand) and later poured 33.0 in 11 on the door[50] through
+                // leg; from this threshold he is visible and a head-first stand kills him at no
+                // cost (58.7 kept).
+                let p4 = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse && d.health > 0.0
+                    && d.team == 1 && d.skin == 0x5000087 && walker::dxz(d.pos, [0.0, 41.3, 26.4]) < 4.0) };
+                if let Some(g) = p4 {
+                    let k = aimed_stand_impl(&mut w, g, "the hall-south chaser from the door[50] threshold", 600, true);
+                    eprintln!("[15p4] #{g} killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                }
+            }
             w.shoot(di, "the great-hall grenade guard (placement 733) from the door[50] threshold");
         }
     } else if !w.tops_up() {
@@ -1490,7 +1502,53 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         ("the exit hall", Wp::new(0.5, 41.4, -21.0).r(1.2)),
         ("the exit approach", Wp::new(-0.6, 41.4, -21.0).r(1.4)),
     ];
+    if difficulty >= 3 && !w.tops_up() {
+        // 00 Agent: the door[51] fights killed #13/#14 but #14's grenade outlived him and landed
+        // 206 ticks later for 33.07 on 33.1 health (t11988) while Bond stood on the threshold.
+        // A player holds the threshold, answers the visible guards in short stands and steps away
+        // from a live grenade (any sim grenade inside its radius + 2 u) - measured: the walk
+        // completes (holds of 600 and 1200 both green).
+        w.walk_route(&route[..1]);
+        let hold: u32 = 600;
+        let home = w.scene.sim.as_ref().unwrap().bond.pos;
+        let t0 = w.total_ticks;
+        while w.total_ticks - t0 < hold {
+            let (gren, pick) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                let gren = sim.drones.grenades.iter().filter(|g| walker::dxz(g.pos, bp) < g.radius.max(4.0) + 2.0)
+                    .map(|g| g.pos).next();
+                let pick = (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 20.0
+                        && (d.pos[1] - bp[1]).abs() < 3.0 && walker::DamageLog::visible(sim, i) })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)));
+                (gren, pick)
+            };
+            if let Some(gp) = gren {
+                // step away from the grenade: world direction bond - grenade, mapped into the view frame
+                let (dir_f, dir_s) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let bp = sim.bond.pos;
+                    let (dx, dz) = (bp[0] - gp[0], bp[2] - gp[2]);
+                    let n = (dx * dx + dz * dz).sqrt().max(0.01);
+                    let (fx, fz) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+                    let f = (dx * fx + dz * fz) / n;
+                    let sd = (dx * fz - dz * fx) / n;
+                    (f, sd)
+                };
+                w.tick(nf_game::player::Input { forward: dir_f.clamp(-1.0, 1.0), strafe: dir_s.clamp(-1.0, 1.0), ..Default::default() }, false);
+                continue;
+            }
+            if let Some(g) = pick { w.shoot_bounded(g, "the door[51] hold", 90); continue; }
+            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, home) > 1.5 {
+                w.lenient = true; w.walk_to(Wp::new(home[0], home[1], home[2]).r(0.8), "back to the door[51] threshold"); w.lenient = false;
+            } else { w.tick(nf_game::player::Input::default(), false); }
+        }
+        eprintln!("[15dodge] hold done, health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+        w.walk_route(&route[1..]);
+    } else {
     w.walk_route(route);
+    }
     {
         // The way through: no mine went off on Bond's body — every one the lanes cross was shot
         // (or went on a shot neighbour's blast; #487 goes on #526's).
@@ -1767,7 +1825,6 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage() {
 /// body (the fence-mark stands at 28 u never fired — the 0.02-rad aim gate is a torso
 /// width there; the door[38]-north point is the next try).
 #[test]
-#[ignore = "00 Agent (11-13 update): the #462 beam is shot from (65.0, -0.3) (17.85 u, no hurt; the old 13.56 u stand paid 14.72) and the solo-line walk holds the fights' resupply nav, so the west room is cleared at 73.7 (was 34.4). The walk dies at t12256 at (0.00, 41.33, 11.27) at the door[51] threshold with 23.2 health: #4 (skin 0x5000087) 33.0 in 11 on the door[50] through leg (58.7 -> 23.2), then #14 (skin 0x50000b2, 0x1a at (3.1, 41.3, 5.8)) one 23.2 hit. Next: #4 before door[50], #14 from the door[51] threshold. Earlier: 00 Agent (11-14, real-health-00agent-15-8): the FENCE LEG IS SOLVED — the walk now crosses the #447 fence shot and dies at the exit corridor's door[51] threshold, t11681 at (0.08, 41.31, 11.27), health 5.4 -> 0.0 to #12 (skin 0x500008c, the 0x1a grenade launcher at (5.4, 41.3, -1.9), the split's own guard, the d3 roster's extra) paying 3.50 + 1.86 = 5.36 — death by 0.04 of health; the fights answered (#12 hp -5) one fight cycle late. WHAT THIS ROUND FIXED, each measured: (1) THE FENCE MARK (d3-gated z 28.5 -> 29.3) — the old t20553 death was THE SHOT'S OWN CHAIN, not #4: the old mark (0.0, 28.5) stood 10.69 u from the #778 diagonal (1.52, 41.47, 17.83 [D placement 778]), the hurt distance 10.69 - 1.06 = 9.63 INSIDE the radius-10 sweep [M Explode_Propagate 0x17c518 — Vec_Dist3D, minus obj+0x8C, max.s 0, /radius, x damage], 80·0.037 = 2.96 from #778 + 1.92 from #779 — the measured -5.36 world hit killed 5.4 (the d2 run paid the same geometry 1.78 at its 0.6 pain row [M Player_HandlePain 0x1902c8] and survived). z 29.3 puts every fence mine >= 11.4 u (d - 1.06 >= 10 -> the sweep's zero; #447 12.22 with its beam y in the 3D distance) and the line still rides the x 0 aperture; measured: '#447 went at tick +3, Bond 12.18 u off, cause 2' with ZERO hurt. (2) THE RESUPPLY SKIP (d3, the P2K holding the round) — the corridor resupply nav found nothing on the walked path and hung three 3000-tick caps over the great hall's middle pit (grounded=false at (9.85, 35.03), segment Some(0.045)) — ~9000 idle ticks at 5.4 health for a round Bond already carries; skipped when sim.gun is 0x02 with clip >= 1 (the fence shot needs ONE round — the beam round's case-0x4B chain sets the neighbours [M 0x17c518]). The d2 keeps the resupply (its stream is committed). MEASURED-NOT-SHIPPED (all three ate MORE fire): (a) the fights' threshold window — 30 return_fire polls at the open door[50] never picked a candidate (the convergers are east of the hall / behind its structures until their rounds already fly [L the run4 death t10192, zero door[50] fights]); (b) the legs-first shape (walk route_d2[..2], the aimed stand on #5 from the hall east) — died t9978 to #5's 0x1a arc rain (19.4) at the door[50] through leg — the fights still cannot see from the corridor; (c) the second-chaser pre-stand (agent_drone_nearest_skin 0x5000087 at door[38] north) — killed #17 at +44 but #4 (the SECOND 0x5000087 chaser) was outside the 16 u tol and paid his full bill. THE UPSTREAM LEDGER (the shared run2/run7 shape, health 34.4 after the west room -> 5.4 at the fence leg): #11 21.0 in 3, #4 15.0 in 5 (the second plank rifle chaser — QUIET through the plank zone so the fights' shooter pick never saw him [M DamageLog::shooters], chased the whole hall, caught the pre-shoot's positioning nav at d 1.9), #15 14.0 in 2, the world 15.1 in 2, #19 7.0, #5 7.0 — the corridor-entry bill 29.0, of which #4's 15.0 is the largest single item. The positioning pre-shoot STAYS (measured three ways: it is the only shape that crosses the kill zone on the moving-target roll [M 0x179740 DroneFiring_TargetMoving_Accuracy]; every stop-and-answer shape ate more). NEXT LEVERS, in order: (1) THE #4 ANSWER — loop the chaser stand until the 0x5000087 skin finder returns None (or widen the spot to the chasers' converging path (28-35, 33-38), tol 20): his 15.0 alone flips the run (5.4 + 15.0 = 20.4 at the fence, 20.4 - 5.36 = 15.0 past #12); (2) THE #12 ANSWER — the fights engage him only after his first launcher round: a pre-emptive aimed stand from the door[51] threshold (the line (0.0, 11.5) -> (5.4, -1.9) crosses the split's void band x -2..2 at eye height) before the last route legs; (3) the exit leg needs >= 11 health — either lever (1) alone suffices. The d1/d2 streams stay byte-identical (every lever gated difficulty >= 3 && !w.tops_up(); the d2 real-damage walk is green on this tree)."]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(3));
 }
