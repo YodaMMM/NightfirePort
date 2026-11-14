@@ -37,3 +37,7 @@ After the hall (11-13): Bond holds the P2K at clip 1 spare 0, health 5.4; the ha
 Correction + measure: the hall pile at (-0.5, 28.1) IS taken when Bond walks onto it (all three gone: 0x1a, 0x1b, 0x14 kind 0/1); Bond already owns the AR so it becomes AR rounds while the empty P2K stays in hand - draw_persist(0x1a) after it gives AR 9/36. Pickups work; the walk only lacked the switch. But at 5.4 health the first hit at the door[42] threshold kills (t11219). The limiter is health through the great hall, not ammo.
 
 FRAGILE: the merged 300-tick hold (b164773fb) is a knife edge - a fine sweep 240/270/330/360/420/480 dies IN the hall every time (t10022-t10233); only 300 crosses. Any upstream change can re-roll it. Treat the hall as unsolved: it needs a real answer to #5 (the throw cycle) or more health in.
+
+---
+## Report (done, 2026-11-14T00:57Z)
+
