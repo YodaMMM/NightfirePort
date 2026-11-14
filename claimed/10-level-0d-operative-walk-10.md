@@ -16,3 +16,5 @@ Main 11-14 (master 06db4a156, NF_DMG_TRACE): the ladder-top bill is the 0x1e SNI
 Main 11-14: the west-roof snipers from the LADDER BASE (kill_guard_at_present (151.2,-248.0) +-(6,12), 600) - no line (pass false at 100.0); the walk then dies at t3947 (one fewer hit absorbed... same phase). The base has no sight of the west roof.
 
 Main 11-14 (667be11e3, crouched ladder top merged, death t5532): a dedicated pass on the bay sniper #10 (214.7,-289.5) +-(3,3) before the bay duo kills him (+487) but the time lets #14 (south roof (166.3,21.2,-271.4), 16.0 x2) and #27 (west roof, x3) finish Bond at t4399. The ladder top faces ~5 0x1e snipers at 55-65 u, each kill costs 200-500 ticks while the others land 16 every ~200: the stand order alone cannot win; it needs cover between kills (crouch helped one hit) or the snipers thinned before the climb. Second west pass before the bay: t4025.
+
+Main 11-14 (667be11e3, crouched): a second west-roof pass before the bay duo does not land (pass false, 38.0) and the walk dies sooner, t5245 vs t5532. Not shipped.
