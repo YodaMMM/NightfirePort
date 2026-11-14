@@ -103,9 +103,14 @@ fast-forward to 194df6378). Task: take the margin-7 report's pool-abort lever in
 3. What a fresh-boot player's aimed P99 taps at d 37-42 land on #4 (does the port's
    zero-spread model match the disc at that range).
 
-## ntfy failed
+## ntfy
 
-(written after the send attempt — see below if it failed)
+- `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+  → `curl: (28) Connection timed out after 20002 milliseconds` (failed).
+- the `python3 urllib.request` fallback → the combined call hit the 60 s tool timeout
+  (urlopen hung; no result line) (failed).
+- `wget -q -O- --timeout=25 --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+  **exit 0, no error output** (succeeded).
 
 ## Usage
 
