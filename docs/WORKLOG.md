@@ -8,3 +8,14 @@
   line, unmeasured), (b) the #16 deck guard's box act via the pre-climb base stand, each
   measured on its own real run. Real input only, no top-ups, never lower damage/health;
   top-up and d2 walks byte-identical. Tests: walkreal_0700000d_live, interactables_0700000d_live.
+- Session outcome (7 real runs on the v5 roll): the walk-6 ledger's base levers (a) the
+  pre-climb band stand and (b) the deck act from the base are MEASURED DEAD (the base line
+  to #17 EXISTS on her east corridor z −218..−223 but the aim cursor pins 4-5 u off and her
+  0.042 u/tick patrol wins the ~120-tick corridor race; the base up-hill ray to #16 dies
+  0.040 on the crane) and stay OUT of the route. LANDED: the deck #16 box act's FIRST turn
+  at the ladder top (down at +209, the -1/-2 law verbatim) and the bay-duo arm → Operative
+  (#18 down at +195); death 3733 → 4514 (+781). The Operative band arm caps trimmed 600→200.
+  NEW FLOOR: #27/#28 act-proof from the top; #10 survives converged CLEAR-ray aim via the
+  OPERATIVE HIP-FIRE LAW (the aim bit flaps, the d1 trigger gate always passes). Next
+  levers in the ignore message. Plain replay + d2 twin green (byte-identical); interactables
+  11/11.
