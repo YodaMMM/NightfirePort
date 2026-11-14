@@ -24,3 +24,10 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 CORRECTION (east-edge probe, 0.75 u grid x 10..17.5, z -76..-91, top-down floor + shooter lines): the ground lane (x 10-12, floor -0.20) is seen by 4-5 shooters, the east ramp (x 13-16, floor rising 0.0 -> 5.7 from z -90 to -80) by 4-6, the ring (5.71) by 5-6. The earlier "0-exposure" patches are off this path (south of the ramp foot at z -96..-100, and the x 15-17 / z -77..-80 cells sit under the ring). There is NO covered approach to the ramp - the lever is thinning the gallery shooters (#2/#3/#5, 0x1a), not a route.
 
 LANDED (master a793c19fa): the d2 gallery-pocket dash now runs at 00 Agent - corridor-approach death t1020 gone; pocket entered at 72.0, its fight kills #0/#5/#2/#3 and ends at 4.7; death t4379 at (20.49, 0.91, -94.04). Next: health through the pocket fight (the gallery peek leg wedged its 3000-tick cap).
+
+Measured 11-13 (dead levers on the pocket fight, both on a793c19fa):
+- clear ground hostiles (radius 12) before each peek cycle: death t4423 vs t4379 base, no gain.
+- hold the pocket and shoot the nearest visible guard instead of the peek walk: death t2236 (worse) - the
+  south ground pair (#2 weapon 0x1a from (21.4,-103.2), #1 from (11.3,-111.1)) see into the pocket.
+The health loss (72 -> 4.7) lands during the wedged peek walk (d 2.09 from (19.0,-92.2), 3000-tick cap).
+Next: a peek spot that is reachable (or a shorter cap), not a hold.
