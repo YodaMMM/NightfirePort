@@ -7,3 +7,6 @@ death is still in the ladder-top phase, t4161 at (213.07, 17.37, -234.51), 10 hi
 round-9 ledger and take its next lever (answer #29/#27 before the climb, from a line the scans already found).
 Real input only, no top-ups; the plain replay and the d2 twin stay byte-identical.
 Tests: walkreal_0700000d_live, interactables_0700000d_live. Branch: s/level-0d-operative-walk-10.
+
+---
+claimed-by: sandbox4 at 2026-11-14T18:26Z
