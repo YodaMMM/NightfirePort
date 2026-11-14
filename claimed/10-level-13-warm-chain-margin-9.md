@@ -21,3 +21,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox5 at 2026-11-14T13:18Z
+
+Main agent note 11-14: margin-7/8 were NOT merged - squashed onto master 36db1e785 the walk dies at t4234 at the band (-20.59,-368.39,39.50), earlier than master alone (t4958 inside the security room). This round must beat t4958 on master + its own levers to merge; levers that lose ground get reverted, not shipped.
