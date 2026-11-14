@@ -41,3 +41,5 @@ Main 11-14: a sight-triggered doorway step (go to (111.09,-179.72) only when a d
 Main 11-14: the 20.0 at the briefcase start (158.93,-116.52) is #4 (0x5000014, 0xa) at (161.6,-120.8), 5 hits; three bounded stands on him there never kill him and the shoot positioning breaks the briefcase take (assert ch 0x4a, line 818, t13560). The station hall costs 40 (#3/#14/#11/#2, 4.0 each, 684-1114) at the walkway head.
 
 Main 11-14: crouched across the station hall (d697c77f2) and for the briefcase stretch (cb29af974) - death t26671 -> t34720, the Hind fight now lasts ~14500 ticks; still ONE rocket (100.7 of 598). A crouch at the lower landing is byte-identical (already crouched). The Hind fight needs launch windows: the Hind is out of sight from the carriage most of its circuit.
+
+Main 11-14 (cb29af974): over the ~14500-tick fight the Hind is in sight (eye_sees) at 140 sampled windows; in those, corridor_clear and machine_lane_clear are false in ~95%. Shortening the 12 u corridor/effective-corridor casts to 8/6 u is byte-identical (1 launch): machine_lane_clear (the forecast lane of the machine s own rounds) is the binding gate. Read that gate next.
