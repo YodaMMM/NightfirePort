@@ -51,3 +51,5 @@ Measured 11-13: the range-keeping tap interval (4/8/12 vs 16) does not matter - 
 Measured 11-13: the armour #648 walk between the room soldier and the chaser (return fire held) arrives with armour 5.0 (the walk ate it) and the chaser kills Bond at t12411 on the armour spot. Not shipped.
 
 Measured 11-13: the squad-phase brute #12 (0x500001e, hp 100) taken first inside 10 u - dies t17282, no gain at 17 health.
+
+Measured 11-13: a shelter hold (visible guards in 90-tick stands, 600/1500 ticks) at the squad spawn dies inside the hold at t17306. Not shipped. The squad stage needs more than 17 health; the chaser fight (37 -> 17) is the place to save it.
