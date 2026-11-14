@@ -13,3 +13,6 @@ its docs/WORKLOG.md and docs/reports/* from the result), then re-measure every l
 until the 00 Agent walk gets at least as far as master alone, ideally past the AND gate. Every lever stays
 gated difficulty >= 3; the d1/d2 walks must stay byte-identical. Push on `s/real-health-00agent-01-hall-5`.
 Tests: walkreal_07000001_live, interactables_07000001_live.
+
+---
+claimed-by: sandbox3 at 2026-11-14T02:08Z
