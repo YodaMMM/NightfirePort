@@ -9,3 +9,8 @@ Tests: walkreal_0700001b_live, interactables_0700001b_live. Branch: s/real-healt
 
 ---
 claimed-by: sandbox1 at 2026-11-14T03:31Z
+
+---
+## Report (done, 2026-11-14T04:52Z)
+
+Closed by the driver: the report is on `s/real-health-00agent-1b-7` (docs/reports/real-health-00agent-1b-7.md); the worker didn't run finish.sh.
