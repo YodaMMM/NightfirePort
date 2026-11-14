@@ -104,3 +104,11 @@ touch one test file only; the whole affected binary + interactables ran on the f
 - output tokens: not visible to me
 - context used: not visible to me
 - cost: not visible to me
+
+## ntfy failed
+
+- curl: `curl: (28) Connection timed out after 20000 milliseconds`
+- python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+- wget: no output, the process was killed after 120 s with no response (connection to
+  ntfy.sh never established from this sandbox; the ISO download host worked, ntfy.sh did
+  not resolve/reach).
