@@ -28,3 +28,5 @@ Merged 11-13 (42aff3fcb): the Kiko corridor squad answered while exposed (neares
 Measured 11-13 (on 42aff3fcb): a second exposed-only stand at node 0 (-49.3,36.3) t27071 (22.9 left after it), at node 1 (-49.4,33.2) t26823 - no gain; the squad on nodes 2-4 outlasts 27.9 health.
 
 Measured 11-13 (97c74df39): the #14/#15 room behind the node-42 door costs 30.0 (72.9 -> 42.9, t11150-11401). A nav stop + stand at (-21.4,-21.1) keeps 60.4 past it but the walk re-rolls: the later timeline reaches the Kiko corridor DRY (clip 1 spare 0) and dies at the same escape-touch legs (t41666, #20 25.0 in 9); at (-22.5,-20.0) t29274. Not shipped. The Kiko stretch needs ammo as well as health.
+
+Measured 11-13: a no-stop push (return fire off) through the escape-touch legs dies sooner, t26418 at node 3. Not shipped.
