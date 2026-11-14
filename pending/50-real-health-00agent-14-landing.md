@@ -24,3 +24,5 @@ walkreal_07000014_live: Bond died at tick 4104 (frame 4104) at (31.42,2.35,33.43
 Merged 11-13 (my-14d): the switch band guards are answered from node 626 (three bounded stands, nearest inside 15 u); death t23511 -> t26213 at (-45.31,1.07,27.50) on the escape-touch legs: #20 15.0 in 3 at node 2, #29 7.9 at 3.7 u, health 27.9 -> 10.4 across nodes 0-3. Next: answer #20/#21/#29 from the Kiko corridor before those legs.
 
 Merged 11-13 (42aff3fcb): the Kiko corridor squad answered while exposed (nearest first, 300 each); death t26213 -> t27134 at node 4 of the escape-touch legs, health 27.9 -> 7.9 by node 2. Next: a second stand at node 0.
+
+Measured 11-13 (on 42aff3fcb): a second exposed-only stand at node 0 (-49.3,36.3) t27071 (22.9 left after it), at node 1 (-49.4,33.2) t26823 - no gain; the squad on nodes 2-4 outlasts 27.9 health.
