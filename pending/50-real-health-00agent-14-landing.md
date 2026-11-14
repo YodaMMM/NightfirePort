@@ -44,3 +44,5 @@ Measured 11-13: the Rook leg split into its 33 nav nodes with a 120-tick close a
 Measured 11-13 (NF_DMG_TRACE): between the Kiko hold (27.9) and the second hold (7.9), #20 (0x5000090, 0x14) hidden at (-51.2,32.6) lands 15.0 in 3 at 2.4 u as Bond passes node 1 (t26993-27001), #23 2.5, #22 2.5. A 300/600-tick stand on #20 from node 0 (-49.8,36.1) or node 1 (-49.0,33.4) dies inside the stand at t26998. Next: a line on #20 from the Kiko hold spot side, or crossing node 1 faster.
 
 Measured 11-13: crossing to the second hold with return fire held dies sooner, t26923. Not shipped.
+
+Measured 11-13: a bullet-line scan at the Kiko hold end finds #20 (at (-51.33,32.42)) in clear line from the whole x -53..-46, z 30..37 band, including the hold spot (-51.33,37.87) at 5.5 u; a direct shoot_bounded on him from there (300/900) loses the duel - death t26998 at the hold spot with 27.9 going in. Open for a worker: the levers tried tonight are all in this file.
