@@ -10,3 +10,5 @@ the Kiko hold, more health out of the west-face fight (#34 10.0). The NF_HOLD_SK
 also needs its discriminator so it can be turned on: the pit-band jump arc's east gate must survive it.
 Real input only, no top-ups; the d1/d2 walks stay byte-identical. Tests: walkreal_07000014_live,
 interactables_07000014_live, probe14_pocket_settle. Branch: s/real-health-00agent-14-landing-2.
+
+Measured 11-14: quiet pass to node 2 then a hold there (300/600) dies inside the hold at t26887 at (-47.41,28.27). Not shipped.
