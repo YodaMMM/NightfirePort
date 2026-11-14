@@ -376,6 +376,26 @@ pub struct DamageLog {
     /// leak is here, not in the file). Off = master behaviour (the loudest pick) everywhere
     /// else — no other walk sets it.
     pub quiet_rearm: bool,
+    /// OPT-IN (`world_ray_fights`, set by the 0700000b 00 Agent walk only, the deck crossing):
+    /// the return-fire fight's reach widens to the WORLD-ray set — the [0b-ray] map's rule. The
+    /// hit-box eye-ray sets (`visible`/`visible_gun_rays`) answer NONE of the roof band from the
+    /// deck crossing (every box's centre ray dies on the deck pieces between the west edge and
+    /// the band [L the 2026-11-13 census run — no candidate VISIBLE at t17109/17139/17428]),
+    /// while the straight segment_bullet ray from the eye to the guard's chest (pos+1.2) reads
+    /// CLEAR to #6/#8/#9 from the same spots ([L the [0b-ray] lines in the same run]). The disc's
+    /// own reachability law is the flight's, not centre-sight: a round spawns along the CROSSHAIR
+    /// ray [M Player_WeaponInitBullet 0x1a4bf0:226-245] and hits the guard iff the ray ENTERS a
+    /// hit box before the flight's world stop (`t_box < world_t` [M 0x1ea398:216-229]) — a
+    /// chest-clear ray reaches the torso/head volume, and centre-sight is strictly stricter than
+    /// the game (walker.rs `exposed_aim`'s note, level-02-every-objective-4). With the flag the
+    /// pick accepts a world-ray-clear shooter and the stand aims the world-ray chest ladder when
+    /// no box centre is clear, so the fight can WIN (the K5 dart's sleep [M 0x1469b8:315-361])
+    /// instead of standing blind on an unreachable shooter (the blind stand is the measured death:
+    /// the 2026-11-13 run died at t17600 with 5 fights — the unseen fallback stands at d 31-40
+    /// while the still-target rolls chew [M 0x179740 DroneFiring_TargetMoving_Accuracy]). Off =
+    /// master behaviour everywhere else — the d1/d2 sisters keep their committed streams
+    /// byte-identical.
+    pub world_ray_fights: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
     /// The live-hostile drones this log has already seen alive, with the walker tick of the
@@ -598,6 +618,27 @@ impl DamageLog {
     /// `visible` under the lane-fight ray set (`exposed_part_gun_rays`).
     pub fn visible_gun_rays(sim: &nf_view::scene::Sim, i: usize) -> bool { Self::exposed_part_gun_rays(sim, i).is_some() }
 
+    /// The world-ray fight point (`world_ray_fights`): the highest point on the guard's spine
+    /// whose straight segment_bullet ray from the eye is CLEAR — the [0b-ray] map's rule (its
+    /// prints read `segment_bullet(eye, [pos.x, pos.y+1.2, pos.z])`). The ladder runs
+    /// 1.2/0.9/0.6/0.3 (the [0b-ray] census's measured chest first, down to the torso anchor —
+    /// the deck pieces' top band sits between the anchors, so the HIGHEST clear point is the
+    /// fight's aim). None = no spine ray clears — the guard is not reachable under the world-ray
+    /// law either. The dart/K5 that flies the crosshair ray hits the guard's box volume on this
+    /// ray (`t_box < world_t` [M 0x1ea398:216-229]); the K5 dart's record carries no gravity bit
+    /// (+0x6C 0xa00, bit 0x8 clear [L ee_snapshot weapon_data 0x2bf150 + 0x43·0x10c]) — the
+    /// flight is straight, the aim needs no drop.
+    pub fn world_ray_point(sim: &nf_view::scene::Sim, i: usize) -> Option<[f32; 3]> {
+        let d = &sim.drones.list[i];
+        let bp = sim.bond.pos;
+        let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+        for &h in &[1.2f32, 0.9, 0.6, 0.3] {
+            let at = [d.pos[0], d.pos[1] + h, d.pos[2]];
+            if sim.world.segment_bullet(eye, at).is_none() { return Some(at); }
+        }
+        None
+    }
+
     /// Why `exposed_part` cannot see drone `i`: every hit box's centre ray with its world stop and
     /// the stopping owner's run, plus the guard's own muzzle→Bond path. NF_RF_GEOM diagnostic.
     pub fn geom_dump(sim: &nf_view::scene::Sim, i: usize) {
@@ -805,7 +846,8 @@ impl Walker {
                             .then(dist_of(a).total_cmp(&dist_of(b)))
                     })
             } else if !self.dmg.lane_fights {
-                match cands.iter().copied().find(|&i| DamageLog::visible(sim, i)) {
+                match cands.iter().copied().find(|&i| DamageLog::visible(sim, i)
+                    || (self.dmg.world_ray_fights && DamageLog::world_ray_point(sim, i).is_some())) {
                     Some(i) => Some(i),
                     // The unseen-cover fallback, opt-in (`with_real_damage_unseen_fights`): the
                     // same hurting-first pick the lane fights run, so a desk guard the eye rays
@@ -819,7 +861,8 @@ impl Walker {
                 }
             } else {
                 let vis = cands.iter().copied()
-                    .filter(|&i| if self.dmg.eye_ray_stands { DamageLog::visible(sim, i) } else { DamageLog::visible_gun_rays(sim, i) })
+                    .filter(|&i| (if self.dmg.eye_ray_stands { DamageLog::visible(sim, i) } else { DamageLog::visible_gun_rays(sim, i) })
+                        || (self.dmg.world_ray_fights && DamageLog::world_ray_point(sim, i).is_some()))
                     .min_by(|&a, &b| {
                         dmg_of(b).total_cmp(&dmg_of(a))
                             .then(dist_of(a).total_cmp(&dist_of(b)))
@@ -1098,7 +1141,15 @@ impl Walker {
                 // stand-ins (the yard stand's idiom — the round leaves low-right of the eye and
                 // the predictor gap is the measured miss), lane fights use the gun stand-ins, the
                 // shared walks the plain eye ray (master behaviour; level-13-lobby-rifles-2).
-                if t % 10 == 0 { aim = if self.dmg.sniper_stands || (self.dmg.lane_fights && !self.dmg.eye_ray_stands) { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) }; }
+                if t % 10 == 0 {
+                    aim = if self.dmg.sniper_stands || (self.dmg.lane_fights && !self.dmg.eye_ray_stands) { DamageLog::exposed_part_gun_rays(sim, di) } else { DamageLog::exposed_part(sim, di) };
+                    // world_ray_fights: no box centre is clear — the world-ray spine ladder is the
+                    // aim (the [0b-ray] law: the chest-clear ray reaches the box volume, the
+                    // crosshair-carried round flies it [M 0x1a4bf0:226-245 + 0x1ea398:216-229]).
+                    if aim.is_none() && self.dmg.world_ray_fights {
+                        aim = DamageLog::world_ray_point(sim, di);
+                    }
+                }
                 if aim.is_none() {
                     unseen += 1;
                     // NF_RF_GEOM: name the world stop that buries the target on the stand's first

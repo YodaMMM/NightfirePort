@@ -923,6 +923,82 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // guards emptied him (the 1988 death).
         for (label, wp) in APPROACH {
             if wp.at[1] > 5.5 { clear_hostiles_16(w, 40.0, 900); }
+            // The Agent walk (d2): the ramp foot and the whole ramp see all
+            // three gallery riflemen (#3/#4/#5, 0x1a) [the 11-13 cover map]; the pocket at
+            // x 19-20 / z -92..-98 sees none. Dash there (no return fire, straight legs - the nav's
+            // hop toward (20.7, -95.6) wedged 771 ticks), arm, and peek-fight from the pocket edge.
+            if re_arm && *label == "the lane east"
+                // 00 Agent too (11-13): on the d3 roster the same pocket holds - the live
+                // bullet-line scan has the gallery lines dead south of the ramp foot - and the
+                // dash moves the death t1020 -> t4379 (pocket entered at 72.0).
+                && w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
+                let rf = w.dmg.return_fire;
+                w.dmg.return_fire = false;
+                w.lenient = true;
+                for (i, at) in [[10.0f32, 0.0, -84.0], [11.0, 0.0, -90.0], [16.5, 0.0, -91.6], [20.5, 0.0, -92.4], [20.6, 0.0, -95.0]].iter().enumerate() {
+                    w.walk_to(walker::Wp::new(at[0], at[1], at[2]).r(0.9), &format!("the pocket dash {i}"));
+                }
+                w.lenient = false;
+                w.dmg.return_fire = rf;
+                let _ = w.switch_to_armed("the pocket");
+                eprintln!("[016] in the pocket: health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                let pocket = [20.6f32, 0.9, -95.0];
+                // d3: (19.3, -93.6) - the old peek (19.0, -92.2) wedged its 3000-tick cap 2.1 u short while the
+                // pocket bled 72 -> 4.7; from here the cycles clear the gallery at 61.5 [L the 11-13 sweep:
+                // (19.6, -93.0) t2841, (20.2, -93.2) t2723, (19.3, -93.6) 61.5 at the fight's end].
+                let peek = if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 { [19.3f32, 0.9, -93.6] } else { [19.0f32, 0.9, -92.2] };
+                for k in 0..10 {
+                    let alive = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        (0..sim.drones.list.len()).filter(|&i| {
+                            let d = &sim.drones.list[i];
+                            d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && d.pos[1] > 5.5 && d.pos[0] < 0.0 && d.pos[2] < -84.0
+                        }).collect::<Vec<_>>()
+                    };
+                    if alive.is_empty() { break; }
+                    w.lenient = true;
+                    w.walk_to(walker::Wp::new(peek[0], peek[1], peek[2]).r(0.5), &format!("the gallery peek {k}"));
+                    w.lenient = false;
+                    let tgt = { let sim = w.scene.sim.as_ref().unwrap(); alive.iter().copied().find(|&i| walker::DamageLog::visible(sim, i)) };
+                    if let Some(gi) = tgt { let _ = w.shoot_bounded(gi, &format!("the gallery peek {k}"), 300); }
+                    w.lenient = true;
+                    w.walk_to(walker::Wp::new(pocket[0], pocket[1], pocket[2]).r(0.6), &format!("back to the pocket {k}"));
+                    w.lenient = false;
+                    for _ in 0..90 { w.tick(nf_game::player::Input::default(), false); }
+                }
+                eprintln!("[016] the gallery pocket fight ends, health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                // d3: the gallery loop ends with two ground guards INSIDE the pocket (#0 hp 25 at 1.9 u,
+                // #5 hp 20 at 4.3 u, both unseen by the visible pick) - backing out past them died at
+                // t3972. Fight them here before the back-out, the 0x50000b2 man first (#5 hit for 14 a
+                // round; nearest-first left 26.5 after the pair, #5-first keeps all 61.5 and reaches the
+                // hand-back at 37.0 with the AR loaded - death t12054 -> t12518 in the chaser fight).
+                if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+                    for _ in 0..4 {
+                        let near = {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let bp = sim.bond.pos;
+                            (0..sim.drones.list.len()).filter(|&i| {
+                                let d = &sim.drones.list[i];
+                                d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                                    && d.pos[1] < bp[1] + 2.0 && walker::dxz(d.pos, bp) < 6.0
+                            }).min_by(|&a, &b| {
+                                let key = |i: usize| { let d = &sim.drones.list[i]; let pri = d.skin == 0x50000b2; (if pri { 0.0 } else { 100.0 }) + walker::dxz(d.pos, bp) };
+                                key(a).total_cmp(&key(b))
+                            })
+                        };
+                        let Some(di) = near else { break };
+                        let _ = w.shoot_bounded(di, "the pocket's close pair", 600);
+                    }
+                    eprintln!("[016] the pocket close pair ends, health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                }
+                // Back out the way the dash came (the straight steer from the pocket to the lane
+                // pins on the trench's east edge).
+                w.lenient = true;
+                for (i, at) in [[20.5f32, 0.0, -92.4], [16.5, 0.0, -91.6], [11.0, 0.0, -90.0], [10.0, 0.0, -84.0]].iter().enumerate() {
+                    w.walk_to(walker::Wp::new(at[0], at[1], at[2]).r(0.9), &format!("out of the pocket {i}"));
+                }
+                w.lenient = false;
+            }
             // los-mask-repins-16 (the real-damage walks' east-lane re-route): under the game's
             // guard sight the east guards (#1 skin 0x50000b1 from (24.1, 0.8, −96.6), #3 skin
             // 0x500008c from (22.1, 0.8, −104.2) [L the 10864 death ledger]) hunt Bond on the
@@ -1323,6 +1399,21 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
             };
             if let Some(g) = threat {
                 if w.shoot_bounded(g, "the squad phase's dealer", 300) { continue; }
+            }
+            // 00 Agent: the far member's slices let #15 (0x14, 10.0 a hit) and the brute #12 walk in
+            // unanswered; any other live hostile inside 10 u gets a short stand first.
+            if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+                let r = 10.0f32;
+                let close = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let bp = sim.bond.pos;
+                    (0..sim.drones.list.len()).filter(|&k| { let d = &sim.drones.list[k];
+                        k != i && d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0 && walker::dxz(d.pos, bp) < r })
+                        .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)))
+                };
+                // 120-tick stands: the slice loop re-checks between them (measured: 120 completes the
+                // walk; 300 died t17678, 600/1200 t17860).
+                if let Some(g) = close { if w.shoot_bounded(g, "the squad phase's close one", 120) { continue; } }
             }
             if w.shoot_bounded(i, "the pit squad", 300) { killed = true; break; }
         }
@@ -2345,7 +2436,41 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
                 d.present && !d.corpse && d.health > 0.0 && d.team == 1
                     && (d.pos[0] - -3.1).powi(2) + (d.pos[1] - -22.0).powi(2) + (d.pos[2] - -163.5).powi(2) < 36.0
             });
-            if let Some(g) = door_guard { w.shoot(g, "the pit-door guard (skin 0x5000093) before the chaser"); }
+            // 00 Agent (d3): the blast room's own soldier (#6, skin 0x5000087, 0x14) stands 2.6-3.9 u
+            // from Bond at the chaser stage and landed 25.0 in 6 while the stands faced the door;
+            // he is fought first (inside 6 u, never the chaser), and the door guard is taken only
+            // when exposed - the hidden-guard stand let the chaser walk in point-blank (t12411).
+            // Measured: the chaser goes down (+2806) and the walk dies in the pit-squad stage,
+            // t12518 -> t17276.
+            if difficulty >= 3 {
+                let r = 6.0f32;
+                for _ in 0..3 {
+                    let near = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let bp = sim.bond.pos;
+                        (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                            i != chaser && d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                                && walker::dxz(d.pos, bp) < r && (d.pos[1] - bp[1]).abs() < 2.0 })
+                            .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)))
+                    };
+                    let Some(di) = near else { break };
+                    let _ = w.shoot_bounded(di, "the blast room's soldier before the chaser", 600);
+                }
+                eprintln!("[016] room soldiers done, health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                // The room-soldier fight leaves Bond against the south wall (-14.6, -173.1): the
+                // chaser (her 0x14 gun) then landed 4 x 5.0 at 2.4 u while the range keeping could
+                // not back off. Back to the room's open floor first (the shelter route's own stand):
+                // the chaser fight then costs nothing (37.0 into the squad stage, was 17.0).
+                w.lenient = true;
+                w.walk_to(walker::Wp::new(-14.45, -22.0, -170.16).r(0.5), "the blast room's open floor");
+                w.lenient = false;
+            }
+            let skip_hidden = difficulty >= 3;
+            if let Some(g) = door_guard {
+                if !(skip_hidden && !walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g)) {
+                    w.shoot(g, "the pit-door guard (skin 0x5000093) before the chaser");
+                }
+            }
         }
         kill_the_chaser_with_range_keeping(&mut w, chaser, t0);
         // Then the pit room's soldiers (their steady fire is what remains; the first run died to
@@ -2490,7 +2615,9 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 /// the chain set), or a live PCSX2 scout of whether the gallery is reachable on foot
 /// (the station's west side?) — the player answer this route is missing.
 #[test]
-#[ignore = "Agent: Bond dies on real health — the south gallery (four AR guards above z -102..-112) plinks 71.4 of the 100 free from tick 455; the ring-gated (48,18) window makes the fights take them but the ring trades still cost 44 (entered the chaser at 7.6); levers: a cover-shaped gallery approach from the ring, an armour pickup, a live scout of the gallery's foot access"]
+/// GREEN 2026-11-13: the gallery trio (#3/#4/#5, 0x1a) sees the whole ramp; the walk dashes to the
+/// x 19-20 / z -92..-98 pocket (no line to any of them), peek-fights them from its edge and backs
+/// out the way it came (end health 49.2, armour 41.3).
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2));
 }
@@ -2502,7 +2629,6 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88]. The d2 gates (the pit-door guard pre-shoot) fire
 /// at 3 too. Real input only; no health/ammo/channel writes.
 #[test]
-#[ignore = "00 Agent: Bond dies in the corridor approach cluster on real health — tick 1141, 20 hits for 100.0 (the d2 ledger's ~86 attrition at Hard: #2 skin 0x50000b2 AR 47.5 in 7, #0 17.5/5, #5 14.0/2, #3 10.5/3, #4 7.0/2), pain Plr_DMod_Hard 1.0 [M 0x1d3a80 case 0x7000014-16] and Accuracy Hard [M 0x179740:74-88] on the game's own pipeline; next lever: the approach-fight work (real-health-agent-16-1b-2) then the 05-07 d3 stands (spawn pre-shoots, head-hunting)"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3));
 }

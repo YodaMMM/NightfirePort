@@ -133,7 +133,7 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
     let sim = w.scene.sim.as_ref().unwrap();
     let fb = sim.drones.fuseboxes.iter().position(|f| f.ch[0] as u32 == want as u32)
         .unwrap_or_else(|| panic!("{label}: the fusebox with group-0 channel {want:#x} exists [D]"));
-    let (bp, wire, wire_obj) = {
+    let (bp, wire, wire_obj, away) = {
         let sim = w.scene.sim.as_ref().unwrap();
         // The group-0 wire (the p1 word's group [D placements 383/385 p1]); fall back to the
         // first alive wire if the group-0 slot is empty.
@@ -141,7 +141,22 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
             .or_else(|| sim.drones.fuseboxes[fb].alive_wires().next())
             .map(|(_, _, o)| o)
             .expect("the script registered wires (groups 0 and 1 [L])");
-        (sim.drones.fuseboxes[fb].pos, wire_aim_point(sim, obj), obj)
+        // The group-1 wire is the WRONG cut: its channel word smashes the room's generator
+        // (#383's group 1 writes 0x71 = destroy #388's kill word, #385's 0xd8 = #387's [D the
+        // fusebox ch words + the destroy census]; type 50 -> a 500-damage, radius-10 blast [M
+        // Destroy_Create 0x12c318 +0x34/+0x40, Destroy_Smash 0x12bb60]) 2.4 u from the stance -
+        // lethal. The two cables hang side by side 0.007 u apart, so the burn aims at the far
+        // side of the wanted cable, away from the other group's (the centre aim's feedback
+        // drift cut group 1 one frame before group 0 [L the 11-13 levellog: 0x71 at 13608,
+        // 0x87 at 13609]).
+        let mine = wire_aim_point(sim, obj);
+        let away = sim.drones.fuseboxes[fb].alive_wires().find(|(_, _, o)| *o != obj)
+            .map(|(_, _, o)| wire_aim_point(sim, o))
+            .map(|other| { let v = [mine[0] - other[0], mine[1] - other[1], mine[2] - other[2]];
+                let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-4);
+                [v[0] / l * 0.04, v[1] / l * 0.04, v[2] / l * 0.04] })
+            .unwrap_or([0.0; 3]);
+        (sim.drones.fuseboxes[fb].pos, [mine[0] + away[0], mine[1] + away[1], mine[2] + away[2]], obj, away)
     };
     let cands = [[0.6f32, -1.2, 0.0], [-0.6, -1.2, 0.0], [0.0, -1.2, 0.6], [0.0, -1.2, -0.6]];
     let mut stood = false;
@@ -200,7 +215,7 @@ fn cut_fusebox(w: &mut Walker, box_pos: [f32; 3], want: u8, label: &str) {
         if let Some((pos, dir, speed)) = round {
             let centre = w.scene.sim.as_ref().unwrap();
             if let Some((lo, hi)) = wire_world_box(centre, wire_obj) {
-                let c = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+                let c = [(lo[0] + hi[0]) * 0.5 + away[0], (lo[1] + hi[1]) * 0.5 + away[1], (lo[2] + hi[2]) * 0.5 + away[2]];
                 let e = [pos[0] + dir[0] * speed, pos[1] + dir[1] * speed, pos[2] + dir[2] * speed];
                 let ab = [e[0] - pos[0], e[1] - pos[1], e[2] - pos[2]];
                 let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
@@ -731,6 +746,11 @@ fn open_the_pad_lid(w: &mut Walker) {
 /// dump]) for the whole 2400-tick cap. The player drops past him on the north side, z 34.9.
 fn drop_aim_z(w: &Walker) -> f32 {
     let sim = w.scene.sim.as_ref().unwrap();
+    // Real health: the drop-band guard is shot from the landing (below), and his body
+    // lies in the band at (32.2, 33.2); the 34.0 line then wedges under the overhang at
+    // (33.71, 1.20, 34.23) while the 33.4 line clears to the low floor [L the 11-13 runs].
+    if !w.tops_up() && sim.drones.list.iter().any(|d| d.corpse
+        && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2])) { return 33.4; }
     let blocked = sim.drones.list.iter().any(|d| d.present && !d.corpse && d.health > 0.0 && d.pos[1] < 2.3
         && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2]));
     if blocked { 34.9 } else { 34.0 }
@@ -806,6 +826,22 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         // clear segment to the target is the overhang catch), so the westing is the player's own
         // push: steer south-west around the slab's corner, hop when grounded (the walker's wedge
         // recovery), until clear of the overhang zone on the low floor.
+        // Real health: a guard (00 Agent #6 / Operative #5, 28 health, 0x14) stands asleep in the
+        // drop band at (32.2, 1.8, 33.2); the drop steers into the overhang around him and wedges, and
+        // walking past wakes him (point-blank death). Bond still holds the vent-lid item here, so
+        // the pistol comes out first, then the guard is shot from the landing (killed, no hits
+        // taken [L the 11-13 run]).
+        if !w.tops_up() {
+            let _ = w.switch_to_armed("the drop-band guard");
+            for _ in 0..3 {
+                let di = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
+                    && d.health > 0.0 && d.pos[1] < 2.3 && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2])) };
+                let Some(di) = di else { break };
+                let k = w.shoot(di, "the drop-band guard (from the landing)");
+                eprintln!("[014] drop-band guard #{di} killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                if !k { break; }
+            }
+        }
         {
             let start = w.total_ticks;
             loop {
@@ -974,6 +1010,24 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     w.walk_to(Wp::new(-60.5, 0.05, 47.4).r(1.0), "the west corridor north lane (node 620)");
     w.walk_to(Wp::new(-60.5, 0.05, 43.79).r(1.0), "the corridor south (node 618)");
     w.walk_to(Wp::new(-60.5, 0.05, 40.77).r(1.0), "the corridor south to the switch band (node 626)");
+    // 00 Agent real health: the band's guards come to the door as Bond walks in (#32 skin
+    // 0x5000093 took 32.9 in 4 from 7.6 u east, then the band death t23511 [L 11-13 run]).
+    // A player answers them from the corridor first: up to three bounded stands on the nearest
+    // team-1 guard inside 15 u from node 626 (measured: death t23511 -> t26213, past the band
+    // and the door, at the escape touch legs).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        for _ in 0..3 {
+            let pick = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 15.0 })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)))
+            };
+            let Some(di) = pick else { break };
+            let _ = w.shoot_bounded(di, "the switch band's guard from node 626", 600);
+        }
+    }
     w.walk_to(Wp::new(-60.3, 0.6, 38.4).r(0.6), "into the switch band (the E-use spot)");
 }
 
@@ -1021,7 +1075,7 @@ fn walk_the_infiltration_to_the_delta_exit() {
 /// 0x1902c8] and the guards' hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy
 /// 0x179740:74-88]. Real input only; no health, ammo or channel writes.
 #[test]
-#[ignore = "re-tune after the claw wall fix: the route's SkyBridge crossing is a stand-in now (the claw bolt dies on the duct wall) and the shifted clock leaves Bond short on the pit band's east jump (46.34, -1.78, 53.19); the plain walk passes the same legs"]
+/// UN-IGNORED 2026-11-13: green on master c94c1043e (the ignored-walk sweep).
 fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
     // The lane-fight + path-clear laws (opt-in, this level's sister only — set inside the body
     // behind the difficulty gate; see the body comment for the measured deaths).
@@ -1070,7 +1124,7 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// wrap + this un-ignore are one-liners; (2) a d2/d3-gated fight-quiet approach so the
 /// displacement never reaches the pocket; (3) the stairwell AIM-pair stands.
 #[test]
-#[ignore = "00 Agent: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
+#[ignore = "00 Agent (11-13 update): the switch band is passed - from node 626 Bond answers the band guards before stepping in (37.9 health left), the door opens and then the Kiko corridor squad is answered (exposed-only, nearest first) and the corridor end is held 600 ticks (short stands + a grenade side-step); the legs kill six of the squad and a second 300-tick hold at node 4 (-44.2, 27.6) takes the squad's tail; the escape touch is reached and the walk dies at t29197 at (-30.20, 1.16, 24.28) on the Rook's-wake legs to #30 (skin 0x5000087, 0x14) with 2.9 health. Next: health into the Kiko corridor (27.9 there). Earlier: 00 Agent (11-13 update 3): the fusebox burns now cut ONLY the group-0 cable (the t21466 death was the walk's own wrong cut: the centre aim drifted onto the adjacent group-1 cable, whose channel 0x71 smashes generator #388 - a 500/r10 blast 2.4 u from the stance); both fuseboxes cut clean, the E-use switch band reached; dies at t23511 at (-59.69, 0.73, 38.98) on the corridor east to the door - #32 (skin 0x5000093) 32.9 in 4 at d 7.6, 9 fights. Next: the switch-band corridor fight. Update 2: the hostile clear picks NEAREST first at d3 real health (the list-order pick spent 900 ticks on #3 at 18.2 u while #9 shot Bond from 1.2 u) - the corridor, leg 2 and the generator room now pass; the walk dies at t21466 at the fusebox #383 stance (-88.35, -1.10, 31.38): the fusebox burn's blast lands 37.91 in one hit on the remaining health (34 hits, 7 fights before it). Next: the #383 burn from a stance outside the blast, or health into it. Update 1: the landing west drop is PASSED - a d3-only guard (#6, 28 hp, 0x14) slept in the drop band at (32.2, 1.8, 33.2) and turned the drop aim into the overhang (wedge at (33.70, 1.19, 35.21)); the pistol comes out (Bond held the vent-lid item) and #6 dies from the landing with no hits, the drop then aims z 33.4 past his body. The walk now dies at t7051 in the corridor lane north (node 57, the door (27.8, 1.2, 30.0)) to the corridor crowd (47 hits, 0 return-fire fights: #9 65.0 in 13 at d 1.2, #8 17.5, #7 12.5 at d 9.9, #10 5.0; all 0x14). Next: the corridor crowd (why no return fire at d 1.2). Earlier ledger: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
@@ -1166,6 +1220,39 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     w.walk_to(Wp::new(-56.6, 0.4, 39.56).r(1.0), "the corridor east to the door");
     w.walk_to(Wp::new(-51.4, 0.4, 39.56).r(1.0), "through the opened doorway");
     w.walk_to(Wp::new(-49.2, 0.9, 38.4).r(1.0), "the Kiko corridor east");
+    // 00 Agent real health: the Kiko corridor squad (#20/#21/#29/#31, hp 10 each) converges on
+    // the escape-touch legs; answered from here, nearest first, while one stands EXPOSED (an
+    // unexposed 600-tick stand burned the window: t26813), 300 ticks each. Measured: death
+    // t26213 -> t27134 (escape-touch node 4).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        for _ in 0..4 {
+            let pick = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 15.0 && (d.pos[1] - bp[1]).abs() < 2.0 })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)))
+            };
+            let Some(di) = pick else { break };
+            if !walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), di) { break; }
+            let _ = w.shoot_bounded(di, "the Kiko corridor's guards", 300);
+        }
+    }
+    // 00 Agent: the squad (#20/#22/#23/#28/#29/#31/#61) converges on the escape-touch legs. A
+    // player holds the corridor end first: 600 ticks answering the nearest visible guard in short
+    // stands and stepping away from any live grenade (the 15 door[51] pattern). Measured: death
+    // t27134 (node 4) -> t27517 at (-35.17, 26.39), 2 u from the touch (1200 ticks: t26998).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        kiko_hold(&mut w, 600, "the Kiko hold");
+    }
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        // A second, shorter hold at escape-touch node 4 (-44.2, 27.6) for the squad's tail (#31
+        // killed Bond 2 u short of the touch on the one-hold stream). Measured: the touch is
+        // reached and the walk dies on the Rook's-wake legs, t27517 -> t29197 (node 3 (-46.6,
+        // 28.4) t27226; node 5 for 600 t29406 with less health).
+        w.follow_nav_route([-44.2, 0.9, 27.6], "east to the second hold");
+        kiko_hold(&mut w, 300, "the second hold");
+    }
     w.follow_nav_route([-33.1, 0.9, 26.8], "east to the escape touch #456");
     let mut ch4a = false;
     for _ in 0..2000 {
@@ -1652,7 +1739,6 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// write no health/armour/ammo; the exit load into 07000015 is the game's own Trigger_Activate
 /// path [M 0x1b2318 → warm_exit_save → Player_RamLoad 0x1957a8].
 #[test]
-#[ignore = "re-tune after the claw wall fix: the route's SkyBridge crossing is a stand-in now (the claw bolt dies on the duct wall) and the shifted clock lands the descent at (29.63, 0.65, 29.25) instead of the leg-2 start (29.99, 0.61, 38.00); the plain walk passes the same legs"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }
@@ -1672,10 +1758,16 @@ fn clear_hostiles(w: &mut Walker, radius: f32, cap: u32) {
     for _ in 0..10 {
         trail.push(w.scene.sim.as_ref().unwrap().bond.pos);
         let sim = w.scene.sim.as_ref().unwrap();
-        let Some(di) = sim.drones.list.iter().position(|d| {
-            d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
-                && walker::dxz(d.pos, sim.bond.pos) < radius
-        }) else { break }; // a clear that ends here still walks home below
+        let live = |d: &nf_game::drone::Drone| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+            && walker::dxz(d.pos, sim.bond.pos) < radius;
+        // 00 Agent real health: nearest first - the list-order pick spent 900 ticks on #3 at
+        // 18.2 u while #9 shot Bond from 1.2 u (65.0 in 13, the t7051 corridor death).
+        let nearest = !w.tops_up();
+        let pick = if nearest {
+            sim.drones.list.iter().enumerate().filter(|(_, d)| live(d))
+                .min_by(|a, b| walker::dxz(a.1.pos, sim.bond.pos).total_cmp(&walker::dxz(b.1.pos, sim.bond.pos))).map(|(i, _)| i)
+        } else { sim.drones.list.iter().position(|d| live(d)) };
+        let Some(di) = pick else { break }; // a clear that ends here still walks home below
         // The dropped-gun cycle is now a bounded test-local loot pass (this tree's measured
         // runs: the fights held Bond at 74.0 across 9-12 fights — the armour takes the traded
         // rounds — while the shared resupply walked Bond onto the trench lip for a drop
@@ -2285,4 +2377,33 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
         // always contains one — the deletion observables above are the 0x12cd98 rule here.)
         assert!(sim.drones.tripbomb_beams.is_empty(), "the beam deleted with it (BU+0x38, +0x70 & 0x80000) [M]");
     }
+}
+
+fn kiko_hold(w: &mut Walker, hold: u32, label: &str) {
+        let home = w.scene.sim.as_ref().unwrap().bond.pos;
+        let t0 = w.total_ticks;
+        while w.total_ticks - t0 < hold {
+            let (gren, pick) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                let gren = sim.drones.grenades.iter().filter(|g| walker::dxz(g.pos, bp) < g.radius.max(4.0) + 2.0).map(|g| g.pos).next();
+                let pick = (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 20.0
+                        && (d.pos[1] - bp[1]).abs() < 3.0 && walker::DamageLog::visible(sim, i) })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)));
+                (gren, pick)
+            };
+            if let Some(gp) = gren {
+                let (f, sd) = { let sim = w.scene.sim.as_ref().unwrap(); let bp = sim.bond.pos;
+                    let (dx, dz) = (bp[0] - gp[0], bp[2] - gp[2]); let n = (dx * dx + dz * dz).sqrt().max(0.01);
+                    let (fx, fz) = (sim.bond.yaw.sin(), sim.bond.yaw.cos()); ((dx * fx + dz * fz) / n, (dx * fz - dz * fx) / n) };
+                w.tick(nf_game::player::Input { forward: f.clamp(-1.0, 1.0), strafe: sd.clamp(-1.0, 1.0), ..Default::default() }, false);
+                continue;
+            }
+            if let Some(g) = pick { let _ = w.shoot_bounded(g, label, 90); continue; }
+            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, home) > 1.5 {
+                w.lenient = true; w.walk_to(Wp::new(home[0], home[1], home[2]).r(0.8), "back to the hold spot"); w.lenient = false;
+            } else { w.tick(nf_game::player::Input::default(), false); }
+        }
+        eprintln!("[14hold] {label} done, health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
 }

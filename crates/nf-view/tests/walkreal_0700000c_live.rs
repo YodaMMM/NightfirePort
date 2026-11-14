@@ -509,7 +509,8 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
 /// the tick-5903 fight) to see whether the blocker hold or the slab eats the taps. The
 /// Operative baseline this sister must match: 100.0 → 26.2 hp over 19287+838 ticks.
 #[test]
-#[ignore = "Agent: the fights win but the crossfire cadence out-bleeds the route — run 3 (lane fights + escalating cooldowns) died tick 8579 at the warehouse plates (3.0 hp left; the tick-5903 fight paid 19.0 to the d 18-20 machine pistols); run 1 (master fights) died tick 4054, run 2 tick 6716, run 4 (dry_taps) reshuffled worse, tick 4234; levers: a d2-gated stair-head down-shot stand on the display-ground pair, an aimed stand on #31 from the display pocket, the NF_RF_TRACE read of the blocked fights"]
+/// UN-IGNORED 2026-11-13: green on master 0fdee8319 - the warehouse-plate crossfire death no
+/// longer reproduces on the current guard rules.
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
     walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(2))

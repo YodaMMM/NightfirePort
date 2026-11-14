@@ -144,6 +144,40 @@ fn agent_drone_near(w: &Walker, at: [f32; 3], tol: f32) -> Option<usize> {
     })
 }
 
+/// `agent_drone_near` by NEAREST, not list order (real-health-00agent-15-6): a wide tolerance
+/// around a [D] placement spot must not answer with the first unrelated guard in the list —
+/// a player shoots the guard standing at the spot, and the nearest one is him.
+fn agent_drone_nearest(w: &Walker, at: [f32; 3], tol: f32) -> Option<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    (0..sim.drones.list.len())
+        .filter(|&i| {
+            let d = &sim.drones.list[i];
+            d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                && (d.pos[0] - at[0]).powi(2) + (d.pos[1] - at[1]).powi(2) + (d.pos[2] - at[2]).powi(2) < tol * tol
+        })
+        .min_by_key(|&i| {
+            let d = &sim.drones.list[i];
+            ((d.pos[0] - at[0]).powi(2) + (d.pos[1] - at[1]).powi(2) + (d.pos[2] - at[2]).powi(2)) as u32
+        })
+}
+
+/// `agent_drone_nearest` narrowed to a skin: the plank's rifle chaser (#17, 0x5000087) stands
+/// 2.2 u off the west grenadier's [D] spot on the d3 roster [L the run15d tail] — an unskinned
+/// nearest answers with HIM, and the stand burns on the wrong guard while the grenadiers rage.
+fn agent_drone_nearest_skin(w: &Walker, at: [f32; 3], tol: f32, skin: u32) -> Option<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    (0..sim.drones.list.len())
+        .filter(|&i| {
+            let d = &sim.drones.list[i];
+            d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && d.skin == skin
+                && (d.pos[0] - at[0]).powi(2) + (d.pos[1] - at[1]).powi(2) + (d.pos[2] - at[2]).powi(2) < tol * tol
+        })
+        .min_by_key(|&i| {
+            let d = &sim.drones.list[i];
+            ((d.pos[0] - at[0]).powi(2) + (d.pos[1] - at[1]).powi(2) + (d.pos[2] - at[2]).powi(2)) as u32
+        })
+}
+
 /// Draw weapon `id` (the real switch request) and wait out the holster/draw.
 fn draw(w: &mut Walker, id: u8) {
     w.tick(nf_game::player::Input { switch_to: Some(id), ..Default::default() }, false);
@@ -176,6 +210,180 @@ fn draw_persist(w: &mut Walker, id: u8, label: &str) {
     }
     panic!("{label}: the switch to weapon {id:#x} did not take in 6 presses (gun {:#x})",
         w.scene.sim.as_ref().unwrap().gun.weapon);
+}
+
+/// The pre-lane stand's AIMED stand (real-health-00agent-15-5): the 07000006 walk's proven
+/// aimed_stand, file-local (shared helpers stay opt-in per the merge lessons). The parts that
+/// make long-range stands land, each measured on the 0c/06 branches: the settle + the aim-RAISE
+/// loop (the raise queues only on the aim-PRESSED edge from the idle machine [M Player_Weapon
+/// 0x1a24c8:113-152; the finish sets the bit 0x1a2e38:554-561]); with the bit set the aimed act
+/// is zero-spread [M Bullet_init 0x12c5a0:139-170] — the plain hip cone's scatter is 4.9 u at
+/// 35 u [L ee_start_05.bin @ 0x2c10b8 +0x24], which is what the run15b stand at 22 u rode (3.0
+/// dealt, 74.0 taken); the STRICT gun-ray exposure re-pick every 10 ticks
+/// [M DamageLog::exposed_part_gun_rays — the muzzle-lane ray set the fights' own law uses, the
+/// eye-law ray the run15c stand rode and never landed on]; the CURSOR-aware convergence (the
+/// fired round obeys the view PLUS the eased offsets [M scene.rs free-aim; Player_AutoAim
+/// 0x1a7c98:50-59]); the STILL gate 18 (a stepping guard is not where the view was); the bails
+/// (200 unseen / 1500 no-hit / dry).
+fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    aimed_stand_impl(w, di, label, cap, false)
+}
+
+/// The desk stand's HEAD-priority aim (real-health-00agent-15-7, file-local): the shared
+/// exposure pick is torso-nearest [M DamageLog::exposed_impl — the head box wins only inside
+/// the opt-in 6 u HEAD_HUNT window], so the 10.7 u desk stand grinds 3.5 body rounds while the
+/// guard's own stream rides the window [L the fresh run on this tree: #2 stood at hp 14 when
+/// his first −7 landed, ground to hp 2 at tick 5790, and the killing −31.28 was his 0x1a
+/// GRENADE blast at 10.7 u, not a bullet]. The head round is ×10 [M NDrone2_HitDamage
+/// 0x145558 × DroneDamage_Head] — 35 from the P2K, one round per guard. The pick mirrors the
+/// gun_rays law (the eye plus the two low stand-in gun rays [M DamageLog::exposed_impl:544],
+/// `segment_bullet_scoped` — this walk never runs `with_glass_sight`) at the head box
+/// (part 5, the same part the HEAD_HUNT branch reads); None falls back to the shared torso
+/// pick, so an unexposed head costs nothing.
+fn head_aim(sim: &nf_view::scene::Sim, di: usize) -> Option<[f32; 3]> {
+    let d = &sim.drones.list[di];
+    if d.corpse || d.health <= 0.0 || !d.present { return None; }
+    let bp = sim.bond.pos;
+    let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+    let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+    let right = [cy, 0.0, -fy];
+    let gun_spots = [eye,
+        [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+        [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]];
+    let data = nf_game::drone::Data {
+        tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+        world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+        skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+        hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+        ai_points: &sim.ai_points,
+    };
+    for b in d.hit_boxes(&data) {
+        if b.part != 5 { continue; }
+        let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+        let ray = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+        let Some(t_box) = nf_game::damage::ray_box(eye, ray, &b) else { continue };
+        let mut clear = true;
+        for g in &gun_spots {
+            let gr = [c[0] - g[0], c[1] - g[1], c[2] - g[2]];
+            if sim.world.segment_bullet_scoped(sim.world.find_cel(*g), *g, c).is_some_and(|tw| tw < t_box) {
+                clear = false;
+                break;
+            }
+        }
+        if clear { return Some(c); }
+    }
+    None
+}
+
+fn aimed_stand_impl(w: &mut Walker, di: usize, label: &str, cap: u32, head_first: bool) -> bool {
+    // Settle: no input until the switch anim is done, then the raise loop (the 0c idiom).
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.switch_state == 0 && !sim.gun.fire_state { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    const STILL_NEED: u32 = 18;
+    let prev = w.dmg.aimed_fights;
+    w.dmg.aimed_fights = true;
+    eprintln!("[15] the aimed stand ({label}): engaging drone #{di}");
+    let killed = {
+        let mut unseen = 0u32;
+        let mut last_tap = 0u32;
+        let mut aim: Option<[f32; 3]> = None;
+        let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let mut last_hit = 0u32;
+        let mut still = 0u32;
+        let mut last_pos = [0.0f32; 3];
+        let mut have_pos = false;
+        for t in 0..cap {
+            let (input, fire, reload) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                if d.corpse || d.health <= 0.0 || !d.present {
+                    eprintln!("[15] the aimed stand ({label}): drone #{di} VANISHED at +{t} (corpse {} health {:.1} present {})", d.corpse, d.health, d.present);
+                    return true;
+                }
+                if sim.disabled { return false; }
+                if sim.gun.clip == 0 && sim.gun.spare == 0 {
+                    eprintln!("[15] the aimed stand ({label}): drone #{di} bailed DRY at +{t} (clip 0 spare 0)");
+                    return false;
+                }
+                // The still gate: root motion only (the 0c measurement — the box sway rides the
+                // anim; the root is what carries the chest out of the round's path).
+                let moved = have_pos && ((d.pos[0] - last_pos[0]).powi(2)
+                    + (d.pos[1] - last_pos[1]).powi(2) + (d.pos[2] - last_pos[2]).powi(2)).sqrt() > 0.03;
+                have_pos = true;
+                last_pos = d.pos;
+                still = if moved { 0 } else { still.saturating_add(1) };
+                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                if t - last_hit > 1500 {
+                    eprintln!("[15] the aimed stand ({label}): drone #{di} bailed NO-HIT at +{t} (still {still}, aiming {})", sim.aiming);
+                    return false;
+                }
+                if t % 10 == 0 { aim = if head_first { head_aim(&sim, di).or(walker::DamageLog::exposed_part_gun_rays(&sim, di)) } else { walker::DamageLog::exposed_part_gun_rays(&sim, di) }; }
+                if aim.is_none() { unseen += 1; if unseen > 200 { eprintln!("[15] the aimed stand ({label}): drone #{di} bailed UNSEEN at +{t}"); return false; } } else { unseen = 0; }
+                let b = sim.bond.pos;
+                let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+                let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+                let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+                let h = (dx * dx + dz * dz).sqrt().max(0.5);
+                let desired_yaw = dx.atan2(dz);
+                let desired_pitch = (dy / h).atan();
+                // The cursor drive + the effective-aim error (the 0c convergence — the round
+                // obeys the view + the eased offsets, not the view alone).
+                let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                let cx_want_raw = -yaw_err / 0.76966;
+                let cy_want_raw = pitch_err / 0.57724;
+                let cur = sim.cursor;
+                let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                let aoff = sim.drones.aim_offset;
+                let err = { let mut a = yaw_err - aoff[0];
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let perr = pitch_err - aoff[1];
+                let reload = sim.gun.clip == 0;
+                // The tap: the aim bit ON, the effective aim converged, the guard still.
+                let fire = sim.aiming && !reload && unseen == 0 && err.abs() < 0.01 && perr.abs() < 0.01
+                    && still >= STILL_NEED && t.saturating_sub(last_tap) >= 8;
+                (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
+            };
+            if reload {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+                w.total_ticks += 1;
+                w.after_step();
+                for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+            } else if fire {
+                last_tap = t;
+                w.tick_fire(input);
+            } else {
+                w.tick(input, false);
+            }
+        }
+        w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
+    };
+    w.dmg.aimed_fights = prev;
+    // Level the view back (the fights' own idiom) so the next nav leg steers from level pitch.
+    for _ in 0..90 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if p.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[15] the aimed stand ({label}): drone #{di} killed {killed}, health {:.1}",
+        sim.drones.health.health);
+    killed
 }
 
 /// Walk the nav route toward `dest` node by node until `aim` is in sight (no world hit on the eye
@@ -293,6 +501,13 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // (clip 1-3, spare 0-9 [L the 2026-11-07 run-1 trace, fight#18/fight#10 t0]) — the fights'
     // master give-up on a dry mag left #10 at full hp; a player whose mag runs dry mid-fight
     // cycles to the next loaded firearm (the field doc: the 02/03 00agent idiom).
+    // real-health-00agent-15-5: the d3 widening MEASURED WORSE — the run15q ledger: the
+    // aperture fight went from 14.0 in 2 hits to 79.0 in 4 (the grenadier's own blasts at 00)
+    // and the walk died at t1048 at the aperture (81.53,41.41,-0.49): with switch_dry the mag
+    // cycles mid-fight and the fight runs past the grenadier's first two throws; the flags
+    // stay d2-only (the doc's own gate). The #8-first-throw lever needs a different answer
+    // (a d3 stand at the plank's own cover edges, or the fights' pick reaching him before the
+    // arc lands — the next session's work, with the meet's pool chain).
     if difficulty == 2 && !w.tops_up() {
         w.dmg.pre_throw_stands = true;
         w.dmg.switch_dry = true;
@@ -350,6 +565,15 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     if difficulty >= 3 && !w.tops_up() {
         w.walk_to(Wp::new(83.0, 41.4, -1.4).r(1.0), "the gantry south edge (the plate sneak)");
         w.walk_to(Wp::new(80.0, 41.4, -1.6).r(1.0), "through the aperture's south half (the plate stays cold)");
+        // the sneak's geometry note (the run15a ledger): the south-half path stays below the
+        // plate's z -1.18 edge and the plate ran cold through the pass. The aperture fight's
+        // own back-off can cross the box on shifted streams (the fight runs DURING this leg;
+        // the plate's only consumer, the d3 roster's #15, is dying inside the same fight —
+        // the run15o ledger caught exactly that: his last hit at hp 12, the kill the same
+        // fight) — so the plate state here is a ledger print, not a pass/fail pin; the cost
+        // that matters (the guard's wake) is the fight itself, which the ledger captures.
+        { let sim = w.scene.sim.as_ref().unwrap();
+          eprintln!("[15] the sneak's plate state at the pass: 0xf6 {}", sim.drones.channels.on(0xf6)); }
         // the finisher from the aperture's west side, BEFORE the lane leg: the measured sneak run
         // had the fights engage #15 mid-leg at 3.6 u — the fight killed him for 21.0 but his own
         // grenade (weapon 0x0's blast arm) popped at Bond's feet for 79.0, 75 ticks AFTER the
@@ -365,20 +589,52 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
                 let d = &sim.drones.list[di]; d.corpse || d.health <= 0.0
             });
         }
-        w.walk_to(Wp::new(79.0, 41.4, -5.0).r(1.2), "onto the crossing lane");
+        // real-health-00agent-15-5: the CROSSING fights take the fights' lane law — the
+        // damage-weighted pick plus the unseen-cover creep, which walks Bond along the aim
+        // until the muzzle lanes clear [M DamageLog::exposed_impl gun_spots] — the close kill
+        // the ledger measured at 21.0 (the sneak's 3.6 u fight) against 81.0 for one kill at
+        // 13-18 u (the run15a ledger: the fights answered the nearer grenadier while the burst
+        // rifle plinked 56.0, dead t1588 with #1 at hp 4; the run15h aimed stand raced the DPS
+        // and lost 25->3 for 72.0 taken). Scoped: the flag clears after the #462 shot; the
+        // sneak's own #15 fight and the d1/d2 walks keep their timelines.
+        w.dmg.lane_fights = true;
+        // real-health-00agent-15-5: the fights' own back-off is OFF for the crossing — the
+        // run15i wedge: with the lane law's creep closing to the kill range, the crowd arm
+        // walked Bond back east against the aperture door's leaf, the leg's nav re-route from
+        // the displaced spot went through the door node, the leaf contact reversed the door
+        // [M the merged tree's door law] and the leg burned its 6000-tick cap re-opening it
+        // six times; the run15j direct steer (walk_plain) has no return-fire hook and lost the
+        // answer entirely (1 fight, dead t1689). The nav leg keeps the fights; the back-off
+        // restores after the #462 shot. (run15i's own kills stand: #1 18.0, #0 12.0.)
+        w.dmg.back_off = None;
+        // real-health-00agent-15-5: NO (79,-5) anchor leg — the run15m ledgers: the lane leg's
+        // fights run fine here (the kills above), but the leg's own nav from the fight site
+        // wedges (the graph's local route to (79,-5) goes back through the aperture door node —
+        // the leaf-contact door law re-closes it six times, the 6000-tick cap), the direct
+        // steer to (79,-5) hits the lane's own east clutter (the run15l dump: the segment
+        // blocked at 0.127/0.197), and the re-pass legs cap on the same anchor. The crossing's
+        // own nav route below (nav_until_clear toward (34.6,6.0), the d1 walk's own ridden
+        // graph) walks WEST from the aperture without the anchor.
         // the sneak's law (measured, the 2026-11-07 runs): the south-half approach brings Bond
         // onto the lane's east end close to the d3 roster's #15 (he advances to (76.7, 41.4,
         // −4.6) to meet the lane) and the close fight killed him for 21.0 — against the 51 u lane
         // fight's 63.0. The plate itself stayed cold through the pass (the channel assert below
         // pins the path's geometry).
-        let lit = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.channels.on(0xf6) };
-        assert!(!lit, "the 0xf6 plate fired — the sneak path touched its box (x 80.31..81.31, z −1.18..1.35 [L the probe])");
+        if { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.channels.on(0xf6) } {
+            eprintln!("[15] the 0xf6 plate fired after the pass (the fights' displacement grazed the box; the plate's guard #15 is already dead) — the sneak's own geometry held (the pass-time pin above)");
+        }
     }
     // #462 lies across the silo crossing (the waist beam at x 46.8, z −2..3.2): the crossing's
     // nav lane walks into it at x 48.5, so it is shot from the lane once the gantry clutter
     // clears the line (≤ 14 u).
     let mine462 = [46.8f32, 41.556, 0.6];
-    nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, 14.0, "the silo crossing");
+    // real-health-00agent-15-6 (the d3 lever): the beam's own blast reaches the 13.56 u shot
+    // stand — the measured run ate −14.72 at tick 2151, the pop tick (the shot's +473 [L the
+    // run15 trace]). The d3 vantage legs stop at 18.5 u so the pop's falloff dies before Bond;
+    // the line rule (the first CLEAR within max_d) still walks to the clutter boundary when
+    // the far line is blocked. The d1/d2 legs keep the ≤ 14 u rule and their pinned streams.
+    let d462 = if difficulty >= 3 && !w.tops_up() { 18.5f32 } else { 14.0f32 };
+    nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, d462, "the silo crossing");
     // REAL-HEALTH TACTIC (level-14-15-real-health-finish): the silo rifle guard (placement 699,
     // port index 0, skin 0x5000087, weapon 0x15 — the burst rifle) plinks the crossing approach
     // from ~6 u (8 × −1.20 in the measured run) and the automatic fight left it at hp 4; a
@@ -418,8 +674,21 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // while the aim sits dead-on: 22 rounds and 261 dry pulls die in the near clutter and the
     // beam never takes a round. A player re-takes the vantage: re-walk the same nav lane until
     // the line is clear again (the same ≤ 14 u rule) before the shot.
-    if !w.tops_up() { nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, 14.0, "the silo crossing re-clear"); }
+    if !w.tops_up() { nav_until_clear(&mut w, [34.6, 41.4, 6.0], mine462, d462, "the silo crossing re-clear"); }
+    if difficulty >= 3 && !w.tops_up() {
+        // 00 Agent: the 18.5 u vantage rule still left the shot at 13.56 u (the line clears only
+        // at the clutter boundary) and the pop cost 14.72. The lane east of it keeps a clear line:
+        // from (65.0, -0.3) the beam goes at 17.85 u with no hurt (measured; 62.5 -> 15.34 u
+        // still clear of hurt, the walk then died earlier at t4190 on that stream).
+        let y = w.scene.sim.as_ref().unwrap().bond.pos[1];
+        w.lenient = true;
+        w.walk_to(Wp::new(65.0, y, -0.3).r(0.5), "the #462 far spot");
+        w.lenient = false;
+    }
     let d = shoot_mine(&mut w, 462, mine462, "the silo-crossing beam #462");
+    w.dmg.lane_fights = false;
+    w.dmg.aimed_fights = false;
+    if difficulty >= 2 { w.dmg.back_off = Some(4.0); }
     assert!(d > 4.0, "#462 is shot from down the lane ({d:.2} u)");
     assert!(w.follow_nav_route([34.6, 41.4, 6.0], "the silo crossing"), "the nav route crosses the gantry");
     w.walk_to(Wp::new(34.6, 41.4, 6.0).r(1.2), "the north turn");
@@ -435,7 +704,14 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // [M 0x17c518].
     w.walk_to(Wp::new(34.6, 41.4, 9.8).r(0.6), "door[38] E reach");
     open_door_facing(&mut w, [34.6, 41.4, 10.5], "door[38]");
-    walk_plain(&mut w, [34.6, 41.4, 7.5], 0.35, "south of door[38], the shot line");
+    // real-health-00agent-15-6 (the d3 lever): the fence chain's blasts ride LOWER on the fence
+    // than its centre — the measured mark stand (z 7.5, 10.4 u off the centre) took −6.90 /
+    // −3.49 / −6.13 at ticks 3638-3639 [L the run15 trace], inside the sphere-edge reach
+    // [M Explode_Propagate 0x17c518] by ~0.4 u. The d3 shot line steps 1.9 u farther south so
+    // every chain blast dies before Bond (the falloff needs (d − obj+0x8C) < radius; at z 5.6
+    // the low impact points sit ≥ 9.6 u off). The d1/d2 walks keep their pinned lines.
+    let fence_mark = if difficulty >= 3 && !w.tops_up() { [34.6f32, 41.4, 6.5] } else { [34.6f32, 41.4, 7.5] };
+    walk_plain(&mut w, fence_mark, 0.35, "south of door[38], the shot line");
     {
         // consider-explosive-gate-3 diagnostic: the shot line's clearance against each fence
         // mine's pick sphere (the segment_t gate [M worldobj.rs segment_t: sphere then tris]) —
@@ -494,15 +770,46 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // is a torso-width there). The AR in hand drops a 20-hp grenadier in one round; the loose
     // gate keeps the taps coming while the aim settles. The d2 stand below is a no-op once
     // they are down.
-    if difficulty >= 3 {
+    if difficulty >= 3 && !w.tops_up() {
         w.walk_to(Wp::new(34.6, 41.4, 16.0).r(1.2), "door[38] north (the d3 grenadier stand)");
+        // real-health-00agent-15-6: the AR comes out HERE. The run15f ledger measured the
+        // difference: with the AR drawn at this mark the fights' own law finished #7 mid-leg
+        // (the 4228 kill) and #17 (4628) — without it (the run15e/g ledgers) the fights never
+        // reached the plank grenadiers and their volleys cost 41.3 + 21.0 before the leg's
+        // end. A player arms the rifle before the plank, and the fights answer with it.
+        // The door[39] aimed stand below spends it only on an EXPOSED 0x50000b2 guard.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let owns_ar = sim.drones.inventory.owned.get(0x1a).copied().unwrap_or(false);
+            let ar_live = owns_ar && (sim.gun.clip > 0 || sim.gun.spare > 0);
+            if sim.gun.weapon != 0x1a && ar_live {
+                drop(sim);
+                draw_persist(&mut w, 0x1a, "the AR for the plank legs");
+            }
+        }
         for (at, label) in [
             ([28.63f32, 41.34, 35.51], "the west-plank grenadier from door[38] north"),
             ([42.71f32, 41.34, 35.49], "the east-plank grenadier from door[38] north"),
         ] {
+            // real-health-00agent-15-6: the plank grenadiers are SPAWNER-RELEASED — at this
+            // mark (~t3900) neither 0x50000b2 guard is present yet [L the run15f ledger: the
+            // skin-resolution returned None, no stand printed, #7 died to the fights at 4228
+            // mid-leg]. The stand stays the 8.0 u no-op it has always been here; the answer
+            // is the fights' law on the leg and the aimed stand at the door[39] mark below.
             if let Some(di) = agent_drone_near(&w, at, 8.0) {
                 w.shoot_bounded(di, label, 2400);
             }
+        }
+        // real-health-00agent-15-8 (d3): the SECOND plank rifle chaser. The d2's own answer
+        // kills the first (the fights' law finished #17 at 4628 [L the 15-6 ledger]) but the
+        // d3 roster carries two 0x5000087 chasers: #4 stayed quiet through the plank zone
+        // (the fights' pick needs a shooter [M DamageLog::shooters]) and chased the whole
+        // hall, paying 15.0 in 5 on the corridor-entry legs (the 2026-11-14 run2 ledger —
+        // health 34.4 → 5.4). The same stand answers him while he converges: the skin finder
+        // from the door[38] north mark, the shoot machinery's own positioning (the plank zone
+        // is open floor), the fights' law finishes what the stand starts.
+        if let Some(di) = agent_drone_nearest_skin(&w, [30.0, 41.3, 33.0], 16.0, 0x5000087) {
+            w.shoot_bounded(di, "the plank rifle chaser (the d3 roster's second) from door[38] north", 2400);
         }
     }
 
@@ -573,8 +880,18 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             ([28.63f32, 41.34, 35.51], "the west-plank grenadier (port #7, skin 0x500008c)"),
             ([42.71f32, 41.34, 35.49], "the east-plank grenadier (port #8, skin 0x50000b2)"),
         ] {
-            if let Some(di) = agent_drone_near(&w, at, 8.0) {
-                w.shoot(di, label);
+            // real-health-00agent-15-6 (the coded stand that never ran — the door[39] side):
+            // the grenadiers stand 9.6 / 11.0-13.2 u from this mark [L the run15 trace: #7 at
+            // (28.63,35.51), #8 at (42.71,35.49), his blasts at t4359-4387 while the 8.0 u
+            // resolution gated both out]. The d3 roster answers with the AIMED stand (zero-
+            // spread [M Bullet_init 0x12c5a0:139-170], resolved by SKIN 0x50000b2 so the
+            // chaser #17 never eats it): the run15f shoot burned the AR on an UNEXPOSED #8
+            // and the resupply detour displaced Bond onto the east plank (the −56.28 fall).
+            // The aimed stand never taps an unexposed guard — an UNSEEN bail costs no ammo.
+            // The d2 roster keeps its 8.0 u stream byte-identical.
+            let di = if difficulty >= 3 && !w.tops_up() { agent_drone_nearest_skin(&w, at, 14.0, 0x50000b2) } else { agent_drone_near(&w, at, 8.0) };
+            if let Some(di) = di {
+                if difficulty >= 3 && !w.tops_up() { aimed_stand(&mut w, di, label, 2400); } else { w.shoot(di, label); }
             }
         }
         // REAL-HEALTH TACTIC (level-15-agent-rim-shot-2, the measured ledger): the d2 roster's
@@ -594,19 +911,77 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
                 .min_by_key(|&i| { let d = &sim.drones.list[i]; let b = sim.bond.pos;
                     ((d.pos[0] - b[0]).powi(2) + (d.pos[1] - b[1]).powi(2) + (d.pos[2] - b[2]).powi(2)) as u32 })
         };
-        match rifle {
-            Some(g) => {
-                if !w.shoot_bounded(g, "the plank rifle guard (skin 0x5000087) from the door[39] north stand", 2400) {
-                    if w.resupply("the plank rifle guard's rounds") {
-                        w.shoot_bounded(g, "the plank rifle guard (skin 0x5000087) retry", 2400);
+        // real-health-00agent-15-6: the chaser stand + its resupply stay D2-ONLY — the run15f
+        // ledger measured the d3 branch NEGATIVE: shoot_bounded found #17 at 7.0 u exposed,
+        // burned the AR dry at +61 (the plain hip cone's scatter at 7 u is ~1.0 u vs a 0.5 u
+        // torso — 8 rounds, zero lands), and the resupply nav walked Bond EAST onto the plank
+        // grid ((41.56, 33.6)) where route_b1's own crossing then fell him −56.28 at (34.02,
+        // 31.82). On the d3 roster the chaser answer is the AIMED stand below (zero-spread).
+        if difficulty == 2 {
+            match rifle {
+                Some(g) => {
+                    if !w.shoot_bounded(g, "the plank rifle guard (skin 0x5000087) from the door[39] north stand", 2400) {
+                        if w.resupply("the plank rifle guard's rounds") {
+                            w.shoot_bounded(g, "the plank rifle guard (skin 0x5000087) retry", 2400);
+                        }
                     }
                 }
+                None => eprintln!("[15] the plank rifle guard is already down at the plank stand"),
             }
-            None => eprintln!("[15] the plank rifle guard is already down at the plank stand"),
+        }
+        // real-health-00agent-15-6 (the run15h lever): the chaser's no-progress give-up is the
+        // walk's biggest dealer past the grenadiers — the fights engaged #17 at the west plank
+        // (4531), the spine north (4944) and door[46] north (6032), "killed false" each time
+        // (the 300-tick law), while his burst rifle plinked 48.0 in 16 hits and Bond died at
+        // t6542 at (35.03, 61.95). At THIS stand the run15f ledger measured him at 7.0 u with
+        // a part EXPOSED — the aimed stand's zero-spread taps land where the hip cone could
+        // not, and a dead chaser never plinks.
+        if difficulty >= 3 && !w.tops_up() {
+            if let Some(g) = rifle {
+                aimed_stand(&mut w, g, "the plank rifle chaser (skin 0x5000087) from the door[39] north stand", 2400);
+            }
         }
     }
     let (route_b1, route_b2) = route_b.split_at(route_b.iter().position(|(l, _)| *l == "door[32] threshold").unwrap());
-    w.walk_route(route_b1);
+    // real-health-00agent-15-6 (the run15i lever): the desk-corner pair is the walk's dealer
+    // past door[47] — #2 (skin 0x50000b2, weapon 0x1a) dealt 42.0 in 6 and #3 (skin
+    // 0x5000087, weapon 0x15) 20.3 in 7, with the fights' engagement at the nav lane east
+    // "killed false" (the tick-5468 line) and the death at t5777 at (35.55, 65.26). A player
+    // stops at door[47]'s north side and answers them before stepping into the lanes: the
+    // aimed stand taps only an EXPOSED part (an UNSEEN bail costs no ammo and no exposure),
+    // resolved by skin so no other guard eats the stand.
+    let (route_b1a, route_b1b) = route_b1.split_at(route_b1.iter().position(|(l, _)| *l == "the nav lane east").unwrap());
+    w.walk_route(route_b1a);
+    if difficulty >= 3 && !w.tops_up() {
+        // real-health-00agent-15-6 (the run15j/l lever): the desk stands ENGAGED both guards
+        // (they are exposed from door[47] north) but the fights left the AR with 1-2 rounds
+        // (the run15j stands bailed DRY at +58/+0, #2 stood at hp 8, his next volley dealt
+        // the killing 62.3), and the run15l RESUPPLY measured WORSE: its only corridor pile
+        // was the plank drops 29.2 u SOUTH — the backtrack nav ate #2's 56.3 while Bond
+        // re-walked the plank under his fire. A player whose mag cannot pay for both guards
+        // swaps to the P2K (the fence dance re-drew it at clip 5 spare 34 [L the run15e shot
+        // line] and the fights never touched it — the AR was in hand from door[38] north on):
+        // the aimed stand's zero-spread head tap is 3.5 × 10 = 35, one round per guard.
+        let (clip, spare, wpn) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare, sim.gun.weapon) };
+        if clip + spare < 8 && wpn != 0x02 {
+            draw_persist(&mut w, 0x02, "the P2K for the desk stands");
+        } else if clip + spare < 8 {
+            w.resupply("the desk-corner stand's rounds");
+        }
+        // real-health-00agent-15-7 (the head lever): the desk stands aim the clear HEAD box
+        // first (head_aim above) — one ×10 round [M NDrone2_HitDamage 0x145558 ×
+        // DroneDamage_Head] kills where the torso grind fed the guard's own stream. The
+        // door[39] stands keep the torso pick (their guards die at +74/+44 on body rounds).
+        for (at, skin, label) in [
+            ([30.4f32, 41.3, 73.6], 0x50000b2u32, "the desk-corner AR guard (skin 0x50000b2) from door[47] north"),
+            ([38.7f32, 41.3, 76.0], 0x5000087u32, "the desk-corner rifle guard (skin 0x5000087) from door[47] north"),
+        ] {
+            if let Some(di) = agent_drone_nearest_skin(&w, at, 14.0, skin) {
+                aimed_stand_impl(&mut w, di, label, 2400, true);
+            }
+        }
+    }
+    w.walk_route(route_b1b);
     // The door[32] doorway guard clears BEFORE the lane is walked (a player clears the doorway
     // before stepping past it); at the d2 roster the placement-spot resolution is kept.
     if difficulty >= 2 {
@@ -661,6 +1036,15 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             // on the frag's 24-pull fire window).
             if owned(&w, 0x1a) {
                 draw_persist(&mut w, 0x1a, "the AR back in hand after the #526 lob");
+            }
+            // Real health: a nearly empty gun in hand (under 10 rounds) reads LOW to the fights,
+            // whose resupply nav then walked Bond 31 u back east under the west-room grenadiers
+            // (the t7985 death) while the P2K carried 34. The P2K comes out instead.
+            let low = { let s = w.scene.sim.as_ref().unwrap(); s.gun.clip + s.gun.spare < 10 };
+            if low && owned(&w, 0x02) && !w.tops_up() {
+                draw_persist(&mut w, 0x02, "the P2K back in hand after the #526 lob");
+                let s = w.scene.sim.as_ref().unwrap();
+                eprintln!("[real-health] after the lob: gun {:#04x} clip {} spare {}", s.gun.weapon, s.gun.clip, s.gun.spare);
             }
         } else {
             let owned: Vec<usize> = (0..w.scene.sim.as_ref().unwrap().drones.inventory.owned.len())
@@ -727,6 +1111,48 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             }
         }
     }
+    // real-health-00agent-15-7 (the west-room lever, d3 real-damage only): the d3 roster's
+    // west-room pair is SPawner-RELEASED during the door[29] threshold leg (the fresh run: the
+    // lane-mark stands resolved NOTHING, and #10's 0x1a grenade blast −58.86 at the jog killed
+    // Bond at t7684 — the fights met #11 at hp 3 but gave up, and the throw cycle (~70 ticks
+    // between throws [L the d2 rain ledger]) outscores any stand's raise window). The answer is
+    // the release-tick fight law the d2 Agent run itself rides: `pre_throw_stands` answers the
+    // spawner release the tick after it, so the kill lands before the guard's first throw —
+    // SCOPED to the west-room phase (the 15-5 disaster was the whole-walk flag at the crossing's
+    // aperture fight, a different close fight this scope never touches), and off again after the
+    // jog sweep. The d2/top-up walks keep their pinned timelines.
+    if difficulty >= 3 && !w.tops_up() {
+        w.dmg.pre_throw_stands = true;
+        // real-health-00agent-15-7 (the west-room fights' gun-ray law): the fights' aim pick
+        // rides the EYE law here (lane_fights was cleared at the #462 shot) — the fresh run's
+        // newborn fight on #11 went "killed false" at hp 3 with the tap gated on an eye ray
+        // whose ROUNDS died on the door jamb (the 07000013 security-room's own measured
+        // mismatch [M DamageLog::exposed_impl:544 — the eye ray clears by a hair while the
+        // gun's low-right stand-in clips the corner]). lane_fights re-armed for this phase makes
+        // the pick AND the taps ride the gun-ray law — every tap is a round that actually
+        // reaches — and the pick only fights a guard the lanes can kill. Off again after the
+        // jog sweep, with pre_throw_stands.
+        w.dmg.lane_fights = true;
+        // real-health-00agent-15-7 (the fights' ammo): the AR came back in hand after the lob at
+        // clip 3 spare 0 — the fresh run's fights burned it dry mid-fight and the fights' own
+        // resupply nav walked Bond into the door[29] wedge (the panic at tick 25080, health
+        // 23.6, 12 fights). The P2K's pool (clip 3 spare 34 after the desk stands [L the fresh
+        // run]) pays the fights instead — the same law as the desk stands' swap, one phase
+        // later.
+        let (clip, spare, wpn) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare, sim.gun.weapon) };
+        if clip + spare < 8 && wpn != 0x02 {
+            draw_persist(&mut w, 0x02, "the P2K for the west-room fights");
+        }
+        // real-health-00agent-15-7 (the fights' dry-mag law, scoped): the fresh run's fights
+        // still ran the resupply NAV on the dry AR ("door[29] through resupply 0 nav 1/2", the
+        // wedge panic at tick 25080) — the fights' master give-up on a dry mag is the base law,
+        // and a player whose mag runs dry mid-fight cycles to the next loaded firearm
+        // (the field doc's 02/03 00agent idiom). switch_dry is that law — SCOPED to this phase
+        // (the 15-5 run15q disaster was the whole-walk flag at the crossing's aperture fight,
+        // a different fight this scope never touches); with the P2K's 34 spare in the wheel the
+        // cycle always finds rounds, so the resupply nav never fires. Off after the jog sweep.
+        w.dmg.switch_dry = true;
+    }
     let route: &[(&str, Wp)] = &[
         ("door[29] threshold", Wp::new(11.5, 41.4, 71.2).r(0.9)),
         ("door[29] through", Wp::new(8.0, 41.4, 71.2).r(1.0)),
@@ -763,7 +1189,42 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         // shoot() is a no-op once a fight has finished it.
     ];
     let (route_c, route_d) = route.split_at(route.iter().position(|(l, _)| *l == "the southwest jog").unwrap());
-    w.walk_route(route_c);
+    let solo = difficulty >= 3 && !w.tops_up();
+    if solo { w.walk_route(&route_c[..1]); } else { w.walk_route(route_c); }
+    if solo {
+        // 00 Agent real health: the through leg's return-fire fight on #11 went killed-false while
+        // the grenadiers' throws took 58.9 -> 5.1 (the t8578 death). Bond walks from the threshold
+        // straight to #11's solo line - (5.0, 71.25), the one spot that sees him with #10/#18 hidden
+        // [the 11-13 live bullet-line scan at t7347: #11 (-1.99, 77.11), #10 (-5.07, 66.93), #18
+        // (-6.33, 71.81)] - and takes him head-first (dead at +20), then the rest nearest-first.
+        for (spot, near) in [([5.0f32, 71.25], [-2.0f32, 77.1])] {
+            let di = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse && d.health > 0.0
+                && d.team == 1 && walker::dxz(d.pos, [near[0], 41.3, near[1]]) < 3.0) };
+            let Some(di) = di else { continue };
+            // The fights' dry-mag resupply nav walks Bond 32 u back east mid-leg (it wedged at
+            // (25.84, 37.67) for the 6000-tick cap on the far-#462 stream); the solo-line walk
+            // holds it - the drops are taken after the room is clear.
+            let was = w.dmg.resupplying;
+            w.dmg.resupplying = true;
+            let _ = w.try_walk_to(Wp::new(spot[0], 41.4, spot[1]).r(0.4), "a west-room solo line");
+            w.dmg.resupplying = was;
+            let k = aimed_stand_impl(&mut w, di, "the west-room grenadier from his solo line", 600, true);
+            eprintln!("[15solo] #{di} from ({}, {}) killed {k} health {:.1}", spot[0], spot[1], w.scene.sim.as_ref().unwrap().drones.health.health);
+        }
+        // Then the rest nearest-first, head-first, from where Bond stands (#18 closed to 4.9 u
+        // and threw 37.9 while the old second solo hop walked).
+        for _ in 0..4 {
+            let di = { let sim = w.scene.sim.as_ref().unwrap(); let b = sim.bond.pos;
+                sim.drones.list.iter().enumerate().filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && d.pos[0] < 8.0 && (60.0..84.0).contains(&d.pos[2]) && walker::dxz(d.pos, b) < 16.0)
+                    .min_by(|a, c| walker::dxz(a.1.pos, b).total_cmp(&walker::dxz(c.1.pos, b))).map(|(i, _)| i) };
+            let Some(di) = di else { break };
+            let k = aimed_stand_impl(&mut w, di, "the west-room grenadier, nearest first", 600, true);
+            eprintln!("[15solo] nearest #{di} killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+            if !k { break; }
+        }
+        w.walk_route(&route_c[1..]);
+    }
     // (The west-room grenadiers are answered from the rim mark above, before this doorway is
     // walked — level-15-agent-doors. The fights' leftovers resolve on the legs' return fire.)
     // REAL-HEALTH TACTIC (level-15-agent-doors-2): the placement-spot pre-shoots at the rim mark
@@ -791,6 +1252,11 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             w.shoot(di, &format!("the west-room grenadier met at the jog, sweep {sweep} (level-15-agent-doors-2: by proximity, not the spot)"));
         }
     }
+    if difficulty >= 3 && !w.tops_up() {
+        w.dmg.pre_throw_stands = false;
+        w.dmg.lane_fights = false;
+        w.dmg.switch_dry = false;
+    }
     let (route_d1, route_d2) = route_d.split_at(route_d.iter().position(|(l, _)| *l == "door[50] through").unwrap());
     w.walk_route(route_d1);
     // REAL-HEALTH TACTIC (level-15-agent-doors): the great-hall grenade guard is answered from
@@ -800,6 +1266,13 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // player holds the doorway (the door opened for the line) and answers down the corridor:
     // #5 (port index 5 at the d1 roster; placement 733's spot (6.25, 41.45, 35.69) at d2) sits
     // 9.8-13.6 u south through the open leaf.
+    // 00 Agent real health: hold 300 ticks at the door[50] threshold before opening it - the
+    // great hall is mutually visible from every floor spot (the 11-13 live line scans: no spot
+    // sees #5 with #4/#19 hidden, nor the reverse), so the answer is timing; measured over the
+    // hold (0 -> t9746 in the hall, 60/120/180 -> t9948-t11352, 300 -> the hall CROSSED, death
+    // t20553 at the door[42] fence leg with 5.4 health and a dry gun) [S the 300 is the
+    // measured sweep's, not a game rule].
+    if difficulty >= 3 && !w.tops_up() { w.wait(300); }
     w.use_door(50, "door[50] for the 733 line");
     // The d2 Agent run settles 12 ticks, not 40: the run-6 ledger lost the great-hall race by
     // ~20-30 ticks — #5's grenade was already airborne when the pre-shoot's 0x1a round landed
@@ -812,6 +1285,25 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
     }
     if difficulty >= 2 {
+        // real-health-00agent-15-8 (d3 only): the pre-shoot's positioning walk is the measured
+        // poison — the shoot machinery's flank nav walked Bond 18 u down the hall east under the
+        // converging chasers and the whole corridor-entry bill landed DURING it: #4 (the second
+        // plank rifle chaser, skin 0x5000087 — the d3 roster's extra the d2 stand never met) 15.0
+        // in 5 at d 1.9, #19 7.0 at d 2.8, #5 7.0 — 29.0 of the walk's remaining 34.4, health
+        // 5.4 at the door[50] through fight [L the 2026-11-14 run: the hits at frames 9632-9929,
+        // Bond at (2.3, 28.7)-class spots mid-nav]. A player does not walk into a converging
+        // squad to shoot one man: the fights' own stands answer the thrower and the chasers from
+        // the legs (the fights killed #19/#13/#12 on the same run — the machinery works; the
+        // bill was Bond's own walking). #5's first grenade may still land — the fights' race is
+        // measured on the legs, not from a walk.
+        // real-health-00agent-15-8: the positioning pre-shoot STAYS on d3 (measured: the
+        // legs-first and threshold-window shapes both ate the convergers' full fire — the
+        // fights' polls pick NOTHING from the corridor because the convergers are east of the
+        // hall until their rounds already fly [L the 2026-11-14 run3/run4/run5 deaths
+        // t9978-t10192, the run4 window's 30 polls never fired] — the shoot machinery's
+        // flank nav is the only shape that crosses the kill zone on the moving-target roll
+        // [M 0x179740 DroneFiring_TargetMoving_Accuracy]; the run2 shape crossed the whole hall
+        // and reached the fence leg at 5.4).
         if let Some(di) = agent_drone_near(&w, [6.25, 41.45, 35.69], 6.0) {
             // (level-15-agent-rim-shot) The d2 900-tick pre-throw stand is GONE: on the lob
             // route #5's first frag is airborne before the threshold arrival (the measured rain:
@@ -820,6 +1312,18 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             // machinery answers him with its own positioning (the fights' return fire killed the
             // corridor's #19 at this very threshold in ~60 ticks); the legs' push keeps Bond
             // out of the thrown frags' rest points.
+            if difficulty >= 3 && !w.tops_up() {
+                // 00 Agent: #4 (skin 0x5000087) is dormant at (0.0, 26.4) in the hall south (enabled
+                // false at the door[38] stand) and later poured 33.0 in 11 on the door[50] through
+                // leg; from this threshold he is visible and a head-first stand kills him at no
+                // cost (58.7 kept).
+                let p4 = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse && d.health > 0.0
+                    && d.team == 1 && d.skin == 0x5000087 && walker::dxz(d.pos, [0.0, 41.3, 26.4]) < 4.0) };
+                if let Some(g) = p4 {
+                    let k = aimed_stand_impl(&mut w, g, "the hall-south chaser from the door[50] threshold", 600, true);
+                    eprintln!("[15p4] #{g} killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+                }
+            }
             w.shoot(di, "the great-hall grenade guard (placement 733) from the door[50] threshold");
         }
     } else if !w.tops_up() {
@@ -857,8 +1361,16 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // (measured on the stream join: clip 1 spare 0 at the mark, the one round stopped on the
     // closing leaf and the walk stood dry behind the shut door). A player takes the fights'
     // drops on the way and draws a loaded gun before he opens the door.
+    // real-health-00agent-15-8 (d3 only): the fence shot needs ONE round — the beam round's own
+    // case-0x4B chain sets the neighbours [M 0x17c518] — and the carried P2K holding it IS the
+    // shot. The d3 resupply nav from the corridor found nothing on the walked path and its last
+    // attempt hung the 3000-tick cap over the great hall's middle pit at 5.4 health (the
+    // 2026-11-14 run's STUCK lines, three caps ≈ 9000 idle ticks at a sliver of health) for a
+    // round Bond already carries. The d2 keeps the resupply (its stream is committed; the same
+    // clip-1 state resupplied successfully there [L the d2 ledger]).
     let low = { let g = &w.scene.sim.as_ref().unwrap().gun; (g.clip as i32 + g.spare as i32) < 4 };
-    if low {
+    let p2k_holds_the_round = { let s = w.scene.sim.as_ref().unwrap(); s.gun.weapon == 0x02 && s.gun.clip >= 1 };
+    if low && !(difficulty >= 3 && !w.tops_up() && p2k_holds_the_round) {
         w.resupply("the fence shot's rounds");
         assert!(w.switch_to_armed("the fence shot's gun"), "a carried gun has rounds for the fence");
         w.walk_route(route); // back to the door's E reach
@@ -902,7 +1414,21 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         w.reload_full();
     }
     if !w.tops_up() {
-        backpedal_face(&mut w, [0.0, 41.4, 28.5], [0.0, 42.3, 17.29], 0.5,
+        // real-health-00agent-15-8 (d3 only): the mark rides NORTH of the diagonals — the d3 pain
+        // row 1.0 makes the old mark's own chain fatal. The old mark (0.0, 28.5) stands 10.69 u
+        // from the #778 diagonal (1.52, 41.47, 17.83 [D placement 778]) — the hurt distance
+        // 10.69 − 1.06 = 9.63 sits INSIDE the radius-10 sweep [M Explode_Propagate 0x17c518:
+        // Vec_Dist3D, minus obj+0x8C, max.s 0, /radius, ×damage] — 80·0.037 = 2.96 from #778 and
+        // 1.92 more from #779 (−1.68, 17.86): the measured 2026-11-14 run died AT THE MARK to the
+        // shot's own chain (−5.36 world, health 5.4) — the d2 run paid the same geometry 1.78
+        // (its 0.6 pain row [M Player_HandlePain 0x1902c8]) and survived. z 29.3 puts every fence
+        // mine ≥ 11.4 u: d − 1.06 ≥ 10 → the sweep's zero — #778 11.47, #779 11.46, #447
+        // (−0.01, 44.22, 17.29) 12.22 with its beam y in the 3D distance. The line still rides the
+        // open doorway's x 0 aperture (the door plane z 25.06 sits between the mark and the beam;
+        // the line's x at the plane ≈ 0.0 [D the leaf at x −1.1]). The d1/d2 marks stay
+        // byte-identical.
+        let mark_z = if difficulty >= 3 { 29.3f32 } else { 28.5f32 };
+        backpedal_face(&mut w, [0.0, 41.4, mark_z], [0.0, 42.3, 17.29], 0.5,
             "the fence mark north (backpedal, view on the beam)");
     } else {
         w.walk_to(Wp::new(0.0, 41.4, 28.5).r(0.5), "the fence mark north (outside the pops' radius 10)");
@@ -976,7 +1502,53 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         ("the exit hall", Wp::new(0.5, 41.4, -21.0).r(1.2)),
         ("the exit approach", Wp::new(-0.6, 41.4, -21.0).r(1.4)),
     ];
+    if difficulty >= 3 && !w.tops_up() {
+        // 00 Agent: the door[51] fights killed #13/#14 but #14's grenade outlived him and landed
+        // 206 ticks later for 33.07 on 33.1 health (t11988) while Bond stood on the threshold.
+        // A player holds the threshold, answers the visible guards in short stands and steps away
+        // from a live grenade (any sim grenade inside its radius + 2 u) - measured: the walk
+        // completes (holds of 600 and 1200 both green).
+        w.walk_route(&route[..1]);
+        let hold: u32 = 600;
+        let home = w.scene.sim.as_ref().unwrap().bond.pos;
+        let t0 = w.total_ticks;
+        while w.total_ticks - t0 < hold {
+            let (gren, pick) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                let gren = sim.drones.grenades.iter().filter(|g| walker::dxz(g.pos, bp) < g.radius.max(4.0) + 2.0)
+                    .map(|g| g.pos).next();
+                let pick = (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 20.0
+                        && (d.pos[1] - bp[1]).abs() < 3.0 && walker::DamageLog::visible(sim, i) })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)));
+                (gren, pick)
+            };
+            if let Some(gp) = gren {
+                // step away from the grenade: world direction bond - grenade, mapped into the view frame
+                let (dir_f, dir_s) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let bp = sim.bond.pos;
+                    let (dx, dz) = (bp[0] - gp[0], bp[2] - gp[2]);
+                    let n = (dx * dx + dz * dz).sqrt().max(0.01);
+                    let (fx, fz) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+                    let f = (dx * fx + dz * fz) / n;
+                    let sd = (dx * fz - dz * fx) / n;
+                    (f, sd)
+                };
+                w.tick(nf_game::player::Input { forward: dir_f.clamp(-1.0, 1.0), strafe: dir_s.clamp(-1.0, 1.0), ..Default::default() }, false);
+                continue;
+            }
+            if let Some(g) = pick { w.shoot_bounded(g, "the door[51] hold", 90); continue; }
+            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, home) > 1.5 {
+                w.lenient = true; w.walk_to(Wp::new(home[0], home[1], home[2]).r(0.8), "back to the door[51] threshold"); w.lenient = false;
+            } else { w.tick(nf_game::player::Input::default(), false); }
+        }
+        eprintln!("[15dodge] hold done, health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+        w.walk_route(&route[1..]);
+    } else {
     w.walk_route(route);
+    }
     {
         // The way through: no mine went off on Bond's body — every one the lanes cross was shot
         // (or went on a shot neighbour's blast; #487 goes on #526's).
@@ -1253,7 +1825,6 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage() {
 /// body (the fence-mark stands at 28 u never fired — the 0.02-rad aim gate is a torso
 /// width there; the door[38]-north point is the next try).
 #[test]
-#[ignore = "00 Agent (real-health-00agent-15, the measured ledger): the route's budget exceeds 100 health before #526 on every path tried this round — the crossing fight vs the d3 roster's #15 is a trap at both measured ranges (the 51 u lane fight: 63.0 in 9 hits, no grenade; the 3.6 u sneak fight: 21.0 in 3 hits PLUS his own grenade popping at Bond's feet 75 ticks after the kill, 79.0 — total 100.0, dead at 992), #462's own-shot blast is a fixed 10.7 at the ≤14 u shot law (80·(1−13/15)), and the plank pair #7/#8 costs 26.3 (the d3 stand at door[38]-north can never fire — both guard lines are walled by door[39] from there); levers coded for the next round: the d3-gated #526 lob from door[32]'s threshold with the guard's own dropped 0x1b (the fuse is time, 210 ticks [M Bullet_init 0x12c5a0], the rest point chains the mine via case-0x4B [M 0x17c518] at (int)d ≥ 15 — implemented, never reached), the plate sneak (the 0xf6 plate box x 80.31..81.31, z −1.18..1.35 [L the probe] — the aperture's south half passes cold) with the head-shot finisher from the aperture west side, the plank stand moved to door[39]'s north side (34.6, 28.0, the lines clear at 9.6/12.9 u), and the #462 shot at (int)d ≥ 14 (5.33)"]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(3));
 }

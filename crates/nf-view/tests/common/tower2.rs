@@ -132,6 +132,20 @@ fn flank_lobby_east(w: &mut crate::walker::Walker) {
         &[0.6, 13.6],    // under the z 13.75 knee-wall (blocked only at z 13.75; z 13.4 clear)
         &[2.4, 13.9],    // the flank — the d2 fight#6 trace's spot
     ];
+    // 00 Agent real health (the flag's only caller): the rifle post #6 (skin 0x5000006, 0x18)
+    // is not exposed from the south-band flank (the retarget measured: 21 hp, never hit, t12162);
+    // a static bullet-line scan of the lobby floor found ONE spot outside his 3-4 u band with a
+    // clear line to his chest - (-8.25, 19.00), d 8.7 [the 11-13 probe over x -14..1, z 12..19].
+    // He is shot from there first (the measured run: #7 and #6 both killed, 12 cleared).
+    {
+        let di = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
+            && d.health > 0.0 && d.team == 1 && d.skin == 0x5000006 && crate::walker::dxz(d.pos, [0.3, 1.0, 17.5]) < 3.0) };
+        if let Some(di) = di {
+            let _ = w.try_walk_to(crate::walker::Wp::new(-8.25, 1.1, 19.0).r(0.5), "the north-lobby line on #6");
+            let k = w.shoot(di, "the rifle post #6 from the north-lobby line (d 8.7)");
+            eprintln!("[012] north line #6 killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+        }
+    }
     for (k, p) in HOPS.iter().enumerate() {
         let _ = w.try_walk_to(crate::walker::Wp::new(p[0], 1.1, p[1]).r(0.9),
             &format!("the lobby-east flank {k}"));
@@ -360,7 +374,15 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
     ];
     for &(x, z, label) in legs {
         let x = if label == "the east wing" && EAST_WING_WEST_SIDE.with(|c| c.get()) { 23.2 } else { x };
+        // 00 Agent real health: the stuck handler opens door plc 543 (9.9, -14.5) on this leg and
+        // its swinging leaf pins Bond at (9.26, -12.67), 1.9 u short of the target; the next leg
+        // walks through that same door, so the leg is lenient there (no cap panic).
+        let lenient = label == "the south corridor west" && !w.tops_up()
+            && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3;
+        let prev = w.lenient;
+        if lenient { w.lenient = true; }
         w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
+        w.lenient = prev;
         if label == "the east wing corner" && CLEAR_EAST_WING_GUARD.with(|c| c.get()) {
             let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
                 d.placement == 9 && d.present && !d.corpse && d.health > 0.0 && d.team == 1
