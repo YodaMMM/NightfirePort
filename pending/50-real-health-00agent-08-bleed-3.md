@@ -18,3 +18,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
 
+
+11-13 (master eb89478f5): on the current master the walk wedged BEFORE the Hind - the "to the briefcase" nav leg from the bolt stand (z -117.6) ran Bond into the safe-face corner (162.59, -118.17) for the cap (ch 0x4a never wrote, t26460). Fixed by starting the leg from the plain walk spot (158.93, -116.52); the walk now dies at t34277 at (110.98, 13.52, -179.31). The Hind levers in this task stand.
