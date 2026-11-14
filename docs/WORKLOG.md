@@ -48,3 +48,11 @@ Work log:
   1 ignored (the d1/d2 walks byte-identical through the opt-ins), interactables_07000001_live
   10/10; re-run green after the debug stamps came out. The ignore message rewritten to the
   hall-5 merged-tree ledger. The report written, the branch pushed, finish.sh + ntfy next.
+## real-health-00agent-01-hall-6 (started 07:56 UTC 2026-11-14, sandbox expires ~09:52 UTC)
+
+Branch s/real-health-00agent-01-hall-6 from origin/master, hall-5 merged in first (not on
+master). Plan: read the hall-5 report and the ignore message on
+walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent, take the levers in the
+named order (#7 volley-reaction race first, then the escort's west route, the slab ambush,
+the plate AND-touch), each on its own real run. Helpers gated to the level and the
+difficulty; real input only, no top-ups, never lower damage or health.
