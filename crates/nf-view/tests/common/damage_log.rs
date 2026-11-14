@@ -408,6 +408,26 @@ pub struct DamageLog {
     /// walk's own `wait_enabled`+`wait` prologue, so the level's standing garrison is born
     /// outside every window that matters.
     alive_seen: Vec<(usize, u32)>,
+    /// OPT-IN (`pool_abort_stands`, set by the 07000013 real-damage walk): a stand that has
+    /// eaten HALF of the health+armour pool it entered with (6.0 floor) aborts (the give-up
+    /// return — the caller's legs resume and the failed drone sits the fight cooldown) instead
+    /// of statueing through the burst. The margin-7 runs measured the door-phase killer as the
+    /// AIM-RAISE STATUE: the drain's aimed stand held 330 ticks (the 90-tick settle + the
+    /// 240-tick raise) while the stream shotgun #7 landed four -3.00 pellets in ONE tick
+    /// (death t4314 mid-raise [L /tmp/d3_run10.log]), and run 12's file-local abort inside
+    /// `aimed_stand` (abort at a flat 6.0) only HANDED the stall to the shared fights' stand
+    /// — killed false on #4, then the same death t4310 [L the run-12 ledger]. The fraction is
+    /// what separates the statue from the trade (the run-13/14 measures [L /tmp/d3_run13.log,
+    /// /tmp/d3_run14.log]): the flat 6.0 aborted every fight at t1 on the balcony rifle #4's
+    /// single -5.5/-7.0 rounds — Bond (40.5 hp + 36.0 armour at the door) never answered and
+    /// bled out at the door crossing — while a HEALTHY stand must be allowed to trade the
+    /// ~26 the raise + two zero-spread taps cost against #4's 14 hp [M Bullet_init
+    /// 0x12c5a0:139-170 — the aim bit's zero-spread act]. A player breaks off a stand that
+    /// has cost him half of what he walked in with; a fragile one (run 10's ~12-pool entry)
+    /// breaks on the first burst at the 6.0 floor. The run-12 flat 6.0 stays inside the
+    /// file-local `aimed_stand` (the drain's own bar). Off = master behaviour everywhere
+    /// else — no other walk sets it.
+    pub pool_abort_stands: bool,
 }
 
 impl DamageLog {
@@ -1036,6 +1056,15 @@ impl Walker {
         let mut last_hit = 0u32;
         let mut dry = 0u32;
         let mut blocked_runs = 0u32;
+        // pool_abort_stands (opt-in, see the field doc): the pool (health + armour) at stand
+        // ENTRY — the settle loop below runs real ticks, so the read precedes it and a burst
+        // landing inside the raise counts toward the bar. The tuple is the trace's entry pair.
+        let mut pool_entry = (0.0f32, 0.0f32);
+        let pool0 = if self.dmg.pool_abort_stands {
+            let s = self.scene.sim.as_ref().unwrap();
+            pool_entry = (s.drones.health.health, s.drones.health.armour);
+            s.drones.health.health + s.drones.health.armour
+        } else { 0.0 };
         // switch_dry: the cycle press + draw wait (see the field doc).
         let mut cycle_wait = 0u32;
         // sniper_stands: the still-gate state (the target's root, per tick — see the field doc).
@@ -1057,6 +1086,27 @@ impl Walker {
             }
         }
         for t in 0..cap {
+            // pool_abort_stands (opt-in): the stand has eaten HALF of the pool it walked in
+            // with (6.0 floor for the fragile states) — a player breaks off a stand that has
+            // cost him half his health+armour and repositions (the 240-tick cooldown + the
+            // legs resume). The fraction is what separates the statue from the trade: run 10
+            // broke on four pellets (~12 pool at a ~12-pool entry — the aim-raise statue),
+            // while run 13's flat 6.0 aborted the fights at t1 on the balcony rifle's single
+            // rounds and Bond never answered him — a healthy stand (76.5 pool) must be ALLOWED
+            // to trade the ~26 the raise + two zero-spread taps cost against #4's 14 hp [M
+            // Bullet_init 0x12c5a0:139-170; L /tmp/d3_run13.log, /tmp/d3_run14.log]. The
+            // retargets below keep this pool0: the pool is Bond's, not the target's.
+            if self.dmg.pool_abort_stands {
+                let s = self.scene.sim.as_ref().unwrap();
+                let took = pool0 - (s.drones.health.health + s.drones.health.armour);
+                if took >= 6.0 && took >= pool0 * 0.5 {
+                    if trace {
+                        eprintln!("[rf-trace] fight#{di} t{t}: pool abort — took {took:.1} of {:.1} this stand (entered hp {:.1} armour {:.1}, now hp {:.1} armour {:.1}), reposition",
+                            pool0, pool_entry.0, pool_entry.1, s.drones.health.health, s.drones.health.armour);
+                    }
+                    return false;
+                }
+            }
             if self.dmg.switch_dry {
                 let clip_dry = { let s = self.scene.sim.as_ref().unwrap(); s.gun.clip == 0 && s.gun.spare == 0 };
                 if clip_dry {

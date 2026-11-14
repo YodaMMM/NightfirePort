@@ -107,7 +107,7 @@ fn clear_the_visible(w: &mut Walker, label: &str, radius: f32, d3: bool, stop_on
 /// close band. One failed stand ends the drain (the unopenable box is the exposure itself; the
 /// stop_on_fail law above). No position writes, no RNG draws, no health/ammo writes; the only
 /// inputs are the wait ticks and the trigger taps through the ordinary `aimed_stand` machinery.
-fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, quiet_rounds: u32, wait: u32) {
+fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, quiet_rounds: u32, wait: u32, skip: &[[f32; 3]]) {
     w.switch_to_armed(label);
     let mut quiet = 0u32;
     let mut taken = 0u32;
@@ -118,6 +118,13 @@ fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, qui
                 let d = &sim.drones.list[i];
                 d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
                     && walker::dxz(d.pos, sim.bond.pos) < radius
+                    // warm-chain-margin-8: the skip posts — guards whose box OPENS from this
+                    // spot but whose own return fire out-trades the stand (the run-13..16
+                    // ledger: the balcony rifle #4's -7.0 rounds cost the stand 13.5-57 pool
+                    // across five runs and it never landed the kill — `!killed` then ended the
+                    // whole drain, so NO other guard was ever drained either; a player does
+                    // not take a fight he cannot hold from a spot he cannot hold).
+                    && !skip.iter().any(|s| walker::dxz(d.pos, *s) < 3.0)
                     && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some()
             })
         };
@@ -185,9 +192,15 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
         // warm-chain-margin-7: the POOL watch (health + armour) — a stand that eats a pellet
         // burst mid-aim-raise (the 330-tick statue, the run-10 death: #7's four -3.00 pellets
         // in one tick killed Bond 240 ticks before the first tap) is not a stand a player
-        // holds. Abort at 6.0 pool damage: the caller's legs resume and the fights' tight gate
-        // answers the static shooter on the move. The kill-exchange taps (the guard's own
-        // return fire during a landing stand) stay under it.
+        // holds. warm-chain-margin-8: the bar is the run-15 FRACTION law (the shared
+        // stand_and_fire's `pool_abort_stands`, see the field doc): HALF of the entry pool,
+        // 6.0 floor. The run-12 flat 6.0 measured dead HERE: the balcony rifle #4's own
+        // return rounds (-7.0) trip it before the stand's raise completes, the stand can
+        // never finish him (killed false, three sessions running), and he snipes the door
+        // phase from his 42-u post — a healthy Bond (76.5 pool at the band) must be ALLOWED
+        // to trade the ~26 the raise + the zero-spread taps cost against his 14 hp [M
+        // Bullet_init 0x12c5a0:139-170; L /tmp/d3_run15.log]. The fragile entry (run 10's
+        // ~12 pool) still breaks on the first burst at the floor.
         let mut pool0 = { let sim = w.scene.sim.as_ref().unwrap();
             sim.drones.health.health + sim.drones.health.armour };
         let mut last_hit = 0u32;
@@ -212,7 +225,7 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                 {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let pool = sim.drones.health.health + sim.drones.health.armour;
-                    if pool0 - pool >= 6.0 { return false; }
+                    if pool0 - pool >= 6.0 && pool0 - pool >= pool0 * 0.5 { return false; }
                 }
                 // 1500: a far post exposes in firing windows — the 500 default aborted before a
                 // first hit ever landed on the 06 mouth runs. A landing round kills a 12-health
@@ -453,6 +466,16 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         w.dmg.lane_floor_drops = true;
         w.dmg.switch_dry = true;
         w.dmg.escalating_cooldowns = true;
+        // warm-chain-margin-8: the POOL ABORT on the SHARED fights' stand (the ignore ledger's
+        // first item, the run-12 law finished): run 12 put the 6.0 pool abort inside this
+        // file's aimed_stand only, and the stall handed to the shared stand_and_fire — killed
+        // false on #4, then the same death t4310 [L the run-12 ledger]. The shared stand now
+        // carries the same bar (common/damage_log.rs `pool_abort_stands`): a fights' stand
+        // that eats 6.0 health+armour gives up (the 240-tick cooldown, the legs resume)
+        // instead of statueing through the stream shotgun's burst (run 10: four -3.00 pellets
+        // in one tick, death t4314 mid-raise [L /tmp/d3_run10.log]). This walk is the only
+        // setter; the sisters keep their byte-identical legs.
+        w.dmg.pool_abort_stands = true;
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -567,7 +590,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // re-anchor fight cost 34.0. Drain the wave from here: up to 12 rounds, done after 6
         // quiet rounds (~180-tick waits + the stand times), each guard taken from the taken
         // spot at d ~12.
-        drain_the_wave(&mut w, "13: the lobby east lane", 24.0, 12, 6, 180);
+        drain_the_wave(&mut w, "13: the lobby east lane", 24.0, 12, 6, 180, &[]);
     }
     // guard-repin-master re-anchor: the west-mid leg's return-fire fights (the north-lobby
     // shooters) displaced Bond SOUTH of the lane line into the lobby pocket at (0.60, −368.30,
@@ -633,7 +656,12 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // (16.2, -362.4, 41.7) — the aimed stand kills him BEFORE the exposed door leg instead
     // of after it.
     if real_damage && difficulty == 3 {
-        drain_the_wave(&mut w, "13: past the glass band", 45.0, 8, 3, 150);
+        // warm-chain-margin-8: the balcony rifle #4's post (16.2, -362.4, 43.3) is SKIPPED —
+        // the run-13..16 ledger (see the skip's comment in the helper): his box opens from
+        // the band but his return fire out-trades the stand, five runs burned 13.5-57 pool on
+        // him for 0.5 landed, and the `!killed` end meant NO other guard was drained either.
+        // The door phase's fight#4 answer is the fights' fraction-bar stand instead.
+        drain_the_wave(&mut w, "13: past the glass band", 45.0, 8, 3, 150, &[[16.2, -362.4, 43.3]]);
     }
     // warm-chain-margin-7 (d3-only, the run-8/10 ledger's door-phase coin flip): the shifted
     // timeline re-rolls #4/#7's volley schedules, and the plain tap gate wastes its stands on
@@ -703,7 +731,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // pre-clear's own law, one wall earlier); the drain waits out his firing window and
         // takes him before the west-lane leg walks Bond through his TooClose band [M
         // DroneFiring_TooClose_Damage].
-        drain_the_wave(&mut w, "13: inside the security room", 12.0, 8, 3, 150);
+        drain_the_wave(&mut w, "13: inside the security room", 12.0, 8, 3, 150, &[]);
         // warm-chain-margin-6 (measured dead, NOT repeated): a deliberate resupply at this spot
         // (the room's own box at (-27.2, -369.4, 30.1), d 6.1) is ROOM MOVEMENT — #9 wakes at
         // the first step (he never fired through ~1050 static ticks, then opened 19 ticks after
@@ -1053,7 +1081,7 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// pre-clear at 14-16 u, no bridge_and_retry, no in-place creep or longer stands — each
 /// measured dead in the margin-4 report). Never lowered damage or health; no top-ups.
 #[test]
-#[ignore = "00 Agent (11-14 update 5, margin-7): the room fight is decided by AMMO and the answer LANDED but the shifted timeline melts the lobby's last legs. THE AMMO LEVER WORKS: the pocket drops rest at (4.85,-369.43,22.23) and (4.81,-369.13,23.02) [L the run-7 pickup dump - the sweep's posted-guard kills drop at their posts, on the lobby east lane's own line]; a WALK-OVER leg to (4.8,-368.4,23.0) r0.6 takes BOTH (run 8: taken 2, in-hand clip 13 spare 9, inventory total 64) - the fights' switch_dry finally has rounds to swap to. But the leg costs +163 ticks and the shift re-rolls the stream/#4 volley schedules: run 8 died t4378 at (-22.75,38.95) 0.6 u short of the door drain spot to #4's three -7.0 mid-leg (frames 4299-4317) + #7's pellet; run 10 (the drain moved to the glass band) died t4314 AT the drain spot mid-aim-raise to the stream shotgun #7 (skin 0x5000008, 0x1c, at (-0.2,32.2)) whose four -3.00 pellets landed in ONE tick [L /tmp/d3_run8.log, /tmp/d3_run10.log]. The fights answer #5/#6 with killed false in BOTH the old and the shifted timelines (t3292/t3801) - the plain fights cannot open their boxes, so the stream guards survive to melt the glass band. MEASURED DEAD THIS SESSION, do not repeat: (a) the SLEEP DUMP - #9 does NOT sleep through gunfire at room range: the inside drain's #8 stand (d 6.7) woke him, the -20.0 landed t4869 INSIDE the drain's quiet waits, and a pre-drain dump woke BOTH guards (#8's burst t4791, #9's t4887 killed mid-dump) while its rounds landed ZERO - the mid-room furniture blocks the inside-spot line to #9 (the drain's radius-12 sweep never took him at d 11.96 either, consistent); the game's basis is [x, y=UP, z] (the panel aim's pitch formula) - the run-3 floor-level aim hit the ramp at his feet, hp 25->24. (b) the SPAWN RESUPPLY - the band's nearest pickup is the placed TRIPBOMB trio at (-0.4,14.0) whose take EQUIPS the gadget in-hand (clip 17, the P99's 30 parked); the lobby fought the gadget dry and the churn died t5390 at the glass band [L runs 6-7]. (c) the west-lane-first room order - byte-identical t4958 (run 2). RUNS 11-12 (this session's last levers): the fights' aimed_fights tight gate from the glass band (run 11) changed NOTHING - the killer is the drain's/fights' own aim-raise statue (330 ticks, no fights run inside it), and a pool-watch abort inside aimed_stand (run 12: abort at 6.0 health+armour damage) just handed the stall to the fights' stand (killed false on #4, then the same death t4310). THE NEXT SESSION'S FIRST ITEM (a rule-7 opt-in): the same pool-abort inside damage_log.rs's stand_and_fire, flagged so only this walk sets it - a stand that eats 6+ pool damage repositions into the legs instead of statueing through the burst; with the tight gate on for the static shooters (#4/#7/#8/#9) and the pocket-drop pool (64) landed, the room fight is won by the in-hand rounds alone (22 >= the ~12 the kill needs). ALSO OPEN: the fights' killed false on #5/#6 (the boxes closed from the leg ends) - the stream guards survive to melt the glass band; their exposure map (which spots open them) needs the live probe. Update 4: the doorway pre-clear at 18 is a measured NO-OP (no box opens through the open door - not even #8's at d 7.9, byte-identical t4958) and the room fight is decided by AMMO: #9 (25-hp class) wakes on the first room movement (silent through the drain's ~1050 static ticks, then fired 19 ticks after the descent leg moved), the fights landed 17 of his 25 hp with the in-hand clip 8 and DRIED - the leg fetch's displacement back up into the line killed the walk at t4958 (-27.26, -368.30, 36.03). The fetch levers are measured dead, do not repeat: the door-side lane band came back zero-attempts (every drop > 12 u or ground-filtered, run 3); the far band's nearest pickup was the room's BodyArmour at 12.8 - a fetch INTO the room's west lane, death t4693 mid-nav (run 4); the pocket drops (clip 4 spare 28 - the RIGHT rounds) sit in the respawner stream's kill zone - fetched pre-drain, the still-alive balcony rifle #4 landed seven -7.0 in 73 ticks (death t4115, run 5), fetched post-drain, the stream melted 16 hits for 40.5 across ten fights (death t6469, run 6). The dropped guns carry nearly-empty clips (clip 1-4, spare 0-28) - the spare pool is the value. Update 3: the security-room door drain reaches 45 u and kills the balcony rifle #4 that sniped the door wait (t4147); the chain then died at t4958 (13 local) at (-27.26, -368.30, 36.03) inside the security room - #9 (skin 0x5000006, 0x10) 27.5 in 2 at d 13.0, Bond entering 13 with 40.5. Update 2: 12 is CLEARED - the lobby-east rifle post #6 is shot first from the one static clear line outside his band, (-8.25, 19.00) d 8.7 (#7 + #6 killed, 89.5 -> 40.5); the chain dies in 0700004a at t4147 (local) at (-24.03, -368.39, 38.47) to #4 (skin 0x5000006, 0x18) 40.5 in 11 at d 40.8 - Bond enters 4a with 40.5. Update 1: the door plc 543 pin is passed (the south corridor west leg is lenient at d3 real health - the stuck handler's door swing pinned Bond at (9.26, -12.67) 1.9 u short, health 96.5); the walk then died at t12351 at (-4.52, 1.13, 16.05) in the north lobby: #6 (skin 0x5000006, weapon 0x18) 68.5 in 10 at d 4.9 + #7 (pistol) 28.0, 13 fights. The operative, agent and plain sisters walk green."]
+#[ignore = "00 Agent (11-14 update 6, margin-8): the POOL-ABORT lever (the margin-7 first item) LANDED and is measured on five real runs, but the walk still dies in the door phase to the balcony rifle #4 (skin 0x5000006, 0x18, posted at (16.2,-362.4,43.3)). WHAT LANDED (all d3-only, opt-in): (1) the SHARED fights' stand gained `pool_abort_stands` (common/damage_log.rs) - a stand that eats HALF of the health+armour pool it entered with (6.0 floor) gives up into the 240-tick cooldown and the legs resume; (2) the file-local aimed_stand's run-12 flat 6.0 became the same fraction law; (3) the glass-band drain skips #4's post (see (6)). THE RUN LEDGER [L /tmp/d3_run13..17.log]: (r13, the flat 6.0 in stand_and_fire) the fights aborted at t1 on #4's single -5.5/-7.0 rounds - Bond carried 40.5 hp + 36.0 ARMOUR at the door and the 13.5 'took' was all armour - so the fights never answered him; death t4383 INSIDE the raw door-crossing loop (no fight machinery there). (r14, the abort gated on the aim bit unset) the same shape, t4383. (r15, the fraction bar) fight#4 traded to 54% (took 41.5 = 21.5 health + 22.5 armour in the reload window; Bond entered the door fights with clip 0 spare 9 - the 13 rounds burned on the #5/#6 killed-false fights and the drain's four taps, 0.5 landed) then aborted; #4 alive; death t4383 at the crossing again. (r16, the fraction law in aimed_stand too) the drain stand on #4 held to the 38.25 bar and STILL killed false (his hp moved 14 -> 13.5 across five runs of stands) while costing ~57 pool; Bond entered fight#4 at 19.0/0.0, aborted at 14/19, death t4315. (r17, the drain skips #4's post (16.2,-362.4,43.3) r3.0) the drain picked the mover #6 instead, burned its quiet waits, and #4's free sniping killed Bond AT the band, t4234. THE NEXT SESSION'S FIRST ITEM is the #4 LINE itself: his box OPENS from the band (aim Some in every run) but the stands' zero-spread taps at d 37-42 land ~0.5 TOTAL (runs 15-17) - the live probe (the margin-7 report's #5/#6 exposure probe, extended to #4) must answer WHY (the root motion beats the flight [M Bullet_update 0x12e7b0]? the world stop eats the round? the eased cursor offsets) and from WHICH spot his line actually lands; the door-crossing raw loop (the r13/r15 t4383 deaths) is the second lever once #4 is answerable. Update 4: the doorway pre-clear at 18 is a measured NO-OP (no box opens through the open door - not even #8's at d 7.9, byte-identical t4958) and the room fight is decided by AMMO: #9 (25-hp class) wakes on the first room movement (silent through the drain's ~1050 static ticks, then fired 19 ticks after the descent leg moved), the fights landed 17 of his 25 hp with the in-hand clip 8 and DRIED - the leg fetch's displacement back up into the line killed the walk at t4958 (-27.26, -368.30, 36.03). The fetch levers are measured dead, do not repeat: the door-side lane band came back zero-attempts (every drop > 12 u or ground-filtered, run 3); the far band's nearest pickup was the room's BodyArmour at 12.8 - a fetch INTO the room's west lane, death t4693 mid-nav (run 4); the pocket drops (clip 4 spare 28 - the RIGHT rounds) sit in the respawner stream's kill zone - fetched pre-drain, the still-alive balcony rifle #4 landed seven -7.0 in 73 ticks (death t4115, run 5), fetched post-drain, the stream melted 16 hits for 40.5 across ten fights (death t6469, run 6). The dropped guns carry nearly-empty clips (clip 1-4, spare 0-28) - the spare pool is the value. Update 3: the security-room door drain reaches 45 u and kills the balcony rifle #4 that sniped the door wait (t4147); the chain then died at t4958 (13 local) at (-27.26, -368.30, 36.03) inside the security room - #9 (skin 0x5000006, 0x10) 27.5 in 2 at d 13.0, Bond entering 13 with 40.5. Update 2: 12 is CLEARED - the lobby-east rifle post #6 is shot first from the one static clear line outside his band, (-8.25, 19.00) d 8.7 (#7 + #6 killed, 89.5 -> 40.5); the chain dies in 0700004a at t4147 (local) at (-24.03, -368.39, 38.47) to #4 (skin 0x5000006, 0x18) 40.5 in 11 at d 40.8 - Bond enters 4a with 40.5. Update 1: the door plc 543 pin is passed (the south corridor west leg is lenient at d3 real health - the stuck handler's door swing pinned Bond at (9.26, -12.67) 1.9 u short, health 96.5); the walk then died at t12351 at (-4.52, 1.13, 16.05) in the north lobby: #6 (skin 0x5000006, weapon 0x18) 68.5 in 10 at d 4.9 + #7 (pistol) 28.0, 13 fights. The operative, agent and plain sisters walk green."]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
     let iso = iso();
     walker::with_real_damage_head_hunting(|| walk_the_warm_chain(&iso, true, 3));
