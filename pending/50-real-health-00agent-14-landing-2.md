@@ -18,3 +18,5 @@ Main 11-14 (master 06db4a156): at the Kiko hold Bond holds the 0x14 9+42, owns 0
 Main 11-14: the t26998 death in every "stay near the Kiko hold" variant is #29 (0x5000093, weapon 0x14, hp 14) at (-49.9,32.7): -5.0 x2 then a -17.91 BLAST at frame 26998 - an explosive 0x14 round, not #20. The shipped stream avoids it by leaving for the second hold. A frag lob on #20 from (-50.3,40.0) never got thrown (the 26998 blast first); dodging landed/bounced drone rounds within 8 u in the holds: t27175 (worse). Next: #29 (hp 14) is the Kiko-side threat to answer, not #20.
 
 Main 11-14: the Kiko hold picking skin 0x5000093 (#29) first dies inside the hold at t26493 at (-46.82,42.38) (worse). Not shipped.
+
+Main 11-14: crouching in the holds (one crouch press at each kiko_hold start) - the Kiko hold ends at 22.9 (was 27.9) and the walk dies at t27365 - worse. Not shipped.
