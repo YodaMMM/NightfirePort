@@ -21,3 +21,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox6 at 2026-11-14T13:34Z
+
+Main agent 11-14 (master 06db4a156): the last-guard press is MERGED - g11 dies, the hall AND fires at t13027; the walk dies at t13141 to the captain #5 (0x5000038, 0x1c, 24 hp) from (-12.3,17.2). Measured on #5 after the AND: a stand from the press spot (600/900, abort 10/30) dies inside it at t13448; walking back to (7.5,9.5) first then standing (600/1500) - #5 visible, NOT killed, Bond 4.6, death t15108/t16365 near the doorway; from the hold (6.3,7.6) t13307. Next: #5 needs a head line (the hall-6 #7 aim law: torso-centre lane aim with a non-pistol, the x8 head record) or the SMG pre-arm before the stand.
