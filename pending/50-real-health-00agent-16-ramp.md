@@ -41,3 +41,5 @@ Measured 11-13: at the chaser fight start Bond stands at (-14.5,-170.2) with 16.
 Measured 11-13: a wait before the pocket close-pair fight (0/30/60/90/120/150/180 ticks) only re-rolls the stream - deaths t12054/12340/(60: alive at 2.0 health + 39.5 armour, wedged at door[1] through t14100)/12507/13047/4058/3733; no stable health gain. Not shipped.
 
 Merged 11-13 (d3b5e5eb4): the pocket pair is fought #5 (skin 0x50000b2) first - the pair costs nothing (61.5 kept), the hand-back opens at 37.0 with the AR loaded (26+55); death t12518 at (-13.90,-22.0,-172.71) in the west blast room: #6 (0x5000087, 0x14) 25.0 in 6 at 2.6 u, then the chaser #9 point-blank. Next: the pit soldiers (#6) before the chaser stand.
+
+Merged 11-13 (48e457c57): the blast room soldier #6 first + the hidden door guard skipped at d3 - THE CHASER GOES DOWN; death t17276 at the pit squad: #14 (hp 10, unexposed 14.3 u) ate the clip while #12 (0x500001e, hp 100) punched 17.0 at 0.9 u. Next: the pit squad from the shelter (#12 before #14, or exposed-only).
