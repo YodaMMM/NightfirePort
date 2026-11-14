@@ -10,3 +10,5 @@ Read the ignore text on master (fdbdbe16e) for the full ledger. Levers in order:
 2. #12: a pre-emptive aimed stand from the door[51] threshold before the last route legs.
 Keep every change gated `difficulty >= 3 && !w.tops_up()`; the d1/d2 walks must stay byte-identical.
 Tests: walkreal_07000015_live, interactables_07000015_live.
+
+Measured 11-13 (master 42aff3fcb): lever 1 (loop the 0x5000087 chaser stand, also widened to (31.5,35.5) tol 20) changes nothing - the finder returns None after #17, #4 is not near yet (62.3 health after the stands, death t11681 unchanged). Lever 2 (visible-guard stand at the door[51] threshold, radius 20/30) kills #12 then #14 but dies sooner, t11654 - 5.4 health cannot stand anywhere. The gap is upstream: health into the hall.
