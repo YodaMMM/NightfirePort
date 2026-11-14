@@ -39,3 +39,5 @@ Measured 11-13 (dead ammo levers, on ced98413c): resupply from the pocket drops 
 Measured 11-13: at the chaser fight start Bond stands at (-14.5,-170.2) with 16.0 health; the pit AR (-16.8,-167.9, 50 rounds, state 1) and armour (-14.4,-172.7) are untaken. Walking both (return fire held) takes the AR (clip 30 + 50 carried) but the walk costs 16 -> 3.5 (#6 skin 0x5000087 0x14 at 1 u) and the armour does not apply; death t12157 (no gain). The real gap is health: 61.5 after the gallery, 26.5 after the close pair, 16 at the pit.
 
 Measured 11-13: a wait before the pocket close-pair fight (0/30/60/90/120/150/180 ticks) only re-rolls the stream - deaths t12054/12340/(60: alive at 2.0 health + 39.5 armour, wedged at door[1] through t14100)/12507/13047/4058/3733; no stable health gain. Not shipped.
+
+Merged 11-13 (d3b5e5eb4): the pocket pair is fought #5 (skin 0x50000b2) first - the pair costs nothing (61.5 kept), the hand-back opens at 37.0 with the AR loaded (26+55); death t12518 at (-13.90,-22.0,-172.71) in the west blast room: #6 (0x5000087, 0x14) 25.0 in 6 at 2.6 u, then the chaser #9 point-blank. Next: the pit soldiers (#6) before the chaser stand.
