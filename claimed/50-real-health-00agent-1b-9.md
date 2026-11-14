@@ -21,3 +21,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-11-14T14:35Z
+
+Main 11-14 (master 06db4a156, NF_DMG_TRACE): 21 hits to the t9134 death - the astronaut 5.0 rounds through the console phase (#9/#11 at x 43-48, #9/#13 at x 31-34), one 13.94 world blast (kind 107, damage 20, d 7.3) at (25.2,-6.9) t7541, then #16/#15/#18/#14 5.0 each and #13 3.72 at x 18-25.
