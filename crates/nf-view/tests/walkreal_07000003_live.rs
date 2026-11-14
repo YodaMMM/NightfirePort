@@ -295,7 +295,7 @@ fn lane_doors_south(w: &mut Walker, label: &str, moat_clear: bool) {
     // The legs stay COLD (no shots before the crossing): run 6's cold legs took 1 hit. The
     // moat_clear opt-in stays for a later round's measurement.
     if moat_clear {
-        clear_exposed_nearest_03(w, &format!("{label} (the moat clear)"), 40.0, 8, 0);
+        clear_exposed_nearest_03(w, &format!("{label} (the moat clear)"), 40.0, 8, 0, false);
     }
     for (k, at) in [[10.03f32, 5.9, -31.87], [10.26, 5.9, -30.02], [10.59, 5.9, -22.92], [10.62, 5.9, -20.99]].into_iter().enumerate() {
         w.walk_to(Wp { at, act: Act::None, arrive: 0.6 }, &format!("{label}: lane {k}"));
@@ -368,10 +368,14 @@ fn stand_shooters_down_03(w: &mut Walker, label: &str, radius: f32) {
 /// guard whose stand bailed (NO-HIT/UNSEEN/DRY) is skipped for the rest of this clear so the
 /// window cannot cycle him. `wait_budget` ticks are spent WAITING for a first candidate with
 /// the aim already held up (the exposure windows flicker — the pick's single snapshot missed
-/// #6's lean entirely in run 6); 0 keeps the old one-shot behaviour. Only this file's d>=3
-/// lane sites call it; every other call site keeps `stand_shooters_down_03` (the pick-order
-/// change must not move the green d<3 streams or the other difficulties' sites).
-fn clear_exposed_nearest_03(w: &mut Walker, label: &str, radius: f32, max: usize, wait_budget: u32) {
+/// #6's lean entirely in run 6); 0 keeps the old one-shot behaviour. `sniper_first` prefers
+/// the weapon-0x1e guards in the pick (the 40.0-a-hit shots decide the run: run 11 spent the
+/// clip on #10's stand and #6's stand bailed DRY at +418, leaving the sniper alive to fire
+/// one 41.2 round at the north courtyard at 15555 [L d3run11]); a pre-stand dry check breaks
+/// the clear when no round is left at all. Only this file's d>=3 lane sites call it; every
+/// other call site keeps `stand_shooters_down_03` (the pick-order change must not move the
+/// green d<3 streams or the other difficulties' sites).
+fn clear_exposed_nearest_03(w: &mut Walker, label: &str, radius: f32, max: usize, wait_budget: u32, sniper_first: bool) {
     w.switch_to_armed(label);
     // Raise the aim BEFORE the first pick (the settle/raise inside each stand then break
     // instantly — a tap can land within ~50 ticks of a window opening).
@@ -383,11 +387,28 @@ fn clear_exposed_nearest_03(w: &mut Walker, label: &str, radius: f32, max: usize
     }
     let mut skip: Vec<usize> = Vec::new();
     let mut waited = 0u32;
+    let mut resupplied = false;
     for _ in 0..max {
+        // No round left at all: loot the nearest drop once (the fights' own kills lie 2-3 u
+        // from the lane north — run 12's #6 stand bailed DRY at +593 with the sniper alive
+        // and he fired one 41.2 round at the north courtyard at 88424 [L d3run12]); a second
+        // dry leaves the rest to the legs' plain clears and the walker's own resupply.
+        if {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.gun.clip == 0 && sim.gun.spare == 0
+        } {
+            if !resupplied {
+                resupplied = true;
+                let _ = w.resupply(label);
+                continue;
+            }
+            break;
+        }
         let di_opt = {
             let sim = w.scene.sim.as_ref().unwrap();
             let b = sim.bond.pos;
             let mut best: Option<(usize, f32)> = None;
+            let mut sniper: Option<(usize, f32)> = None;
             for i in 0..sim.drones.list.len() {
                 let d = &sim.drones.list[i];
                 if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
@@ -395,10 +416,12 @@ fn clear_exposed_nearest_03(w: &mut Walker, label: &str, radius: f32, max: usize
                 let dist = walker::dxz(d.pos, b);
                 if dist > radius { continue; }
                 if walker::DamageLog::exposed_part(&sim, i).is_none() { continue; }
-                let nearer = match best { None => true, Some((_, bd)) => dist < bd };
-                if nearer { best = Some((i, dist)); }
+                let nearer = |cur: &Option<(usize, f32)>| match cur { None => true, Some((_, bd)) => dist < *bd };
+                if sniper_first && d.weapon == 0x1e {
+                    if nearer(&sniper) { sniper = Some((i, dist)); }
+                } else if nearer(&best) { best = Some((i, dist)); }
             }
-            best.map(|(i, _)| i)
+            sniper.or(best).map(|(i, _)| i)
         };
         let Some(di) = di_opt else {
             if waited + 10 <= wait_budget {
@@ -629,7 +652,15 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     w.walk_nav_to([0.0f32, 5.9, -20.0], "courtyard east", 1.6);
     // Into the mid courtyard through the lane doors on their centre line (`cross_lane_doors`).
     lane_doors_south(&mut w, "the lane doors south", false);
+    // 00 Agent (runs 6-9): the plain fights stop Bond IN the doorway kill zone — the north
+    // crossing's two fights ate 60.0 (#9 22.8, #8 28.2 [L d3run6/9]) and left the whole lane
+    // phase a 4.0-hp race. A player sprints the gap and answers from the far side, where the
+    // shut doors re-block the cluster's lines (the mouth window's only hits came through
+    // glass [L d3run9]); the walker's return-fire switch is the fights' own opt-in, off for
+    // the crossing legs only.
+    if difficulty >= 3 { w.dmg.return_fire = false; }
     cross_lane_doors(&mut w, true, "mid courtyard");
+    if difficulty >= 3 { w.dmg.return_fire = true; }
     w.walk_nav_to([13.0, 5.9, -18.0], "mid courtyard", 1.6);
     // guard-repin-master-2 item 1 (the 06 stand_shooters_down law, d-gated), measured on the
     // fatal NF_DMG_TRACE ledger: the courtyard cluster opens on the mid-courtyard leg (#11
@@ -644,7 +675,10 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     // re-takes that line, the aimed stands (the aim-bit zero-spread act [M Bullet_init
     // 0x12c5a0:139-170]) take the 5-hp #10 and the 24-hp #11 before the west-lawn legs feed
     // the charge.
-    if difficulty >= 2 {
+    if difficulty == 2 {
+        // d3 skips the angle trip (runs 6-9): its fight-line sweep found no candidate at d3
+        // and the south crossing re-opened the door cluster's lines for another 22.8 fight;
+        // the mouth clear below answers the shooters instead. d2 keeps its measured law.
         cross_lane_doors(&mut w, false, "the mid-courtyard angle");
         w.walk_to(Wp { at: [11.0, 6.5, -21.5], act: Act::None, arrive: 1.0 }, "the mid-courtyard angle (the shooters' fight line)");
         stand_shooters_down_03(&mut w, "the mid-courtyard shooters", 40.0);
@@ -705,9 +739,14 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     if difficulty >= 3 {
         w.walk_to(Wp { at: [10.93, 5.35, -19.0], act: Act::None, arrive: 0.35 },
             "the lane mouth line (pre-crossing)");
-        clear_exposed_nearest_03(&mut w, "the lane mouth shooters (pre-crossing)", 40.0, 8, 600);
+        clear_exposed_nearest_03(&mut w, "the lane mouth shooters (pre-crossing)", 40.0, 8, 600, false);
     }
     let mut on_lane = false;
+    // 00 Agent (run 9): the through-crossing's plain fight vs #11 stopped Bond on the lane for
+    // the trade — the fights stay off across the crossing like the north one (the door
+    // cluster's lines are at Bond's back once he is south of the doors; the lane-north clear
+    // below answers what the open gap exposes).
+    if difficulty >= 3 { w.dmg.return_fire = false; }
     for attempt in 0..3 {
         w.use_door(lane_door, "the lane doors");
         if attempt > 0 {
@@ -729,6 +768,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         w.lenient = false;
         if got != u32::MAX { on_lane = true; break; }
     }
+    if difficulty >= 3 { w.dmg.return_fire = true; }
     assert!(on_lane, "the lane north never reached (the doorway held)");
     // 00 Agent (real-health-00agent-03-captors-2, on the merged tree): the AimStandFire root
     // stop is live on 03 [M drone.rs ZERO_ROOT 0x03] and the guards react to gunfire the
@@ -740,7 +780,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     // with the aimed stands (the aim-bit zero-spread act [M Bullet_init 0x12c5a0:139-170])
     // BEFORE walking the lane legs.
     if difficulty >= 3 {
-        clear_exposed_nearest_03(&mut w, "the lane north shooters", 40.0, 8, 0);
+        clear_exposed_nearest_03(&mut w, "the lane north shooters", 40.0, 8, 0, true);
     }
     for (name, at) in [
         ("the lane south", [10.41f32, 6.08, -28.74]),
@@ -752,8 +792,14 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         ("gate plate lawn", [11.0, 5.9, -35.0]),
     ] {
         if difficulty >= 3 {
-            // The lane legs' own answer, the east lane's clear_near idiom: each leg clears
-            // the guards its walk woke (the merged tree's gunfire reaction draws them).
+            // Run 10: the plain clear_near's hip-cone taps take 3-5 rounds a d3 guard and the
+            // moat-ditch machine gun #12 (skin 0x500003a, weapon 0xe, (4.2,-26.7)) survived
+            // them at hp 1 and ambushed the moat-west-end resupply leg for 41.2 (4 hits, the
+            // run died at 12475) [L d3run10]. The aimed stands (the aim-bit zero-spread act
+            // [M Bullet_init 0x12c5a0:139-170]) kill a 12-hp guard in 1-2 taps, and the pick
+            // is PROACTIVE (no recent-hit gate — #12's first round landed only after his
+            // leg's reactive window had passed); the plain clear stays as the backstop.
+            clear_exposed_nearest_03(&mut w, name, 12.0, 4, 0, false);
             clear_near(&mut w, 9.0, name);
         }
         w.walk_nav_to(at, name, 1.6);
