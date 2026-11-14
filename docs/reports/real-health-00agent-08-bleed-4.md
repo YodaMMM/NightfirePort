@@ -122,3 +122,13 @@ touch ONE test file; the whole affected binary and interactables ran green on th
 - output tokens: not visible to me
 - context used: not visible to me
 - cost: not visible to me
+
+## ntfy failed
+
+- curl: `curl: (28) Connection timed out after 20002 milliseconds`
+- python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+  (a first attempt also raised `SyntaxError: bytes can only contain ASCII literal characters`
+  — an em-dash inside the bytes literal; the retry with ASCII bytes gave the URLError above)
+- wget: the process was killed by `timeout 90` (exit 124) with no response — the connection to
+  ntfy.sh (159.203.148.75:443) never completed (the same finding as the bleed-3 report; an
+  earlier piped run printed exit 0 but that was the downstream `tail`'s exit code, not wget's).
