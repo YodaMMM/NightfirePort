@@ -149,6 +149,45 @@ fn fight_close_guards_opts(w: &mut Walker, label: &str, max_ticks: u32, visible_
     fight_guards_within(w, label, max_ticks, visible_only, 12.0)
 }
 
+/// real-health-00agent-08-bleed-3 (d3): the WIDE sister of `fight_guards_within` — the same
+/// single-target stands with a larger radius and y band. The fusebox pit guard #16 (skin
+/// 0x5000030, (148.1, 38.7, −110.5)) sniped the burn stands from the level below at 12.7-12.8
+/// u and 4.4 u down — outside the close fights' 12 u ring and their ±4.0 y band [L the
+/// 2026-11-14 run-lever4 log: fourteen −4.0 hits t3550-6554 drained the last 60.0 while Bond
+/// held the laser burn]. Local to this file, every call d3-gated.
+fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, visible_only: bool, radius: f32, dy: f32) {
+    if w.tops_up() { return; }
+    let close = |sim: &nf_view::scene::Sim| -> Option<usize> {
+        let b = sim.bond.pos;
+        sim.drones.list.iter().enumerate()
+            .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1)
+            .filter(|(_, d)| ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < radius && (d.pos[1] - b[1]).abs() < dy)
+            .filter(|(i, _)| !visible_only || walker::DamageLog::visible(sim, *i))
+            .min_by(|x, y| {
+                let dx = (x.1.pos[0] - b[0]).powi(2) + (x.1.pos[2] - b[2]).powi(2);
+                let dy2 = (y.1.pos[0] - b[0]).powi(2) + (y.1.pos[2] - b[2]).powi(2);
+                dx.total_cmp(&dy2)
+            })
+            .map(|(i, _)| i)
+    };
+    let start = w.total_ticks;
+    let mut skipped: Vec<usize> = Vec::new();
+    loop {
+        if w.total_ticks - start >= max_ticks {
+            eprintln!("[08 guards] {label}: fight cap at tick {} (health {:.1})", w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+            break;
+        }
+        let Some(di) = close(&w.scene.sim.as_ref().unwrap()) else { break };
+        if skipped.contains(&di) { break; }
+        eprintln!("[08 guards] {label}: the close guard #{di} ({:?}) at tick {}, health {:.1} — the gun first",
+            w.scene.sim.as_ref().unwrap().drones.list[di].pos, w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+        let killed = w.switch_to_gun(label) && w.stand_and_fire(di, 900);
+        eprintln!("[08 guards] {label}: guard #{di} {} (killed {killed}) at tick {}, health {:.1}",
+            if killed { "down" } else { "held (out of sight or cap)" }, w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+        if !killed { skipped.push(di); }
+    }
+}
+
 fn fight_guards_within(w: &mut Walker, label: &str, max_ticks: u32, visible_only: bool, radius: f32) {
     if w.tops_up() { return; }
     let close = |sim: &nf_view::scene::Sim| -> Option<usize> {
@@ -421,6 +460,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     let fusebox = [154.35f32, 43.41, -119.67];
     for (name, at) in [
         ("the station hall", [139.0f32, 49.5, -93.0]),
+        // real-health-00agent-08-bleed-3 (d3): the east-deck head — the walkway-head nav's own
+        // measured first arrival (152.16, 46.08, −93.92) [L the 2026-11-14 baseline run: nav 1
+        // lands IN the east placements' fire, the t684 hit −4.0 from #14 at d 4.1, and the
+        // nav-2 return-fire stand on #11 cost 32.0 (96.0 → 64.0)] — walked as its own leg so
+        // the visible-only stand fights the east placements (152.5-161.5, 46.0,
+        // −87.7..−101.5) FROM the deck, before the westward nav crosses their lanes. The
+        // 11-13 mouth stand fights nobody from the hall mouth (no visible guard at t373 [L the
+        // same run]); from the deck head every shooter is at 4-12 u. D3-GATED: the sisters'
+        // timelines stay byte-exact.
+        ("the east deck head", [152.2f32, 46.0, -93.9]),
         // No "station doors" stop at (139.5, 49.5, −97.5) on this walk: its nav route runs east
         // through door (160.6, 45.0, −100.1) and back west along the lower deck (y 46.1), and the
         // last leg aims at a point 3.4 above that deck — the leg wedged there, and the stuck
@@ -430,8 +479,31 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the walkway mid", [145.5, 45.0, -108.6]),
         ("the lower landing", [150.0, 43.5, -116.0]),
     ] {
+        if name == "the east deck head" && difficulty < 3 { continue; }
+        // real-health-00agent-08-bleed-3 (d3): the landing nav from the deck-line approach
+        // wedges ON the stair lip (146.34, 44.99, −115.69) grounded=false [L the 2026-11-14
+        // run-lever3 log] — take the approach chain's own stair-head waypoint instead (the
+        // chain below re-walks it; its arrival is the measured green crossing). D3-GATED.
+        if difficulty >= 3 && name == "the lower landing" {
+            w.walk_to(Wp::new(146.6, 44.4, -117.6).r(2.2), "the stair head from the walkway");
+            continue;
+        }
         if name == "the lower landing" && w.tops_up() && walkway_pair_holds(&w) { continue; }
-        w.walk_nav_to(at, name, 1.5);
+        // The east deck head takes the tight 0.7 arrival: the 1.5 radius counted an arrival
+        // 1.3 u west of the measured node and the next nav re-routed through the east door
+        // (160.6, −100.1) into its frame wedge [L the 2026-11-14 run-lever1 log].
+        let nav_r = if name == "the east deck head" { 0.7 } else { 1.5 };
+        // real-health-00agent-08-bleed-3 (d3): after the deck-head fight the walkway-head nav
+        // re-routes through the east door (160.6, −100.1) and wedges in its frame from the deck
+        // above (head_bump at (160.27, 46.60, −99.37), the door already open pos01 1.00; every
+        // later leg wedged there) [L the 2026-11-14 run-lever1 log]. Walk the deck line west
+        // explicitly first (the baseline bleed's own line: (152.4, −93.9) → (150.0, −96.4)),
+        // then the short walkway-head hop navs direct. D3-GATED: the sisters' timelines stay
+        // byte-exact.
+        if difficulty >= 3 && name == "the walkway head" {
+            w.walk_to(Wp::new(148.5, 46.1, -98.5).r(1.5), "the deck line west");
+        }
+        w.walk_nav_to(at, name, nav_r);
         // los-mask-repins-08-agent (d2): the east-hall guards (#11/#14/#2/#9/#10, placements
         // (152.5-161.5, 46.0, −87.7..−101.5) [L the run ledgers]) wake on the ch-0x2a plate and
         // hold the deck the walkway-head nav crosses — on the Agent accuracy (1.1
@@ -443,6 +515,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // out to 25 u. D2-GATED: the Operative sisters' timelines stay byte-exact.
         if difficulty >= 2 && fight_pkg && name == "the station hall" {
             fight_guards_within(&mut w, "the station hall mouth", 4200, true, 25.0);
+        }
+        // real-health-00agent-08-bleed-3 (d3): the deck-head stand — fight the east placements
+        // from the east deck head before the westward leg crosses their lanes (the leg's own
+        // comment above; the 11-13 ledger's "fight the hall guards from cover as they come
+        // round" — they never come round, but from the deck head they are all visible at
+        // 4-12 u [L the 2026-11-14 baseline run]). D3-GATED.
+        if difficulty >= 3 && fight_pkg && name == "the east deck head" {
+            fight_guards_within(&mut w, "the east deck head", 4200, true, 25.0);
         }
     }
     // With the game's standing bodies the live walkway pair (#7/#8, AimStandFire 0x68 / StepAim
@@ -528,6 +608,20 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // The wire filter DROPS guns (kind 0x0008) and keeps the Laser (0x0002) [M fusebox.rs's
     // Collide_FilterBullets 0x1ece30:24-31 with the disc category words] — gunfire never cuts a
     // wire; the player's laser does.
+    // real-health-00agent-08-bleed-3 (d3): the pit fight before the burn — the level-below
+    // snipers (#16-class) sit outside the doorway fight's 6 u and the close fights' 12 u/±4
+    // rings [L the run-lever4 log]. D3-GATED: the sisters' timelines stay byte-exact.
+    if difficulty >= 3 && !w.tops_up() {
+        // The pick is the VISIBLE-only wide one: #16 is NOT visible from the burn spot (the
+        // run-lever5 rerun found nobody visible and the timeline matched lever 4's t6554
+        // death exactly), so this is a no-op on the measured roll — but a visible pit guard
+        // on a re-roll must be answered before the burn. The UNSEEN variant (the
+        // hurting-first creep, run-lever6) REGRESSED: its nearest-first pick opened on the
+        // buried doorway man #5, stalled 60 ticks and the death came at t4320 — the next
+        // session's lever is a pick that targets the guard that actually landed the last hit
+        // within the wide ring, not the nearest.
+        fight_guards_wide(&mut w, "the fusebox pit", 4200, true, 25.0, 6.0);
+    }
     aim_and_fire_until(&mut w, fusebox, 0x4e, 420, |s| s.drones.channels.on(137));
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -2164,7 +2258,7 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// plus the pin of the round's actual spawn direction (lock-on vs the effective aim) in
 /// PCSX2 (the report's live check).
 #[test]
-#[ignore = "00 Agent (11-13): the briefcase leg now starts from the plain walk's spot (158.93, -116.52) - from the bolt stand's z -117.6 the nav ran Bond into the safe-face corner (162.59, -118.17) for the whole cap and ch 0x4a never wrote (a wedge before the Hind on the current master). The walk now dies at t34277 at (110.98, 13.52, -179.31). Earlier: 00 Agent 2026-11-10 state (on the solid-body master 0a9d39435): the descent is cleared and the Hind fight is REACHED with the bleed re-tuned — the fusebox doorway fight clears the walkway-door burst man before the laser burn (the old tick-8995 death at his 2.9-u bursts is gone) and the per-leg boarding lip fights kill the #26/#27 pair on each leg's arrival spot (24.0 → 9.0+3.0); the Hind fight gained the missile dodge (the laser-hinges-2 side step off each inbound round's line, d3-gated) and rocket 1 LANDED for 100.9 at t2554. Bond still dies at tick 32622 to the machine's own −15.00 k=6 blast at 6 u with ~15 health (the ledger: 23 hits for 100.0 — the station hall's six d3 pistol guards 52.0 [#14 16.0 at 2.1-2.6 u, #11 12.0 at 9.6 u, #2/#9 8.0+8.0, #10/#3 4.0+4.0], the pair 15.0, the fight's blasts). NEXT LEVERS: (1) the station-hall stands OUT OF THE PAIR'S LINE — the guards hold their east placements (152.5-161.5, 46.0, −87.7..−101.5) under the solid-body commit and the legs' fights run inside their bursts; fight them from the intro-plate cover before crossing (they wake on the ch-0x2a plate at (139.1, 50.2, −93.6) [D]), or widen the shooters window so the legs' return fire engages at 20-30 u; (2) the dodge window widened from 30 to 60 u with the side step held until the round dies — the killing blast is a WALL detonation 6 u out (the k=6 falloff signature [M Explode_Propagate 0x17c518:69-71]), so the step must clear the wall band, not just the direct line; (3) the machine's own rounds through the launch-time forecast law the self-blast gate already uses. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
+#[ignore = "00 Agent (11-14): the START bleed lever is TAKEN and measured — the east-deck head leg (152.2, 46.0, −93.9, the walkway-head nav's own measured arrival) + a visible-only 25-u stand there kills the east placements ONE AT A TIME from the deck (4 down for 40.0, 100 → 60 [L the 2026-11-14 run-lever1..4 logs]) instead of eating their bursts mid-nav (the 11-13 baseline on this master: death t34277 at (110.98, 13.52, −179.31), 33 hits for 100.0, the hall nav-2 alone 76.0 [#11 32.0, #3 44.0], the machine 0.0/598 when Bond fell). The crossing is then carried by the d3-only deck line west walk_to (148.5, 46.1, −98.5 — the east-door frame wedge (160.27, 46.60, −99.37, head_bump, the door ALREADY open pos01 1.00) is bypassed) and the stair-head walk_to (146.6, 44.4, −117.6, master's own approach chain) — the walkway pair #7/#8 and the deck stragglers #9/#10 die to the return fire for FREE (60.0 → 60.0). The walk now dies at t6554 at (154.51, 43.10, −120.72), 26 hits for 100.0, 10 return-fire fights: the FUSEBOX PIT guard #16 (skin 0x5000030, (148.1, 38.7, −110.5)) sniped the laser-burn stands from the level BELOW at 12.7-12.8 u and 4.4 u down — outside the doorway fight's 6 u and the close fights' 12 u/±4 rings, and NOT visible from the burn spot (the visible-only wide fight found nobody [L run-lever5] while his rounds reached Bond; fourteen −4.0 hits t3550-6554 = the last 60.0). The UNSEEN nearest-first variant REGRESSED (its pick opened on the buried doorway man #5, stalled 60 ticks, death t4320 [L run-lever6]). NEXT LEVERS: (1) the fusebox pit: a pick that targets the guard that actually LANDED THE LAST HIT within the wide 25-u/±6-y ring (the walker's hurt bookkeeping names him — #16 — without the nearest-first stall), the same wide stand before the bolts/safe burns; (2) past the fusebox the route is the master flow with the guards dead upstream — the descent re-rolls (the 11-13 mouth-hold note's re-roll deaths t25621/t26960 lower-level-east stand as the class to watch); (3) the Hind fight's own levers still stand: the dodge window 30 → 60 u with the side step held until the round dies (the killing blast is a WALL detonation 6 u out, the k=6 falloff signature [M Explode_Propagate 0x17c518:69-71]), cover between volleys, and the machine's own rounds through the launch-time forecast law. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
