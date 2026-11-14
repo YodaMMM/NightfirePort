@@ -317,3 +317,18 @@ walkway-head nav 2; the held mouth stand re-rolls the descent). Levers this wind
 fight the hall guards from cover as they come round / cross the hall on a different
 line, then the Hind fight levers (dodge window vs the wall band, cover between volleys,
 the rockets' pacing). Sandbox was reset: toolchain and ISO re-fetched this window.
+
+real-health-00agent-08-bleed-3 (2026-11-14T04:26Z, master c9b24271d): the start-bleed
+lever is TAKEN — the d3 east-deck head leg (152.2, 46.0, −93.9) + a visible-only 25-u
+stand kills the station hall's east placements one at a time from the deck (4 down for
+40.0; the 11-13 mouth stand fights nobody), the d3 deck line west walk_to bypasses the
+east-door frame wedge, the stair-head walk_to replaces the wedging landing nav — the
+walkway pair and the deck stragglers die free. The walk advanced from the master death
+t34277 (33 hits, the Hind fight, machine 0/598) to t6554 at the fusebox: the pit guard
+#16 (12.8 u, 4.4 u below, outside the 12 u/±4 rings, NOT visible from the burn spot)
+sniped the laser-burn stands; the unseen nearest-first fight variant regressed (t4320).
+Ledger + next levers in the ignore message. walkreal_07000008_live whole binary 5/1
+(the failure is the ledgered d3 walk), interactables_07000008_live 15/0. Sandbox reset
+this window (Rust + ISO re-fetched); the background suite dies between tool calls
+(nohup/setsid both) — per-binary foreground runs instead; disk ceiling again (target/
+release/build/nf-view held 4.6G of stale hardlinked test binaries).
