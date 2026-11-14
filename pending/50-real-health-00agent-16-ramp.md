@@ -47,3 +47,5 @@ Merged 11-13 (48e457c57): the blast room soldier #6 first + the hidden door guar
 Measured 11-13 (48e457c57): the finale health trail - 37.0 at the chaser stand, the chaser fight costs 20.0 in 20 (#9 at 2.4 u, range keeping), 17.0 into the pit squad; #12 (0x500001e, hp 100) then lands one 17.0 hit. A close-hostile answer in the squad slices (radius 5/9) picks #15 first and dies t17259 - no gain. Next: health through the chaser fight (20 lost at 2.4 u means the range keeping lets him in).
 
 Measured 11-13: the range-keeping tap interval (4/8/12 vs 16) does not matter - the chaser dies at +2782..+2806 either way and the death stays t17260-17276.
+
+Measured 11-13: the armour #648 walk between the room soldier and the chaser (return fire held) arrives with armour 5.0 (the walk ate it) and the chaser kills Bond at t12411 on the armour spot. Not shipped.
