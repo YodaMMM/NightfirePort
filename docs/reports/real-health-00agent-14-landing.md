@@ -102,6 +102,11 @@ or context-window readout to the worker. What was visible: the task message's cl
 expiry ~05:24 UTC; this report written ~04:40 UTC), `git` hashes, test outputs and process
 exit codes. No input/output token counters, no credit balance, no dollar cost.
 
-## ntfy
+## ntfy failed
 
-Sent at the finish step (the record appended below only if a fallback was needed).
+All three fallbacks failed on 2026-11-14 ~04:48 UTC:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d ... https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 28: `curl: (28) Connection timed out after 20002 milliseconds`.
+2. `python3 urllib.request` → `URLError(OSError(101, 'Network is unreachable'))`.
+3. `wget -q -O- --post-data ... https://ntfy.sh/nightfire-yoda-8k3x` → exit 124 (timed out
+   after 60 s; a delivered post exits 0 quietly — this one did not deliver).
