@@ -149,6 +149,129 @@ fn fight_close_guards_opts(w: &mut Walker, label: &str, max_ticks: u32, visible_
     fight_guards_within(w, label, max_ticks, visible_only, 12.0)
 }
 
+/// real-health-00agent-08-bleed-3 (d3): the WIDE sister of `fight_guards_within` — the same
+/// single-target stands with a larger radius and y band. The fusebox pit guard #16 (skin
+/// 0x5000030, (148.1, 38.7, −110.5)) sniped the burn stands from the level below at 12.7-12.8
+/// u and 4.4 u down — outside the close fights' 12 u ring and their ±4.0 y band [L the
+/// 2026-11-14 run-lever4 log: fourteen −4.0 hits t3550-6554 drained the last 60.0 while Bond
+/// held the laser burn]. Local to this file, every call d3-gated.
+///
+/// real-health-00agent-08-bleed-4 (d3): the pick is the guard who actually LANDED THE LAST HIT
+/// inside the wide ring — the walker's hurt bookkeeping (`player_hits`, the (frame, owner,
+/// damage) record the [dmg] trace reads) names him — not the nearest: the unseen nearest-first
+/// variant opened on the buried doorway man #5, stalled 60 ticks and died t4320 [L the 2026-11-14
+/// run-lever6 log]. Before the first burn no hit has landed yet, so the pick falls back to the
+/// in-ring guard whose muzzle is live on Bond NOW (his own shot log + his aim point on Bond —
+/// the same firing evidence `DamageLog::shooters` reads). #16 is NOT visible from the burn spot
+/// (the run-lever5 rerun: the visible-only wide fight found nobody while his rounds reached
+/// Bond), so a below-the-level pick gets the PIT EXCURSION: the route's own descent legs (the
+/// path-2 link chain the walk itself takes after the secure room) carry Bond down toward the
+/// guard with a sight check after every leg; the stand fires the moment a leg opens the line,
+/// and the return walks the same legs back to the burn spot (the caller's laser needs the 4.0
+/// range [L weapon_data +0x4E·0x10C+0x1C]). A guard at or above Bond's level never gets the
+/// excursion (the descent is the pit's answer, not a hall guard's). [S] the excursion legs are
+/// the walk's own player tactic; the legs themselves are the master flow's measured green
+/// descent.
+///
+/// The y band is 8.0 at both call sites, not the ledger's ±6.0: the pit pair MOVES — the
+/// lever run's #16 fired from (144.4, 37.2, −111.1) mid-descent and the poll at the burn spot
+/// (y 44.3) read dy 7.1 — outside ±6 — so the whole fight stayed a silent no-op while a
+/// SECOND pit shooter (#15, skin 0x500002e, (151.7, 39.2, −111.5)) opened up from dy 3.9-5.1
+/// and the death came t5050 [L run-bleed4-2]. The pit floor spans y 37-39.5 under a y 43-44.3
+/// Bond: the band that always holds the pit class is 8.0.
+fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, radius: f32, dy: f32) {
+    if w.tops_up() { return; }
+    let start = w.total_ticks;
+    let mut excursions = 0u32;
+    loop {
+        if w.total_ticks - start >= max_ticks {
+            eprintln!("[08 guards] {label}: fight cap at tick {} (health {:.1})", w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+            break;
+        }
+        let (di, below) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            let now = sim.drones.frame;
+            let ring: Vec<usize> = sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1)
+                .filter(|(_, d)| ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < radius && (d.pos[1] - b[1]).abs() < dy)
+                .map(|(i, _)| i).collect();
+            // 1. the guard who landed the LAST hit on Bond inside the ring — the hurt bookkeeping
+            //    names him (player_hits is frame-ordered; the newest entry with an in-ring live owner).
+            let hurt = sim.drones.player_hits.iter().rev()
+                .find(|h| h.1 < sim.drones.list.len() && ring.contains(&h.1))
+                .map(|h| h.1);
+            // 2. before any round has landed: the in-ring guard firing at Bond NOW — his own shot
+            //    log is live (≤ 90 frames) and his aim point sits on Bond (the shooters() law,
+            //    [M DroneFiring opp_target reads — the same evidence the return-fire pick uses]).
+            let firing = ring.iter().copied().find(|&i| {
+                let d = &sim.drones.list[i];
+                d.shots.last().is_some_and(|&f| now.saturating_sub(f) <= 90)
+                    && ((d.opp_target[0] - b[0]).powi(2) + (d.opp_target[2] - b[2]).powi(2)).sqrt() < 1.5
+            });
+            match hurt.or(firing) {
+                Some(i) => {
+                    let d = &sim.drones.list[i];
+                    let visible = walker::DamageLog::visible(sim, i);
+                    (Some(i), !visible && d.pos[1] < b[1] - 2.0)
+                }
+                None => (None, false),
+            }
+        };
+        let Some(di) = di else { break };
+        if below && excursions < 3 {
+            excursions += 1;
+            eprintln!("[08 guards] {label}: the pit pick #{di} ({:?}) is unseen from here — the pit excursion {excursions} at tick {}, health {:.1}",
+                w.scene.sim.as_ref().unwrap().drones.list[di].pos, w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+            // The route's own descent legs (the outbound list below, "the gondola: the descent to
+            // the floor plate"): the path-2 link chain, walked on every green run. Sight check
+            // after every leg — the stand fires the moment the line opens.
+            let excursion: &[(&str, [f32; 3])] = &[
+                ("the landing east", [151.2f32, 42.5, -120.5]),
+                ("through the door", [153.0, 42.5, -120.7]),
+                ("the ramp south", [153.1, 41.2, -116.0]),
+                ("the ramp mid", [153.2, 39.7, -111.7]),
+                ("the ramp turn", [148.3, 38.5, -110.9]),
+            ];
+            let mut opened_at: Option<usize> = None;
+            for (k, (name, at)) in excursion.iter().enumerate() {
+                w.walk_nav_to(*at, &format!("{label} {name}"), if k + 1 == excursion.len() { 0.9 } else { 1.2 });
+                let vis = walker::DamageLog::visible(&w.scene.sim.as_ref().unwrap(), di);
+                eprintln!("[08 guards] {label}: {name} at tick {} bond {:?} — pick #{di} visible {vis} (health {:.1})",
+                    w.total_ticks, w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().drones.health.health);
+                if vis { opened_at = Some(k); break; }
+            }
+            let mut killed = false;
+            if opened_at.is_some() {
+                killed = w.switch_to_gun(label) && w.stand_and_fire(di, 900);
+            }
+            eprintln!("[08 guards] {label}: the pit pick #{di} {} (killed {killed}) at tick {}, health {:.1}",
+                if opened_at.is_none() { "never opened" } else if killed { "down" } else { "held" },
+                w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+            // The return: the walked legs in reverse, then the caller's own spot — the laser's
+            // 4.0 range [L weapon_data +0x4E·0x10C+0x1C] needs Bond back on the fusebox walkway.
+            if let Some(k) = opened_at {
+                for (name, at) in excursion[..k].iter().rev() {
+                    w.walk_nav_to(*at, &format!("{label} back {name}"), 1.2);
+                }
+            } else {
+                for (name, at) in excursion.iter().rev() {
+                    w.walk_nav_to(*at, &format!("{label} back {name}"), 1.2);
+                }
+            }
+            w.walk_nav_to([154.35, 43.41, -119.67], &format!("{label} back to the burn spot"), 1.0);
+            if !killed { break; } // one failed excursion — walk on (the caller's leg continues)
+            continue;
+        }
+        eprintln!("[08 guards] {label}: the hurting pick #{di} ({:?}) at tick {}, health {:.1} — the gun first",
+            w.scene.sim.as_ref().unwrap().drones.list[di].pos, w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+        let killed = w.switch_to_gun(label) && w.stand_and_fire(di, 900);
+        eprintln!("[08 guards] {label}: pick #{di} {} (killed {killed}) at tick {}, health {:.1}",
+            if killed { "down" } else { "held (out of sight or cap)" }, w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+        if !killed { break; }
+    }
+}
+
 fn fight_guards_within(w: &mut Walker, label: &str, max_ticks: u32, visible_only: bool, radius: f32) {
     if w.tops_up() { return; }
     let close = |sim: &nf_view::scene::Sim| -> Option<usize> {
@@ -421,6 +544,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     let fusebox = [154.35f32, 43.41, -119.67];
     for (name, at) in [
         ("the station hall", [139.0f32, 49.5, -93.0]),
+        // real-health-00agent-08-bleed-3 (d3): the east-deck head — the walkway-head nav's own
+        // measured first arrival (152.16, 46.08, −93.92) [L the 2026-11-14 baseline run: nav 1
+        // lands IN the east placements' fire, the t684 hit −4.0 from #14 at d 4.1, and the
+        // nav-2 return-fire stand on #11 cost 32.0 (96.0 → 64.0)] — walked as its own leg so
+        // the visible-only stand fights the east placements (152.5-161.5, 46.0,
+        // −87.7..−101.5) FROM the deck, before the westward nav crosses their lanes. The
+        // 11-13 mouth stand fights nobody from the hall mouth (no visible guard at t373 [L the
+        // same run]); from the deck head every shooter is at 4-12 u. D3-GATED: the sisters'
+        // timelines stay byte-exact.
+        ("the east deck head", [152.2f32, 46.0, -93.9]),
         // No "station doors" stop at (139.5, 49.5, −97.5) on this walk: its nav route runs east
         // through door (160.6, 45.0, −100.1) and back west along the lower deck (y 46.1), and the
         // last leg aims at a point 3.4 above that deck — the leg wedged there, and the stuck
@@ -430,8 +563,31 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the walkway mid", [145.5, 45.0, -108.6]),
         ("the lower landing", [150.0, 43.5, -116.0]),
     ] {
+        if name == "the east deck head" && difficulty < 3 { continue; }
+        // real-health-00agent-08-bleed-3 (d3): the landing nav from the deck-line approach
+        // wedges ON the stair lip (146.34, 44.99, −115.69) grounded=false [L the 2026-11-14
+        // run-lever3 log] — take the approach chain's own stair-head waypoint instead (the
+        // chain below re-walks it; its arrival is the measured green crossing). D3-GATED.
+        if difficulty >= 3 && name == "the lower landing" {
+            w.walk_to(Wp::new(146.6, 44.4, -117.6).r(2.2), "the stair head from the walkway");
+            continue;
+        }
         if name == "the lower landing" && w.tops_up() && walkway_pair_holds(&w) { continue; }
-        w.walk_nav_to(at, name, 1.5);
+        // The east deck head takes the tight 0.7 arrival: the 1.5 radius counted an arrival
+        // 1.3 u west of the measured node and the next nav re-routed through the east door
+        // (160.6, −100.1) into its frame wedge [L the 2026-11-14 run-lever1 log].
+        let nav_r = if name == "the east deck head" { 0.7 } else { 1.5 };
+        // real-health-00agent-08-bleed-3 (d3): after the deck-head fight the walkway-head nav
+        // re-routes through the east door (160.6, −100.1) and wedges in its frame from the deck
+        // above (head_bump at (160.27, 46.60, −99.37), the door already open pos01 1.00; every
+        // later leg wedged there) [L the 2026-11-14 run-lever1 log]. Walk the deck line west
+        // explicitly first (the baseline bleed's own line: (152.4, −93.9) → (150.0, −96.4)),
+        // then the short walkway-head hop navs direct. D3-GATED: the sisters' timelines stay
+        // byte-exact.
+        if difficulty >= 3 && name == "the walkway head" {
+            w.walk_to(Wp::new(148.5, 46.1, -98.5).r(1.5), "the deck line west");
+        }
+        w.walk_nav_to(at, name, nav_r);
         // los-mask-repins-08-agent (d2): the east-hall guards (#11/#14/#2/#9/#10, placements
         // (152.5-161.5, 46.0, −87.7..−101.5) [L the run ledgers]) wake on the ch-0x2a plate and
         // hold the deck the walkway-head nav crosses — on the Agent accuracy (1.1
@@ -443,6 +599,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // out to 25 u. D2-GATED: the Operative sisters' timelines stay byte-exact.
         if difficulty >= 2 && fight_pkg && name == "the station hall" {
             fight_guards_within(&mut w, "the station hall mouth", 4200, true, 25.0);
+        }
+        // real-health-00agent-08-bleed-3 (d3): the deck-head stand — fight the east placements
+        // from the east deck head before the westward leg crosses their lanes (the leg's own
+        // comment above; the 11-13 ledger's "fight the hall guards from cover as they come
+        // round" — they never come round, but from the deck head they are all visible at
+        // 4-12 u [L the 2026-11-14 baseline run]). D3-GATED.
+        if difficulty >= 3 && fight_pkg && name == "the east deck head" {
+            fight_guards_within(&mut w, "the east deck head", 4200, true, 25.0);
         }
     }
     // With the game's standing bodies the live walkway pair (#7/#8, AimStandFire 0x68 / StepAim
@@ -528,6 +692,19 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // The wire filter DROPS guns (kind 0x0008) and keeps the Laser (0x0002) [M fusebox.rs's
     // Collide_FilterBullets 0x1ece30:24-31 with the disc category words] — gunfire never cuts a
     // wire; the player's laser does.
+    // real-health-00agent-08-bleed-3 (d3): the pit fight before the burn — the level-below
+    // snipers (#16-class) sit outside the doorway fight's 6 u and the close fights' 12 u/±4
+    // rings [L the run-lever4 log]. D3-GATED: the sisters' timelines stay byte-exact.
+    // real-health-00agent-08-bleed-4 (d3): the pick is the HURTING one — the guard who landed
+    // the last hit inside the wide 25-u/±6-y ring (the hurt bookkeeping names him — #16 —
+    // [L the run-lever4 log: fourteen −4.0 hits t3550-6554]), falling back to the in-ring
+    // guard whose muzzle is live on Bond before his first round lands; the unseen below-level
+    // pick takes the pit excursion (the function doc). The UNSEEN nearest-first variant
+    // (run-lever6) REGRESSED — its pick opened on the buried doorway man #5, stalled 60 ticks,
+    // death t4320 — the hurting pick never stands a guard the bookkeeping has not named.
+    if difficulty >= 3 && !w.tops_up() {
+        fight_guards_wide(&mut w, "the fusebox pit", 4200, 25.0, 8.0);
+    }
     aim_and_fire_until(&mut w, fusebox, 0x4e, 420, |s| s.drones.channels.on(137));
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -549,6 +726,44 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             let Some(g) = g else { break };
             if !w.shoot(g, &format!("the walkway guard {g}")) { break; }
         }
+    }
+
+    // real-health-00agent-08-bleed-4 (d3): the SAME wide stand before the bolts/safe burns —
+    // the ledger's lever (the ignore message): the pit guard's rounds reached the door
+    // approach too (the last ledgered hit lands t6554 at (154.51, 43.10, −120.72) — the door
+    // leg itself [L the run-lever4 log]), so a pit guard the first stand missed is answered
+    // here, before the door E and the burns. The pick re-reads the hurt bookkeeping; a pit
+    // guard already dead makes this a no-op. The stand sits at the door (not inside the room,
+    // where the excursion out would wedge on the closed leaf — the arc-occupied law above).
+    // D3-GATED: the sisters' timelines stay byte-exact.
+    if difficulty >= 3 && !w.tops_up() {
+        // THE OPENING-VOLLEY POLL (real-health-00agent-08-bleed-4, measured on the lever run):
+        // both pre-burn stands ran BEFORE the pit guard ever fired — his first volley lands
+        // ~56 ticks after the burn ends (t3550 in the lever run, the door leg's own start) and
+        // the bookkeeping is empty at both call sites, so both picks were silent no-ops and
+        // the timeline matched the ledger death t6554 exactly [L run-bleed4-1]. A player at
+        // the door hears the rounds from below before he walks the arc: hold the burn spot for
+        // up to 420 ticks while the walk's own return fire answers the visible doorway men,
+        // until ANY in-ring guard's round has landed (the hurt bookkeeping names him) — then
+        // the hurting pick fights him, the pit excursion included. The poll's own exposure is
+        // the door arc's standing exposure relocated (the door leg stood there anyway).
+        for t in 0..420 {
+            let named = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                sim.drones.player_hits.iter().rev().any(|h| {
+                    h.1 < sim.drones.list.len() && {
+                        let d = &sim.drones.list[h.1];
+                        d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                            && ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < 25.0
+                            && (d.pos[1] - b[1]).abs() < 8.0
+                    }
+                })
+            };
+            if named { eprintln!("[08] the pit poll: a round landed at tick {} — the hurting fight runs", w.total_ticks); break; }
+            w.tick(Input::default(), false);
+        }
+        fight_guards_wide(&mut w, "the pit before the burns", 4200, 25.0, 8.0);
     }
 
     // ── the secure room: the laser burns the safe bolts → ch 136 ────────────────────────────────
@@ -607,7 +822,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // timelines stay byte-exact.
     // los-mask-join: the Operative walk takes it too — on the masked tree it reached the Hind
     // at 62.2 with no armour and the gunship's fire outlasted its four rockets [L the run].
-    if (difficulty == 2 || difficulty == 1) && !w.tops_up() {
+    // real-health-00agent-08-bleed-4 (d3): the 00 Agent walk takes it too. The pit-lever run
+    // reached the boarding legs at health 24.0 (the fusebox pit pair + the doorway men cost 76
+    // upstream) and the burst rifle #20 (skin 0x500002f) closed to 3.3 u and burst three times
+    // for exactly those 24.0 — death t15465 at (108.70, 28.37, −118.08) [L run-bleed4-3]. The
+    // room's armour lies on the walk's own path; a player at 24 health puts it on. The gate
+    // simplifies to !tops_up(): d1/d2 real-damage take it already, the topped-up sisters keep
+    // their skip, so only the ignored d3 walk's timeline changes.
+    if !w.tops_up() {
         w.walk_nav_to([159.4, 43.0, -113.6], "the secure room armour", 0.6);
         eprintln!("[08] the secure room armour: armour {}", w.scene.sim.as_ref().unwrap().drones.health.armour);
     }
@@ -1428,6 +1650,10 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // episode steps to.
     let mut dodge_sign = 1.0f32;
     let mut dodge_hold = 0u32;
+    // real-health-00agent-08-bleed-4 (d3): the ZAP hold — a world hit under Bond's feet (owner
+    // past the drone list — the volume law, no blast row) means he is standing IN the terminal's
+    // hurt volume; the walk-out holds for 40 ticks against the dodge (run-bleed4-4/6).
+    let mut zap_hold = 0u32;
     for t in 0..20000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1642,6 +1868,20 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 miss < 2.0
             })
         } else { false };
+        // real-health-00agent-08-bleed-4 (d3): the fight anchor — the ride-end spot every green
+        // run fights from (111.09, −179.72). The volume law's −2.0/6-tick rows cover (113.0,
+        // −180.6) and (111.14, −180.95) [L run-bleed4-4/6]; the clear spot is the anchor the
+        // dodge bias and the drift walk both keep Bond on.
+        const ANCHOR: [f32; 2] = [111.09, -179.72];
+        // The zap detector: the newest player_hit is a world hit (owner past the drone list)
+        // whose frame is fresh — the volume law's −2.0 rows (run-bleed4-4: frames 20344-20441,
+        // (113.0, 13.5, −180.6), no explosion lines).
+        {
+            let zap_now = sim.drones.player_hits.last().is_some_and(|h| {
+                h.1 >= sim.drones.list.len() && sim.drones.frame.saturating_sub(h.0) <= 3
+            });
+            if zap_now { zap_hold = 40; } else if zap_hold > 0 { zap_hold -= 1; }
+        }
         if dodge_now {
             if dodge_hold == 0 { dodge_sign = -dodge_sign; }
             dodge_hold = 24;
@@ -1649,10 +1889,50 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             dodge_hold -= 1;
         }
         if dodge_hold > 0 {
-            input.strafe = dodge_sign;
+            if difficulty >= 3 {
+            // real-health-00agent-08-bleed-4 (d3): the dodge SIDE is the one that also walks the
+            // anchor-ward component. The missile's miss band is symmetric (the dodge gate's own
+            // miss < 2 u test — either side steps off the line), so the side choice is free, and
+            // the alternating `dodge_sign` was the measured drift source: the lever run's
+            // episodes walked Bond 2 u east of the ride-end spot into the terminal's east band
+            // and a hurt volume drained −2.0 every 6 ticks for the last 12.0 (frames 20344-20441
+            // at (113.0, 13.5, −180.6) [L run-bleed4-4]); the zap-anchor variant that walked him
+            // back AFTER the drift pinned him at (111.14, −180.95) — the volume reaches the
+            // south band too — and died earlier [L run-bleed4-6]. A player side-steps toward
+            // the spot he means to keep firing from. The strafe stays perpendicular to the view
+            // (the dodge's own law); the component toward the ride-end anchor (111.09, −179.72)
+            // picks its sign. D3-GATED: the d1/d2 sisters keep the alternating-sign timeline
+            // byte-exact (the d1 real-damage walk regressed on the ungated form [L the 11-14
+            // final-binary run]).
+            let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+            let right = [cy, 0.0, -fy];
+            let (ax, az) = (ANCHOR[0] - b[0], ANCHOR[1] - b[2]);
+            let dot = right[0] * ax + right[2] * az;
+            input.strafe = if dot > 0.05 { 1.0 } else if dot < -0.05 { -1.0 } else { dodge_sign };
             input.forward = 0.0;
+            } else {
+                input.strafe = dodge_sign;
+                input.forward = 0.0;
+            }
         }
         let _ = exit_ticks;
+        // real-health-00agent-08-bleed-4 (d3): the ZAP walk-out + the drift walk. The dodge bias
+        // above keeps the episodes anchor-ward; when a zap lands anyway (or plain drift over
+        // 1.2 u between episodes) Bond walks back to the ride-end anchor — a player being zapped
+        // steps out of the volume, and the aim re-converges on the spot (the launch gates read
+        // the live spot every tick, so nothing fires mid-walk). The walk never runs while a
+        // rocket rides. D3-GATED: the d1/d2 sisters keep their byte-exact timelines.
+        if difficulty >= 3 && rocket.is_none() && (zap_hold > 0 || dodge_hold == 0) {
+            let (dx, dz) = (ANCHOR[0] - b[0], ANCHOR[1] - b[2]);
+            if dx * dx + dz * dz > 1.2 * 1.2 {
+                let want_yaw = dx.atan2(dz);
+                let yaw_err_a = walker::wrap_pi(want_yaw - sim.bond.yaw);
+                input.turn = yaw_err_a.clamp(-0.08, 0.08);
+                input.look = 0.0;
+                input.forward = if yaw_err_a.abs() < 0.3 { 1.0 } else { 0.0 };
+                input.strafe = 0.0;
+            }
+        }
         if rocket.is_some() != riding {
             riding = rocket.is_some();
             let now = sim.drones.copters[ci].damage;
@@ -2164,7 +2444,7 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// plus the pin of the round's actual spawn direction (lock-on vs the effective aim) in
 /// PCSX2 (the report's live check).
 #[test]
-#[ignore = "00 Agent (11-13): the briefcase leg now starts from the plain walk's spot (158.93, -116.52) - from the bolt stand's z -117.6 the nav ran Bond into the safe-face corner (162.59, -118.17) for the whole cap and ch 0x4a never wrote (a wedge before the Hind on the current master). The walk now dies at t34277 at (110.98, 13.52, -179.31). Earlier: 00 Agent 2026-11-10 state (on the solid-body master 0a9d39435): the descent is cleared and the Hind fight is REACHED with the bleed re-tuned — the fusebox doorway fight clears the walkway-door burst man before the laser burn (the old tick-8995 death at his 2.9-u bursts is gone) and the per-leg boarding lip fights kill the #26/#27 pair on each leg's arrival spot (24.0 → 9.0+3.0); the Hind fight gained the missile dodge (the laser-hinges-2 side step off each inbound round's line, d3-gated) and rocket 1 LANDED for 100.9 at t2554. Bond still dies at tick 32622 to the machine's own −15.00 k=6 blast at 6 u with ~15 health (the ledger: 23 hits for 100.0 — the station hall's six d3 pistol guards 52.0 [#14 16.0 at 2.1-2.6 u, #11 12.0 at 9.6 u, #2/#9 8.0+8.0, #10/#3 4.0+4.0], the pair 15.0, the fight's blasts). NEXT LEVERS: (1) the station-hall stands OUT OF THE PAIR'S LINE — the guards hold their east placements (152.5-161.5, 46.0, −87.7..−101.5) under the solid-body commit and the legs' fights run inside their bursts; fight them from the intro-plate cover before crossing (they wake on the ch-0x2a plate at (139.1, 50.2, −93.6) [D]), or widen the shooters window so the legs' return fire engages at 20-30 u; (2) the dodge window widened from 30 to 60 u with the side step held until the round dies — the killing blast is a WALL detonation 6 u out (the k=6 falloff signature [M Explode_Propagate 0x17c518:69-71]), so the step must clear the wall band, not just the direct line; (3) the machine's own rounds through the launch-time forecast law the self-blast gate already uses. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
+#[ignore = "00 Agent (11-14, bleed-4): the FUSEBOX PIT lever is TAKEN and measured — the hurting pick (the guard who actually LANDED THE LAST HIT inside the wide ring — the walker's hurt bookkeeping, player_hits, names him — falls back to the in-ring guard whose muzzle is live on Bond before his first round lands) + the OPENING-VOLLEY POLL (the pre-burn stands ran BEFORE the pit pair ever fired: #16's first volley lands during the burn itself (t3414) and a SECOND pit shooter #15 (skin 0x500002e, (151.7, 39.2, −111.5)) opened 275 ticks after the burn ended — both call sites were silent no-ops on the first lever run [L run-bleed4-1/2]) + the PIT EXCURSION (the pick is NOT visible from the burn spot and sits 4.4-7.1 u BELOW, so the fight walks the route's OWN descent legs — landing east, through the door, ramp south, ramp mid, ramp turn — with a sight check after every leg; the stand fires the moment the line opens, the return walks the legs back to the burn spot). The y band is ±8.0, not the ledger's ±6.0: the pit pair MOVES — #16 fired from (144.4, 37.2, −111.1) mid-descent and the poll at the burn spot (y 44.3) read dy 7.1 — outside ±6 [L run-bleed4-2]. MEASURED (run-bleed4-3): the poll caught #16's round at t3414, the excursion walked, the RETURN FIRE from the ramp mid killed BOTH pit shooters (#16 t4091, #15 t4205) for 16.0 total, the pit stand confirmed #16 down; the bolt burns ran clean, objective 1 folded, and the walk advanced from the bleed-3 death t6554 to the boarding legs (the burst rifle #20 (skin 0x500002f) closed to 3.3 u and burst for the last 24.0 — death t15465 at (108.70, 28.37, −118.08)). The SECURE-ROOM ARMOUR lever then taken (the d3 walk joins the d1/d2 real-damage sisters; a player at 24 health puts on the armour lying in his room): MEASURED (run-bleed4-4) the boarding cleared, the ride and the cinematic ran, and the walk reached THE HIND FIGHT — death t20440 at (113.04, 13.51, −178.54), 61 hits for 100.0, 17 return-fire fights, the machine 0.0/598. The Hind fight's shape on that roll: every end pane shot out (both 30 u bearings CLEAR), rockets owned clip 4 carried 4, the machine state 2 route flight at dist 17.6-28.9 — NO launch ever opened (the d3 slit/corridor/forecast gates starved through the whole fight) and the dodge strafes DRIFTED Bond 2 u east of the ride-end spot into a HURT VOLUME that drained −2.0 every 6 ticks for the last 12.0 (frames 20344-20441 at (113.0, 13.5, −180.6), no blast rows — the volume law). The anchor+zap variant (walk back to the ride-end anchor (111.09, −179.72) on a world-hit zap, overriding the dodge) was TRIED and MEASURED WORSE: the machine's burst cadence kept dodge_hold > 0 through the drain, the zap walk pinned Bond at (111.14, 13.52, −180.95) — the volume reaches the SOUTH band too — and the death came EARLIER (t20415 [L run-bleed4-5/6]); NOT shipped. The dodge-bias + zap-walk variant (the dodge side picks the anchor-ward component; a world-hit zap walks Bond back to the ride-end spot against the dodge) was then TAKEN and measured (run-bleed4-7): Bond held the anchor (death at (111.19, 13.52, −179.81), 0.15 u from it) — and the volume hit HIM THERE TOO, the same 33 world hits for 24.0 — the −2.0/6-tick law covers the WHOLE terminal floor (the anchor (111.09, −179.72), the east band (113.0, −180.6), the south (111.14, −180.95)). NEXT LEVERS: (1) the drain class: at health ≈ 25 entering the fight the −2.0/6-tick drain (0.33/tick) kills in ~75 ticks wherever Bond stands — the fight must be won inside that window or the pool entering the fight must grow (the ride's rocket-ammo pickups — the (1, 4) boxes at (111.99, 18.04, −179.42) [D 0x0600004C streams 37-39, collected standing in the car] — went UNTAKEN on the measured roll, carried stayed 4 — check the ride's passive collection); (2) the launch starvation — the machine's low passes vs the slit: the d1/d2 gates fire from inside the cabin on l >= 10 with no corridor gates (the guided round threads the openings [M Bullet_update 0x12e7b0:177-244]); the d3 gates (16 u + slit + corridor + forecast) never opened on this roll — measure one gate's relaxation (the machine's own rounds through the launch-time forecast law still stand); (3) the volume's source: name the hurt volume at the terminal (the placement census / the volumes table) and check whether a spot 2-3 u west (x ≈ 110.3-110.5, the slit) reads clear in the real game. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
