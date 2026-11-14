@@ -71,11 +71,21 @@ hits for 100.0, 0 return-fire fights: #29 48.0, #16 32.0, #28 14.0, #10 6.0, #18
   task-mandated binaries both ran whole. What's left for the next session: the fast-runner
   full suite after the aim-bit lever lands.
 
+6. **The aim-bit trigger gate (ledger lever #1) — WIRED, measured a no-op on this roll.**
+   The d1 trigger now requires `sim.aiming` when `walker::no_topup_env() && difficulty == 1`
+   (the d2 path's own parity; the plain replay and the d2 twin byte-identical). The measured
+   run is tick-for-tick identical (4514): every tap this roll already had the bit up, so the
+   hip-round law was NOT #10's survival cause here. The real #10 audit is now the ledger's
+   next lever: five AIMED, converged, CLEAR-ray rounds at d 55 all missed a nearly-stationary
+   10-health guard (wander ~0.0017 u/tick ≈ 0.11 u over the flight) — the next session
+   audits the bay act's bullet path at d 55 (the spread actually applied at the shot
+   [M Bullet_init 0x12c5a0:139-170], the flight lead, the posed box set vs the chest point).
+
 ## What's left
 
 The walk is not green. The next session starts from the ignore message's OPERATIVE-WALK-7
-LEDGER: lever (1) the aim-bit trigger gate, then (2) the act-proof pair's head-line gamble,
-then (3) the yard levers.
+LEDGER: lever (1) the #10 bay-act bullet audit at d 55, then (2) the act-proof pair's
+head-line gamble, then (3) the yard levers.
 
 ## Usage
 

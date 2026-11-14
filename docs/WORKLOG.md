@@ -19,3 +19,9 @@
   OPERATIVE HIP-FIRE LAW (the aim bit flaps, the d1 trigger gate always passes). Next
   levers in the ignore message. Plain replay + d2 twin green (byte-identical); interactables
   11/11.
+- Follow-up (lever #1, the aim-bit trigger gate): wired the d1 real-damage gate (walker::no_topup_env()
+  && difficulty==1 -> the trigger requires sim.aiming, the d2 law's parity; plain + d2 byte-identical).
+  Measured a NO-OP on this roll (tick-for-tick identical, 4514) - every tap already had the bit up, so
+  #10's survival is NOT the hip-round law: five AIMED converged CLEAR-ray rounds at d 55 missed a
+  nearly-stationary guard. The ledger's next lever is the bay-act bullet audit at d 55. Whole binary
+  green (2 passed, 1 ignored).
