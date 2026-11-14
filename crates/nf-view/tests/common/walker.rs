@@ -151,6 +151,39 @@ pub struct Walker {
     pub sidestep_decays: bool,
     max_y: f32,
     pub lenient: bool,
+    /// Opt-in tick cap for `walk_to`'s leg loop (real-health-00agent-01-hall-3, d3 only):
+    /// `None` everywhere else — the door-phase advance dance needs a nav leg into the hall
+    /// that STOPS after the exchange instead of wedging to the 3000-tick cap in the lane (the
+    /// 16518→16593 measured linger is lethal). `Some(cap)` makes a leg return early after
+    /// `cap` ticks (u32::MAX−1, not the wedge marker, so `walk_nav_to` does not re-bridge).
+    /// Pure tick accounting: no RNG draw, no sim call — the other walks are byte-identical.
+    pub nav_tick_cap: Option<u32>,
+    /// Opt-in wound abort for `walk_to` (same round, d3 only): `Some(threshold)` makes a leg
+    /// return early (u32::MAX−1, not the wedge marker) the first tick Bond's health drops more
+    /// than `threshold` below the leg's start — the advance dance's leg must END on the first
+    /// volley (the 36.0 captain burst is one-frame; the linger is the measured killer). `None`
+    /// everywhere else; pure health reads, no RNG, no sim call.
+    pub leg_abort_on_wound: Option<f32>,
+    /// Opt-in kill abort for `walk_to` (real-health-00agent-01-hall-4, d3 only): `Some(named)`
+    /// makes a leg return early (u32::MAX−1, not the wedge marker) the first loop head after ANY
+    /// listed guard dies — the advance dance's leg must END the moment the walker's own return
+    /// fire kills the advancer (the measured window: the free kill at 7217 and the captain's
+    /// 40.6 frame 84 ticks later at 7301 while the leg kept walking [L the dance5 run]).
+    /// `None` everywhere else; pure corpse/health reads, no RNG, no sim call.
+    pub leg_abort_on_kill: Option<Vec<usize>>,
+    /// Opt-in crouched legs for `walk_to` (real-health-00agent-01-hall-4, d3 only): the dance's
+    /// RETREAT legs run crouched — the peek runs measured crouched Bond in the lane taking 0
+    /// fire across 24 windows (the guards held z 13.5-19.4 [L]) — so the exit from the lane is
+    /// unhittable even while the captain's volleys are in flight. Default false everywhere
+    /// else; a pure input bit, no RNG, no sim call.
+    pub leg_crouch: bool,
+    /// Opt-in crouched door presses for `use_door` (real-health-00agent-01-hall-5, d3 only):
+    /// the close-in walk and the E edges run CROUCHED — the merged stream parks the shotgun
+    /// (#6, 0x1c) at the door mouth (5.7,6.3,14.7) and his bursts swept the standing press
+    /// (two windows, 55.0 total [L the run0/run1 NF_DMG_TRACE traces]); the peek law says a
+    /// crouched Bond in the lane takes 0 fire (the guards held z 13.5-19.4 [L the hall-4 peek
+    /// runs]). Default false everywhere else; a pure input bit, no RNG, no sim call.
+    pub use_door_crouch: bool,
     /// Inside the stuck ladder's hostile-body-block response (the arm's shoot/resupply run their
     /// own nested walks): the nested stuck ladders must fall through to the plain sidestep ladder
     /// instead of re-triggering the arm (the run-2 recursion: nav 5 flank 1 nav 1 flank 1 …).
@@ -200,6 +233,14 @@ pub struct Walker {
     /// not walk to reach a guard he cannot see. Bond holds instead and returns after three holds,
     /// so the caller's round loop gets the window.
     pub flank_hold_x: Option<f32>,
+    /// OPT-IN (real-health-00agent-01-hall-2, the 07000001 d3 walk): the z twin — a target whose
+    /// pos[2] is NORTH of this z never takes a flank nav. The hall's aperture: the across guards
+    /// never expose from the hold line, and the ladder's perpendicular flank point landed INSIDE
+    /// the hall (run 5: the flank to (3.9,18.0) walked Bond across the aperture to his death at
+    /// (6.6,13.3), #6's shotgun at 2.1 u [L the run-5 trace]) — the named loop already refuses
+    /// the flank for across guards; this holds the same line inside `shoot`/`shoot_bounded` for
+    /// every caller (the return-fire stands included). Bond holds instead.
+    pub flank_hold_z: Option<f32>,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -307,6 +348,11 @@ impl Walker {
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, on_step: None, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, sidestep_decays: false, max_y: pos[1], lenient: false,
+            nav_tick_cap: None,
+            leg_abort_on_wound: None,
+            leg_abort_on_kill: None,
+            leg_crouch: false,
+            use_door_crouch: false,
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
@@ -322,6 +368,7 @@ impl Walker {
             no_grenade_throws: false,
             grenade_downgrade_logged: false,
             flank_hold_x: None,
+            flank_hold_z: None,
             record_inputs: None,
             record_states: None,
         }
@@ -1082,6 +1129,18 @@ impl Walker {
                 if flanks >= 3 { return false; }
                 continue;
             }
+            // flank_hold_z (OPT-IN, real-health-00agent-01-hall-2): the z twin — an ACROSS
+            // target is never flanked (the ladder's perpendicular point lands inside the hall;
+            // see the field doc). The hold counts like the pocket hold.
+            if blocked_streak >= 540 && flanks < 6
+                && self.flank_hold_z.is_some_and(|wz| self.scene.sim.as_ref().unwrap().drones.list[di].pos[2] > wz) {
+                flanks += 1;
+                blocked_streak = 0;
+                last_progress = t;
+                eprintln!("[walk] {label}: no exposed part for 540 ticks: holding (no flank across the aperture, hold {flanks})");
+                if flanks >= 3 { return false; }
+                continue;
+            }
             if blocked_streak >= 540 && flanks < 6 {
                 flanks += 1;
                 let side = if flanks % 2 == 1 { 1.0 } else { -1.0 };
@@ -1208,6 +1267,7 @@ impl Walker {
             // A wedged nav node is SKIPPED (the next node re-aims); the route continues.
             let r = self.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{label} nav {k}"));
             if r == u32::MAX { self.bridge_and_retry(*p, 1.3, &format!("{label} nav {k}")); }
+            if r == u32::MAX - 1 { self.lenient = false; return; } // the opt-in wound abort / tick cap: stop the WHOLE nav, not just this leg
         }
         let r = self.walk_to(Wp { at: target, act: Act::None, arrive: final_arrive }, label);
         if r == u32::MAX { self.bridge_and_retry(target, final_arrive, label); }
@@ -1277,6 +1337,7 @@ impl Walker {
         // trip the 6000-tick give-up cap on the way out; the 16 chasers walk died exactly
         // there, walker.rs:853, level-02-every-objective-5 2026-10-31).
         let mut start_ticks = self.total_ticks;
+        let start_health = self.scene.sim.as_ref().map(|s| s.drones.health.health).unwrap_or(100.0);
         let mut use_left = 0u32;
         let mut ladder = false;
         let mut riding = false;
@@ -1297,7 +1358,29 @@ impl Walker {
                 if self.lenient { eprintln!("[walk] {label}: gave up at the {give_up}-tick cap\n{dump}"); return u32::MAX; }
                 panic!("walk_to {label}: 6000-tick cap\n{dump}");
             }
+            // The opt-in leg cap (see the field doc): return early, NOT as a wedge — the
+            // caller's bridge_and_retry must not run on a deliberate stop.
+            if let Some(cap) = self.nav_tick_cap {
+                if self.total_ticks - start_ticks >= cap {
+                    eprintln!("[walk] {label}: the opt-in nav_tick_cap {cap} hit — returning early (not a wedge)");
+                    return u32::MAX - 1;
+                }
+            }
             let sim = self.scene.sim.as_ref().unwrap();
+            if let Some(th) = self.leg_abort_on_wound {
+                if sim.drones.health.health < start_health - th {
+                    eprintln!("[walk] {label}: the opt-in wound abort hit (health {:.1}) — returning early (not a wedge)", sim.drones.health.health);
+                    return u32::MAX - 1;
+                }
+            }
+            if let Some(named) = &self.leg_abort_on_kill {
+                if named.iter().any(|&gi| {
+                    sim.drones.list.get(gi).is_some_and(|d| d.corpse || d.health <= 0.0)
+                }) {
+                    eprintln!("[walk] {label}: the opt-in kill abort hit — a named guard is down — returning early (not a wedge)");
+                    return u32::MAX - 1;
+                }
+            }
             if self.stop_on_exit && sim.drones.level_exit.is_some() {
                 self.report.legs.push((label.to_string(), self.total_ticks - start_ticks, self.pos));
                 if std::env::var_os("NF_RF_TRACE").is_some() {
@@ -1463,6 +1546,7 @@ impl Walker {
             let mut input = Input {
                 turn: err.clamp(-0.07, 0.07),
                 forward: if d > 2.2 { 1.0 } else { 0.45 },
+                crouch: self.leg_crouch,
                 ..Default::default()
             };
             if err.abs() > 1.2 { input.forward = 0.0; }
@@ -1652,7 +1736,7 @@ impl Walker {
                 if dd < 0.9 { break; }
                 let desired = (dpos[0] - sim.bond.pos[0]).atan2(dpos[2] - sim.bond.pos[2]);
                 let err = wrap_pi(desired - sim.bond.yaw);
-                let input = Input { turn: err.clamp(-0.08, 0.08), forward: 0.8, ..Default::default() };
+                let input = Input { turn: err.clamp(-0.08, 0.08), forward: 0.8, crouch: self.use_door_crouch, ..Default::default() };
                 self.tick(input, false);
             }
             return;
@@ -1696,6 +1780,7 @@ impl Walker {
                 turn: err.clamp(-0.08, 0.08),
                 look: perr.clamp(-0.06, 0.06),
                 forward: if far { 0.5 } else { 0.0 },
+                crouch: self.use_door_crouch,
                 ..Default::default()
             };
             self.tick(input, pressing);
