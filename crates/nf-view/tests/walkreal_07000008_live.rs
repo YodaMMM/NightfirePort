@@ -155,36 +155,120 @@ fn fight_close_guards_opts(w: &mut Walker, label: &str, max_ticks: u32, visible_
 /// u and 4.4 u down — outside the close fights' 12 u ring and their ±4.0 y band [L the
 /// 2026-11-14 run-lever4 log: fourteen −4.0 hits t3550-6554 drained the last 60.0 while Bond
 /// held the laser burn]. Local to this file, every call d3-gated.
-fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, visible_only: bool, radius: f32, dy: f32) {
+///
+/// real-health-00agent-08-bleed-4 (d3): the pick is the guard who actually LANDED THE LAST HIT
+/// inside the wide ring — the walker's hurt bookkeeping (`player_hits`, the (frame, owner,
+/// damage) record the [dmg] trace reads) names him — not the nearest: the unseen nearest-first
+/// variant opened on the buried doorway man #5, stalled 60 ticks and died t4320 [L the 2026-11-14
+/// run-lever6 log]. Before the first burn no hit has landed yet, so the pick falls back to the
+/// in-ring guard whose muzzle is live on Bond NOW (his own shot log + his aim point on Bond —
+/// the same firing evidence `DamageLog::shooters` reads). #16 is NOT visible from the burn spot
+/// (the run-lever5 rerun: the visible-only wide fight found nobody while his rounds reached
+/// Bond), so a below-the-level pick gets the PIT EXCURSION: the route's own descent legs (the
+/// path-2 link chain the walk itself takes after the secure room) carry Bond down toward the
+/// guard with a sight check after every leg; the stand fires the moment a leg opens the line,
+/// and the return walks the same legs back to the burn spot (the caller's laser needs the 4.0
+/// range [L weapon_data +0x4E·0x10C+0x1C]). A guard at or above Bond's level never gets the
+/// excursion (the descent is the pit's answer, not a hall guard's). [S] the excursion legs are
+/// the walk's own player tactic; the legs themselves are the master flow's measured green
+/// descent.
+///
+/// The y band is 8.0 at both call sites, not the ledger's ±6.0: the pit pair MOVES — the
+/// lever run's #16 fired from (144.4, 37.2, −111.1) mid-descent and the poll at the burn spot
+/// (y 44.3) read dy 7.1 — outside ±6 — so the whole fight stayed a silent no-op while a
+/// SECOND pit shooter (#15, skin 0x500002e, (151.7, 39.2, −111.5)) opened up from dy 3.9-5.1
+/// and the death came t5050 [L run-bleed4-2]. The pit floor spans y 37-39.5 under a y 43-44.3
+/// Bond: the band that always holds the pit class is 8.0.
+fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, radius: f32, dy: f32) {
     if w.tops_up() { return; }
-    let close = |sim: &nf_view::scene::Sim| -> Option<usize> {
-        let b = sim.bond.pos;
-        sim.drones.list.iter().enumerate()
-            .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1)
-            .filter(|(_, d)| ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < radius && (d.pos[1] - b[1]).abs() < dy)
-            .filter(|(i, _)| !visible_only || walker::DamageLog::visible(sim, *i))
-            .min_by(|x, y| {
-                let dx = (x.1.pos[0] - b[0]).powi(2) + (x.1.pos[2] - b[2]).powi(2);
-                let dy2 = (y.1.pos[0] - b[0]).powi(2) + (y.1.pos[2] - b[2]).powi(2);
-                dx.total_cmp(&dy2)
-            })
-            .map(|(i, _)| i)
-    };
     let start = w.total_ticks;
-    let mut skipped: Vec<usize> = Vec::new();
+    let mut excursions = 0u32;
     loop {
         if w.total_ticks - start >= max_ticks {
             eprintln!("[08 guards] {label}: fight cap at tick {} (health {:.1})", w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
             break;
         }
-        let Some(di) = close(&w.scene.sim.as_ref().unwrap()) else { break };
-        if skipped.contains(&di) { break; }
-        eprintln!("[08 guards] {label}: the close guard #{di} ({:?}) at tick {}, health {:.1} — the gun first",
+        let (di, below) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            let now = sim.drones.frame;
+            let ring: Vec<usize> = sim.drones.list.iter().enumerate()
+                .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1)
+                .filter(|(_, d)| ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < radius && (d.pos[1] - b[1]).abs() < dy)
+                .map(|(i, _)| i).collect();
+            // 1. the guard who landed the LAST hit on Bond inside the ring — the hurt bookkeeping
+            //    names him (player_hits is frame-ordered; the newest entry with an in-ring live owner).
+            let hurt = sim.drones.player_hits.iter().rev()
+                .find(|h| h.1 < sim.drones.list.len() && ring.contains(&h.1))
+                .map(|h| h.1);
+            // 2. before any round has landed: the in-ring guard firing at Bond NOW — his own shot
+            //    log is live (≤ 90 frames) and his aim point sits on Bond (the shooters() law,
+            //    [M DroneFiring opp_target reads — the same evidence the return-fire pick uses]).
+            let firing = ring.iter().copied().find(|&i| {
+                let d = &sim.drones.list[i];
+                d.shots.last().is_some_and(|&f| now.saturating_sub(f) <= 90)
+                    && ((d.opp_target[0] - b[0]).powi(2) + (d.opp_target[2] - b[2]).powi(2)).sqrt() < 1.5
+            });
+            match hurt.or(firing) {
+                Some(i) => {
+                    let d = &sim.drones.list[i];
+                    let visible = walker::DamageLog::visible(sim, i);
+                    (Some(i), !visible && d.pos[1] < b[1] - 2.0)
+                }
+                None => (None, false),
+            }
+        };
+        let Some(di) = di else { break };
+        if below && excursions < 3 {
+            excursions += 1;
+            eprintln!("[08 guards] {label}: the pit pick #{di} ({:?}) is unseen from here — the pit excursion {excursions} at tick {}, health {:.1}",
+                w.scene.sim.as_ref().unwrap().drones.list[di].pos, w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+            // The route's own descent legs (the outbound list below, "the gondola: the descent to
+            // the floor plate"): the path-2 link chain, walked on every green run. Sight check
+            // after every leg — the stand fires the moment the line opens.
+            let excursion: &[(&str, [f32; 3])] = &[
+                ("the landing east", [151.2f32, 42.5, -120.5]),
+                ("through the door", [153.0, 42.5, -120.7]),
+                ("the ramp south", [153.1, 41.2, -116.0]),
+                ("the ramp mid", [153.2, 39.7, -111.7]),
+                ("the ramp turn", [148.3, 38.5, -110.9]),
+            ];
+            let mut opened_at: Option<usize> = None;
+            for (k, (name, at)) in excursion.iter().enumerate() {
+                w.walk_nav_to(*at, &format!("{label} {name}"), if k + 1 == excursion.len() { 0.9 } else { 1.2 });
+                let vis = walker::DamageLog::visible(&w.scene.sim.as_ref().unwrap(), di);
+                eprintln!("[08 guards] {label}: {name} at tick {} bond {:?} — pick #{di} visible {vis} (health {:.1})",
+                    w.total_ticks, w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().drones.health.health);
+                if vis { opened_at = Some(k); break; }
+            }
+            let mut killed = false;
+            if opened_at.is_some() {
+                killed = w.switch_to_gun(label) && w.stand_and_fire(di, 900);
+            }
+            eprintln!("[08 guards] {label}: the pit pick #{di} {} (killed {killed}) at tick {}, health {:.1}",
+                if opened_at.is_none() { "never opened" } else if killed { "down" } else { "held" },
+                w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+            // The return: the walked legs in reverse, then the caller's own spot — the laser's
+            // 4.0 range [L weapon_data +0x4E·0x10C+0x1C] needs Bond back on the fusebox walkway.
+            if let Some(k) = opened_at {
+                for (name, at) in excursion[..k].iter().rev() {
+                    w.walk_nav_to(*at, &format!("{label} back {name}"), 1.2);
+                }
+            } else {
+                for (name, at) in excursion.iter().rev() {
+                    w.walk_nav_to(*at, &format!("{label} back {name}"), 1.2);
+                }
+            }
+            w.walk_nav_to([154.35, 43.41, -119.67], &format!("{label} back to the burn spot"), 1.0);
+            if !killed { break; } // one failed excursion — walk on (the caller's leg continues)
+            continue;
+        }
+        eprintln!("[08 guards] {label}: the hurting pick #{di} ({:?}) at tick {}, health {:.1} — the gun first",
             w.scene.sim.as_ref().unwrap().drones.list[di].pos, w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
         let killed = w.switch_to_gun(label) && w.stand_and_fire(di, 900);
-        eprintln!("[08 guards] {label}: guard #{di} {} (killed {killed}) at tick {}, health {:.1}",
+        eprintln!("[08 guards] {label}: pick #{di} {} (killed {killed}) at tick {}, health {:.1}",
             if killed { "down" } else { "held (out of sight or cap)" }, w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
-        if !killed { skipped.push(di); }
+        if !killed { break; }
     }
 }
 
@@ -611,16 +695,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // real-health-00agent-08-bleed-3 (d3): the pit fight before the burn — the level-below
     // snipers (#16-class) sit outside the doorway fight's 6 u and the close fights' 12 u/±4
     // rings [L the run-lever4 log]. D3-GATED: the sisters' timelines stay byte-exact.
+    // real-health-00agent-08-bleed-4 (d3): the pick is the HURTING one — the guard who landed
+    // the last hit inside the wide 25-u/±6-y ring (the hurt bookkeeping names him — #16 —
+    // [L the run-lever4 log: fourteen −4.0 hits t3550-6554]), falling back to the in-ring
+    // guard whose muzzle is live on Bond before his first round lands; the unseen below-level
+    // pick takes the pit excursion (the function doc). The UNSEEN nearest-first variant
+    // (run-lever6) REGRESSED — its pick opened on the buried doorway man #5, stalled 60 ticks,
+    // death t4320 — the hurting pick never stands a guard the bookkeeping has not named.
     if difficulty >= 3 && !w.tops_up() {
-        // The pick is the VISIBLE-only wide one: #16 is NOT visible from the burn spot (the
-        // run-lever5 rerun found nobody visible and the timeline matched lever 4's t6554
-        // death exactly), so this is a no-op on the measured roll — but a visible pit guard
-        // on a re-roll must be answered before the burn. The UNSEEN variant (the
-        // hurting-first creep, run-lever6) REGRESSED: its nearest-first pick opened on the
-        // buried doorway man #5, stalled 60 ticks and the death came at t4320 — the next
-        // session's lever is a pick that targets the guard that actually landed the last hit
-        // within the wide ring, not the nearest.
-        fight_guards_wide(&mut w, "the fusebox pit", 4200, true, 25.0, 6.0);
+        fight_guards_wide(&mut w, "the fusebox pit", 4200, 25.0, 8.0);
     }
     aim_and_fire_until(&mut w, fusebox, 0x4e, 420, |s| s.drones.channels.on(137));
     {
@@ -643,6 +726,44 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             let Some(g) = g else { break };
             if !w.shoot(g, &format!("the walkway guard {g}")) { break; }
         }
+    }
+
+    // real-health-00agent-08-bleed-4 (d3): the SAME wide stand before the bolts/safe burns —
+    // the ledger's lever (the ignore message): the pit guard's rounds reached the door
+    // approach too (the last ledgered hit lands t6554 at (154.51, 43.10, −120.72) — the door
+    // leg itself [L the run-lever4 log]), so a pit guard the first stand missed is answered
+    // here, before the door E and the burns. The pick re-reads the hurt bookkeeping; a pit
+    // guard already dead makes this a no-op. The stand sits at the door (not inside the room,
+    // where the excursion out would wedge on the closed leaf — the arc-occupied law above).
+    // D3-GATED: the sisters' timelines stay byte-exact.
+    if difficulty >= 3 && !w.tops_up() {
+        // THE OPENING-VOLLEY POLL (real-health-00agent-08-bleed-4, measured on the lever run):
+        // both pre-burn stands ran BEFORE the pit guard ever fired — his first volley lands
+        // ~56 ticks after the burn ends (t3550 in the lever run, the door leg's own start) and
+        // the bookkeeping is empty at both call sites, so both picks were silent no-ops and
+        // the timeline matched the ledger death t6554 exactly [L run-bleed4-1]. A player at
+        // the door hears the rounds from below before he walks the arc: hold the burn spot for
+        // up to 420 ticks while the walk's own return fire answers the visible doorway men,
+        // until ANY in-ring guard's round has landed (the hurt bookkeeping names him) — then
+        // the hurting pick fights him, the pit excursion included. The poll's own exposure is
+        // the door arc's standing exposure relocated (the door leg stood there anyway).
+        for t in 0..420 {
+            let named = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                sim.drones.player_hits.iter().rev().any(|h| {
+                    h.1 < sim.drones.list.len() && {
+                        let d = &sim.drones.list[h.1];
+                        d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                            && ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < 25.0
+                            && (d.pos[1] - b[1]).abs() < 8.0
+                    }
+                })
+            };
+            if named { eprintln!("[08] the pit poll: a round landed at tick {} — the hurting fight runs", w.total_ticks); break; }
+            w.tick(Input::default(), false);
+        }
+        fight_guards_wide(&mut w, "the pit before the burns", 4200, 25.0, 8.0);
     }
 
     // ── the secure room: the laser burns the safe bolts → ch 136 ────────────────────────────────
@@ -701,7 +822,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // timelines stay byte-exact.
     // los-mask-join: the Operative walk takes it too — on the masked tree it reached the Hind
     // at 62.2 with no armour and the gunship's fire outlasted its four rockets [L the run].
-    if (difficulty == 2 || difficulty == 1) && !w.tops_up() {
+    // real-health-00agent-08-bleed-4 (d3): the 00 Agent walk takes it too. The pit-lever run
+    // reached the boarding legs at health 24.0 (the fusebox pit pair + the doorway men cost 76
+    // upstream) and the burst rifle #20 (skin 0x500002f) closed to 3.3 u and burst three times
+    // for exactly those 24.0 — death t15465 at (108.70, 28.37, −118.08) [L run-bleed4-3]. The
+    // room's armour lies on the walk's own path; a player at 24 health puts it on. The gate
+    // simplifies to !tops_up(): d1/d2 real-damage take it already, the topped-up sisters keep
+    // their skip, so only the ignored d3 walk's timeline changes.
+    if !w.tops_up() {
         w.walk_nav_to([159.4, 43.0, -113.6], "the secure room armour", 0.6);
         eprintln!("[08] the secure room armour: armour {}", w.scene.sim.as_ref().unwrap().drones.health.armour);
     }
