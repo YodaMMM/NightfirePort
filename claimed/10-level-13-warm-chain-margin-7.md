@@ -9,3 +9,6 @@ or answer #9 from a line that reaches the east corner). Real input only; keep th
 Tests: walkreal_07000013_live, interactables_07000013_live. Branch: s/level-13-warm-chain-margin-7.
 
 Measured 11-13 (main): in 12 the 96.5 -> 40.5 loss lands on the walk to the north-lobby line (-8.25,19.0) - #7 (pistol, 3.5 a hit from (4.9,14.2)) plinks while Bond wedges at (-8.8,18.2), then #6 7.0 x2. #7 first from the pre-walk spot (shoot_bounded 900, not exposed) dies in 12 at t13094; from the line spot he is not exposed. Not shipped.
+
+---
+claimed-by: sandbox7 at 2026-11-14T03:04Z
