@@ -31,3 +31,5 @@ Main 11-14: the (8.5,10.0) captain stand BEFORE the g11 press (1500/2400): #5 ta
 Main 11-14: head-first aim on #5 after the AND (head_aim part-5 with the gun stand-ins) - from (8.5,10.0) the head is never clear (0 ticks, 0 shots; death t18816), from the press spot t13253. Whole walk under with_real_damage_head_hunting: t13545 (head hunting only reaches 6 u). Not shipped.
 
 Main 11-14: the captain shoot_bounded right after the AND with flank_hold_z cleared (900/1800) walks into the hall and dies inside it at t13448. Not shipped.
+
+Main 11-14: one crouch press after the AND - byte-identical death t13141 (the next legs walk the crouch off). Not shipped.
