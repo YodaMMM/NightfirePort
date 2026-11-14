@@ -31,3 +31,7 @@
   abort in aimed_stand (run 12, abort at 6.0 health+armour) handed the stall to the fights'
   stand — same death t4310. The next session's first item: the rule-7 opt-in pool abort in
   damage_log.rs::stand_and_fire. Ledger updated.
+
+## level-13-warm-chain-margin-8 (started 2026-11-14 07:4x UTC)
+
+- (07:40) Branch s/level-13-warm-chain-margin-8 created from origin/master; origin/s/level-13-warm-chain-margin-7 merged (was not on master; fast-forward to 194df6378). Reading margin-7 report + the ignore message next; ISO download starting. Plan: take the pool-abort lever (rule-7 opt-in in stand_and_fire) the report names for the door-phase aim-raise stall, judge on its own real run, then carry the warm chain out the front entrance.
