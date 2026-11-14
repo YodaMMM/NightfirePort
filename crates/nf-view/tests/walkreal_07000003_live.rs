@@ -341,6 +341,43 @@ fn stand_shooters_down_03(w: &mut Walker, label: &str, radius: f32) {
     }
 }
 
+/// The d3 lane ledger's lever 1: the same answer law as `stand_shooters_down_03` but the pick
+/// is NEAREST-first. Measured reason [L the d3run5 ledger]: the far pick engaged the east-wing
+/// sniper #6 (12 hp, exposed from the mouth line through the windows) while three shooters
+/// fired simultaneously, the stand window ate 36.0 (#11 12.0 + #17 24.0) and the crossing
+/// started at 4.0 hp — #11's last 4.0 finished Bond at 10015. The machine gun #11 at d 9.9
+/// fires far more rounds per tick than the far shooters, so answering the closest hitter
+/// first shortens the window the rest shoot into. Only this file's d>=3 lane sites call it;
+/// every other call site keeps `stand_shooters_down_03` (the pick-order change must not move
+/// the green d<3 streams or the other difficulties' sites).
+fn stand_shooters_nearest_03(w: &mut Walker, label: &str, radius: f32) {
+    w.switch_to_armed(label);
+    for _ in 0..8 {
+        let di_opt = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let now = sim.drones.frame;
+            let b = sim.bond.pos;
+            let mut best: Option<(usize, f32)> = None;
+            for i in 0..sim.drones.list.len() {
+                let d = &sim.drones.list[i];
+                if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                let dist = walker::dxz(d.pos, b);
+                if dist > radius { continue; }
+                let hitting = sim.drones.player_hits.iter().rev()
+                    .take_while(|h| now.saturating_sub(h.0) <= 600)
+                    .any(|h| h.1 == i);
+                if !hitting { continue; }
+                if walker::DamageLog::exposed_part(&sim, i).is_none() { continue; }
+                let nearer = match best { None => true, Some((_, bd)) => dist < bd };
+                if nearer { best = Some((i, dist)); }
+            }
+            best.map(|(i, _)| i)
+        };
+        let Some(di) = di_opt else { break };
+        aimed_stand_03(w, di, label, 2400);
+    }
+}
+
 /// The guards the courtyard plates wake stand in the route with the game's standing bodies
 /// (`NDrone2_Collision` 0x140e90's capsule, on within 2.0 of the player [M 0x149ec8 / 0x14b190]):
 /// the AimStandFire 0x68 rifleman #9 at (11.0, 6.3, −18.0) held Bond 1.9 u off the mid-courtyard
@@ -628,7 +665,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     if difficulty >= 3 {
         w.walk_to(Wp { at: [10.93, 5.35, -19.0], act: Act::None, arrive: 0.35 },
             "the lane mouth line (pre-crossing)");
-        stand_shooters_down_03(&mut w, "the lane mouth shooters (pre-crossing)", 40.0);
+        stand_shooters_nearest_03(&mut w, "the lane mouth shooters (pre-crossing)", 40.0);
     }
     let mut on_lane = false;
     for attempt in 0..3 {
@@ -663,7 +700,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     // with the aimed stands (the aim-bit zero-spread act [M Bullet_init 0x12c5a0:139-170])
     // BEFORE walking the lane legs.
     if difficulty >= 3 {
-        stand_shooters_down_03(&mut w, "the lane north shooters", 40.0);
+        stand_shooters_nearest_03(&mut w, "the lane north shooters", 40.0);
     }
     for (name, at) in [
         ("the lane south", [10.41f32, 6.08, -28.74]),
