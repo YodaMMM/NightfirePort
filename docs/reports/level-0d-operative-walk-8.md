@@ -97,3 +97,16 @@ NEXT LEVERS: (1) the pair's CROSSING SWEEP with the box act run BEFORE the retar
 ## Usage
 
 not visible to me (no token, cost or context-window figures are exposed to this session).
+
+## ntfy failed
+
+All three fallbacks failed in order:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "level-0d-operative-walk-8: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=25)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "level-0d-operative-walk-8: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out and was killed after 60 s (no output; the plain retry with exit-code capture
+   printed exit code 124 — the timeout kill).
+
