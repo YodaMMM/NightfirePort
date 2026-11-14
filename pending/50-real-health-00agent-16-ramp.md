@@ -49,3 +49,5 @@ Measured 11-13 (48e457c57): the finale health trail - 37.0 at the chaser stand, 
 Measured 11-13: the range-keeping tap interval (4/8/12 vs 16) does not matter - the chaser dies at +2782..+2806 either way and the death stays t17260-17276.
 
 Measured 11-13: the armour #648 walk between the room soldier and the chaser (return fire held) arrives with armour 5.0 (the walk ate it) and the chaser kills Bond at t12411 on the armour spot. Not shipped.
+
+Measured 11-13: the squad-phase brute #12 (0x500001e, hp 100) taken first inside 10 u - dies t17282, no gain at 17 health.
