@@ -27,3 +27,5 @@ Main agent 11-14 (master 06db4a156): the last-guard press is MERGED - g11 dies, 
 Main 11-14 (06db4a156): a bullet-line scan after the AND finds #5 (at (-12.30,6.35,17.16)) clear from (8,10)/(9,10) (d 21.5) and a band at z 11-13 (x -2..6). From (8.5,10.0) a pistol shoot_bounded (1500, wound abort 40) takes #5 24.0 -> 1.0 and leaves Bond 4.6 (death t17396); a second stand dies inside it (t17976); from (6.0,11.0) t13142. The SMG has no rounds left by then (d3_switch_to_smg keeps 0x02). Next: health into the AND (19.0 after the press) or the SMG kept for #5.
 
 Main 11-14: the (8.5,10.0) captain stand BEFORE the g11 press (1500/2400): #5 takes no damage (not yet exposed; 26.2 kept), the press then kills g11 at 26.2 but the walk dies deeper in the hall (t17517 at (5.46,17.42); t17394). The captain line works only after the AND.
+
+Main 11-14: head-first aim on #5 after the AND (head_aim part-5 with the gun stand-ins) - from (8.5,10.0) the head is never clear (0 ticks, 0 shots; death t18816), from the press spot t13253. Whole walk under with_real_damage_head_hunting: t13545 (head hunting only reaches 6 u). Not shipped.
