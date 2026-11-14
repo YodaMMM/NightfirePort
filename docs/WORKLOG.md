@@ -29,3 +29,6 @@
 ## level-0d-operative-walk-8
 - 2026-11-14: opened from origin/master 385ebb66d + merged s/level-0d-operative-walk-7 (01ad97cf0); reading the walk-7 report and the ignore message on walk_arrival_to_the_c5_door_real_damage, then taking the next lever the OPERATIVE-WALK-7 ledger names.
 - 2026-11-14 (cont.): the NF_0D_AUDIT flight trace rode (env-gated, read-only); lever (1) ANSWERED - the flight's per-tick start-cel re-feed [M 0x12f0cc-0x12f0d8] stops every #10 line on the bay's north-wall strip (the stop points (214.45,12.89,-288.28)/(212.25,11.93,-287.90), each before the posed boxes; the aim gate's cel reads the same lines CLEAR) - #10 act-proof from the top, the bay-duo loop keeps one pass; the south-roof pair arm rides for the Operative; the head-line gamble (2 runs, 2 grazes) and the hoisted fixed chest leg (450 on a 0.972-blocked ray) measured dead and OUT; rolls 4514/4121/4345/4160; walkreal_0700000d_live whole 2 passed 0 failed 1 ignored, interactables_0700000d_live 11 passed; the crossing-sweep lever and the ledger are in the ignore message; report docs/reports/level-0d-operative-walk-8.md.
+
+## level-0d-operative-walk-9
+- 2026-11-14: opened from origin/master 385ebb66d + merged s/level-0d-operative-walk-8 (ba8db6ac4); reading the walk-8 report and the ignore message on walk_arrival_to_the_c5_door_real_damage, then taking the crossing-sweep lever.
