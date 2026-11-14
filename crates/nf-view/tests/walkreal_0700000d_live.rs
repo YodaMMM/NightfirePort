@@ -559,7 +559,56 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                 let _ = kill_guard_head_present_fast(&mut w, [169.6, -271.5], [5.0, 3.0], "the south-roof pair (the Operative arm, the d2 law)", 400);
             }
         }
+        // THE PAIR'S CROSSING SWEEP (level-0d-operative-walk-9, the OPERATIVE-WALK-8 ledger's
+        // lever (1)): the -3 kills' own law — the WALKER-CATCHING sweep — hoisted BEFORE the
+        // retarget loop. The walk-8 structural floor: the trio settles into the slab shadow
+        // where the chest rays die 0.972 on the mid-band obstruction (the run-4380 law, the
+        // guards −243.42/−245.55), the head-only lines graze and the torso pick returns no
+        // box, so NO act family landed on them from the top before ~3900 while their
+        // 180-tick sniper cadence delivered 86.0 (the 4121/4345/4160 rolls). But the trio
+        // does not hold still: they reposition off their placements and PATROL the band
+        // east-west afterwards (the stable ends −238.3/−255.8), and a pass opened on the
+        // walkers' band catches the CROSSING of a clear-ray spot — the -3's kills at
+        // +222/+754/+193, the -4 run-5's +194 and roll A's +236 g29 catch, every one inside
+        // a 900 cap (a 300 cap expires before the crossing lands).
+        // MEASURED THIS SESSION (level-0d-operative-walk-9, the lever's own real run): the
+        // NEAREST-LIVE chest pass caught g29 at +200 (the crossing law verbatim — she was
+        // 0.972-blocked at the pick census and crossed clear inside the pass), but the
+        // second pass's nearest lock took g28 (blocked, 0.972 the whole ride) while #27
+        // stood at her CLEAR south spawn (151.35,−255.80) the whole phase — the roll's top
+        // killer (32.0) untouched — and the death stayed 4161 (the walk-8 roll's 4160). The
+        // refined shape rides BOTH proven laws per pass: the retarget pick's torso-first
+        // clear-box law first (the settled-CLEAR member dies — the -4/-5 law's +194 kills at
+        // the walked spots), and when NO clear box exists anywhere in the band the
+        // nearest-live chest act takes over (the crossing catch — the -3 law). A full pass
+        // with zero damage blacklists the guard (the retarget law) into the SHARED
+        // stalled_op, so the retarget loop behind it never re-burns the measured-dead line.
+        // Caps: 450 for the box act (the retarget law), 900 for the crossing act (the -3
+        // law). Gated real_damage at difficulty 1 (this else branch): the plain replay and
+        // the d2 twin keep their trees byte-identical.
         let mut stalled_op: Vec<usize> = Vec::new();
+        if real_damage {
+            for _k in 0..2 {
+                let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+                    d.present && !d.corpse && d.health > 0.0 && d.pos[1] > 18.0
+                        && (d.pos[0] - 151.5).abs() < 12.0 && (d.pos[2] + 248.0).abs() < 14.0
+                });
+                if !live { break; }
+                match pick_trio_target(&w, [151.2, -246.8], [6.0, 11.0], &stalled_op) {
+                    Some((di, _part)) => {
+                        let hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+                        let down = shoot_far_box_fast(&mut w, di, "the west roof pair (the crossing sweep, the clear-box pick)", 450);
+                        if !down && w.scene.sim.as_ref().unwrap().drones.list[di].health >= hp0 {
+                            eprintln!("[0d] the west roof pair (the crossing sweep): g{di} took ZERO damage across a full pass — blacklisted (the act-proof law)");
+                            stalled_op.push(di);
+                        }
+                    }
+                    None => {
+                        kill_guard_at_present(&mut w, [151.2, -246.8], [6.0, 11.0], "the west roof pair (the crossing sweep, the nearest-live crossing act)", 900);
+                    }
+                }
+            }
+        }
         if real_damage {
             for _k in 0..6 {
                 let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
