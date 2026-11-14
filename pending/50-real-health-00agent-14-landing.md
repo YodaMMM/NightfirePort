@@ -40,3 +40,5 @@ Measured 11-13 (51fc82754): an extra hold-and-dodge at node 626 after the band s
 Measured 11-13 (51fc82754): a hold at the escape touch (300/600) dies there at 2.9 (t29452/t29378); hold-length sweep (Kiko/second): 600/150 t27685, 600/450 t29335, 450/300 t29157 (12.9 after the second hold, same death area), 900/300 t26998. No stable gain; the shipped 600/300 stays. The 16 pattern that finished its squad (short 120-tick stands on close hostiles inside the slice loop) is the next thing to try on the Rooks-wake legs.
 
 Measured 11-13: the Rook leg split into its 33 nav nodes with a 120-tick close answer (visible, radius 8/12/18) before each node - byte-identical death t29197 at node 1 (nobody visible; 2.9 health). The gap is health before the escape touch.
+
+Measured 11-13 (NF_DMG_TRACE): between the Kiko hold (27.9) and the second hold (7.9), #20 (0x5000090, 0x14) hidden at (-51.2,32.6) lands 15.0 in 3 at 2.4 u as Bond passes node 1 (t26993-27001), #23 2.5, #22 2.5. A 300/600-tick stand on #20 from node 0 (-49.8,36.1) or node 1 (-49.0,33.4) dies inside the stand at t26998. Next: a line on #20 from the Kiko hold spot side, or crossing node 1 faster.
