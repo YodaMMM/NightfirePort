@@ -43,3 +43,11 @@
   interactables 11/11; the whole binary OOM-kills parallel on this 3 GB sandbox (per-test
   runs green). NEXT: the sweep hoisted to the FIRST ladder-top act; then the capsule fix.
   Report docs/reports/level-0d-operative-walk-9.md.
+- 2026-11-14 (cont.): the ledger's next lever (the sweep hoisted to the FIRST ladder-top
+  act) measured on its own run — the trio IS present pre-cadence and the hoisted pass caught
+  g29 at +224 with a CLEAR chest ray, but the dice re-rolled lethal-early: death 3664 (WORSE
+  than 4161), the whole phase's acts never ran. Reverted; the final tree reproduces 4161
+  tick-for-tick. The sweep stays at its measured-best home. Whole binary green per-test
+  (plain 28.6 s + d2 twin 42.1 s; the 3-sim parallel run OOM-kills on this 3 GB sandbox),
+  interactables 11/11 on the final tree. NEXT: the port-side capsule fix; then the yard
+  levers.
