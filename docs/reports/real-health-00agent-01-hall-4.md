@@ -116,7 +116,8 @@ and process exit codes. No input/output token counters, no credit balance, no do
 
 ## ntfy
 
-Sent at the finish step (see the queue record); the fallbacks fire in order if the first
-curl times out — this sandbox's network blocks ntfy.sh the way hall-2/hall-3 documented
-(curl 28 / errno 101 / wget timeout); the exact error output lands below only if all three
-fail.
+Sent at the finish step. The record: `curl -m 20` → `curl: (28) Connection timed out after
+20002 milliseconds` (the hall-2/hall-3 signature), `python3 urllib.request` →
+`URLError: [Errno 101] Network is unreachable`, `wget -q -O- --post-data …` → **exit 0,
+no output — the post went through** (quiet mode; a failed post exits non-zero or times
+out). The notification was delivered on the third fallback.
