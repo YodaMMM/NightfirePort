@@ -267,6 +267,26 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     ] {
         assert!(w.try_walk_to(Wp { at, act: Act::None, arrive: r }, label), "{label} must walk");
     }
+    // LEVERS (a)+(b) FROM THE BASE — MEASURED DEAD this session (level-0d-operative-walk-7,
+    // four + one real runs, the walk-6 ledger's first two named levers, the #18-leg precedent
+    // "the net is NEGATIVE: the leg stays out" applies):
+    // (a) the pre-climb band stand from the ladder BASE: the base line to #17 EXISTS and
+    // CLEARS on her east corridor (z −218..−223; the ray printed full CLEAR / bullet_scoped
+    // CLEAR at d 56 while she patrolled east of the x ~160 low wall — the -5 strip-mouth 0.975
+    // law is the z ~−225+ west segment only) — but the act never landed in four runs: the aim
+    // cursor PINS ~4-5 u off a far off-centre target (cross stuck 0.09-0.29 across raw,
+    // drained, no-drain and d2-pre-aim-tracking acts) and her 0.042 u/tick patrol crosses the
+    // ~120-tick corridor before any convergence; the ladder-top band arm's rays to her west
+    // and NE corners die 0.967-0.988 from the top too. Costs: ~500-800 ticks of dwell, zero
+    // incoming on three rolls, 14.0 landed across the re-rolled dice on the fifth — every
+    // death WORSE than the baseline (4251/4571/3934/3804 vs 3733). The corridor law and the
+    // convergence race are the next session's inheritance (the ledger below).
+    // (b) the deck guard's box act FROM THE BASE: the pick finds #16 in-box at (198.95,
+    // 14.04, −260.41) state 0x68, but the up-hill ray from the base (eye 1.8) dies 0.040
+    // along on the crane's own structure — clear_box_aim returns None, ZERO rounds in 400
+    // ticks (the [0d:ray] trace). The d2 #20-leg geometry does NOT transfer to #16's line;
+    // the -1/-2 law's own stand is the LADDER TOP (down-hill rays clear the crane), so the
+    // act's FIRST turn moved up there (below).
     if difficulty >= 2 {
         // The deck guard #20 (d ~30 from the base) lands one 28.0 on the ~800-tick climb (the
         // climb rate is the game's 1.2 u/s); the ladder top has no cover to absorb it later.
@@ -486,7 +506,109 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // the 450/200 caps, the all-stalled break) rides for the Operative real-damage run too;
         // the plain replay (top-ups on) keeps its fixed legs byte-identical (the loop is
         // real_damage-gated and the fixed picks below self-gate on the emptied band).
+        // LEVER (b), FINAL SHAPE (level-0d-operative-walk-7): the deck guard #16's box act
+        // takes its FIRST turn here — before the retarget loop — on the -1/-2 law's own
+        // stand (the -1/-2 routes landed this kill every run, +~200 ticks, from the ladder
+        // top; the walk-6 ledger's named lever never got its turn because the retarget loop
+        // opened the phase). Measured this session FROM THE BASE: the up-hill ray dies 0.040
+        // on the crane's own structure (the comment at the climb) — from the TOP the down-
+        // hill rays clear the crane and the box act aims at her REAL posed fire-anim box
+        // centres [M NDrone2_Collision 0x140e90:91-121]. Removing her takes the climb's
+        // 32.0 (her two 16s on every v-roll) off the whole phase below. Real-damage-gated:
+        // the plain replay keeps its fixed order byte-identical; when the early act lands,
+        // the phase's later deck leg self-cancels ("no PRESENT guard near", zero cost).
+        if real_damage {
+            let _ = kill_guard_head_present(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (the box act, the FIRST turn — the -1/-2 law from the ladder top)", 600);
+        }
+        // LEVER (c) (level-0d-operative-walk-7): the bay captain #10's act — the d2 bay-duo
+        // law (the t4312 ledger's decisive drain) rides for the Operative real-damage run.
+        // MEASURED THIS SESSION (level-0d-operative-walk-8, the audit env NF_0D_AUDIT — the
+        // ledger's lever (1), the #10 bay-act bullet audit at d 55): the flight's own law —
+        // Bullet_update's per-tick START-CEL re-feed [M 0x12f0cc-0x12f0d8] — stops EVERY line
+        // to #10 on the bay's north-wall strip east of the strip mouth: the audit's stop
+        // points (214.45,12.89,−288.28) for the head line and (212.25,11.93,−287.90) for the
+        // torso line, each BEFORE the posed boxes the same query sees past it (part
+        // Some(5,0.805) / Some(4,0.704) over the remaining 60 u) — while the AIM gate (the
+        // eye's cel, segment_bullet_scoped) reads the same line bullet_scoped CLEAR (the
+        // [0d:ray] lines). #18's line passes the strip MOUTH at x ~204 (her stop z −291.02 is
+        // PAST her torso hit t 0.744 — the contact order is box first) which is why her act
+        // lands at +195 and his never does. #10 is ACT-PROOF from the ladder top on this
+        // roll; the two extra 400-tick passes were pure cadence exposure under the west-roof
+        // pair's fire (this roll: 64.0 from #29/#27 while the #10 hunts ran). The loop keeps
+        // ONE pass — the measured +195 #18 kill — and the #10 hunts are removed.
+        if real_damage {
+            for k in 0..1 {
+                let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+                    d.present && !d.corpse && d.health > 0.0
+                        && (d.pos[2] + 289.5).abs() < 4.0 && (195.0..=217.0).contains(&d.pos[0])
+                });
+                if !live { break; }
+                let _ = kill_guard_head_present(&mut w, [209.3, -289.5], [7.0, 3.0], "the bay duo (the Operative arm, the d2 t4312 drain law)", 400);
+            }
+        }
+        // THE SOUTH-ROOF PAIR → OPERATIVE (level-0d-operative-walk-8, the d2 law verbatim,
+        // the death-list lever): the pair's east member #14 (skin 0x5000087, 0x1e at
+        // (166.3,21.2,−271.4), d 59.7) landed 22.0 this roll (16+6 at 4155/4335) and the
+        // Operative arm never acted on them — the d2 twin's own acts (the present-pick + the
+        // no-drain box act at this exact box, landed every d2 run from the ladder top) sit
+        // behind `difficulty >= 2`. The same real-damage gate as the other Operative levers;
+        // the plain replay keeps its fixed legs byte-identical (the pick self-gates on the
+        // emptied box when the d2 legs already ran).
+        if real_damage {
+            for _ in 0..2 {
+                let _ = kill_guard_head_present_fast(&mut w, [169.6, -271.5], [5.0, 3.0], "the south-roof pair (the Operative arm, the d2 law)", 400);
+            }
+        }
+        // THE PAIR'S CROSSING SWEEP (level-0d-operative-walk-9, the OPERATIVE-WALK-8 ledger's
+        // lever (1)): the -3 kills' own law — the WALKER-CATCHING sweep — hoisted BEFORE the
+        // retarget loop. The walk-8 structural floor: the trio settles into the slab shadow
+        // where the chest rays die 0.972 on the mid-band obstruction (the run-4380 law, the
+        // guards −243.42/−245.55), the head-only lines graze and the torso pick returns no
+        // box, so NO act family landed on them from the top before ~3900 while their
+        // 180-tick sniper cadence delivered 86.0 (the 4121/4345/4160 rolls). But the trio
+        // does not hold still: they reposition off their placements and PATROL the band
+        // east-west afterwards (the stable ends −238.3/−255.8), and a pass opened on the
+        // walkers' band catches the CROSSING of a clear-ray spot — the -3's kills at
+        // +222/+754/+193, the -4 run-5's +194 and roll A's +236 g29 catch, every one inside
+        // a 900 cap (a 300 cap expires before the crossing lands).
+        // MEASURED THIS SESSION (level-0d-operative-walk-9, the lever's own real run): the
+        // NEAREST-LIVE chest pass caught g29 at +200 (the crossing law verbatim — she was
+        // 0.972-blocked at the pick census and crossed clear inside the pass), but the
+        // second pass's nearest lock took g28 (blocked, 0.972 the whole ride) while #27
+        // stood at her CLEAR south spawn (151.35,−255.80) the whole phase — the roll's top
+        // killer (32.0) untouched — and the death stayed 4161 (the walk-8 roll's 4160). The
+        // refined shape rides BOTH proven laws per pass: the retarget pick's torso-first
+        // clear-box law first (the settled-CLEAR member dies — the -4/-5 law's +194 kills at
+        // the walked spots), and when NO clear box exists anywhere in the band the
+        // nearest-live chest act takes over (the crossing catch — the -3 law). A full pass
+        // with zero damage blacklists the guard (the retarget law) into the SHARED
+        // stalled_op, so the retarget loop behind it never re-burns the measured-dead line.
+        // Caps: 450 for the box act (the retarget law), 900 for the crossing act (the -3
+        // law). Gated real_damage at difficulty 1 (this else branch): the plain replay and
+        // the d2 twin keep their trees byte-identical.
         let mut stalled_op: Vec<usize> = Vec::new();
+        if real_damage {
+            for _k in 0..2 {
+                let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
+                    d.present && !d.corpse && d.health > 0.0 && d.pos[1] > 18.0
+                        && (d.pos[0] - 151.5).abs() < 12.0 && (d.pos[2] + 248.0).abs() < 14.0
+                });
+                if !live { break; }
+                match pick_trio_target(&w, [151.2, -246.8], [6.0, 11.0], &stalled_op) {
+                    Some((di, _part)) => {
+                        let hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+                        let down = shoot_far_box_fast(&mut w, di, "the west roof pair (the crossing sweep, the clear-box pick)", 450);
+                        if !down && w.scene.sim.as_ref().unwrap().drones.list[di].health >= hp0 {
+                            eprintln!("[0d] the west roof pair (the crossing sweep): g{di} took ZERO damage across a full pass — blacklisted (the act-proof law)");
+                            stalled_op.push(di);
+                        }
+                    }
+                    None => {
+                        kill_guard_at_present(&mut w, [151.2, -246.8], [6.0, 11.0], "the west roof pair (the crossing sweep, the nearest-live crossing act)", 900);
+                    }
+                }
+            }
+        }
         if real_damage {
             for _k in 0..6 {
                 let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
@@ -640,6 +762,14 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // replay (top-ups on) and the d2 twin keep their streams (the arm adds the d1 real-damage
     // path only).
     if difficulty >= 2 || (difficulty == 1 && real_damage) {
+        // THE OPERATIVE CAP TRIM (level-0d-operative-walk-7): the top rays to the Operative
+        // stream's band spots are MEASURED BLOCKED every roll (0.967-0.988 — her west and NE
+        // corners, two rolls) — the 600-tick caps are pure cadence exposure under the roof
+        // pair's fire (the walk-6 ledger's own "the waits themselves are cadence exposure"
+        // law). The Operative real-damage arm rides 200 per pass (a clear-line kill fits —
+        // the aimed tap fires within ~40 ticks of a clear line); the d2 twin keeps its 600
+        // (the d2 band spots' rays clear — the -5 ledger's kills).
+        let band_cap = if difficulty == 1 && real_damage { 200 } else { 600 };
         for k in 0..3 {
             let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| {
                 d.enabled && d.present && !d.corpse && d.health > 0.0
@@ -647,7 +777,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                     && (-230.0..=-210.0).contains(&d.pos[2])
             });
             if !live { break; }
-            let _ = kill_guard_at_present(&mut w, [160.5, -220.0], [5.5, 8.0], "the ground-band sniper sweep (the ladder-top shot)", 600);
+            let _ = kill_guard_at_present(&mut w, [160.5, -220.0], [5.5, 8.0], "the ground-band sniper sweep (the ladder-top shot)", band_cap);
         }
         // THE g21 HEAD LINE (dart-tase-stamps-check) — MEASURED: the RAY law holds (the head
         // line reads full CLEAR / static clear / bullet CLEAR from the ladder top while the
@@ -1466,7 +1596,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
 /// pinned against). The real-damage-gated route legs are marked level-0d-operative-walk in
 /// the body; the plain master replay (top-ups on) runs byte-identical to its pre-gate tree.
 #[test]
-#[ignore = "level-0d-operative-walk-2 ledger: the whole pre-yard route now PASSES on real damage — the jump-grab, the ride, the deck, the E on #450, the walk-off, the descent, the bay legs, THE BOARDING, the hang, the gantry ride and the slot hop all pass, and the drop landed in the yard at (137.98, 5.02, −296.08) — the death moved from tick 13800 (the hang) to 15646 (the yard sweep), +1846 ticks of route. WHAT THIS SESSION FIXED: (1) THE REAL-DAMAGE REEL BUG — the hang loop broke on max_ox > 177 alone, but the real-damage twin's E-plate park wait + the corner walk eat the beam's east crawl, so the loop started at/past the apex and released Bond MID-REEL (the claw latched, the reel never finished, pos[1] 10.67 on the deck floor — the -1's 'tick 13800 best run' was this hang assert with its stored 60-tick summary misread as alive); the break now ALSO waits for the reel's phase 2 [M 0x192860:91-94], and the plain master replay's break tick is unchanged (green, 22.3 s). (2) LEVER (a) THE CROUCH-DODGE — PROVEN: crouch ON at the rim corner (the Toggle press, held 5 ticks then released — the stand needs a NEW press edge [M the crouch arms, 0x190630 dispatch]) and stay crouched through the wait, the latch, the hang and the ride; the stand before the hop is a fresh press. MEASURED: the baseline's rim step pulled 0.6-per-hit 0x12 fire at a 12-tick cadence (#3 (131.6, 5.0, −301.1), ticks 13824/13836); WITH the crouch: ZERO hits from tick 12517 to the drop — the bay/yard opening line clips the crouched chest (the aim/sight target drops 0.45 [M Player_GetHeadPos 0x195aa0:39-51 — the BL+0x90C drop; the port's Player::target = camera − 0.45]) and the visibility factor 0.75 [M Drone_ProcessOpponents 0x1390c0:40-42] drops under the 0.7 LOS gate [M 0x176a28]. (3) LEVER (b) THE DROP-THEN-SWEEP — LANDED: the sweep is the nearest-clear-box-first dynamic loop over the yard/trench band (the fixed box order swept the far corner while #3 had WALKED to the drop point during the ride — d 55 at the corner, d 7.9 at the landing — and its landing bursts killed). THE REMAINING FLOOR IS UPSTREAM HEALTH: the boarding arrives at ~15.0 (9 hits for 78.6: #29's two ladder-top sniper hits 14+16 at 3462/4332 before her +222 kill, #18's bay-enter 16 at 3491+10812, #17's ride-window 16 at 7437 — the Operative ground-band sniper at (157.9, 1.0, −226.1), the d2 band sweep is difficulty-gated off, #10's deck 16 at 8071); the slot fall costs ~10-12 and skips armour [M 0x1902c8:84-104]; the landing at 3.2 health died in 64 ticks to #3's point-blank bursts — no aim converges that fast (the sweep's first tap needs ~250). NEXT LEVER: take the four hits off upstream — extend the ladder-top band sweep to the Operative difficulty for #17/#10 (the -1's d2 law holds: the ladder top looks down the band line over the low x ~160 wall), and audit the in-bay #18 kill (400 ticks have NEVER landed a 10-health guard at d 19.7 in-room — the leg landed false in every run including the -1's; check the converge and the ray). The port-side capsule fix [M NDrone2_Collision 0x140e90:91-121] stays its own task; the Agent sister's d2 levers stay its own. OPERATIVE-WALK-6 LEDGER (master b164773fb, five rolls v1-v5, all 10 hits for 100.0, 0 return-fire fights): the stream re-rolled LETHAL at the climb — deaths 4683/4361/4383/4058/3733 across five stance/act configurations (the roof pair #28/#29 at d 53-63, the deck guard #16 at d 11-30, the bay guard #10's wake-kill 6.0; v5 also had the band sniper #17 live at (158.31, 1.00, −225.28)) — the -4 ladder law is now the WHOLE phase: the climb (~900 ticks) + the roof phase + the grab window deliver the full 100 budget before any act lands. WIRED THIS SESSION: (1) the west-roof RETARGET LAW → Operative (the d2 lever-(c) law verbatim — the torso-first clear-box pick, the act-proof blacklist, the 450/200 caps, the all-stalled break; the v1 roll measured the run-4380 cause VERBATIM: the fixed chest acts + the #27-direct burned ~1700 ticks on head-only d-63 lines for ZERO damage while the roof fire landed 100); (2) the ground-band sniper sweep → Operative (this ignore's own lever — self-gating, zero cost on an empty band; v5 measured #17 PRESENT in the band, the census caught her, the phase died before her act); (3) the g21 never-lands leg kept d2-only. MEASURED DEAD THIS SESSION: the climb CROUCH (the grab admits the crouched substate on the default arm [M Player_CollLadder 0x196118:16-17] and the flag survives the climb — but the crouched climb BREAKS the geometry: top-out 16.95 vs the standing 17.37, the grab +84 vs +53, death 4058 WORSE; the roof fire lands anyway — the 0.45 target drop does not clear a shooter 5+ u above) and the act-fire dice correlation (MORE trigger draws = LATER death: v1 4683 with ~1300 act ticks > v2 4361 with none > v4 4058 — the draws shift the incoming dice, never the 100.0 total). NEXT LEVERS (in order): (a) the ride window — #17's band is LIVE on this stream; the band sweep's act must get its turn (a pre-climb band stand from the ladder BASE: the -5 strip-mouth west-ray law (0.975 dead) is the CHEST line — the band's own y < 5 line from the base is unmeasured); (b) the #16 deck guard's box act (proven +209 twice, the -1/-2 law) never got its turn on any roll — the pre-climb base stand (the d2 #20 leg's own geometry) is its shot; (c) the yard levers (the fast first tap, the girder sweep, walk-5's wired set) re-queue behind this climb floor; (d) the port-side capsule fix [M NDrone2_Collision 0x140e90:91-121] stays its own task"]
+#[ignore = "level-0d-operative-walk-2 ledger: the whole pre-yard route now PASSES on real damage — the jump-grab, the ride, the deck, the E on #450, the walk-off, the descent, the bay legs, THE BOARDING, the hang, the gantry ride and the slot hop all pass, and the drop landed in the yard at (137.98, 5.02, −296.08) — the death moved from tick 13800 (the hang) to 15646 (the yard sweep), +1846 ticks of route. WHAT THIS SESSION FIXED: (1) THE REAL-DAMAGE REEL BUG — the hang loop broke on max_ox > 177 alone, but the real-damage twin's E-plate park wait + the corner walk eat the beam's east crawl, so the loop started at/past the apex and released Bond MID-REEL (the claw latched, the reel never finished, pos[1] 10.67 on the deck floor — the -1's 'tick 13800 best run' was this hang assert with its stored 60-tick summary misread as alive); the break now ALSO waits for the reel's phase 2 [M 0x192860:91-94], and the plain master replay's break tick is unchanged (green, 22.3 s). (2) LEVER (a) THE CROUCH-DODGE — PROVEN: crouch ON at the rim corner (the Toggle press, held 5 ticks then released — the stand needs a NEW press edge [M the crouch arms, 0x190630 dispatch]) and stay crouched through the wait, the latch, the hang and the ride; the stand before the hop is a fresh press. MEASURED: the baseline's rim step pulled 0.6-per-hit 0x12 fire at a 12-tick cadence (#3 (131.6, 5.0, −301.1), ticks 13824/13836); WITH the crouch: ZERO hits from tick 12517 to the drop — the bay/yard opening line clips the crouched chest (the aim/sight target drops 0.45 [M Player_GetHeadPos 0x195aa0:39-51 — the BL+0x90C drop; the port's Player::target = camera − 0.45]) and the visibility factor 0.75 [M Drone_ProcessOpponents 0x1390c0:40-42] drops under the 0.7 LOS gate [M 0x176a28]. (3) LEVER (b) THE DROP-THEN-SWEEP — LANDED: the sweep is the nearest-clear-box-first dynamic loop over the yard/trench band (the fixed box order swept the far corner while #3 had WALKED to the drop point during the ride — d 55 at the corner, d 7.9 at the landing — and its landing bursts killed). THE REMAINING FLOOR IS UPSTREAM HEALTH: the boarding arrives at ~15.0 (9 hits for 78.6: #29's two ladder-top sniper hits 14+16 at 3462/4332 before her +222 kill, #18's bay-enter 16 at 3491+10812, #17's ride-window 16 at 7437 — the Operative ground-band sniper at (157.9, 1.0, −226.1), the d2 band sweep is difficulty-gated off, #10's deck 16 at 8071); the slot fall costs ~10-12 and skips armour [M 0x1902c8:84-104]; the landing at 3.2 health died in 64 ticks to #3's point-blank bursts — no aim converges that fast (the sweep's first tap needs ~250). NEXT LEVER: take the four hits off upstream — extend the ladder-top band sweep to the Operative difficulty for #17/#10 (the -1's d2 law holds: the ladder top looks down the band line over the low x ~160 wall), and audit the in-bay #18 kill (400 ticks have NEVER landed a 10-health guard at d 19.7 in-room — the leg landed false in every run including the -1's; check the converge and the ray). The port-side capsule fix [M NDrone2_Collision 0x140e90:91-121] stays its own task; the Agent sister's d2 levers stay its own. OPERATIVE-WALK-6 LEDGER (master b164773fb, five rolls v1-v5, all 10 hits for 100.0, 0 return-fire fights): the stream re-rolled LETHAL at the climb — deaths 4683/4361/4383/4058/3733 across five stance/act configurations (the roof pair #28/#29 at d 53-63, the deck guard #16 at d 11-30, the bay guard #10's wake-kill 6.0; v5 also had the band sniper #17 live at (158.31, 1.00, −225.28)) — the -4 ladder law is now the WHOLE phase: the climb (~900 ticks) + the roof phase + the grab window deliver the full 100 budget before any act lands. WIRED THIS SESSION: (1) the west-roof RETARGET LAW → Operative (the d2 lever-(c) law verbatim — the torso-first clear-box pick, the act-proof blacklist, the 450/200 caps, the all-stalled break; the v1 roll measured the run-4380 cause VERBATIM: the fixed chest acts + the #27-direct burned ~1700 ticks on head-only d-63 lines for ZERO damage while the roof fire landed 100); (2) the ground-band sniper sweep → Operative (this ignore's own lever — self-gating, zero cost on an empty band; v5 measured #17 PRESENT in the band, the census caught her, the phase died before her act); (3) the g21 never-lands leg kept d2-only. MEASURED DEAD THIS SESSION: the climb CROUCH (the grab admits the crouched substate on the default arm [M Player_CollLadder 0x196118:16-17] and the flag survives the climb — but the crouched climb BREAKS the geometry: top-out 16.95 vs the standing 17.37, the grab +84 vs +53, death 4058 WORSE; the roof fire lands anyway — the 0.45 target drop does not clear a shooter 5+ u above) and the act-fire dice correlation (MORE trigger draws = LATER death: v1 4683 with ~1300 act ticks > v2 4361 with none > v4 4058 — the draws shift the incoming dice, never the 100.0 total). NEXT LEVERS (in order): (a) the ride window — #17's band is LIVE on this stream; the band sweep's act must get its turn (a pre-climb band stand from the ladder BASE: the -5 strip-mouth west-ray law (0.975 dead) is the CHEST line — the band's own y < 5 line from the base is unmeasured); (b) the #16 deck guard's box act (proven +209 twice, the -1/-2 law) never got its turn on any roll — the pre-climb base stand (the d2 #20 leg's own geometry) is its shot; (c) the yard levers (the fast first tap, the girder sweep, walk-5's wired set) re-queue behind this climb floor; (d) the port-side capsule fix [M NDrone2_Collision 0x140e90:91-121] stays its own task. OPERATIVE-WALK-7 LEDGER (branch s/level-0d-operative-walk-7, seven real runs on the v5 roll): the two named base levers are MEASURED DEAD and OUT of the route, and the phase landed its first two kills. (a) THE PRE-CLIMB BAND STAND FROM THE LADDER BASE - the base line to #17 EXISTS (her east corridor z -218..-223 prints full CLEAR / bullet_scoped CLEAR at d 56; the -5 strip-mouth 0.975 law is the z ~-225+ west segment only) but the act never landed in four runs: the aim cursor PINS ~4-5 u off a far off-centre target (cross stuck 0.09-0.29 across raw/drained/no-drain/d2-pre-aim-tracking acts) and her 0.042 u/tick patrol crosses the ~120-tick corridor before any convergence; the ladder-top band arm's rays to her west and NE corners die 0.967-0.988 from the TOP too; costs ~500-800 ticks of dwell, 14.0 landed across the re-rolled dice on the fifth run, every death WORSE than the baseline (4251/4571/3934/3804 vs 3733) - the #18-leg precedent, the leg stays out. (b) THE DECK ACT FROM THE BASE - the pick finds #16 in-box (198.95, 14.04, -260.41, state 0x68) but the up-hill ray dies 0.040 along on the crane's own structure (clear_box_aim None, zero rounds in 400 ticks, the [0d:ray] trace) - the d2 #20-leg geometry does NOT transfer to #16's line; the -1/-2 law's own stand is the LADDER TOP (down-hill rays clear the crane). WHAT THIS SESSION LANDED: (1) THE DECK #16 BOX ACT'S FIRST TURN at the ladder top, BEFORE the retarget loop, real-damage-gated - down at +209 ticks (the ledger's +209-twice law verbatim, ray full CLEAR from eye (213.1,18.1,-234.5)); (2) THE BAY-DUO ARM -> Operative (the d2 t4312 drain law's own box [209.3,-289.5] +/- (7,3)) - #18 down at +195 on the first pass; the death moved 3733 -> 4514 (+781) with #16 AND #18 dead; (3) the Operative band arm's caps trimmed 600->200 (the top rays to #17 are blocked every roll - pure exposure, the run-5239 law). THE NEW FLOOR: #27/#28 are ACT-PROOF from the top on this roll (pick_trio_target returns no torso box, the loop breaks by its own law) and #10 survives the bay acts under CONVERGED CLEAR-ray aim - two clips burned, still alive. THE AIM-BIT GATE IS WIRED AND MEASURED A NO-OP ON THIS ROLL (the d1 trigger now requires sim.aiming when no_topup_env() && difficulty==1 - the d2 law's own parity; the plain replay and the d2 twin byte-identical): the run is tick-for-tick identical (4514), so every tap already had the bit up - the hip-round law was NOT #10's survival cause here. THE REAL #10 AUDIT: five AIMED, converged, CLEAR-ray rounds at d 55 (cross 0.25->0.0, chest aim dp+0.3, ray full CLEAR/static clear/bullet_scoped CLEAR at +257/+377) all MISSED a nearly-stationary 10-health guard (his wander ~0.0017 u/tick = ~0.11 u over the flight) - audit the bay act's bullet path at d 55 next (the spread actually applied at the shot [M Bullet_init 0x12c5a0:139-170], the flight lead, the posed box set vs the chest point). NEXT LEVERS (in order): (1) the #10 bay-act bullet audit at d 55 (aimed converged CLEAR rounds miss - find where they die); (2) the act-proof pair's head-line gamble from the top (the run-4379 graze law says pure exposure - measure once on its own run before believing it either way); (3) the yard levers (the fast first tap, the girder sweep, walk-5's wired set); (4) the port-side capsule fix [M NDrone2_Collision 0x140e90:91-121] stays its own task. OPERATIVE-WALK-8 LEDGER (branch s/level-0d-operative-walk-8, master 385ebb66d + walk-7 merged; the audit tool rides NF_0D_AUDIT=1 - env-gated in shoot_far_aim, read-only, no draws): (1) THE #10 BAY-ACT BULLET AUDIT AT D 55 - ANSWERED: the flight's own law - Bullet_update's per-tick START-CEL re-feed [M 0x12f0cc-0x12f0d8] - stops EVERY line to #10 on the bay's north-wall strip EAST of the strip mouth; the audit's stop points (214.45,12.89,-288.28) for the head line and (212.25,11.93,-287.90) for the torso line, each BEFORE the posed boxes the same query sees past it (part Some(5,0.805) / Some(4,0.704) over the remaining 60 u) - while the AIM gate (the eye's cel, segment_bullet_scoped) reads the same line bullet_scoped CLEAR (the [0d:ray] lines). The spread is NOT the cause (the P2K 0x1e record +0x24 = 100.0 [L ee_start_05.bin @0x2bf150 + 0x1e*0x10C] but the 0x400000-flagged aim mul is 0 [M Bullet_init 0x12c5a0:139-170, the port's player_spread law]); the muzzle midpoint is NOT the cause (the P2K carries no 0x10000 - the None arm spawns at the eye [M 0x1a4bf0:226-245]). #18's line passes the strip MOUTH at x ~204 (her stop z -291.02 is PAST her torso hit t 0.744 - the contact order is box first) which is why her act lands at +195 and his never does. #10 IS ACT-PROOF FROM THE LADDER TOP on this roll family - the bay-duo loop keeps ONE pass (the +195 #18 kill) and the two #10 hunts are removed (the two 400-tick passes were pure cadence exposure under the pair's fire). (2) THE SOUTH-ROOF PAIR -> Operative wired (the d2 law verbatim: the present-pick + the no-drain box act at (169.6,-271.5) +/- (5,3), cap 400 x2, real-damage-gated) - the baseline roll's #14 (skin 0x5000087, (166.3,21.2,-271.4)) landed 22.0 and the arm never acted on them; both lever rolls the pick found the box EMPTY (the dice) - the act self-gates at zero cost. (3) THE HEAD-LINE GAMBLE - MEASURED DEAD TWICE, OUT: one 200-tick head act on the all-stalled roll's nearest ANY-box candidate grazed BOTH runs (0 lands, 400 ticks - the run-4379 graze law HOLDS on this tree); the leg is removed. (4) THE HOISTED FIXED CHEST LEG - MEASURED DEAD, OUT: the fixed g28-spot chest leg at the phase start burned its 450 cap on a 0.972-BLOCKED chest ray (the run-4380 mid-band law verbatim, the guards settled at -243.42/-245.55); roll A's +236 g29 catch was the leg catching her CLEAR CROSSING (the sweep law), not the fixed spot - the crossing catches belong to the capped sweep. THE DICE: the three rolls this session (the walk-7 tree 4514, +levers 4121, +hoist 4345) all re-rolled the phase lethal - the act-fire dice correlation (the walk-6 law) holds: every act change re-rolls the incoming stream, the 100.0 total lands before the pair dies. THE STRUCTURAL FLOOR: the pair #29/#27/#28 (86.0 / 86.0 / 70.0+14.0 across the three rolls) opens at 3042/3398 on the 180-tick sniper cadence and no act family lands on them from the top before ~3900 - the chest rays die 0.972 on the mid-band obstruction at their settled spots, the head-only lines graze, the torso pick returns no box. NEXT LEVERS (in order): (1) the pair's CROSSING SWEEP with the box act run BEFORE the retarget loop (the -3 kills' own law: the caps ride 900 and the pass catches the crossing of a clear-ray spot - the +222/+754/+193/+194 kills and roll A's +236; the pick nearest-live); (2) the port-side capsule fix [M NDrone2_Collision 0x140e90:91-121] (its own task - the origin-centred two-sphere standing volume the game hits and the port's boxes-only refine misses is the pair's down-hill graze law's twin); (3) the yard levers (the fast first tap, the girder sweep, walk-5's wired set). OPERATIVE-WALK-9 LEDGER (branch s/level-0d-operative-walk-9, master 385ebb66d + walk-8 merged): (1) THE PAIR'S CROSSING SWEEP (the ledger's lever (1)) - WIRED AND MEASURED ON ITS OWN REAL RUN: the nearest-live chest pass hoisted BEFORE the retarget loop (the walkers' band box (151.2,-246.8) +/- (6,11), cap 900, the -3 kills' own law) CAUGHT g29 at +200 (the crossing law verbatim - she was 0.972-blocked at the pick census (151.37,22.70,-245.55) and crossed clear inside the pass; the -3 family's +194/+222/+236 shape) - but the death STAYED 4161 (the walk-8 roll's 4160): the trio's first 64.0 (#29 32.0 at 3042/3222, #27 32.0 at 3398/3578) landed BEFORE the sweep opened (~3800, behind the #16-first +209 and the bay-duo +195 laws), so the catch removed only FUTURE fire; the remaining shooters delivered the 100 inside the same window (10 hits for 100.0: #27 32.0 in 4, #29 32.0 in 2, #10 22.0 in 2, #28 14.0 in 1, #18 0.0 in 1, 0 return-fire fights). (2) THE CLEAR-BOX PICK REFINEMENT (each pass rides the retarget pick's torso-first clear-box law first, the nearest-live chest act as the fallback when no clear box exists, the zero-damage blacklist into the SHARED stalled_op) - MEASURED A NO-OP on its own real run: pick_trio_target returned NONE at the sweep moment on this roll (no clear torso box anywhere in the band - #27 stood at her SOUTH spawn (151.35,22.70,-255.80), whose clear-ray law is the -4/-5 walks' wake dump, not this roll's moment) - the fallback ran the identical measured behavior, the dice tick-for-tick identical, the death 4161. THE STRUCTURAL FLOOR CONFIRMED: the trio's first 64.0 lands in the 3042-3800 window the #16-first and bay-duo laws occupy ahead of any sweep; the sweep catches only future fire; the act-fire dice correlation (the walk-6 law) held (10 hits for 100.0 on every roll). NEXT LEVERS (in order): (1) the sweep hoisted to the FIRST ladder-top act (before the #16 deck act) - the trio is present-but-pre-cadence there (the first hit lands 3042), the reposition-era crossings are the -3 law's most catchable window (the placements 145.6-145.8 are CLEAR rays from the top), and #16's zero-delivery law says her +209 kill can absorb the sweep's ~400-tick delay; every act change re-rolls the dice - judge on its own run; (3) THE HOISTED FIRST-ACT SWEEP (the sweep hoisted to the FIRST ladder-top act, before the #16 deck act) - MEASURED WORSE, OUT: the trio IS present pre-cadence at the ladder top (the census caught all three: g27 (151.35,22.70,-255.80) state 0x94, g28 (150.96,22.70,-243.42) state 0x5e, g29 (151.37,22.70,-245.55) state 0x97) and the hoisted pass CAUGHT g29 at +224 with the chest ray bullet_scoped CLEAR at the crossing - but the act-fire dice re-rolled LETHAL-EARLY: death 3664 (WORSE than 4161), 10 hits for 100.0 by 3664 DURING the second pass's 900-tick ride on g28's blocked line (the whole phase's acts never ran; #27 delivered 16.0 in 3, #29 still 32.0, #28 14.0, #10 the rest). The sweep stays at its measured-best home (behind the #16-first and bay-duo laws); the extra pre-cadence dwell feeds the stream (the walk-6 law). NEXT LEVERS (in order): (1) the port-side capsule fix [M NDrone2_Collision 0x140e90:91-121] (its own task - the origin-centred two-sphere standing volume the game hits and the port's boxes-only refine misses is the pair's down-hill graze law's twin); (2) the yard levers (the fast first tap, the girder sweep, walk-5's wired set)."]
 fn walk_arrival_to_the_c5_door_real_damage() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(1, true));
 }
@@ -1549,6 +1679,30 @@ fn kill_guard_head_present(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &
             eprintln!("[0d:box] {label}: g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) state {:#x}",
                 d.skin, d.pos[0], d.pos[1], d.pos[2], d.state);
             shoot_far_box(w, i, label, cap)
+        }
+        None => { eprintln!("[0d] {label}: no PRESENT guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
+    }
+}
+
+/// The FAST CHEST variant (level-0d-operative-walk-7, lever (a)): the present-pick + the
+/// chest aim WITHOUT the 160-tick aim-off drain — the drain exists to reset the raise queue
+/// after a fire script (state 9 [M 0x1a24c8:66-99]), and the pre-climb base stand fires
+/// ~1600+ ticks after the last shot with no script pending (the ladder-top legs' own
+/// skip-drain law) — while a patrolling band guard crosses the z −216..−223 clear corridor
+/// at ~0.026 u/tick, the drain's 160 ticks are 4.2 u of walk: the whole corridor (measured
+/// v2: the CLEAR snapshot's act re-found her behind the wall at +220, one round late).
+fn kill_guard_at_present_fast(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str, cap: u32) -> bool {
+    let di = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && !d.corpse && d.health > 0.0
+            && (d.pos[0] - at[0]).abs() < tol[0] && (d.pos[2] - at[1]).abs() < tol[1])
+        .min_by_key(|(_, d)| ((d.pos[0] - at[0]).powi(2) + (d.pos[2] - at[1]).powi(2)) as u32)
+        .map(|(i, _)| i);
+    match di {
+        Some(i) => {
+            let d = &w.scene.sim.as_ref().unwrap().drones.list[i];
+            eprintln!("[0d:box] {label}: g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) state {:#x}",
+                d.skin, d.pos[0], d.pos[1], d.pos[2], d.state);
+            shoot_far_aim(w, i, label, cap, 0.3, true)
         }
         None => { eprintln!("[0d] {label}: no PRESENT guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
     }
@@ -1708,7 +1862,90 @@ fn band_all_stalled(w: &Walker, stalled: &[usize]) -> bool {
     })
 }
 
+/// THE BULLET FLIGHT AUDIT (level-0d-operative-walk-8, the ledger's lever (1)): env-gated
+/// (`NF_0D_AUDIT=1`, zero cost when unset — the plain replay and the d2 twin stay
+/// byte-identical). Every tick of `shoot_far_aim` it tracks the live `player_bullets`
+/// (read-only: no RNG draws, no sim writes) and prints, per round: the SPAWN state (pos, dir,
+/// weapon, speed, range) and the death state — the round's last pos/dir/travelled with the
+/// flight's own verdicts AT that point: `drone_ray_part` (the flight's posed-box test over a
+/// 4 u segment [M Bullet_update 0x12e7b0's per-tick sweep]) and the world stop
+/// (`segment_flight_scoped` with the glass pass — the flight's own query). The aim
+/// (`clear_box_aim`/`segment_bullet_scoped`) and the flight share the same box law, so a
+/// SPAWN verdict of part Some + world CLEAR that still dies identifies the diverging leg
+/// (the spread actually applied, the dir the scene composes, or the world pick the aim gate
+/// does not see).
+thread_local! {
+    static AUDIT_LAST: std::cell::RefCell<Vec<(usize, [f32; 3], [f32; 3], f32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn audit_bullets(w: &Walker, di: usize, start: u32) {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = nf_game::drone::Data {
+        tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+        world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+        skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+        hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+        ai_points: &sim.ai_points,
+    };
+    // the verdict rides the WHOLE remaining flight (up to 60 u): the world stop point (t·l,
+    // absolute coords) and the posed-box test over the same reach — the aim gate (the eye's
+    // cel) and the flight (the bullet's per-tick cel) may disagree; the stop point names the leg
+    let verdict = |pos: [f32; 3], dir: [f32; 3]| -> String {
+        let l = 60.0f32;
+        let end = [pos[0] + dir[0] * l, pos[1] + dir[1] * l, pos[2] + dir[2] * l];
+        let world = sim.world.segment_flight_scoped(sim.world.find_cel(pos), pos, end, true);
+        let wp = world.map(|t| [pos[0] + dir[0] * l * t, pos[1] + dir[1] * l * t, pos[2] + dir[2] * l * t]);
+        let part = nf_game::drone::drone_ray_part(&sim.drones.list[di], &d, pos, end);
+        let dr = &sim.drones.list[di];
+        format!("tgt g{di} ({:.2},{:.2},{:.2}) st{:#x} en{} pr{} hp{:.0} part{:?} world {}",
+            dr.pos[0], dr.pos[1], dr.pos[2], dr.state, dr.enabled as u8, dr.present as u8, dr.health,
+            part.map(|(p, t)| format!("Some({p},{t:.3})")).unwrap_or_else(|| "None".into()),
+            wp.map(|w| format!("STOP({:.2},{:.2},{:.2})", w[0], w[1], w[2])).unwrap_or_else(|| "CLEAR".into()))
+    };
+    AUDIT_LAST.with(|last| {
+        let mut last = last.borrow_mut();
+        let mut matched = vec![false; last.len()];
+        for (k, b) in sim.drones.player_bullets.iter().enumerate() {
+            let mut mi = None;
+            for (i, e) in last.iter().enumerate() {
+                if matched[i] || e.0 != b.weapon as usize { continue; }
+                let dd = (e.1[0] - b.pos[0]).powi(2) + (e.1[1] - b.pos[1]).powi(2) + (e.1[2] - b.pos[2]).powi(2);
+                // the P2K flies 13.2 u/tick [L weapon_data 0x1e +0x20] — the match window rides it
+                if dd < 15.0 * 15.0 { mi = Some(i); break; }
+            }
+            match mi {
+                Some(i) => { matched[i] = true; last[i] = (b.weapon as usize, b.pos, b.dir, b.travelled); }
+                None => {
+                    eprintln!("[audit] +{} b{k} SPAWN pos({:.2},{:.2},{:.2}) dir({:.4},{:.4},{:.4}) w{:#x} sp{:.2} rng{:.0} {}",
+                        w.total_ticks - start, b.pos[0], b.pos[1], b.pos[2], b.dir[0], b.dir[1], b.dir[2],
+                        b.weapon, b.speed, b.range, verdict(b.pos, b.dir));
+                    last.push((b.weapon as usize, b.pos, b.dir, b.travelled));
+                    matched.push(true);
+                }
+            }
+        }
+        for (i, m) in matched.iter().enumerate() {
+            if !*m {
+                let e = &last[i];
+                eprintln!("[audit] +{} DEAD pos({:.2},{:.2},{:.2}) dir({:.4},{:.4},{:.4}) trv {:.1} {}",
+                    w.total_ticks - start, e.1[0], e.1[1], e.1[2], e.2[0], e.2[1], e.2[2], e.3, verdict(e.1, e.2));
+            }
+        }
+        let mut keep = Vec::new();
+        for (i, m) in matched.iter().enumerate() { if *m { keep.push(last[i]); } }
+        *last = keep;
+    });
+}
+
+/// Clears the flight tracker (act boundaries) without printing.
+fn audit_clear() {
+    AUDIT_LAST.with(|last| last.borrow_mut().clear());
+}
+
 fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, skip_drain: bool) -> bool {
+    let audit = std::env::var_os("NF_0D_AUDIT").is_some();
+    if audit { audit_clear(); }
     let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
     let mut last_tap = 0u32;
     let start = w.total_ticks;
@@ -1822,7 +2059,18 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, 
             // fire until the bit is back up (the raise is ~20 ticks [M Player_SetWeaponAnimObj
             // 0x1a2e38 case 0xf]). Gated to agent_fast: the plain/Operative drained paths enter
             // the loop with the bit raised and keep their byte-identical behaviour.
-            let trigger = !clip_empty && on_target && world_clear && (sim.aiming || !agent_fast);
+            // THE OPERATIVE AIM-BIT TRIGGER GATE (level-0d-operative-walk-7, the ledger's
+            // lever (1), the OPERATIVE HIP-FIRE LAW's own fix): the aim bit FLAPS with the
+            // fire script between shots, and the d1 shortcut (`!agent_fast`) fired those
+            // down-bit windows as HIP rounds — the full 100-unit cone [M Bullet_init
+            // 0x12c5a0:139-170] — even with the ray converged (the measured bay trace: cross
+            // ~0.0 at +377 with `aiming false`, two clips burned, the 10-health target
+            // alive). On the Operative REAL-DAMAGE run the trigger now requires the bit like
+            // the d2 path always has (the raise completes ~20 ticks [M Player_SetWeaponAnimObj
+            // 0x1a2e38 case 0xf]); the plain replay (no_topup_env() false at d1) and the d2
+            // twin keep their byte-identical gates.
+            let op_real = walker::no_topup_env() && sim.drones.difficulty == 1;
+            let trigger = !clip_empty && on_target && world_clear && (sim.aiming || (!agent_fast && !op_real));
             if trigger { last_tap = t; }
             // The stick drives the RAY ~1:1 (turn: the cursor's angular response is
             // 0.76966·(T/0.76966) = T; look: 0.57724·(L·π/2/0.57724) = L·π/2 — the overflow
@@ -1838,6 +2086,7 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, 
         }
         w.total_ticks += 1;
         w.after_step();
+        if audit { audit_bullets(w, di, start); }
         let sim = w.scene.sim.as_ref().unwrap();
         if w.total_ticks % 120 == 0 {
             let (bp, dp) = (sim.bond.pos, sim.drones.list[di].pos);
