@@ -177,6 +177,13 @@ pub struct Walker {
     /// unhittable even while the captain's volleys are in flight. Default false everywhere
     /// else; a pure input bit, no RNG, no sim call.
     pub leg_crouch: bool,
+    /// Opt-in crouched door presses for `use_door` (real-health-00agent-01-hall-5, d3 only):
+    /// the close-in walk and the E edges run CROUCHED — the merged stream parks the shotgun
+    /// (#6, 0x1c) at the door mouth (5.7,6.3,14.7) and his bursts swept the standing press
+    /// (two windows, 55.0 total [L the run0/run1 NF_DMG_TRACE traces]); the peek law says a
+    /// crouched Bond in the lane takes 0 fire (the guards held z 13.5-19.4 [L the hall-4 peek
+    /// runs]). Default false everywhere else; a pure input bit, no RNG, no sim call.
+    pub use_door_crouch: bool,
     /// Inside the stuck ladder's hostile-body-block response (the arm's shoot/resupply run their
     /// own nested walks): the nested stuck ladders must fall through to the plain sidestep ladder
     /// instead of re-triggering the arm (the run-2 recursion: nav 5 flank 1 nav 1 flank 1 …).
@@ -345,6 +352,7 @@ impl Walker {
             leg_abort_on_wound: None,
             leg_abort_on_kill: None,
             leg_crouch: false,
+            use_door_crouch: false,
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
@@ -1728,7 +1736,7 @@ impl Walker {
                 if dd < 0.9 { break; }
                 let desired = (dpos[0] - sim.bond.pos[0]).atan2(dpos[2] - sim.bond.pos[2]);
                 let err = wrap_pi(desired - sim.bond.yaw);
-                let input = Input { turn: err.clamp(-0.08, 0.08), forward: 0.8, ..Default::default() };
+                let input = Input { turn: err.clamp(-0.08, 0.08), forward: 0.8, crouch: self.use_door_crouch, ..Default::default() };
                 self.tick(input, false);
             }
             return;
@@ -1772,6 +1780,7 @@ impl Walker {
                 turn: err.clamp(-0.08, 0.08),
                 look: perr.clamp(-0.06, 0.06),
                 forward: if far { 0.5 } else { 0.0 },
+                crouch: self.use_door_crouch,
                 ..Default::default()
             };
             self.tick(input, pressing);

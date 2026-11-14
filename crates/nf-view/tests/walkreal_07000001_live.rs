@@ -1110,6 +1110,10 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // ×2 [M Drone_ModBulletDamage 0x139f50]). The lure hold below is difficulty-blind geometry:
     // the hold line sits just outside the 3.0 band and the guards cross one at a time — easier
     // tuning than Agent (pain 0.5, accuracy 0.5), not a different game.
+    // real-health-00agent-01-hall-5 (d3): the walker's return-fire posture — the entry and the
+    // loop's early phase run quiet (the fight's stand held Bond in the mouth ray for run 0/1's
+    // two-burst death); restored before the fights, which manage their own stances.
+    let rf0 = w.dmg.return_fire;
     if difficulty >= 1 {
         // real-health-00agent-01-hall-2 (d3): the flank z-hold for the whole hall phase — a
         // guard across the aperture (z > 11.2, the named loop's own across rule) never takes a
@@ -1154,15 +1158,40 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         if difficulty >= 3 {
             d3_switch_to_deepest_gun(&mut w, "the hall loop arm");
         }
-        w.walk_nav_to([7.5, 6.4, 10.1], "the hall door approach (pre-opens it)", 0.8);
-        // real-health-00agent-01-hall-2 (d3): the (7.2,8.8) stop + the 60-wait held Bond IN the
-        // deep captain's open-aperture lane for ~200 extra ticks — run 4 died to two #7 volleys
-        // at (7.0,9.1) during the transition (ticks 3421/3536 [L the run-4 trace]), before the
-        // named loop's fight machinery ever engaged. The d3 walk goes STRAIGHT to the
-        // west-shifted deep line; d1/d2 keep the tuned two-stop timeline.
+        // real-health-00agent-01-hall-5 (d3): the merged stream parked the SHOTGUN at the door
+        // mouth — #6 (skin 0x5000036, weapon 0x1c) at (5.7,6.3,14.7), 6.6 u from the hold
+        // line, and master's aim-stop root (zero_root_live 0x01) makes him stop dead and trade.
+        // The old entry died in the door-open window: the return-fire fight answered his first
+        // aperture burst and HELD Bond standing at (7.4,8.4) in the mouth ray — exactly two
+        // bursts (28.8 at t3433-34, 26.2 at t3545-46; 16 pellet hits and nothing else for 2900
+        // ticks [L the run0/run1 NF_DMG_TRACE traces]) ate the whole 55.0 ledger, and the walk
+        // died at tick 3546 before the named loop's machinery ever engaged. The player's
+        // answer reorders the entry: the deep line FIRST (the door closed — no LOS, no fight,
+        // and the deep line's ray from #6 crosses the wall plane at x ~6.1, outside the hole
+        // the bursts demonstrably flew through), then the CROUCHED press (the peek law:
+        // crouched Bond in the lane took 0 fire across 24 windows, the guards held z 13.5-19.4
+        // [L the hall-4 peek runs]), then the crouched home — no walk-through, no mouth stand.
+        // The whole doorway LOS stays available for the loop below.
         if difficulty >= 3 {
-            w.walk_nav_to([6.5, 6.4, 7.6], "the door-hold line (d3, straight to the deep line)", 1.0);
+            w.leg_crouch = true;
+            w.use_door_crouch = true;
+            w.dmg.return_fire = false; // no return-fire stand in the mouth ray during the entry
+            w.walk_nav_to([6.5, 6.4, 7.6], "the door-hold line (d3, hall-5: the deep line before the door)", 1.0);
+            if let Some((_, di)) = walker::door_near(w.scene.sim.as_ref().unwrap(), [7.9, 6.4, 11.1]) {
+                if w.scene.sim.as_ref().unwrap().drones.doors.list[di].state & 0xc == 0 {
+                    w.use_door(di, "the hall door (d3, hall-5 crouched press)");
+                }
+            }
+            w.walk_nav_to([6.5, 6.4, 7.6], "the door-hold line (d3, hall-5: home after the press)", 1.0);
+            // hall-5: the crouch and the quiet STAY through the loop's lure+hold — run 2's
+            // ledger: the entry itself was clean (0 hits), then 3 ticks after the stand was
+            // restored #7 (0x5000038, 0x1c, the DEEP captain at (8.3,6.3,17.3)) landed one
+            // full 8-pellet volley (7×7.2+4.6 = the whole 55.0) at (6.9,8.4) through the open
+            // aperture — his fan covers the hold area (the measured ray crosses the wall plane
+            // at x 7.33, inside the hole) [L the run2 trace]. The volley answer waits for the
+            // fights below (they manage their own crouch/return-fire posture).
         } else {
+            w.walk_nav_to([7.5, 6.4, 10.1], "the hall door approach (pre-opens it)", 0.8);
             w.walk_nav_to([7.2, 6.4, 8.8], "the door-hold line", 1.0);
             w.wait(60);
         }
@@ -1287,7 +1316,10 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                             let perr = want_pitch - sim.bond.pitch;
                             let seen = walker::dxz(d.pos, bp) < 9.0
                                 && sim.world.segment_bullet_scoped(sim.world.find_cel([bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]]), [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]], [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none();
-                            (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() },
+                            // hall-5 (d3): the lure crouches — the volley cycles own the standing
+                            // lure window (run 2's ledger), and the pitch math below already
+                            // reads the crouched eye.
+                            (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), crouch: difficulty >= 3, ..Default::default() },
                                 err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0, seen, difficulty >= 3 && sim.gun.clip == 0 && sim.gun.spare > 0)
                         }
                     };
@@ -1321,7 +1353,13 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                         && sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]).is_none()
                 };
                 if seen { break; }
-                w.wait(30);
+                // hall-5 (d3): the crossing window waits CROUCHED (the volley cycles own a
+                // standing hold — run 2's ledger).
+                if difficulty >= 3 {
+                    w.tick(Input { crouch: true, ..Default::default() }, false);
+                } else {
+                    w.wait(30);
+                }
             }
         }
         let _ = gpos;
@@ -1386,6 +1424,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 continue;
             }
         }
+        // real-health-00agent-01-hall-5 (d3): the posture restores here — the loop's early
+        // phase (the lure, the crossing hold) ran crouched and quiet; the fights below own
+        // their own stances from this point.
+        if difficulty >= 3 {
+            w.leg_crouch = false;
+            w.use_door_crouch = false;
+            w.dmg.return_fire = rf0;
+        }
         // guard-radii-finish (d3 only): a named guard ACROSS the aperture with no part from the
         // hold line must not take the shoot machinery's flank — on the merged tree the flank nav
         // opened the hall door and walked Bond INTO the hall, where the 12-hp shotgunner #6
@@ -1421,7 +1467,15 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             // die to head shots in the doorway — the armed lure run that drew 5/6/7/11 across
             // carried 48 rounds [L the lure run note]); the d3 path goes STRAIGHT to the
             // sustained lure below with the pool intact. d1/d2 keep the crouch fight.
-            if difficulty < 3 {
+            // real-health-00agent-01-hall-5 (d3): RE-ENABLED as the merged-stream measurement —
+            // hall-2's pool-thief ledger was taken on the OLD stream (the guards parked deep,
+            // z 17.8+, lamp-blocked); the merged stream parks #6 AT the mouth (5.7,14.7) and
+            // #7 at (8.3,17.3), both on ~112-tick shotgun cycles through the open hole — the
+            // run0/run1 fight's answer DID land on #6 (12->6) from the hold area, so parts
+            // expose on this stream. The crouch fight is the only kill shape that never
+            // crosses the fan; the dance's advance legs die to #7's full-volley frame (56.0
+            // >= the whole ledger [L the run2 trace]).
+            if difficulty >= 1 {
                 w.walk_nav_to([6.5, 6.4, 7.6], &format!("hall guard {g} the crouch line"), 1.0);
                 let hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
                 for t in 0..2400u32 {
