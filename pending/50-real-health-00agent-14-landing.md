@@ -20,3 +20,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 ---
 Main agent, fresh deaths on master 729f9694e (each ignored walk of the level, --ignored --test-threads=1; test names not captured):
 walkreal_07000014_live: Bond died at tick 4104 (frame 4104) at (31.42,2.35,33.43) armour 0.0
+
+Merged 11-13 (my-14d): the switch band guards are answered from node 626 (three bounded stands, nearest inside 15 u); death t23511 -> t26213 at (-45.31,1.07,27.50) on the escape-touch legs: #20 15.0 in 3 at node 2, #29 7.9 at 3.7 u, health 27.9 -> 10.4 across nodes 0-3. Next: answer #20/#21/#29 from the Kiko corridor before those legs.
