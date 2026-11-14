@@ -168,6 +168,12 @@ pub struct DamageLog {
     pub active: bool,
     /// Return fire on real damage (`shooters`); a test that scripts its own fight turns it off.
     pub return_fire: bool,
+    /// Opt-in wound abort for `stand_and_fire` (real-health-00agent-01-hall-3, d3 only):
+    /// `Some(threshold)` stops the stand-and-fire loop the first tick Bond's health drops more
+    /// than `threshold` below the fight's start — the door-phase advance dance's exchange must
+    /// END on the first volley (the captain's 36.0 burst is one-frame; standing in the lane
+    /// while the stand runs is the measured 16518→16593 killer). `None` everywhere else.
+    pub abort_on_wound: Option<f32>,
     /// OPT-IN (drone-block-swaps-g055-3): when the return-fire stand's cap expires without the
     /// drop, run ONE determined `shoot_bounded` pass before the 240-tick cooldown. Under the
     /// flush [M 0x148010:100-131] the un-dropped guard keeps hunting from his first attack —
@@ -1033,6 +1039,7 @@ impl Walker {
         let mut last_tap = 0u32;
         let mut aim: Option<[f32; 3]> = None;
         let mut hp0 = self.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let bond0 = self.scene.sim.as_ref().unwrap().drones.health.health;
         let mut last_hit = 0u32;
         let mut dry = 0u32;
         let mut blocked_runs = 0u32;
@@ -1057,6 +1064,11 @@ impl Walker {
             }
         }
         for t in 0..cap {
+            // The opt-in wound abort (see the field doc): the stand ends on the first volley.
+            if let Some(th) = self.dmg.abort_on_wound {
+                let h = self.scene.sim.as_ref().unwrap().drones.health.health;
+                if h <= 0.0 || h < bond0 - th { return false; }
+            }
             if self.dmg.switch_dry {
                 let clip_dry = { let s = self.scene.sim.as_ref().unwrap(); s.gun.clip == 0 && s.gun.spare == 0 };
                 if clip_dry {
