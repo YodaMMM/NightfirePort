@@ -32,3 +32,14 @@
 
 ## level-0d-operative-walk-9
 - 2026-11-14: opened from origin/master 385ebb66d + merged s/level-0d-operative-walk-8 (ba8db6ac4); reading the walk-8 report and the ignore message on walk_arrival_to_the_c5_door_real_damage, then taking the crossing-sweep lever.
+- 2026-11-14 (cont.): the pair's CROSSING SWEEP wired (the -3 law verbatim: the nearest-live
+  chest pass hoisted before the retarget loop, the walkers' band box, cap 900) — the lever's
+  own real run CAUGHT g29 at +200 (the crossing law verbatim: 0.972-blocked at the census,
+  crossed clear inside the pass) but the death STAYED 4161 (the walk-8 roll's 4160): the
+  trio's first 64.0 lands 3042-3800, BEFORE the sweep opens behind the #16-first +209 and
+  bay-duo +195 laws — the catch removes only future fire; the clear-box pick refinement
+  measured a NO-OP (pick_trio_target None at the sweep moment, the fallback identical, the
+  dice tick-for-tick identical, 4161). Plain replay + d2 twin green (byte-identical);
+  interactables 11/11; the whole binary OOM-kills parallel on this 3 GB sandbox (per-test
+  runs green). NEXT: the sweep hoisted to the FIRST ladder-top act; then the capsule fix.
+  Report docs/reports/level-0d-operative-walk-9.md.
