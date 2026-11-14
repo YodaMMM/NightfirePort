@@ -12,3 +12,5 @@ Real input only, no top-ups; the d1/d2 walks stay byte-identical. Tests: walkrea
 interactables_07000014_live, probe14_pocket_settle. Branch: s/real-health-00agent-14-landing-2.
 
 Measured 11-14: quiet pass to node 2 then a hold there (300/600) dies inside the hold at t26887 at (-47.41,28.27). Not shipped.
+
+Main 11-14 (master 06db4a156): at the Kiko hold Bond holds the 0x14 9+42, owns 0x34/0x37 grenades (1 each in clip, carried slots 22/25 = 4/4); a CROUCHED duel on #20 from the hold spot (300/900) still dies inside it at t26998 at (-51.42,0.65,37.88). Untried: a frag lob onto #20 at (-51.3,32.4) from the hold (5.5 u - check the frag radius first).
