@@ -43,3 +43,5 @@ Measured 11-13: a wait before the pocket close-pair fight (0/30/60/90/120/150/18
 Merged 11-13 (d3b5e5eb4): the pocket pair is fought #5 (skin 0x50000b2) first - the pair costs nothing (61.5 kept), the hand-back opens at 37.0 with the AR loaded (26+55); death t12518 at (-13.90,-22.0,-172.71) in the west blast room: #6 (0x5000087, 0x14) 25.0 in 6 at 2.6 u, then the chaser #9 point-blank. Next: the pit soldiers (#6) before the chaser stand.
 
 Merged 11-13 (48e457c57): the blast room soldier #6 first + the hidden door guard skipped at d3 - THE CHASER GOES DOWN; death t17276 at the pit squad: #14 (hp 10, unexposed 14.3 u) ate the clip while #12 (0x500001e, hp 100) punched 17.0 at 0.9 u. Next: the pit squad from the shelter (#12 before #14, or exposed-only).
+
+Measured 11-13 (48e457c57): the finale health trail - 37.0 at the chaser stand, the chaser fight costs 20.0 in 20 (#9 at 2.4 u, range keeping), 17.0 into the pit squad; #12 (0x500001e, hp 100) then lands one 17.0 hit. A close-hostile answer in the squad slices (radius 5/9) picks #15 first and dies t17259 - no gain. Next: health through the chaser fight (20 lost at 2.4 u means the range keeping lets him in).
