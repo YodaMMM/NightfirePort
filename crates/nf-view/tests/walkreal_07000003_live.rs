@@ -157,7 +157,7 @@ fn mission_row() -> (usize, usize, usize, usize) {
 ///   shared rule this walk's own plain fights fight with) with the 200-tick unseen bail (the 06
 ///   roof guard's lean-in flicker: a window that lasts ~100 ticks still ends in a tap within 200).
 /// Never writes health, armour or ammo; the only inputs are the view drives + the trigger taps.
-fn aimed_stand_03(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+fn aimed_stand_03(w: &mut Walker, di: usize, label: &str, cap: u32, keep_aim: bool) -> bool {
     // Settle: no input until the switch anim is done, then the raise loop (the 0c idiom).
     for _ in 0..90 {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -256,10 +256,14 @@ fn aimed_stand_03(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
     };
     w.dmg.aimed_fights = prev;
     // Level the view back (the fights' own idiom) so the next nav leg steers from level pitch.
-    for _ in 0..90 {
-        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
-        if p.abs() < 0.01 { break; }
-        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+    // A serial clear keeps the aim up instead (the settle/raise of the next stand break
+    // instantly — the window between stands is where the unanswered shooters land).
+    if !keep_aim {
+        for _ in 0..90 {
+            let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+            if p.abs() < 0.01 { break; }
+            w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+        }
     }
     let sim = w.scene.sim.as_ref().unwrap();
     eprintln!("[03] the aimed stand ({label}): drone #{di} killed {killed}, health {:.1}", sim.drones.health.health);
@@ -279,8 +283,20 @@ fn aimed_stand_03(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
 /// Up the lane to the lane doors' south side: the moat node (8.7, −34.1) by the nav, then the
 /// lane's own nodes walked direct (the nav's A* from the courtyard picks a line up the west
 /// wall instead and wedges at x 6.35 [L the walk logs]).
-fn lane_doors_south(w: &mut Walker, label: &str) {
+fn lane_doors_south(w: &mut Walker, label: &str, moat_clear: bool) {
     w.walk_nav_to([8.7, 5.9, -34.1], &format!("{label}: the moat node"), 1.0);
+    // 00 Agent (runs 6-8): the machine gun #11 (skin 0x5000038 weapon 0xe, 12 a hit, hp 24)
+    // holds (14.5,-29.0) east of the lane and CANNOT be picked from the doorway's south end
+    // (his box never passed the eye-ray set there) while his rounds reach Bond in the same
+    // spot — the pre-north clear with the doors shut stood Bond in that line and he dealt
+    // 76.6 in 7 hits [L d3run7]. A moat-node clear only ENGAGED #17 (nobody else is exposed
+    // from the flank seat) and its shots alerted the lane cluster early — the legs ran HOT
+    // (#11 5 hits 58.6 + #10 19 hits 34.2 on the legs) and the run died on lane 3 [L d3run8].
+    // The legs stay COLD (no shots before the crossing): run 6's cold legs took 1 hit. The
+    // moat_clear opt-in stays for a later round's measurement.
+    if moat_clear {
+        clear_exposed_nearest_03(w, &format!("{label} (the moat clear)"), 40.0, 8, 0);
+    }
     for (k, at) in [[10.03f32, 5.9, -31.87], [10.26, 5.9, -30.02], [10.59, 5.9, -22.92], [10.62, 5.9, -20.99]].into_iter().enumerate() {
         w.walk_to(Wp { at, act: Act::None, arrive: 0.6 }, &format!("{label}: lane {k}"));
     }
@@ -337,44 +353,68 @@ fn stand_shooters_down_03(w: &mut Walker, label: &str, radius: f32) {
             best
         };
         let Some(di) = di_opt else { break };
-        aimed_stand_03(w, di, label, 2400);
+        aimed_stand_03(w, di, label, 2400, false);
     }
 }
 
-/// The d3 lane ledger's lever 1: the same answer law as `stand_shooters_down_03` but the pick
-/// is NEAREST-first. Measured reason [L the d3run5 ledger]: the far pick engaged the east-wing
-/// sniper #6 (12 hp, exposed from the mouth line through the windows) while three shooters
-/// fired simultaneously, the stand window ate 36.0 (#11 12.0 + #17 24.0) and the crossing
-/// started at 4.0 hp — #11's last 4.0 finished Bond at 10015. The machine gun #11 at d 9.9
-/// fires far more rounds per tick than the far shooters, so answering the closest hitter
-/// first shortens the window the rest shoot into. Only this file's d>=3 lane sites call it;
-/// every other call site keeps `stand_shooters_down_03` (the pick-order change must not move
-/// the green d<3 streams or the other difficulties' sites).
-fn stand_shooters_nearest_03(w: &mut Walker, label: &str, radius: f32) {
+/// The d3 lane ledger's lever 1 (runs 4-6): the REACTIVE law (recent-hit gate) misses the worst
+/// shooter — the upper-east sniper #6 (skin 0x5000036 weapon 0x1e, 40.0 a hit, hp 12) fires on
+/// the courtyard mouth and MISSES until one round lands for the whole remaining health (run 6:
+/// the mouth stand at (10.91,-19.34) had no `hitting` candidate — #6's rounds had not landed —
+/// the sweep broke instantly, and one 40.0 at d 22.3 from still Bond at 40.0 ended the run at
+/// 9585 [L d3run6]; the mid-courtyard plain trades before it had eaten 60.0: #9 22.8 in the
+/// north crossing, #8 28.2 [L d3run6]). A player shoots the guard he can SEE before stepping
+/// into his field: the pick is the NEAREST EXPOSED enabled guard — no recent-hit gate — and a
+/// guard whose stand bailed (NO-HIT/UNSEEN/DRY) is skipped for the rest of this clear so the
+/// window cannot cycle him. `wait_budget` ticks are spent WAITING for a first candidate with
+/// the aim already held up (the exposure windows flicker — the pick's single snapshot missed
+/// #6's lean entirely in run 6); 0 keeps the old one-shot behaviour. Only this file's d>=3
+/// lane sites call it; every other call site keeps `stand_shooters_down_03` (the pick-order
+/// change must not move the green d<3 streams or the other difficulties' sites).
+fn clear_exposed_nearest_03(w: &mut Walker, label: &str, radius: f32, max: usize, wait_budget: u32) {
     w.switch_to_armed(label);
-    for _ in 0..8 {
+    // Raise the aim BEFORE the first pick (the settle/raise inside each stand then break
+    // instantly — a tap can land within ~50 ticks of a window opening).
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    let mut skip: Vec<usize> = Vec::new();
+    let mut waited = 0u32;
+    for _ in 0..max {
         let di_opt = {
             let sim = w.scene.sim.as_ref().unwrap();
-            let now = sim.drones.frame;
             let b = sim.bond.pos;
             let mut best: Option<(usize, f32)> = None;
             for i in 0..sim.drones.list.len() {
                 let d = &sim.drones.list[i];
                 if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                if skip.contains(&i) { continue; }
                 let dist = walker::dxz(d.pos, b);
                 if dist > radius { continue; }
-                let hitting = sim.drones.player_hits.iter().rev()
-                    .take_while(|h| now.saturating_sub(h.0) <= 600)
-                    .any(|h| h.1 == i);
-                if !hitting { continue; }
                 if walker::DamageLog::exposed_part(&sim, i).is_none() { continue; }
                 let nearer = match best { None => true, Some((_, bd)) => dist < bd };
                 if nearer { best = Some((i, dist)); }
             }
             best.map(|(i, _)| i)
         };
-        let Some(di) = di_opt else { break };
-        aimed_stand_03(w, di, label, 2400);
+        let Some(di) = di_opt else {
+            if waited + 10 <= wait_budget {
+                waited += 10;
+                for _ in 0..10 { w.tick(nf_game::player::Input { aiming: true, ..Default::default() }, false); }
+                continue;
+            }
+            break;
+        };
+        if !aimed_stand_03(w, di, label, 2400, true) { skip.push(di); }
+    }
+    // Level the view back for the next nav leg (the serial clear held the aim throughout).
+    for _ in 0..90 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if p.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
     }
 }
 
@@ -588,7 +628,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     // under Bond's feet as he crosses them [D the TouchOnce census]).
     w.walk_nav_to([0.0f32, 5.9, -20.0], "courtyard east", 1.6);
     // Into the mid courtyard through the lane doors on their centre line (`cross_lane_doors`).
-    lane_doors_south(&mut w, "the lane doors south");
+    lane_doors_south(&mut w, "the lane doors south", false);
     cross_lane_doors(&mut w, true, "mid courtyard");
     w.walk_nav_to([13.0, 5.9, -18.0], "mid courtyard", 1.6);
     // guard-repin-master-2 item 1 (the 06 stand_shooters_down law, d-gated), measured on the
@@ -665,7 +705,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     if difficulty >= 3 {
         w.walk_to(Wp { at: [10.93, 5.35, -19.0], act: Act::None, arrive: 0.35 },
             "the lane mouth line (pre-crossing)");
-        stand_shooters_nearest_03(&mut w, "the lane mouth shooters (pre-crossing)", 40.0);
+        clear_exposed_nearest_03(&mut w, "the lane mouth shooters (pre-crossing)", 40.0, 8, 600);
     }
     let mut on_lane = false;
     for attempt in 0..3 {
@@ -700,7 +740,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     // with the aimed stands (the aim-bit zero-spread act [M Bullet_init 0x12c5a0:139-170])
     // BEFORE walking the lane legs.
     if difficulty >= 3 {
-        stand_shooters_nearest_03(&mut w, "the lane north shooters", 40.0);
+        clear_exposed_nearest_03(&mut w, "the lane north shooters", 40.0, 8, 0);
     }
     for (name, at) in [
         ("the lane south", [10.41f32, 6.08, -28.74]),
@@ -1277,7 +1317,7 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     let sim = w.scene.sim.as_ref().unwrap();
     let exit = sim.drones.triggers.iter().find(|t| t.kind == walker::trigger_kind::LOAD_LEVEL).map(|t| t.centre()).expect("the Load Point");
     drop(sim);
-    lane_doors_south(&mut w, "the lane doors south (exit)");
+    lane_doors_south(&mut w, "the lane doors south (exit)", false);
     cross_lane_doors(&mut w, true, "the exit");
     // The exit lawn on the nav's own nodes from the doorway, walked direct (from the doorway
     // line the A* cuts the corner at (22.3, 10.9) and wedges on the garden wall [L the walk log]).
