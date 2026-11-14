@@ -25,3 +25,6 @@
   #10's survival is NOT the hip-round law: five AIMED converged CLEAR-ray rounds at d 55 missed a
   nearly-stationary guard. The ledger's next lever is the bay-act bullet audit at d 55. Whole binary
   green (2 passed, 1 ignored).
+
+## level-0d-operative-walk-8
+- 2026-11-14: opened from origin/master 385ebb66d + merged s/level-0d-operative-walk-7 (01ad97cf0); reading the walk-7 report and the ignore message on walk_arrival_to_the_c5_door_real_damage, then taking the next lever the OPERATIVE-WALK-7 ledger names.
