@@ -790,6 +790,17 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
                 w.shoot_bounded(di, label, 2400);
             }
         }
+        // real-health-00agent-15-8 (d3): the SECOND plank rifle chaser. The d2's own answer
+        // kills the first (the fights' law finished #17 at 4628 [L the 15-6 ledger]) but the
+        // d3 roster carries two 0x5000087 chasers: #4 stayed quiet through the plank zone
+        // (the fights' pick needs a shooter [M DamageLog::shooters]) and chased the whole
+        // hall, paying 15.0 in 5 on the corridor-entry legs (the 2026-11-14 run2 ledger —
+        // health 34.4 → 5.4). The same stand answers him while he converges: the skin finder
+        // from the door[38] north mark, the shoot machinery's own positioning (the plank zone
+        // is open floor), the fights' law finishes what the stand starts.
+        if let Some(di) = agent_drone_nearest_skin(&w, [30.0, 41.3, 33.0], 16.0, 0x5000087) {
+            w.shoot_bounded(di, "the plank rifle chaser (the d3 roster's second) from door[38] north", 2400);
+        }
     }
 
     // The north lane through the grid, then the west lane south, then the exit hall. The x34.6
@@ -1258,6 +1269,25 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         for _ in 0..40 { w.tick(nf_game::player::Input::default(), false); }
     }
     if difficulty >= 2 {
+        // real-health-00agent-15-8 (d3 only): the pre-shoot's positioning walk is the measured
+        // poison — the shoot machinery's flank nav walked Bond 18 u down the hall east under the
+        // converging chasers and the whole corridor-entry bill landed DURING it: #4 (the second
+        // plank rifle chaser, skin 0x5000087 — the d3 roster's extra the d2 stand never met) 15.0
+        // in 5 at d 1.9, #19 7.0 at d 2.8, #5 7.0 — 29.0 of the walk's remaining 34.4, health
+        // 5.4 at the door[50] through fight [L the 2026-11-14 run: the hits at frames 9632-9929,
+        // Bond at (2.3, 28.7)-class spots mid-nav]. A player does not walk into a converging
+        // squad to shoot one man: the fights' own stands answer the thrower and the chasers from
+        // the legs (the fights killed #19/#13/#12 on the same run — the machinery works; the
+        // bill was Bond's own walking). #5's first grenade may still land — the fights' race is
+        // measured on the legs, not from a walk.
+        // real-health-00agent-15-8: the positioning pre-shoot STAYS on d3 (measured: the
+        // legs-first and threshold-window shapes both ate the convergers' full fire — the
+        // fights' polls pick NOTHING from the corridor because the convergers are east of the
+        // hall until their rounds already fly [L the 2026-11-14 run3/run4/run5 deaths
+        // t9978-t10192, the run4 window's 30 polls never fired] — the shoot machinery's
+        // flank nav is the only shape that crosses the kill zone on the moving-target roll
+        // [M 0x179740 DroneFiring_TargetMoving_Accuracy]; the run2 shape crossed the whole hall
+        // and reached the fence leg at 5.4).
         if let Some(di) = agent_drone_near(&w, [6.25, 41.45, 35.69], 6.0) {
             // (level-15-agent-rim-shot) The d2 900-tick pre-throw stand is GONE: on the lob
             // route #5's first frag is airborne before the threshold arrival (the measured rain:
@@ -1303,8 +1333,16 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // (measured on the stream join: clip 1 spare 0 at the mark, the one round stopped on the
     // closing leaf and the walk stood dry behind the shut door). A player takes the fights'
     // drops on the way and draws a loaded gun before he opens the door.
+    // real-health-00agent-15-8 (d3 only): the fence shot needs ONE round — the beam round's own
+    // case-0x4B chain sets the neighbours [M 0x17c518] — and the carried P2K holding it IS the
+    // shot. The d3 resupply nav from the corridor found nothing on the walked path and its last
+    // attempt hung the 3000-tick cap over the great hall's middle pit at 5.4 health (the
+    // 2026-11-14 run's STUCK lines, three caps ≈ 9000 idle ticks at a sliver of health) for a
+    // round Bond already carries. The d2 keeps the resupply (its stream is committed; the same
+    // clip-1 state resupplied successfully there [L the d2 ledger]).
     let low = { let g = &w.scene.sim.as_ref().unwrap().gun; (g.clip as i32 + g.spare as i32) < 4 };
-    if low {
+    let p2k_holds_the_round = { let s = w.scene.sim.as_ref().unwrap(); s.gun.weapon == 0x02 && s.gun.clip >= 1 };
+    if low && !(difficulty >= 3 && !w.tops_up() && p2k_holds_the_round) {
         w.resupply("the fence shot's rounds");
         assert!(w.switch_to_armed("the fence shot's gun"), "a carried gun has rounds for the fence");
         w.walk_route(route); // back to the door's E reach
@@ -1348,7 +1386,21 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         w.reload_full();
     }
     if !w.tops_up() {
-        backpedal_face(&mut w, [0.0, 41.4, 28.5], [0.0, 42.3, 17.29], 0.5,
+        // real-health-00agent-15-8 (d3 only): the mark rides NORTH of the diagonals — the d3 pain
+        // row 1.0 makes the old mark's own chain fatal. The old mark (0.0, 28.5) stands 10.69 u
+        // from the #778 diagonal (1.52, 41.47, 17.83 [D placement 778]) — the hurt distance
+        // 10.69 − 1.06 = 9.63 sits INSIDE the radius-10 sweep [M Explode_Propagate 0x17c518:
+        // Vec_Dist3D, minus obj+0x8C, max.s 0, /radius, ×damage] — 80·0.037 = 2.96 from #778 and
+        // 1.92 more from #779 (−1.68, 17.86): the measured 2026-11-14 run died AT THE MARK to the
+        // shot's own chain (−5.36 world, health 5.4) — the d2 run paid the same geometry 1.78
+        // (its 0.6 pain row [M Player_HandlePain 0x1902c8]) and survived. z 29.3 puts every fence
+        // mine ≥ 11.4 u: d − 1.06 ≥ 10 → the sweep's zero — #778 11.47, #779 11.46, #447
+        // (−0.01, 44.22, 17.29) 12.22 with its beam y in the 3D distance. The line still rides the
+        // open doorway's x 0 aperture (the door plane z 25.06 sits between the mark and the beam;
+        // the line's x at the plane ≈ 0.0 [D the leaf at x −1.1]). The d1/d2 marks stay
+        // byte-identical.
+        let mark_z = if difficulty >= 3 { 29.3f32 } else { 28.5f32 };
+        backpedal_face(&mut w, [0.0, 41.4, mark_z], [0.0, 42.3, 17.29], 0.5,
             "the fence mark north (backpedal, view on the beam)");
     } else {
         w.walk_to(Wp::new(0.0, 41.4, 28.5).r(0.5), "the fence mark north (outside the pops' radius 10)");
@@ -1699,7 +1751,7 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage() {
 /// body (the fence-mark stands at 28 u never fired — the 0.02-rad aim gate is a torso
 /// width there; the door[38]-north point is the next try).
 #[test]
-#[ignore = "00 Agent (11-13 update 3): a 300-tick hold before door[50] (the timing sweep; the hall has no position answer) carries the walk ACROSS the great hall to the door[42] fence leg - death t20553 at (0.45, 41.48, 28.47) with 5.4 health after the hall and a dry gun (clip 1 spare 0, the fence shot's resupply found nothing on the path; #4 15.0 at d 1.9). Next: health/ammo through the hall. Update 2: the west room is CLEARED - from the threshold Bond takes #11 head-first from his solo line (5.0, 71.25) [the live bullet-line scan], then #18 and #10 nearest-first, keeping 34.4; the walk dies at t9746 at (-5.66, 41.46, 34.60) in the great hall - #5 (skin 0x50000b2) 31.4 in 2 at d 12.7 (the ledger's lever 3). Update 1: the P2K now comes back in hand after the #526 lob when the gun in hand holds under 10 rounds (the AR came back at clip 0-3 and the fights' resupply nav walked Bond 31 u east) - no resupply walk now; the death moved t7985 -> t8578 at (8.23, 41.41, 73.27): the door[29] through fight on #11 goes killed-false while #11/#10 throw 33.2 + 25.7. Measured dead: a head-first aimed stand from the threshold (#11 bails UNSEEN at +200, death t8121). Earlier ledger: (real-health-00agent-15-7, the measured ledger on this tree): the walk PASSES the whole desk corner for the first time and dies at t7985 at (11.26, 41.38, 70.82) — the door[29] threshold — with 15 hits for 100.0, 9 fights. What this session fixed, each measured on its own run: the desk stands answer HEAD-first (the file-local head_aim — the shared pick is torso-nearest [M DamageLog::exposed_impl; the head round is ×10 = 35 from the P2K, one round per guard]): #2 VANISHED at +20, #3 at +19, zero return fire during the stands (was: the torso grind 14→9→2 while #2's 0x1a GRENADE blast −31.28 rode the settle+raise window — the killing hit, not a bullet); the walk then clears door[32], the #526 lob from the threshold lands at −0.42 (Bond 16.22 u off the boom, cause 3 — the lob lever WORKS, the feared −44.33 rim shot never paid), door[29] opens and the fights meet the west-room pair for the first time. The west-room ledger (four runs): the pair is SPawner-RELEASED during the door[32]-threshold leg ~28 u behind the west wall (the lane-mark 22 u skin stands resolved NOTHING; born ≈ t7400, first sight during route_c); the fights' pick rode the EYE law and the newborn fight on #11 went killed-false at hp 3 with the rounds on the door jamb (the 07000013 mismatch [M DamageLog::exposed_impl:544 — the eye ray clears by a hair while the gun's low-right stand-in clips the corner]) — lane_fights re-armed for the phase (d3-gated, cleared after the jog sweep) made the fights HONEST and #11 KILLED at 7637, the first west-room kill; his grenade still landed −14.0 (the thrown grenades outlive their throwers [L the aim-last-seven §3 ledger]); #10's fight never reached him (his gun-ray window from the through/jog never cleared — he stands at the room's south-west), his grenade −21.1; Bond SURVIVED both pops (58.9 → 23.8 — the pop budget at this health is TWO, not one). The wedge that killed: the fights' dry-mag RESUPPLY NAV — after the P2K's clip burned the nav walked Bond BACK EAST 31 u to the (41.9, 40.4, 67.8) pile with both throwers alive (the switch_dry cycle needs a LOADED wheel entry; the P2K at clip 0 spare 34 did not qualify) and the grenades chased the nav to the death at t7985. The next levers, in order: 1) disarm the fights' resupply nav for this phase, or keep a LOADED gun in the wheel (a mid-phase reload press — the reload input exists in aimed_stand), 2) kill #10 from the jog with the head-first aimed stand (the raise ~330 ticks eats 1-2 pops of −14/−21; after #11's outlived pop the budget holds 44.9 — ONE pop survivable, so the stand is a race the fights' co-fight helps), 3) then the corridor south, the great-hall #5 (the d3 roster's wander — the same spot-resolution miss is likely there), the door[42] fence dance, the exit. The upstream costs stand accepted: the sneak 14.0, the #462 beam's own blast −14.72 at the 13.56 u shot stand (the north-side line [S] remains the untried dodge — the beam spans z −2..3.2), the crossing 9.0."]
+#[ignore = "00 Agent (11-14, real-health-00agent-15-8): the FENCE LEG IS SOLVED — the walk now crosses the #447 fence shot and dies at the exit corridor's door[51] threshold, t11681 at (0.08, 41.31, 11.27), health 5.4 -> 0.0 to #12 (skin 0x500008c, the 0x1a grenade launcher at (5.4, 41.3, -1.9), the split's own guard, the d3 roster's extra) paying 3.50 + 1.86 = 5.36 — death by 0.04 of health; the fights answered (#12 hp -5) one fight cycle late. WHAT THIS ROUND FIXED, each measured: (1) THE FENCE MARK (d3-gated z 28.5 -> 29.3) — the old t20553 death was THE SHOT'S OWN CHAIN, not #4: the old mark (0.0, 28.5) stood 10.69 u from the #778 diagonal (1.52, 41.47, 17.83 [D placement 778]), the hurt distance 10.69 - 1.06 = 9.63 INSIDE the radius-10 sweep [M Explode_Propagate 0x17c518 — Vec_Dist3D, minus obj+0x8C, max.s 0, /radius, x damage], 80·0.037 = 2.96 from #778 + 1.92 from #779 — the measured -5.36 world hit killed 5.4 (the d2 run paid the same geometry 1.78 at its 0.6 pain row [M Player_HandlePain 0x1902c8] and survived). z 29.3 puts every fence mine >= 11.4 u (d - 1.06 >= 10 -> the sweep's zero; #447 12.22 with its beam y in the 3D distance) and the line still rides the x 0 aperture; measured: '#447 went at tick +3, Bond 12.18 u off, cause 2' with ZERO hurt. (2) THE RESUPPLY SKIP (d3, the P2K holding the round) — the corridor resupply nav found nothing on the walked path and hung three 3000-tick caps over the great hall's middle pit (grounded=false at (9.85, 35.03), segment Some(0.045)) — ~9000 idle ticks at 5.4 health for a round Bond already carries; skipped when sim.gun is 0x02 with clip >= 1 (the fence shot needs ONE round — the beam round's case-0x4B chain sets the neighbours [M 0x17c518]). The d2 keeps the resupply (its stream is committed). MEASURED-NOT-SHIPPED (all three ate MORE fire): (a) the fights' threshold window — 30 return_fire polls at the open door[50] never picked a candidate (the convergers are east of the hall / behind its structures until their rounds already fly [L the run4 death t10192, zero door[50] fights]); (b) the legs-first shape (walk route_d2[..2], the aimed stand on #5 from the hall east) — died t9978 to #5's 0x1a arc rain (19.4) at the door[50] through leg — the fights still cannot see from the corridor; (c) the second-chaser pre-stand (agent_drone_nearest_skin 0x5000087 at door[38] north) — killed #17 at +44 but #4 (the SECOND 0x5000087 chaser) was outside the 16 u tol and paid his full bill. THE UPSTREAM LEDGER (the shared run2/run7 shape, health 34.4 after the west room -> 5.4 at the fence leg): #11 21.0 in 3, #4 15.0 in 5 (the second plank rifle chaser — QUIET through the plank zone so the fights' shooter pick never saw him [M DamageLog::shooters], chased the whole hall, caught the pre-shoot's positioning nav at d 1.9), #15 14.0 in 2, the world 15.1 in 2, #19 7.0, #5 7.0 — the corridor-entry bill 29.0, of which #4's 15.0 is the largest single item. The positioning pre-shoot STAYS (measured three ways: it is the only shape that crosses the kill zone on the moving-target roll [M 0x179740 DroneFiring_TargetMoving_Accuracy]; every stop-and-answer shape ate more). NEXT LEVERS, in order: (1) THE #4 ANSWER — loop the chaser stand until the 0x5000087 skin finder returns None (or widen the spot to the chasers' converging path (28-35, 33-38), tol 20): his 15.0 alone flips the run (5.4 + 15.0 = 20.4 at the fence, 20.4 - 5.36 = 15.0 past #12); (2) THE #12 ANSWER — the fights engage him only after his first launcher round: a pre-emptive aimed stand from the door[51] threshold (the line (0.0, 11.5) -> (5.4, -1.9) crosses the split's void band x -2..2 at eye height) before the last route legs; (3) the exit leg needs >= 11 health — either lever (1) alone suffices. The d1/d2 streams stay byte-identical (every lever gated difficulty >= 3 && !w.tops_up(); the d2 real-damage walk is green on this tree)."]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(3));
 }
