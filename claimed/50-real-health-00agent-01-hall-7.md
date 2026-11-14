@@ -35,3 +35,5 @@ Main 11-14: the captain shoot_bounded right after the AND with flank_hold_z clea
 Main 11-14: one crouch press after the AND - byte-identical death t13141 (the next legs walk the crouch off). Not shipped.
 
 Main 11-14: press-spot sweep - (6.5,12.0) t12712 no AND; (7.2,12.2) g11 killed at 11.8, no AND, t12827; (5.8,12.4) t13292 no AND. The merged (6.5,12.4) stays the only spot that fires the AND.
+
+Main 11-14: a crouched captain stand from (8.5,10.0) after the AND (crouch press, shoot_bounded 1500, abort 40) - shoot_bounded stands Bond up/moves him (crouched false at the end), #5 24 -> 9.0, Bond 4.6, death t16977. Not shipped.
