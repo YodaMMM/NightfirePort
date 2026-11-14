@@ -52,3 +52,6 @@ Measured 11-13: a hold-and-dodge in the switch band before the door west face (3
 Measured 11-13 (c9b24271d): the node-42 door stand (60.4 kept) re-rolls the later stream: a clear_hostiles return leg ("back along the clears trail nav 1/2") wedges two 6000-tick caps at (-58.27,35.49) and Bond reaches the Kiko hold DRY (0x11 clip 0 spare 0, no armed gun to switch to) - death t41862. If the door stand is used, the clear return leg needs fixing first (nav to a reachable node, or lenient).
 
 Measured 11-13: skipping the clears trail return at d3 (nav straight home) - alone t26476 (Kiko hold ends at 15.6); with the node-42 door stand (77.9 at the door) t26461 near the Kiko corridor. Both worse than the shipped t29197; the late stream re-rolls with any upstream change.
+
+---
+claimed-by: sandbox3 at 2026-11-14T03:24Z
