@@ -27,3 +27,5 @@ Main 11-14 (master 06db4a156, NF_DMG_TRACE): the t74135 death is a DRY STAND at 
 Main 11-14 more: the saddle sweep has NO dry check (the comment claims one) - Bond arrives at the saddle with the P2K 3+13 and 41.2, the sweep and the stands spend it, and the walker switch_to_armed then stands ~730 ticks cycling an empty wheel (0x1 clip 1) in #7s line. Measured: a dry stop inside the sweep / skipping the sweep when nothing fires - byte-identical t74135 (the cycling comes from the loot pass after it); return fire off on the walk to the saddle (3+13 kept) t73170; saddle sweep radius 15/20 (skip #7 at 26.5) t74135, with return fire off t72825. Not shipped. #7 at (11.4,10.1,-16.1) needs an answer that is not a 26.5 u pistol duel.
 
 Main 11-14: a positioning shoot_bounded on #7 at the saddle (900) dies inside it at t73864 at (29.49,6.38,18.38). Not shipped.
+
+Main 11-14: crouched at the saddle (one press before the sweep) - t74068, no gain (#7 at 26.5 u still lands). Not shipped.
