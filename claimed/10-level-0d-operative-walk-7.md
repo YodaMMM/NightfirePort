@@ -6,3 +6,6 @@ walk dies at the ladder-top phase (five measured rolls, all 10 hits for 100.0: #
 ignore message for the full ledger and its named next levers, take them in order, and measure each on its own real
 run. Real input only, no top-ups, never lower damage or health; keep the top-up and d2 walks byte-identical.
 Tests: walkreal_0700000d_live, interactables_0700000d_live. Branch: s/level-0d-operative-walk-7.
+
+---
+claimed-by: sandbox5 at 2026-11-14T02:24Z
