@@ -29,3 +29,5 @@ Main 11-14 more: the saddle sweep has NO dry check (the comment claims one) - Bo
 Main 11-14: a positioning shoot_bounded on #7 at the saddle (900) dies inside it at t73864 at (29.49,6.38,18.38). Not shipped.
 
 Main 11-14: crouched at the saddle (one press before the sweep) - t74068, no gain (#7 at 26.5 u still lands). Not shipped.
+
+Main 11-14: an aimed_stand_03 on #7 (900, torso) from the saddle before the sweep dies inside it at t74105 - no line on #7 from the saddle either. #7 at (11.4,10.1,-16.1) needs a different spot entirely.
