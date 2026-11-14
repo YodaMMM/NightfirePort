@@ -245,6 +245,19 @@ pub struct Walker {
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
     trail: Vec<V3>,
+    /// real-health-00agent-01-hall-6 (opt-in, set only by the 07000001 d3 00 Agent walk):
+    /// pickups `resupply` must not walk to. The press legs mark the hall's interior on the
+    /// trail, so the nearest-on-trail rule admitted the interior boxes — the run10 ledger:
+    /// the on-trail stock walked Bond to (7.1,14.3) then (6.3,16.8) DEEP and the walk died
+    /// at 10270 at (6.76,14.88) to a west 0x1c volley there (the west lanes own the hall
+    /// interior — hall-4's lever wording). Empty by default: every other walk unchanged.
+    pub no_fetch: Vec<[f32; 3]>,
+    /// real-health-00agent-01-hall-6 (opt-in): the ZONE form of the ban — `resupply` refuses
+    /// every pickup whose z sits above this line. The static `no_fetch` spots miss boxes that
+    /// spawn after the walk's entry (the run12 ledger: the (7.1,5.3,14.3) interior box was
+    /// fetched even with the entry-time list set — it was not in the pickups list at entry).
+    /// None by default: every other walk unchanged.
+    pub no_fetch_z_above: Option<f32>,
     /// Per-tick drone watch (level-06-rook-door debugging, env-gated `NF_DRONE_WATCH="3,4"`):
     /// each listed drone's last logged state; tick_inner prints a line on every state change or
     /// >0.03 move, so a leg that runs inside walk_nav_to stays observable. Additive; no test sets
@@ -354,6 +367,8 @@ impl Walker {
             leg_crouch: false,
             use_door_crouch: false,
             trail: Vec::new(),
+            no_fetch: Vec::new(),
+            no_fetch_z_above: None,
             alarm_last: Vec::new(),
             drone_watch, watch_last,
             health_last: Vec::new(),
@@ -750,6 +765,13 @@ impl Walker {
                 .filter(|p| (p.m[3][1] - bond_y).abs() < 1.5)
                 // The walked-path corridor (see the block comment above).
                 .filter(|p| self.trail.iter().any(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) < 9.0))
+                // hall-6's opt-in ban (see the field doc): the 07000001 d3 walk lists the
+                // hall-interior boxes and the dead guards' drop spots; every other caller
+                // leaves it empty and this filter is a no-op.
+                .filter(|p| self.no_fetch.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 1.0))
+                // hall-6's zone form (see the field doc): the hall's door plane is z 11.2 —
+                // every interior box is behind it and the west lanes own the interior ground.
+                .filter(|p| self.no_fetch_z_above.map_or(true, |z| p.m[3][2] <= z))
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 // A box the walker just wedged on is not the box a player keeps trying: exclude
                 // the already-tried spots so the next attempt takes the next-nearest.

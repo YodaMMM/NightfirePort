@@ -56,3 +56,15 @@ walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent, take the l
 named order (#7 volley-reaction race first, then the escort's west route, the slab ambush,
 the plate AND-touch), each on its own real run. Helpers gated to the level and the
 difficulty; real input only, no top-ups, never lower damage or health.
+- (07:56-09:06) real-health-00agent-01-hall-6: the #7 VOLLEY RACE WON — the SMG pre-arm
+  (d3_switch_to_smg, before the press), the volley-race sort (the deeper 0x1c first, so the
+  first tap targets the deep captain) and the torso-center lane aim (the run4-8 dy-scan:
+  landings track the aim point ±0.36; dy-1.4 flew over, dy-0.6 bought one 12.0 head hit then
+  the sidestep wall; dy-0.05 + the 0.035/0.04 gates ground 20 hits) — #7 DEAD AT 3366 to the
+  part-5 ×8 record, bond 55.0 FULL; #6 followed at 3525 (the detour's return fire). The
+  shared resupply grew the opt-in no_fetch + no_fetch_z_above bans (the run10 death: the
+  on-trail stock walked Bond deep into the hall, a west 0x1c volley at 10270). The remaining
+  wall: g11 (no reachable stand reads a lane; the fight idles; the third AND input never
+  fires) — the refreshed ledger + the last-guard press lever in the ignore. Batteries:
+  walkreal 7/0/1 (70.5 s), interactables 10/10 (29.6 s). The full suite did not fit the disk
+  (ENOSPC ×2; the nf-view binary forest is 5.5 G). Report + branch pushed.
