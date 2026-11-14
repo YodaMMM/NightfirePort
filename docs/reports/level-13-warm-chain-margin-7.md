@@ -82,6 +82,15 @@ writes anywhere; the only inputs are the view drives, the trigger taps and the l
 3. What a fresh-boot player's P99 volley into the asleep #9 does (does the port's hip
    damage model match the disc at d 13 through the furniture block).
 
+## ntfy failed
+
+- `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+  → `curl: (28) Connection timed out after 20002 milliseconds`
+- `python3 -c "... urllib.request ..."` → `urllib.error.URLError: <urlopen error [Errno 101]
+  Network is unreachable>`
+- `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → timed out after 30 s
+  and was killed.
+
 ## Usage
 
 not visible to me (no token, context-window or cost figures are exposed in this environment;
