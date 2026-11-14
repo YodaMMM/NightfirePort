@@ -1514,7 +1514,7 @@ impl CollisionWorld {
         let (mut total, mut walkable, mut pick) = ([0f32; 3], false, false);
         let mut hit = false;
         for t in tris {
-            if capsule_tri_contact(t, 0, &mut a, &mut b, r, r + 0.1, &mut total, &mut walkable, &mut pick, false, [0.0; 3]) { hit = true; }
+            if capsule_tri_contact(t, 0, &mut a, &mut b, r, r + 0.1, &mut total, &mut walkable, &mut pick, false, false, [0.0; 3]) { hit = true; }
         }
         hit
     }
@@ -1990,8 +1990,12 @@ impl CollisionWorld {
 
     /// The walk pass's own query (level-14-landing-float): identical to `capsule_push_scoped`
     /// with the failed-ref up-facing hold skip on (see `capsule_tri_contact`'s walk_flat_hold).
-    pub fn capsule_push_scoped_hold(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool) {
-        self.capsule_push_scoped_impl(cell, a, b, r, top_guard, true, ref_v)
+    pub fn capsule_push_scoped_hold(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool, hold: bool, ref_v: V3) -> (V3, bool) {
+        // real-health-00agent-14-landing: the hold flag is the CALLER's scope now — the walk
+        // pass gates it on NF_HOLD_SKIP (off by default = master behaviour everywhere; the
+        // merged-tree A/B measured the skip's cost on this stream: the pit-band jump's east
+        // gate rides master's small-mag tail and the skip as scoped loses it at tick 1260).
+        self.capsule_push_scoped_impl(cell, a, b, r, top_guard, hold, ref_v)
     }
 
     fn capsule_push_scoped_impl(&self, cell: Option<usize>, a: V3, b: V3, r: f32, top_guard: bool, walk_flat_hold: bool, ref_v: V3) -> (V3, bool) {
@@ -2058,7 +2062,7 @@ impl CollisionWorld {
             if (0..3).any(|k| o.hi[k] < a[k].min(b[k]) - grow || o.lo[k] > a[k].max(b[k]) + grow) { continue; }
             for k in o.tris.clone() {
                 let before = total;
-                capsule_tri_contact(&dynamic.geo.tris[k], dynamic.geo.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, [0.0; 3]);
+                capsule_tri_contact(&dynamic.geo.tris[k], dynamic.geo.mats[k], &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, [0.0; 3]);
                 if total != before { pane = Some((id & !PANE_PART) as usize); }
             }
         }
@@ -3150,8 +3154,8 @@ impl CollisionWorld {
 
     /// The walk pass's flat-world fallback (level-14-landing-float): the hold skip on — see
     /// `capsule_push_scoped_hold`.
-    pub fn capsule_push_hold(&self, a: V3, b: V3, r: f32, top_guard: bool, ref_v: V3) -> (V3, bool) {
-        self.capsule_push_impl(a, b, r, top_guard, true, ref_v)
+    pub fn capsule_push_hold(&self, a: V3, b: V3, r: f32, top_guard: bool, hold: bool, ref_v: V3) -> (V3, bool) {
+        self.capsule_push_impl(a, b, r, top_guard, hold, ref_v)
     }
 
     fn capsule_push_impl(&self, a: V3, b: V3, r: f32, top_guard: bool, walk_flat_hold: bool, ref_v: V3) -> (V3, bool) {

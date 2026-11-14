@@ -329,6 +329,14 @@ fn walk_ghost() -> bool {
     *ON.get_or_init(|| std::env::var("NF_WALK_GHOST").is_ok())
 }
 
+/// real-health-00agent-14-landing: NF_HOLD_SKIP=1 arms the walk pass's failed-ref up-facing
+/// hold skip (the 1.72-landing pocket hover — the port's [S] fallback hold where the game's
+/// push tail is dead [M Intersect_CylGeom 0x109da0:431-447]). OFF by default: the merged-tree
+/// A/B measured the skip losing the stairwell pit-band jump's east gate (master's small-mag
+/// tail is load-bearing there on the current stream); the scope that separates the pocket's
+/// never-works hold from the arcs' real work is the next window's measurement.
+fn hold_skip() -> bool { std::env::var_os("NF_HOLD_SKIP").is_some() }
+
 /// walk-move-clip experiment switch: `NF_WALK_CLIP=1` replaces the walk capsule's two-sided
 /// depenetration push with the game's move-clip model — the tick's move is CLIPPED at the
 /// capsule's face contacts (the radial push tail stays dead: its reference HITTEST+0x50 is the
@@ -2055,7 +2063,16 @@ impl Bond {
         // The walk pass runs with the failed-ref up-facing hold skip on (level-14-landing-float:
         // the game's dead push tail must not hold the capsule at the r-equilibrium above a flat
         // up-facing face — the 1.72-landing hover; see capsule_tri_contact's walk_flat_hold).
-        let (mut push, mut walkable) = world.capsule_push_scoped_hold(self.cel, a, b, RADIUS, swimming, self.pick_ref);
+        // The hold skip is ARMed by NF_HOLD_SKIP (real-health-00agent-14-landing; the carry
+        // from level-14-landing-float: the game's dead push tail must not hold the capsule at
+        // the r-equilibrium above a flat up-facing face — the 1.72-landing hover; see
+        // capsule_tri_contact's walk_flat_hold). OFF by default = master behaviour: the
+        // merged-tree A/B measured the skip losing the stairwell pit-band jump's east gate on
+        // the current stream (master's small-mag tail is load-bearing in the jump arc; the
+        // skip as scoped dropped Bond into the pit at tick 1260) — the scope that separates
+        // the pocket's never-works hold from the arcs' real work is the next window's
+        // measurement; probe14_pocket_settle pins both legs.
+        let (mut push, mut walkable) = world.capsule_push_scoped_hold(self.cel, a, b, RADIUS, swimming, hold_skip(), self.pick_ref);
         // walk-move-clip EXPERIMENT (`NF_WALK_CLIP=1`): the game's move-clip walk model — the
         // tick's move clipped at the capsule's face contacts, the radial push tail dead (see
         // capsule_tri_clip). Replaces the push displacement AND the pick_ref feed (the game's
@@ -2103,7 +2120,7 @@ impl Bond {
                 let move_v = [self.pos[0] - pre_move_pos[0], self.pos[1] - pre_move_pos[1], self.pos[2] - pre_move_pos[2]];
                 world.capsule_clip(a, b, RADIUS, swimming, move_v)
             } else {
-                world.capsule_push_hold(a, b, RADIUS, swimming, self.pick_ref)
+                world.capsule_push_hold(a, b, RADIUS, swimming, hold_skip(), self.pick_ref)
             };
             push = if walk_ghost() && !walk_clip() { [0.0; 3] } else { fp };
             walkable = fw;
