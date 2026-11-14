@@ -20,3 +20,5 @@ Main 11-14: the t26998 death in every "stay near the Kiko hold" variant is #29 (
 Main 11-14: the Kiko hold picking skin 0x5000093 (#29) first dies inside the hold at t26493 at (-46.82,42.38) (worse). Not shipped.
 
 Main 11-14: crouching in the holds (one crouch press at each kiko_hold start) - the Kiko hold ends at 22.9 (was 27.9) and the walk dies at t27365 - worse. Not shipped.
+
+Main 11-14: five switch-band stands (radius 15/20, was 3) - death t27276 in the Kiko hold, worse than t29197. Not shipped.
