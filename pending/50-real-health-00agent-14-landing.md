@@ -34,3 +34,5 @@ Measured 11-13: a no-stop push (return fire off) through the escape-touch legs d
 Merged 11-13 (d0b707fbf): the Kiko corridor end is held 600 ticks (short stands + grenade side-step); six of the squad die on the legs; death t27517 at (-35.17,26.39), 2 u from the escape touch, to #31 (0x5000090, 0x14 at (-28.8,27.0)) with 7.9 health. Next: #31 before the last leg.
 
 Merged 11-13 (51fc82754): a second 300-tick hold at escape-touch node 4 (-44.2,27.6); the escape touch is reached; death t29197 at (-30.20,24.28) on the Rooks-wake legs to #30 (0x5000087, 0x14) with 2.9 health. Next: health into the Kiko corridor (27.9 there).
+
+Measured 11-13 (51fc82754): an extra hold-and-dodge at node 626 after the band stands (300/600) dies sooner at the door (t25726/t26118). Not shipped.
