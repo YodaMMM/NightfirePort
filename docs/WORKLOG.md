@@ -31,3 +31,20 @@ Work log:
   lane-triggered crouch taps (the corridor-fight shape) from the west stands.
 - (03:15) checkpoint: the entry reorder + the use_door_crouch opt-in + the d3 crouch-fight
   re-enable pushed; the lane-trigger fight is the next edit.
+- (03:16-03:50) the lane-fight lever landed (runs 5-18): the fight-direct entry (the press
+  from the meet-plate spot, no positioning legs — the entry's ~430 ticks of press+swing+wander
+  left only 73 ticks before #7's fixed volley [L the stamp-A ledger]), the lane stand picked by
+  the live probe at Bond's own floor (the floor_below cast read a duct lip at 5.34 [L run11]),
+  the lane taps on aim-OR-lane with the dy-0.9 head-biased aim. MEASURED: #6 (a NAMED
+  shotgunner, death channel one of 0x11/0x12/0x13) DIED AT 3164 to ONE tap (12.0->-16.0, the
+  28.0 part-5 head record [M 0x145558 head x8]) for ZERO Bond damage — one AND input fired
+  free. THE WALL: #7's first full volley lands ~91 ticks after the first tap noise (55.0 in
+  one frame) and the pistol's 16-tick refire gives ~5 attempts (one part-4 hit measured);
+  the SMG rate arm measured A LOSS (the 41-tick holster/draw ate the window [L run17]);
+  the dy-0.6 arm hit part 53 at 2.1/hit (the spread lands 0.42-0.64 BELOW the aim [L run15]);
+  the dy-1.5 arm flew over [L run14]. The walk now dies t3255 at (7.06,9.59) with #6 dead —
+  one named kill on the board, master alone dies t6054 at (7.40,10.55) with none.
+- (03:50-04:05) the battery on the final tree: walkreal_07000001_live whole 7 passed 0 failed
+  1 ignored (the d1/d2 walks byte-identical through the opt-ins), interactables_07000001_live
+  10/10; re-run green after the debug stamps came out. The ignore message rewritten to the
+  hall-5 merged-tree ledger. The report written, the branch pushed, finish.sh + ntfy next.
