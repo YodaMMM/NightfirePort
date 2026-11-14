@@ -38,3 +38,33 @@ lives on s/level-14-landing-hover.
   un-ignore waits on the grind's fight answer (the 07000013 repositioning law or the
   answer-only-after-first-damage gate), then the whole-binary quote + the walkreal battery.
   Report: docs/reports/level-14-landing-float.md.
+
+## real-health-00agent-14-landing (continued 2026-11-14)
+- (03:26-03:40) resumed the claimed branch: merged current origin/master 385ebb66d, then
+  carried s/level-14-landing-float (the pocket-hover collision fix + probe14 + the carried
+  lever branches) — conflicts resolved keeping master's body_mat accessor + the walk_flat_hold
+  param and both damage_log opt-in sets (merge 07a2c4ecc, pushed).
+- (03:40-04:00) measured on the MERGED tree: the float fix's mag<0.02 scope BREAKS the
+  stairwell pit-band jump on the current master ("the pit band is jumpable east back onto the
+  corridor" at tick 1260 — Bond lands at x 47.2 and master's wall at 47.7 needs the arc past
+  47.6; master's small-mag tail pushes extend the arc east and the skip removes them [L the
+  run2-7 A/B]). The skip DISABLED (pure master collision): the walk runs master's known shape
+  to t29197 (the Rook's-wake death), PAST the 1.72 landing — the current stream does NOT
+  wedge at the pocket (the task's t26340 wedge is the ignore's earlier ledger; the stream
+  re-rolled with master's merges).
+- (04:00-04:30) landed the fix ENV-GATED: NF_HOLD_SKIP=1 arms the walk pass's hold skip, OFF
+  by default = master behaviour everywhere (zero regression risk on any walk); the scope that
+  separates the pocket's never-works hold from the arcs' real work is the named next
+  measurement. probe14_pocket_settle reworked into the red/green proof: LEG A asserts the BUG
+  (the hover, grounded=false through the settle, the r-equilibrium y 0.6500), LEG B asserts
+  the FIX (NF_HOLD_SKIP=1 grounds the pocket, hist 0xf, rest (33.9712, 0.6335, 30.9501) —
+  the float branch's measured numbers reproduced). LEG B is red on the old code.
+- The 0a replay mismatch (walk_office_floor_qworm_keyboard_hatch_real_damage, the first-diff
+  tick 7793) reproduced on PURE master's code — pre-existing, not mine.
+- Batteries on the final tree: walkreal_07000014_live 9 passed 0 failed 1 ignored (170.7 s),
+  interactables_07000014_live 10/10 (13.9 s), probe14_pocket_settle 1/0; the walkreal sweep
+  (rule 7): 01 7/0/1, 02 5/0, 03 6/0/2, 06 9/0, 08 5/0/1, 0b 8/0, 0c 5/0, 0d 2/0/1, 11 4/0,
+  12 4/0, 13 3/0/1, 15 9/0, 16 18/0, 1b 18/0/1, 04 10/0, 05 17/0, 07 6/0, 09 9/0 — all green;
+  0a 12 passed 1 failed (the pre-existing replay mismatch above). The background suite died
+  twice (the sandbox kills background jobs between tool calls; suite.out stayed 0 bytes) —
+  the explicit binaries above are the coverage.
