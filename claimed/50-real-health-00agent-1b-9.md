@@ -27,3 +27,5 @@ Main 11-14 (master 06db4a156, NF_DMG_TRACE): 21 hits to the t9134 death - the as
 Main 11-14: the named round-8 lever, CONSOLE_ORDER_HARD [5,4,3,8,6,7,1,2] (k7 first after k6), measured on 7c721b2ea: k5/k4/k3/k8/k6 latch, the walk dies at t8344 at the x46 nest (46.00,3.74) - earlier than the current order (t9134). Not shipped.
 
 Main 11-14: a crouch press at the console phase start (hard) - Bond does not die, but the console 1 latch assert fails (line 1528, the real shot never latches it: crouched, the station shots miss the screen). Not shipped; a crouch would need to stand up for each console chain.
+
+Main 11-14: crouch-between-shots inside the console screen loop (stand on fire, crouch after 90 quiet ticks) - byte-identical t9134 (the damage lands in the defense fights, not the screen loop). The crouch-at-start run survived only because it never latched console 1 (the walk ran out of console work, not the wave).
