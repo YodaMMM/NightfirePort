@@ -100,3 +100,19 @@ trio already enabled — re-check the plate asserts before wiring.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-14 03:27-03:29 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "real-health-00agent-03-captors-3: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...'), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out (killed after 30 s, no output)
+
+The queue entry `done/50-real-health-00agent-03-captors-3.md` (with this report attached) was
+pushed to `origin/queue` successfully before the notification attempts, so the driver's queue
+watcher is the delivery path for this result.
+
