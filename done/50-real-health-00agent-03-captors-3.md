@@ -27,3 +27,7 @@ claimed-by: sandbox1 at 2026-11-13T11:19Z
 Measured dead (11-13): an aimed pre-clear from the mid-courtyard doorway line (lane side, after the doors open). It kills #9 cleanly (+0 damage) but the stand time on the lane side feeds the lane shooters #11 (machine gun, 56.8 in 5) and #10 (30.6 in 17): death t8720 (t8472 when the pick also took the upper-row #8 at y 9.1). The quick crossing stays the better trade; the 52.8 drain needs a crossing that does not linger on either side, or the lane shooters dead first.
 
 Live solo-line scan at the mid-courtyard doors (11-13, Bond (10.66, -21.21)): 8 enabled hostiles within 30 u (#6, #7, #8 upper row, #9, #10, #11, #12, #17); only #6 (12.0, -19.75) and #9 (8.0, -29.25) have one solo spot each - the courtyard/lane is mutually visible, no position answer. Levers left: timing or fewer awake guards (the wake order).
+
+---
+## Report (done, 2026-11-14T03:26Z)
+
