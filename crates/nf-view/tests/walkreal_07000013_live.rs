@@ -481,6 +481,36 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // green); the d2 sister runs the sight batch's byte-identical 2400-cap sweep.
         clear_the_visible(&mut w, "13: the spawn pocket", 24.0, difficulty == 3, false);
     }
+    if real_damage && difficulty == 3 {
+        // warm-chain-margin-7 (d3-only): the room fight is decided by AMMO (the update-4
+        // ledger) and the fights' own dry answer — `switch_dry`, ON for this walk — only has
+        // something to swap to when an ARMED gun sits reachable. The pocket drops rest at
+        // (4.85,-369.43,22.23) and (4.81,-369.13,23.02) [L the run-7 pickup dump: the fight
+        // drops of the sweep's posted-guard kills, on the lobby east lane's own line], one
+        // carrying "clip 4 spare 28 - the RIGHT rounds" [L the margin-6 run 5 fetch]. A
+        // deliberate resupply here is measured WRONG twice over: the band's nearest pickup is
+        // the placed TRIPBOMB trio at (-0.4,14.0) whose take EQUIPS the gadget in-hand (clip
+        // 17, the P99's 30 parked) — the lobby then fought the gadget dry and the churn died at
+        // the glass band, t5390 [L runs 6-7]. The WALK-OVER leg targets the drops directly:
+        // the arrive walks Bond onto (4.8,23.0) r 0.6, both drops' take spheres reach from
+        // there (dxz 0.8, dy 1.09, the 3D distance 1.24 < radius+1.1 [M 0x18e148:203-214]),
+        // and the takes land their rounds in the inventory/equip with NO fetch nav anywhere —
+        // the clip pool survives the lobby intact for the room fight's mid-stand swap.
+        w.walk_to(Wp::new(4.8, -368.4, 23.0).r(0.6), "13: the pocket drops walk-over");
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let mut inv = sim.gun.clip as i32 + sim.gun.spare as i32;
+            for wid in 2..=0x47usize {
+                if !sim.drones.inventory.owned.get(wid).copied().unwrap_or(false) { continue; }
+                let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, wid);
+                inv += sim.drones.inventory.clip.get(slot).copied().unwrap_or(0) as i32;
+                inv += sim.drones.inventory.carried.get(sim.weapons.ammo_type(wid)).copied().unwrap_or(0) as i32;
+            }
+            eprintln!("[013] the pocket drops: taken {}; in-hand weapon {} clip {} spare {}; inventory total {}",
+                sim.drones.pickups.iter().filter(|p| p.gone && walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], [4.8, p.m[3][1], 23.0]) < 2.0).count(),
+                sim.gun.weapon, sim.gun.clip, sim.gun.spare, inv);
+        }
+    }
 
     // THE SECURITY GATE: the "Shutters2" SimpleScript #149 (out ch 0x23 [D param 3]) is the
     // entrance mouth's panel (the SS cel's glist spans x −8.54..−4.97 at z 65.02 [D the object
@@ -581,20 +611,22 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // two legs later) — seven -7.0 rounds in 73 ticks, death t4115 at (-8.01, -368.30, 30.29)
     // [L this branch's run]. The fetch moved to the door side, after the drain (see there).
     w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
-    w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
+    // warm-chain-margin-7 (d3-only, moved one leg EARLIER from the door): the pocket-drops
+    // walk-over legs shift the tick stream and #4's volley schedule re-rolls with it — run 8
+    // died at (-22.75,38.95), 0.6 u short of the drain spot, to #4's three -7.0 mid-leg
+    // (frames 4299-4317) + #7's pellet [L /tmp/d3_run8.log]. The drain's own law says the
+    // boxes open from here exactly as from the door (the same sight lines, 5 units west [L
+    // the iter-1 fights' kills from this area]); radius 45 reaches the balcony rifle #4
+    // (16.2, -362.4, 41.7) — the aimed stand kills him BEFORE the exposed door leg instead
+    // of after it.
     if real_damage && difficulty == 3 {
-        // warm-chain-margin-2 iter-6 (ported to master): the door E + the crossing loop are
-        // ~400 ticks of static at the mouth — the iter-4/5 grind (7 return-fire fights, the
-        // resupply nav, death at 6.5 hp) ran because the respawn stream had closed during the
-        // glass-band drain's stands. The boxes open from here exactly as from the glass band
-        // (the same sight lines, 5 units west [L the iter-1 fights' kills from this area]); the
-        // drain takes each closer as his box opens and the health-watch breaks any stall the
-        // stream shoots at, so the E/crossing runs against a dead or far wave.
-        // Radius 45 (was 24): the balcony rifle #4 (skin 0x5000006, 0x18, at (16.2, -362.4, 41.7),
-        // 6 u up and 40.8 u east) sniped Bond through the whole door wait outside the 24 u drain
-        // (40.5 in 11, the t4147 death); at 45 the drain kills him (the 11-13 run, -> t4958).
-        drain_the_wave(&mut w, "13: at the security-room door", 45.0, 8, 3, 150);
+        drain_the_wave(&mut w, "13: past the glass band", 45.0, 8, 3, 150);
     }
+
+    w.walk_to(Wp::new(-24.5, -368.4, 38.8).r(1.2), "13: at the security-room door");
+    // warm-chain-margin-2 iter-6's radius-45 door drain moved one leg earlier (past the glass
+    // band, above — the margin-7 run-8 ledger); the door E + the crossing loop still run
+    // against a dead or far wave the same way.
     w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
     w.wait(120); // the sliding door finishes [probe: state 0x8 → 0x4 within the wait]
     // guard-repin-master doorway pre-clear (d3): with the lobby budget spent on the west legs
@@ -663,6 +695,40 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         assert_eq!(sim.bond.cel, Some(28), "the portal-1 cross relinks Bond into the security room's cel [M 0x1e0d58]");
     }
     if real_damage && difficulty == 3 {
+        // warm-chain-margin-7 (the 11-14 update-4 ledger's next levers, RE-SHAPED by this tree's
+        // repro — d3-only, the sisters keep their byte-identical legs): the room fight is decided
+        // by AMMO and the wake lands INSIDE the inside drain (the sleep dump runs pre-drain,
+        // above). What remains after the dump is the ledger's second lever: the room's own box
+        // (#8's drop at (-27.2,-369.4,30.1) [L the margin-6 resupply d 6.1 / this tree's d 6.0])
+        // taken as a WALK-OVER leg — the take tops the ammo pool before the middle exposure
+        // [M Pickup_Handler 0x18e650's equip path], with no fetch nav anywhere: the room's
+        // pickups are pushed into `no_fetch` (the repro's lethal shape was the fights' restock
+        // resupply NAV — the stand stalls Bond in the line, dries the clip, and the fetch's
+        // displacement walks him back up into #9's bursts, death t4958 [L /tmp/d3_repro.log]),
+        // so the walk's own fight law handles any survivor dry: `!armed` → resupply → no target
+        // → walk on — Bond WALKS to the box, the walk-over take lands its rounds in the
+        // inventory, and the next gate fights with `switch_to_gun` + `switch_dry` cycling to
+        // the taken rounds instead of fetching.
+        w.no_fetch.push([-27.2, -369.4, 30.1]);
+        w.no_fetch.push([-27.66, -368.51, 25.57]);
+        // The room's own box as a WALK-OVER leg (the ledger's second lever): the take tops the
+        // ammo pool before the middle exposure, with no fetch nav anywhere (no_fetch above).
+        w.walk_to(Wp::new(-27.2, -369.4, 30.1).r(0.8), "13: the room's ammo box");
+        {
+            // The take's diagnostic (the box's value is unmeasured — this run settles it). Not a
+            // pass/fail assert: the walk's own survival is the test.
+            let sim = w.scene.sim.as_ref().unwrap();
+            let mut inv = sim.gun.clip as i32 + sim.gun.spare as i32;
+            for wid in 2..=0x47usize {
+                if !sim.drones.inventory.owned.get(wid).copied().unwrap_or(false) { continue; }
+                let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, wid);
+                inv += sim.drones.inventory.clip.get(slot).copied().unwrap_or(0) as i32;
+                inv += sim.drones.inventory.carried.get(sim.weapons.ammo_type(wid)).copied().unwrap_or(0) as i32;
+            }
+            eprintln!("[013] the room's ammo box: taken {}; in-hand clip {} spare {}; inventory total {}",
+                sim.drones.pickups.iter().filter(|p| p.gone && walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], [-27.2, p.m[3][1], 30.1]) < 2.0).count(),
+                sim.gun.clip, sim.gun.spare, inv);
+        }
         // warm-chain-margin-2 iter-5 (ported to master, d3-only — the d2/d1 sisters keep the
         // sight batch's byte-identical legs below): the room legs follow the pickups test's
         // PROVEN take route (interactables_07000013_live::the_pickups_take_on_the_walk, green
@@ -965,7 +1031,7 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// pre-clear at 14-16 u, no bridge_and_retry, no in-place creep or longer stands — each
 /// measured dead in the margin-4 report). Never lowered damage or health; no top-ups.
 #[test]
-#[ignore = "00 Agent (11-14 update 4): the doorway pre-clear at 18 is a measured NO-OP (no box opens through the open door - not even #8's at d 7.9, byte-identical t4958) and the room fight is decided by AMMO: #9 (25-hp class) wakes on the first room movement (silent through the drain's ~1050 static ticks, then fired 19 ticks after the descent leg moved), the fights landed 17 of his 25 hp with the in-hand clip 8 and DRIED - the leg fetch's displacement back up into the line killed the walk at t4958 (-27.26, -368.30, 36.03). The fetch levers are measured dead, do not repeat: the door-side lane band came back zero-attempts (every drop > 12 u or ground-filtered, run 3); the far band's nearest pickup was the room's BodyArmour at 12.8 - a fetch INTO the room's west lane, death t4693 mid-nav (run 4); the pocket drops (clip 4 spare 28 - the RIGHT rounds) sit in the respawner stream's kill zone - fetched pre-drain, the still-alive balcony rifle #4 landed seven -7.0 in 73 ticks (death t4115, run 5), fetched post-drain, the stream melted 16 hits for 40.5 across ten fights (death t6469, run 6). The dropped guns carry nearly-empty clips (clip 1-4, spare 0-28) - the spare pool is the value. Next: bring the rounds from 12 (enter 13 with spare > 0; the 12-side boxes give clip only, clip 30 spare 0 at the shaft) or take the room's own box as a WALK-OVER leg down the d2-proven west lane BEFORE the middle legs (the box at (-27.2, -369.4, 30.1) is 4.9 u from the inside spot; the take tops the clip before the middle exposure - unmeasured, the d2 sister walks that lane green). Update 3: the security-room door drain reaches 45 u and kills the balcony rifle #4 that sniped the door wait (t4147); the chain now dies at t4958 (13 local) at (-27.26, -368.30, 36.03) inside the security room - #9 (skin 0x5000006, 0x10) 27.5 in 2 at d 13.0, Bond entering 13 with 40.5. Next: health into 13. Update 2: 12 is CLEARED - the lobby-east rifle post #6 is shot first from the one static clear line outside his band, (-8.25, 19.00) d 8.7 (#7 + #6 killed, 89.5 -> 40.5); the chain dies in 0700004a at t4147 (local) at (-24.03, -368.39, 38.47) to #4 (skin 0x5000006, 0x18) 40.5 in 11 at d 40.8 - Bond enters 4a with 40.5. Next: health into 4a (the lobby pair cost 49) or the 4a #4 line. Update 1: the door plc 543 pin is passed (the south corridor west leg is lenient at d3 real health - the stuck handler's door swing pinned Bond at (9.26, -12.67) 1.9 u short, health 96.5); the walk now dies at t12351 at (-4.52, 1.13, 16.05) in the north lobby: #6 (skin 0x5000006, weapon 0x18) 68.5 in 10 at d 4.9 + #7 (pistol) 28.0, 13 fights. Next: the north-lobby pair. Earlier: 00 Agent re-tune: with 12's start pair keeping apart (no-bunching side bits live on 12) the 12 leg's corridor fights carry Bond into door 543's recess, the stuck ladder opens 543 from east of the hinge and the leaf pins him at (9.26, -12.67); tried: corridor marker x 12 (then the diagonal wedges at (10.62, -15.73)), + the west stand (pinned at (9.28, -12.82)), a lenient marker (13's lobby flanks die after the 6000-tick wait). The operative, agent and plain sisters walk green."]
+#[ignore = "00 Agent (11-14 update 5, margin-7): the room fight is decided by AMMO and the answer LANDED but the shifted timeline melts the lobby's last legs. THE AMMO LEVER WORKS: the pocket drops rest at (4.85,-369.43,22.23) and (4.81,-369.13,23.02) [L the run-7 pickup dump - the sweep's posted-guard kills drop at their posts, on the lobby east lane's own line]; a WALK-OVER leg to (4.8,-368.4,23.0) r0.6 takes BOTH (run 8: taken 2, in-hand clip 13 spare 9, inventory total 64) - the fights' switch_dry finally has rounds to swap to. But the leg costs +163 ticks and the shift re-rolls the stream/#4 volley schedules: run 8 died t4378 at (-22.75,38.95) 0.6 u short of the door drain spot to #4's three -7.0 mid-leg (frames 4299-4317) + #7's pellet; run 10 (the drain moved to the glass band) died t4314 AT the drain spot mid-aim-raise to the stream shotgun #7 (skin 0x5000008, 0x1c, at (-0.2,32.2)) whose four -3.00 pellets landed in ONE tick [L /tmp/d3_run8.log, /tmp/d3_run10.log]. The fights answer #5/#6 with killed false in BOTH the old and the shifted timelines (t3292/t3801) - the plain fights cannot open their boxes, so the stream guards survive to melt the glass band. MEASURED DEAD THIS SESSION, do not repeat: (a) the SLEEP DUMP - #9 does NOT sleep through gunfire at room range: the inside drain's #8 stand (d 6.7) woke him, the -20.0 landed t4869 INSIDE the drain's quiet waits, and a pre-drain dump woke BOTH guards (#8's burst t4791, #9's t4887 killed mid-dump) while its rounds landed ZERO - the mid-room furniture blocks the inside-spot line to #9 (the drain's radius-12 sweep never took him at d 11.96 either, consistent); the game's basis is [x, y=UP, z] (the panel aim's pitch formula) - the run-3 floor-level aim hit the ramp at his feet, hp 25->24. (b) the SPAWN RESUPPLY - the band's nearest pickup is the placed TRIPBOMB trio at (-0.4,14.0) whose take EQUIPS the gadget in-hand (clip 17, the P99's 30 parked); the lobby fought the gadget dry and the churn died t5390 at the glass band [L runs 6-7]. (c) the west-lane-first room order - byte-identical t4958 (run 2). THE NEXT LEVERS: (1) the stream guards must die before the glass band - the fights' killed false on #5/#6 means the aimed drains (the sweep/aimed_stand machinery) at the re-anchor and north-west leg ends are the answer, if their boxes open there; (2) the pocket-drop take's +163-tick shift is the only variable in the door-phase coin flip - try absorbing it (a shorter drop leg, or the drops' take on the lane leg's own path bend); (3) the door drain at 45 belongs at whichever leg end the shifted schedule leaves quiet - measure, do not assume. Update 4: the doorway pre-clear at 18 is a measured NO-OP (no box opens through the open door - not even #8's at d 7.9, byte-identical t4958) and the room fight is decided by AMMO: #9 (25-hp class) wakes on the first room movement (silent through the drain's ~1050 static ticks, then fired 19 ticks after the descent leg moved), the fights landed 17 of his 25 hp with the in-hand clip 8 and DRIED - the leg fetch's displacement back up into the line killed the walk at t4958 (-27.26, -368.30, 36.03). The fetch levers are measured dead, do not repeat: the door-side lane band came back zero-attempts (every drop > 12 u or ground-filtered, run 3); the far band's nearest pickup was the room's BodyArmour at 12.8 - a fetch INTO the room's west lane, death t4693 mid-nav (run 4); the pocket drops (clip 4 spare 28 - the RIGHT rounds) sit in the respawner stream's kill zone - fetched pre-drain, the still-alive balcony rifle #4 landed seven -7.0 in 73 ticks (death t4115, run 5), fetched post-drain, the stream melted 16 hits for 40.5 across ten fights (death t6469, run 6). The dropped guns carry nearly-empty clips (clip 1-4, spare 0-28) - the spare pool is the value. Update 3: the security-room door drain reaches 45 u and kills the balcony rifle #4 that sniped the door wait (t4147); the chain then died at t4958 (13 local) at (-27.26, -368.30, 36.03) inside the security room - #9 (skin 0x5000006, 0x10) 27.5 in 2 at d 13.0, Bond entering 13 with 40.5. Update 2: 12 is CLEARED - the lobby-east rifle post #6 is shot first from the one static clear line outside his band, (-8.25, 19.00) d 8.7 (#7 + #6 killed, 89.5 -> 40.5); the chain dies in 0700004a at t4147 (local) at (-24.03, -368.39, 38.47) to #4 (skin 0x5000006, 0x18) 40.5 in 11 at d 40.8 - Bond enters 4a with 40.5. Update 1: the door plc 543 pin is passed (the south corridor west leg is lenient at d3 real health - the stuck handler's door swing pinned Bond at (9.26, -12.67) 1.9 u short, health 96.5); the walk then died at t12351 at (-4.52, 1.13, 16.05) in the north lobby: #6 (skin 0x5000006, weapon 0x18) 68.5 in 10 at d 4.9 + #7 (pistol) 28.0, 13 fights. The operative, agent and plain sisters walk green."]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
     let iso = iso();
     walker::with_real_damage_head_hunting(|| walk_the_warm_chain(&iso, true, 3));
