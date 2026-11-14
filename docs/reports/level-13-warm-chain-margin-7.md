@@ -65,11 +65,18 @@ writes anywhere; the only inputs are the view drives, the trigger taps and the l
 
 ## What's left (the next session's first levers, also in the ignore message)
 
-1. The stream guards (#5/#6/#7) must die before the glass band — the fights' `killed false`
-   on #5/#6 means the aimed drains at the re-anchor and north-west leg ends are the answer,
-   if their boxes open there.
-2. The pocket-drop take's +163-tick shift is the only variable in the door-phase coin flip —
-   try absorbing it (a shorter drop leg, or taking the drops on the lane leg's own path).
+1. **A rule-7 opt-in pool abort in `damage_log.rs::stand_and_fire`** — runs 11-12 proved the
+   door-phase killer is the aim-raise STATUE inside the stands (the drain's aimed_stand and
+   the fights' stand both hold 330+ ticks with no fights running inside), and a pool-watch
+   abort in the file-local `aimed_stand` (run 12: abort at 6.0 health+armour damage) just
+   hands the stall to the fights' stand (same death t4310). The shared `stand_and_fire` needs
+   the same abort, flagged so only this walk sets it, and every `walkreal_*_live` binary run
+   after (rule 7). With the tight gate on for the static shooters (#4/#7/#8/#9) and the
+   pocket-drop pool (64) landed, the room fight is won by the in-hand rounds alone
+   (22 >= the ~12 the kill needs) — the door phase is the last wall.
+2. The fights' `killed false` on #5/#6 (the boxes closed from the leg ends) — the stream
+   guards survive to melt the glass band; their exposure map (which spots open them) needs
+   the live probe.
 3. The door drain at 45 belongs at whichever leg end the shifted schedule leaves quiet.
 
 ## Live checks for the main agent

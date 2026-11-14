@@ -26,3 +26,8 @@
 - (06:20) Rule-10 coverage run: walkreal_07000013_live whole binary — the d2 agent sister 1/0,
   the d1 operative sister 1/0, the plain sister 1/0 (all d3-gated blocks skip, legs
   byte-identical); interactables_07000013_live 10/0. Report updated with the results.
+- (06:45) Runs 11-12: the fights' aimed_fights tight gate at the door phase (run 11) changed
+  nothing (the killer is the aim-raise statue inside the stands); the file-local pool-watch
+  abort in aimed_stand (run 12, abort at 6.0 health+armour) handed the stall to the fights'
+  stand — same death t4310. The next session's first item: the rule-7 opt-in pool abort in
+  damage_log.rs::stand_and_fire. Ledger updated.
