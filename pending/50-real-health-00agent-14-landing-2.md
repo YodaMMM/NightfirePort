@@ -16,3 +16,5 @@ Measured 11-14: quiet pass to node 2 then a hold there (300/600) dies inside the
 Main 11-14 (master 06db4a156): at the Kiko hold Bond holds the 0x14 9+42, owns 0x34/0x37 grenades (1 each in clip, carried slots 22/25 = 4/4); a CROUCHED duel on #20 from the hold spot (300/900) still dies inside it at t26998 at (-51.42,0.65,37.88). Untried: a frag lob onto #20 at (-51.3,32.4) from the hold (5.5 u - check the frag radius first).
 
 Main 11-14: the t26998 death in every "stay near the Kiko hold" variant is #29 (0x5000093, weapon 0x14, hp 14) at (-49.9,32.7): -5.0 x2 then a -17.91 BLAST at frame 26998 - an explosive 0x14 round, not #20. The shipped stream avoids it by leaving for the second hold. A frag lob on #20 from (-50.3,40.0) never got thrown (the 26998 blast first); dodging landed/bounced drone rounds within 8 u in the holds: t27175 (worse). Next: #29 (hp 14) is the Kiko-side threat to answer, not #20.
+
+Main 11-14: the Kiko hold picking skin 0x5000093 (#29) first dies inside the hold at t26493 at (-46.82,42.38) (worse). Not shipped.
