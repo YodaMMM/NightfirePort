@@ -33,3 +33,5 @@ Main 11-14: head-first aim on #5 after the AND (head_aim part-5 with the gun sta
 Main 11-14: the captain shoot_bounded right after the AND with flank_hold_z cleared (900/1800) walks into the hall and dies inside it at t13448. Not shipped.
 
 Main 11-14: one crouch press after the AND - byte-identical death t13141 (the next legs walk the crouch off). Not shipped.
+
+Main 11-14: press-spot sweep - (6.5,12.0) t12712 no AND; (7.2,12.2) g11 killed at 11.8, no AND, t12827; (5.8,12.4) t13292 no AND. The merged (6.5,12.4) stays the only spot that fires the AND.
