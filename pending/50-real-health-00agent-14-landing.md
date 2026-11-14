@@ -48,3 +48,5 @@ Measured 11-13: crossing to the second hold with return fire held dies sooner, t
 Measured 11-13: a bullet-line scan at the Kiko hold end finds #20 (at (-51.33,32.42)) in clear line from the whole x -53..-46, z 30..37 band, including the hold spot (-51.33,37.87) at 5.5 u; a direct shoot_bounded on him from there (300/900) loses the duel - death t26998 at the hold spot with 27.9 going in. Open for a worker: the levers tried tonight are all in this file.
 
 Measured 11-13: a hold-and-dodge in the switch band before the door west face (300/900) bleeds to 7.9/2.9 and dies at the door (t25847/t26050). Not shipped.
+
+Measured 11-13 (c9b24271d): the node-42 door stand (60.4 kept) re-rolls the later stream: a clear_hostiles return leg ("back along the clears trail nav 1/2") wedges two 6000-tick caps at (-58.27,35.49) and Bond reaches the Kiko hold DRY (0x11 clip 0 spare 0, no armed gun to switch to) - death t41862. If the door stand is used, the clear return leg needs fixing first (nav to a reachable node, or lenient).
