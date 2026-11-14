@@ -846,7 +846,11 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
             // waits safely for the pause and the tap lands.
             aimed_stand_the_mouth(w);
         }
-        clear_the_spot(w, 20.0, false);
+        // 00 Agent: exposed-only - at pick time the ch-55 pair's #19 (19.7 u) is the only
+        // candidate and has no exposed part; the 6000-tick stand on him burned the clip to 4 and
+        // #20 charged in (55.0 in 10, the t7007 death). Skipped, the mouth stands below drop both
+        // (#19 +90, #20 +18) and the walk reaches the courtyard (tick 6255).
+        clear_the_spot(w, 20.0, difficulty >= 3);
         aimed_stand_the_mouth(w);
     }
     // South across the courtyard to the tunnel door's approach (3.75, 42.00, −51.13) [D leg
@@ -982,6 +986,22 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool)
     // own guards.
     let ledge_stands = stands;
     w.walk_nav_to([10.5, 42.4, -34.3], "the courtyard's east strip", 1.6);
+    if difficulty >= 3 && !w.tops_up() {
+        // 00 Agent real health: the east posts #24 (32.0, -38.7) and #25 (32.4, -33.0) (0x16)
+        // landed 49.5 + 31.2 across the strip/corner legs (the t6743 death). A live bullet-line
+        // scan from the courtyard bottom found each post's solo spot - #24 is seen with #25
+        // hidden from (10.8, -34.2), on this leg's end; #25 alone from (25.2, -45.4), on the
+        // 43-step approach. #24 is taken from his spot (dead at +19, the walk on to t7076);
+        // [S] #25's spot is never reached (the corner leg kills first), and taking him from the
+        // #24 spot lets the roof guard #11 land 44.0 (t6866) - left for the next round.
+        let post = |w: &Walker, at: [f32; 2]| { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
+            && d.health > 0.0 && d.team == 1 && dxz(d.pos, [at[0], 42.0, at[1]]) < 3.0) };
+        if let Some(di) = post(&w, [32.0, -38.7]) {
+            let _ = w.try_walk_to(Wp::new(10.8, 42.0, -34.2).r(0.4), "the #24 solo spot");
+            let k = aimed_stand(w, di, "the east post #24 from his solo spot", 1500);
+            eprintln!("[06] east post #24 killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+        }
+    }
     if difficulty >= 3 {
         // 00-Agent tactics (real-health-00agent-06, measured): the ch-55 alarm's reinforcement
         // pair (#19/#20) converges on the strip AFTER the alarm's mouth fight — at 00 they met
@@ -993,6 +1013,16 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool)
     }
     if ledge_stands { aimed_stand_the_mouth(w); }
     w.walk_nav_to([14.0, 41.9, -36.7], "the courtyard's south-east corner", 1.6);
+    if difficulty >= 3 && !w.tops_up() {
+        // 00 Agent real health: east post #25 (27.0, -34.1; 0x16) poured 30.2 in 11 across the
+        // corner leg while the deck guard #23 (0x24) lobbed in (the t7076 death). From the
+        // corner he stands 10 u out with a clean line - an aimed stand kills him (measured: the
+        // walk then completes with 25.8 health; a no-stop push through to the step's foot
+        // completed with 6.5).
+        let p25 = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
+            && d.health > 0.0 && d.team == 1 && dxz(d.pos, [27.0, 42.0, -34.1]) < 4.0) };
+        if let Some(di) = p25 { let _ = aimed_stand(w, di, "the east post #25 from the corner", 1500); }
+    }
     if difficulty >= 3 {
         clear_the_spot(w, 8.0, false);
     }
@@ -1319,7 +1349,6 @@ fn walk_the_castle_interior_to_the_party_real_damage_agent() {
 /// [M 0x1ae1f8:67-69]. Real input only — the
 /// load path is the only difference; no health, ammo or channel writes, no teleports.
 #[test]
-#[ignore = "00 Agent: the mouth->strip lane on master c2c4a6e — the ch-55 pair (#19/#20) charges the landing engagement from inside its 12 u sight (runs 6/7: the duel at d 10.1, 64.2 in 12 hits) and the tunnel-roof guard #11 (y 55.5) holds the whole mouth-strip band in a full-damage lane (runs 8-10: 38-42 per phase at d 23-41) while the still-gate stand cannot land on a mover or his parapet flicker; the session's test-side levers (the door-#47 re-open + the d1-aligned guardroom nav, the guardroom ammo-box loot, the d3 balcony drop, the nearest-first stand triage — #20 died to it) got the walk from the guardroom wedge to the strip at 64.2 hp; follow-up real-health-00agent-06-4"]
 fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(3));
 }

@@ -1010,6 +1010,24 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     w.walk_to(Wp::new(-60.5, 0.05, 47.4).r(1.0), "the west corridor north lane (node 620)");
     w.walk_to(Wp::new(-60.5, 0.05, 43.79).r(1.0), "the corridor south (node 618)");
     w.walk_to(Wp::new(-60.5, 0.05, 40.77).r(1.0), "the corridor south to the switch band (node 626)");
+    // 00 Agent real health: the band's guards come to the door as Bond walks in (#32 skin
+    // 0x5000093 took 32.9 in 4 from 7.6 u east, then the band death t23511 [L 11-13 run]).
+    // A player answers them from the corridor first: up to three bounded stands on the nearest
+    // team-1 guard inside 15 u from node 626 (measured: death t23511 -> t26213, past the band
+    // and the door, at the escape touch legs).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        for _ in 0..3 {
+            let pick = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 15.0 })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)))
+            };
+            let Some(di) = pick else { break };
+            let _ = w.shoot_bounded(di, "the switch band's guard from node 626", 600);
+        }
+    }
     w.walk_to(Wp::new(-60.3, 0.6, 38.4).r(0.6), "into the switch band (the E-use spot)");
 }
 
@@ -1106,7 +1124,7 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// wrap + this un-ignore are one-liners; (2) a d2/d3-gated fight-quiet approach so the
 /// displacement never reaches the pocket; (3) the stairwell AIM-pair stands.
 #[test]
-#[ignore = "00 Agent (11-13 update 3): the fusebox burns now cut ONLY the group-0 cable (the t21466 death was the walk's own wrong cut: the centre aim drifted onto the adjacent group-1 cable, whose channel 0x71 smashes generator #388 - a 500/r10 blast 2.4 u from the stance); both fuseboxes cut clean, the E-use switch band reached; dies at t23511 at (-59.69, 0.73, 38.98) on the corridor east to the door - #32 (skin 0x5000093) 32.9 in 4 at d 7.6, 9 fights. Next: the switch-band corridor fight. Update 2: the hostile clear picks NEAREST first at d3 real health (the list-order pick spent 900 ticks on #3 at 18.2 u while #9 shot Bond from 1.2 u) - the corridor, leg 2 and the generator room now pass; the walk dies at t21466 at the fusebox #383 stance (-88.35, -1.10, 31.38): the fusebox burn's blast lands 37.91 in one hit on the remaining health (34 hits, 7 fights before it). Next: the #383 burn from a stance outside the blast, or health into it. Update 1: the landing west drop is PASSED - a d3-only guard (#6, 28 hp, 0x14) slept in the drop band at (32.2, 1.8, 33.2) and turned the drop aim into the overhang (wedge at (33.70, 1.19, 35.21)); the pistol comes out (Bond held the vent-lid item) and #6 dies from the landing with no hits, the drop then aims z 33.4 past his body. The walk now dies at t7051 in the corridor lane north (node 57, the door (27.8, 1.2, 30.0)) to the corridor crowd (47 hits, 0 return-fire fights: #9 65.0 in 13 at d 1.2, #8 17.5, #7 12.5 at d 9.9, #10 5.0; all 0x14). Next: the corridor crowd (why no return fire at d 1.2). Earlier ledger: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
+#[ignore = "00 Agent (11-13 update): the switch band is passed - from node 626 Bond answers the band guards before stepping in (37.9 health left), the door opens and then the Kiko corridor squad is answered (exposed-only, nearest first) and the walk dies on the escape-touch legs at t27134 at (-44.33, 1.07, 27.33): the squad (#20/#22/#23/#29/#31) still converges on nodes 1-4, health 27.9 -> 7.9 at node 2 (#20 15.0 in 3). Next: more of the squad before node 1 (a second stand spot at node 0). Earlier: 00 Agent (11-13 update 3): the fusebox burns now cut ONLY the group-0 cable (the t21466 death was the walk's own wrong cut: the centre aim drifted onto the adjacent group-1 cable, whose channel 0x71 smashes generator #388 - a 500/r10 blast 2.4 u from the stance); both fuseboxes cut clean, the E-use switch band reached; dies at t23511 at (-59.69, 0.73, 38.98) on the corridor east to the door - #32 (skin 0x5000093) 32.9 in 4 at d 7.6, 9 fights. Next: the switch-band corridor fight. Update 2: the hostile clear picks NEAREST first at d3 real health (the list-order pick spent 900 ticks on #3 at 18.2 u while #9 shot Bond from 1.2 u) - the corridor, leg 2 and the generator room now pass; the walk dies at t21466 at the fusebox #383 stance (-88.35, -1.10, 31.38): the fusebox burn's blast lands 37.91 in one hit on the remaining health (34 hits, 7 fights before it). Next: the #383 burn from a stance outside the blast, or health into it. Update 1: the landing west drop is PASSED - a d3-only guard (#6, 28 hp, 0x14) slept in the drop band at (32.2, 1.8, 33.2) and turned the drop aim into the overhang (wedge at (33.70, 1.19, 35.21)); the pistol comes out (Bond held the vent-lid item) and #6 dies from the landing with no hits, the drop then aims z 33.4 past his body. The walk now dies at t7051 in the corridor lane north (node 57, the door (27.8, 1.2, 30.0)) to the corridor crowd (47 hits, 0 return-fire fights: #9 65.0 in 13 at d 1.2, #8 17.5, #7 12.5 at d 9.9, #10 5.0; all 0x14). Next: the corridor crowd (why no return fire at d 1.2). Earlier ledger: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
@@ -1202,6 +1220,24 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     w.walk_to(Wp::new(-56.6, 0.4, 39.56).r(1.0), "the corridor east to the door");
     w.walk_to(Wp::new(-51.4, 0.4, 39.56).r(1.0), "through the opened doorway");
     w.walk_to(Wp::new(-49.2, 0.9, 38.4).r(1.0), "the Kiko corridor east");
+    // 00 Agent real health: the Kiko corridor squad (#20/#21/#29/#31, hp 10 each) converges on
+    // the escape-touch legs; answered from here, nearest first, while one stands EXPOSED (an
+    // unexposed 600-tick stand burned the window: t26813), 300 ticks each. Measured: death
+    // t26213 -> t27134 (escape-touch node 4).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        for _ in 0..4 {
+            let pick = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 15.0 && (d.pos[1] - bp[1]).abs() < 2.0 })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)))
+            };
+            let Some(di) = pick else { break };
+            if !walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), di) { break; }
+            let _ = w.shoot_bounded(di, "the Kiko corridor's guards", 300);
+        }
+    }
     w.follow_nav_route([-33.1, 0.9, 26.8], "east to the escape touch #456");
     let mut ch4a = false;
     for _ in 0..2000 {
