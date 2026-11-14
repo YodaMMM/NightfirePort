@@ -332,3 +332,16 @@ Ledger + next levers in the ignore message. walkreal_07000008_live whole binary 
 this window (Rust + ISO re-fetched); the background suite dies between tool calls
 (nohup/setsid both) — per-binary foreground runs instead; disk ceiling again (target/
 release/build/nf-view held 4.6G of stale hardlinked test binaries).
+
+real-health-00agent-08-bleed-4 (started 2026-11-14T08:50Z): branch
+s/real-health-00agent-08-bleed-4 from origin/master 385ebb66d, merged
+s/real-health-00agent-08-bleed-3 (8158b1df9) in. Goal: the 07000008 whole-mission
+real-damage 00 Agent walk past the fusebox pit guard and through the Hind fight.
+The bleed-3 ledger: the walk dies t6554 at (154.51, 43.10, −120.72), 26 hits for
+100.0 — the pit guard #16 (skin 0x5000030, (148.1, 38.7, −110.5)) sniped the
+laser-burn stands from 12.7-12.8 u, 4.4 u below, outside the doorway fight's 6 u
+and the close fights' 12 u/±4 rings, NOT visible from the burn spot. This
+window's lever: a fight pick that targets whoever LANDED THE LAST HIT inside the
+wide 25-u/±6-y ring (the walker's hurt bookkeeping names him) instead of the
+nearest-first pick that stalls on buried guards, then the same wide stand before
+the bolts/safe burns. Sandbox reset: full setup re-done this window.
