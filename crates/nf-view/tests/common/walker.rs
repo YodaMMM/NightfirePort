@@ -164,6 +164,19 @@ pub struct Walker {
     /// volley (the 36.0 captain burst is one-frame; the linger is the measured killer). `None`
     /// everywhere else; pure health reads, no RNG, no sim call.
     pub leg_abort_on_wound: Option<f32>,
+    /// Opt-in kill abort for `walk_to` (real-health-00agent-01-hall-4, d3 only): `Some(named)`
+    /// makes a leg return early (u32::MAX−1, not the wedge marker) the first loop head after ANY
+    /// listed guard dies — the advance dance's leg must END the moment the walker's own return
+    /// fire kills the advancer (the measured window: the free kill at 7217 and the captain's
+    /// 40.6 frame 84 ticks later at 7301 while the leg kept walking [L the dance5 run]).
+    /// `None` everywhere else; pure corpse/health reads, no RNG, no sim call.
+    pub leg_abort_on_kill: Option<Vec<usize>>,
+    /// Opt-in crouched legs for `walk_to` (real-health-00agent-01-hall-4, d3 only): the dance's
+    /// RETREAT legs run crouched — the peek runs measured crouched Bond in the lane taking 0
+    /// fire across 24 windows (the guards held z 13.5-19.4 [L]) — so the exit from the lane is
+    /// unhittable even while the captain's volleys are in flight. Default false everywhere
+    /// else; a pure input bit, no RNG, no sim call.
+    pub leg_crouch: bool,
     /// Inside the stuck ladder's hostile-body-block response (the arm's shoot/resupply run their
     /// own nested walks): the nested stuck ladders must fall through to the plain sidestep ladder
     /// instead of re-triggering the arm (the run-2 recursion: nav 5 flank 1 nav 1 flank 1 …).
@@ -330,6 +343,8 @@ impl Walker {
             sidestep: 0, sidestep_decays: false, max_y: pos[1], lenient: false,
             nav_tick_cap: None,
             leg_abort_on_wound: None,
+            leg_abort_on_kill: None,
+            leg_crouch: false,
             trail: Vec::new(),
             alarm_last: Vec::new(),
             drone_watch, watch_last,
@@ -1302,6 +1317,14 @@ impl Walker {
                     return u32::MAX - 1;
                 }
             }
+            if let Some(named) = &self.leg_abort_on_kill {
+                if named.iter().any(|&gi| {
+                    sim.drones.list.get(gi).is_some_and(|d| d.corpse || d.health <= 0.0)
+                }) {
+                    eprintln!("[walk] {label}: the opt-in kill abort hit — a named guard is down — returning early (not a wedge)");
+                    return u32::MAX - 1;
+                }
+            }
             if self.stop_on_exit && sim.drones.level_exit.is_some() {
                 self.report.legs.push((label.to_string(), self.total_ticks - start_ticks, self.pos));
                 if std::env::var_os("NF_RF_TRACE").is_some() {
@@ -1467,6 +1490,7 @@ impl Walker {
             let mut input = Input {
                 turn: err.clamp(-0.07, 0.07),
                 forward: if d > 2.2 { 1.0 } else { 0.45 },
+                crouch: self.leg_crouch,
                 ..Default::default()
             };
             if err.abs() > 1.2 { input.forward = 0.0; }
