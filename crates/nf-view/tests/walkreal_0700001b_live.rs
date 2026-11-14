@@ -502,6 +502,9 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
     let mut preflied: Vec<u32> = Vec::new();
     // level-1b-console-latch-00agent (hard): the mid-phase defense's cooldown anchor.
     let mut last_defense = 0u32;
+    // real-health-00agent-1b-7: consecutive zero-kill FULL-CAP fights — the fight-loop
+    // signature (see the mid-defense block below).
+    let mut no_progress_streak = 0u32;
     let mut plan: (u32, Option<[f32; 3]>) = (0, None);
     let mut cal = ShotCal::default();
     let mut banned: Vec<[f32; 3]> = Vec::new();
@@ -756,12 +759,51 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
                 // (aim 9+) wait out across the 300-tick frame cooldown.]
                 let fight_cap = cap.min(300);
                 let hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
+                // real-health-00agent-1b-7 (the round-6 ledger's lever 1, measured [L
+                // /tmp/baseline.log, /tmp/lever1.log, /tmp/lever2.log]): the melee override is
+                // a FIGHT LOOP — with the wave parked within 12 u the fights re-fire with NO
+                // 2-kill progress (astro 3 -> 3 -> 3 in fights 6714..7014/7014..7314/7314..7442,
+                // no k6 hold EVER answered, death 7442) because `cooled` counts from the
+                // fight's START and a cap-long fight ends exactly when the cooldown expires:
+                // consecutive fights leave ZERO console ticks and the pending console's chain
+                // starves. The fix is the SCREEN RESUMPTION on the loop SIGNATURE: two
+                // consecutive zero-kill FULL-CAP fights (the parked-wave shape — the wave is
+                // unreachable, the fight is pure loss) hand the window back to the console
+                // work: last_defense moves to fight_end + 300, so the next defense (the melee
+                // override with it) waits 600 real ticks while the pending console's holds
+                // answer (k6's measured chain is 230 ticks, hold#1 7289 -> latch 7519 [L
+                // round-6 iteration 4], and k6 shares the x32 station with 3/4/5 — no travel);
+                // a kill or an early (exposure) exit resets/keeps the cadence. MEASURED
+                // ANTI-LEVERS: (lever1.log) a TIME-based no-progress exit (a fight with no kill
+                // by 150 ticks ends there) is WRONG — the measured kill shape needs 286-388
+                // ticks (iters 3-4), so the 150 exit truncated every kill fight (astro 3 -> 3
+                // where the baseline thinned 3 -> 1), the wave grew 3 -> 9 un-thinned, the
+                // grind cost the whole health bar and m3 LAUNCHED (deploy [0,0,3,2,2,1,0,1],
+                // death 6580 — 862 before baseline); (lever2.log) resuming after the FIRST
+                // zero-kill full-cap fight is also WRONG — the baseline's first parked fight
+                // (3105..3405, kills 0) is followed by the productive thinning fight
+                // (3405..3556, 3 -> 1), and the 300-tick delay dropped that kill (the wave
+                // grew 3 -> 10, death 6530). The SECOND consecutive zero-kill full-cap fight
+                // is the measured loop signature: it first occurs at 7314 in the baseline
+                // (after 6714..7014 and 7014..7314, both full-cap zero-kill), exactly where
+                // the chain window is needed.
                 fight_opts_y(w, lane, prio_i, true,
                     |s| stuck(s) || exposure(s, s.bond.head()).0 <= 1 || live_astronauts(s).len() + 2 <= n0, fight_cap, 7.0);
                 {
                     let sim = w.scene.sim.as_ref().unwrap();
-                    eprintln!("[1b] mid-phase defense: frames {f0}..{} (lined was {lined}, cap {fight_cap} of {cap}, chain_clear {chain_clear}, astro {n0} -> {}, hp {hp0:.1} -> {:.1}, lane {lane:?})",
-                        sim.drones.frame, live_astronauts(sim).len(), sim.drones.health.health);
+                    let end = sim.drones.frame;
+                    let kills = n0.saturating_sub(live_astronauts(sim).len());
+                    if kills > 0 {
+                        no_progress_streak = 0;
+                    } else if end.saturating_sub(f0) >= fight_cap {
+                        no_progress_streak += 1;
+                        if no_progress_streak >= 2 {
+                            last_defense = end + 300;
+                        }
+                    }
+                    eprintln!("[1b] mid-phase defense: frames {f0}..{end} (lined was {lined}, cap {fight_cap} of {cap}, chain_clear {chain_clear}, astro {n0} -> {}, hp {hp0:.1} -> {:.1}, lane {lane:?}, kills {kills}, streak {no_progress_streak}{})",
+                        live_astronauts(sim).len(), sim.drones.health.health,
+                        if no_progress_streak >= 2 && kills == 0 { ", screen window" } else { "" });
                 }
                 continue;
             } else if lined >= 1 && w.scene.sim.as_ref().unwrap().drones.frame % 600 == 0 {
