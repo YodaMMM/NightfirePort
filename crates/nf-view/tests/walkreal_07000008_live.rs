@@ -1650,6 +1650,10 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // episode steps to.
     let mut dodge_sign = 1.0f32;
     let mut dodge_hold = 0u32;
+    // real-health-00agent-08-bleed-4 (d3): the ZAP hold — a world hit under Bond's feet (owner
+    // past the drone list — the volume law, no blast row) means he is standing IN the terminal's
+    // hurt volume; the walk-out holds for 40 ticks against the dodge (run-bleed4-4/6).
+    let mut zap_hold = 0u32;
     for t in 0..20000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1864,6 +1868,20 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 miss < 2.0
             })
         } else { false };
+        // real-health-00agent-08-bleed-4 (d3): the fight anchor — the ride-end spot every green
+        // run fights from (111.09, −179.72). The volume law's −2.0/6-tick rows cover (113.0,
+        // −180.6) and (111.14, −180.95) [L run-bleed4-4/6]; the clear spot is the anchor the
+        // dodge bias and the drift walk both keep Bond on.
+        const ANCHOR: [f32; 2] = [111.09, -179.72];
+        // The zap detector: the newest player_hit is a world hit (owner past the drone list)
+        // whose frame is fresh — the volume law's −2.0 rows (run-bleed4-4: frames 20344-20441,
+        // (113.0, 13.5, −180.6), no explosion lines).
+        {
+            let zap_now = sim.drones.player_hits.last().is_some_and(|h| {
+                h.1 >= sim.drones.list.len() && sim.drones.frame.saturating_sub(h.0) <= 3
+            });
+            if zap_now { zap_hold = 40; } else if zap_hold > 0 { zap_hold -= 1; }
+        }
         if dodge_now {
             if dodge_hold == 0 { dodge_sign = -dodge_sign; }
             dodge_hold = 24;
@@ -1871,10 +1889,50 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             dodge_hold -= 1;
         }
         if dodge_hold > 0 {
-            input.strafe = dodge_sign;
+            if difficulty >= 3 {
+            // real-health-00agent-08-bleed-4 (d3): the dodge SIDE is the one that also walks the
+            // anchor-ward component. The missile's miss band is symmetric (the dodge gate's own
+            // miss < 2 u test — either side steps off the line), so the side choice is free, and
+            // the alternating `dodge_sign` was the measured drift source: the lever run's
+            // episodes walked Bond 2 u east of the ride-end spot into the terminal's east band
+            // and a hurt volume drained −2.0 every 6 ticks for the last 12.0 (frames 20344-20441
+            // at (113.0, 13.5, −180.6) [L run-bleed4-4]); the zap-anchor variant that walked him
+            // back AFTER the drift pinned him at (111.14, −180.95) — the volume reaches the
+            // south band too — and died earlier [L run-bleed4-6]. A player side-steps toward
+            // the spot he means to keep firing from. The strafe stays perpendicular to the view
+            // (the dodge's own law); the component toward the ride-end anchor (111.09, −179.72)
+            // picks its sign. D3-GATED: the d1/d2 sisters keep the alternating-sign timeline
+            // byte-exact (the d1 real-damage walk regressed on the ungated form [L the 11-14
+            // final-binary run]).
+            let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+            let right = [cy, 0.0, -fy];
+            let (ax, az) = (ANCHOR[0] - b[0], ANCHOR[1] - b[2]);
+            let dot = right[0] * ax + right[2] * az;
+            input.strafe = if dot > 0.05 { 1.0 } else if dot < -0.05 { -1.0 } else { dodge_sign };
             input.forward = 0.0;
+            } else {
+                input.strafe = dodge_sign;
+                input.forward = 0.0;
+            }
         }
         let _ = exit_ticks;
+        // real-health-00agent-08-bleed-4 (d3): the ZAP walk-out + the drift walk. The dodge bias
+        // above keeps the episodes anchor-ward; when a zap lands anyway (or plain drift over
+        // 1.2 u between episodes) Bond walks back to the ride-end anchor — a player being zapped
+        // steps out of the volume, and the aim re-converges on the spot (the launch gates read
+        // the live spot every tick, so nothing fires mid-walk). The walk never runs while a
+        // rocket rides. D3-GATED: the d1/d2 sisters keep their byte-exact timelines.
+        if difficulty >= 3 && rocket.is_none() && (zap_hold > 0 || dodge_hold == 0) {
+            let (dx, dz) = (ANCHOR[0] - b[0], ANCHOR[1] - b[2]);
+            if dx * dx + dz * dz > 1.2 * 1.2 {
+                let want_yaw = dx.atan2(dz);
+                let yaw_err_a = walker::wrap_pi(want_yaw - sim.bond.yaw);
+                input.turn = yaw_err_a.clamp(-0.08, 0.08);
+                input.look = 0.0;
+                input.forward = if yaw_err_a.abs() < 0.3 { 1.0 } else { 0.0 };
+                input.strafe = 0.0;
+            }
+        }
         if rocket.is_some() != riding {
             riding = rocket.is_some();
             let now = sim.drones.copters[ci].damage;
@@ -2386,7 +2444,7 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// plus the pin of the round's actual spawn direction (lock-on vs the effective aim) in
 /// PCSX2 (the report's live check).
 #[test]
-#[ignore = "00 Agent (11-14, bleed-4): the FUSEBOX PIT lever is TAKEN and measured — the hurting pick (the guard who actually LANDED THE LAST HIT inside the wide ring — the walker's hurt bookkeeping, player_hits, names him — falls back to the in-ring guard whose muzzle is live on Bond before his first round lands) + the OPENING-VOLLEY POLL (the pre-burn stands ran BEFORE the pit pair ever fired: #16's first volley lands during the burn itself (t3414) and a SECOND pit shooter #15 (skin 0x500002e, (151.7, 39.2, −111.5)) opened 275 ticks after the burn ended — both call sites were silent no-ops on the first lever run [L run-bleed4-1/2]) + the PIT EXCURSION (the pick is NOT visible from the burn spot and sits 4.4-7.1 u BELOW, so the fight walks the route's OWN descent legs — landing east, through the door, ramp south, ramp mid, ramp turn — with a sight check after every leg; the stand fires the moment the line opens, the return walks the legs back to the burn spot). The y band is ±8.0, not the ledger's ±6.0: the pit pair MOVES — #16 fired from (144.4, 37.2, −111.1) mid-descent and the poll at the burn spot (y 44.3) read dy 7.1 — outside ±6 [L run-bleed4-2]. MEASURED (run-bleed4-3): the poll caught #16's round at t3414, the excursion walked, the RETURN FIRE from the ramp mid killed BOTH pit shooters (#16 t4091, #15 t4205) for 16.0 total, the pit stand confirmed #16 down; the bolt burns ran clean, objective 1 folded, and the walk advanced from the bleed-3 death t6554 to the boarding legs (the burst rifle #20 (skin 0x500002f) closed to 3.3 u and burst for the last 24.0 — death t15465 at (108.70, 28.37, −118.08)). The SECURE-ROOM ARMOUR lever then taken (the d3 walk joins the d1/d2 real-damage sisters; a player at 24 health puts on the armour lying in his room): MEASURED (run-bleed4-4) the boarding cleared, the ride and the cinematic ran, and the walk reached THE HIND FIGHT — death t20440 at (113.04, 13.51, −178.54), 61 hits for 100.0, 17 return-fire fights, the machine 0.0/598. The Hind fight's shape on that roll: every end pane shot out (both 30 u bearings CLEAR), rockets owned clip 4 carried 4, the machine state 2 route flight at dist 17.6-28.9 — NO launch ever opened (the d3 slit/corridor/forecast gates starved through the whole fight) and the dodge strafes DRIFTED Bond 2 u east of the ride-end spot into a HURT VOLUME that drained −2.0 every 6 ticks for the last 12.0 (frames 20344-20441 at (113.0, 13.5, −180.6), no blast rows — the volume law). The anchor+zap variant (walk back to the ride-end anchor (111.09, −179.72) on a world-hit zap, overriding the dodge) was TRIED and MEASURED WORSE: the machine's burst cadence kept dodge_hold > 0 through the drain, the zap walk pinned Bond at (111.14, 13.52, −180.95) — the volume reaches the SOUTH band too — and the death came EARLIER (t20415 [L run-bleed4-5/6]); NOT shipped. NEXT LEVERS: (1) map the hurt volume's bounds (the −2.0/6-tick law covers (113.0, −180.6) and (111.14, −180.95); the master fight spot (111.09, −179.72) is clear on every green run) and anchor the fight outside it BEFORE the machine's first burst; (2) the launch starvation — the machine's low passes vs the slit: the d1/d2 gates fire from inside the cabin on l >= 10 with no corridor gates (the guided round threads the openings [M Bullet_update 0x12e7b0:177-244]); the d3 gates (16 u + slit + corridor + forecast) never opened on this roll — measure one gate's relaxation (the machine's own rounds through the launch-time forecast law still stand); (3) the dodge episodes' unanchored walk is the drift source — a dodge that biases its strafe back toward the clear spot instead of alternating signs. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
+#[ignore = "00 Agent (11-14, bleed-4): the FUSEBOX PIT lever is TAKEN and measured — the hurting pick (the guard who actually LANDED THE LAST HIT inside the wide ring — the walker's hurt bookkeeping, player_hits, names him — falls back to the in-ring guard whose muzzle is live on Bond before his first round lands) + the OPENING-VOLLEY POLL (the pre-burn stands ran BEFORE the pit pair ever fired: #16's first volley lands during the burn itself (t3414) and a SECOND pit shooter #15 (skin 0x500002e, (151.7, 39.2, −111.5)) opened 275 ticks after the burn ended — both call sites were silent no-ops on the first lever run [L run-bleed4-1/2]) + the PIT EXCURSION (the pick is NOT visible from the burn spot and sits 4.4-7.1 u BELOW, so the fight walks the route's OWN descent legs — landing east, through the door, ramp south, ramp mid, ramp turn — with a sight check after every leg; the stand fires the moment the line opens, the return walks the legs back to the burn spot). The y band is ±8.0, not the ledger's ±6.0: the pit pair MOVES — #16 fired from (144.4, 37.2, −111.1) mid-descent and the poll at the burn spot (y 44.3) read dy 7.1 — outside ±6 [L run-bleed4-2]. MEASURED (run-bleed4-3): the poll caught #16's round at t3414, the excursion walked, the RETURN FIRE from the ramp mid killed BOTH pit shooters (#16 t4091, #15 t4205) for 16.0 total, the pit stand confirmed #16 down; the bolt burns ran clean, objective 1 folded, and the walk advanced from the bleed-3 death t6554 to the boarding legs (the burst rifle #20 (skin 0x500002f) closed to 3.3 u and burst for the last 24.0 — death t15465 at (108.70, 28.37, −118.08)). The SECURE-ROOM ARMOUR lever then taken (the d3 walk joins the d1/d2 real-damage sisters; a player at 24 health puts on the armour lying in his room): MEASURED (run-bleed4-4) the boarding cleared, the ride and the cinematic ran, and the walk reached THE HIND FIGHT — death t20440 at (113.04, 13.51, −178.54), 61 hits for 100.0, 17 return-fire fights, the machine 0.0/598. The Hind fight's shape on that roll: every end pane shot out (both 30 u bearings CLEAR), rockets owned clip 4 carried 4, the machine state 2 route flight at dist 17.6-28.9 — NO launch ever opened (the d3 slit/corridor/forecast gates starved through the whole fight) and the dodge strafes DRIFTED Bond 2 u east of the ride-end spot into a HURT VOLUME that drained −2.0 every 6 ticks for the last 12.0 (frames 20344-20441 at (113.0, 13.5, −180.6), no blast rows — the volume law). The anchor+zap variant (walk back to the ride-end anchor (111.09, −179.72) on a world-hit zap, overriding the dodge) was TRIED and MEASURED WORSE: the machine's burst cadence kept dodge_hold > 0 through the drain, the zap walk pinned Bond at (111.14, 13.52, −180.95) — the volume reaches the SOUTH band too — and the death came EARLIER (t20415 [L run-bleed4-5/6]); NOT shipped. The dodge-bias + zap-walk variant (the dodge side picks the anchor-ward component; a world-hit zap walks Bond back to the ride-end spot against the dodge) was then TAKEN and measured (run-bleed4-7): Bond held the anchor (death at (111.19, 13.52, −179.81), 0.15 u from it) — and the volume hit HIM THERE TOO, the same 33 world hits for 24.0 — the −2.0/6-tick law covers the WHOLE terminal floor (the anchor (111.09, −179.72), the east band (113.0, −180.6), the south (111.14, −180.95)). NEXT LEVERS: (1) the drain class: at health ≈ 25 entering the fight the −2.0/6-tick drain (0.33/tick) kills in ~75 ticks wherever Bond stands — the fight must be won inside that window or the pool entering the fight must grow (the ride's rocket-ammo pickups — the (1, 4) boxes at (111.99, 18.04, −179.42) [D 0x0600004C streams 37-39, collected standing in the car] — went UNTAKEN on the measured roll, carried stayed 4 — check the ride's passive collection); (2) the launch starvation — the machine's low passes vs the slit: the d1/d2 gates fire from inside the cabin on l >= 10 with no corridor gates (the guided round threads the openings [M Bullet_update 0x12e7b0:177-244]); the d3 gates (16 u + slit + corridor + forecast) never opened on this roll — measure one gate's relaxation (the machine's own rounds through the launch-time forecast law still stand); (3) the volume's source: name the hurt volume at the terminal (the placement census / the volumes table) and check whether a spot 2-3 u west (x ≈ 110.3-110.5, the slit) reads clear in the real game. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair

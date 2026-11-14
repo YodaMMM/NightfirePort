@@ -345,3 +345,18 @@ window's lever: a fight pick that targets whoever LANDED THE LAST HIT inside the
 wide 25-u/±6-y ring (the walker's hurt bookkeeping names him) instead of the
 nearest-first pick that stalls on buried guards, then the same wide stand before
 the bolts/safe burns. Sandbox reset: full setup re-done this window.
+
+real-health-00agent-08-bleed-4 (2026-11-14T09:55Z, master 385ebb66d + bleed-3 merged): the
+fusebox-pit lever is TAKEN and measured — the hurting pick (the last-hitter inside the wide
+ring, the hurt bookkeeping names him, ±8.0 band the moved pit pair demands), the
+opening-volley poll (both pre-burn stands ran before the pit pair ever fired), and the pit
+excursion (the route's own descent legs, sight-checked per leg). MEASURED: both pit shooters
+(#16 skin 0x5000030 AND a second shooter #15 skin 0x500002e the ledger hadn't named) dead by
+t4205 for 16.0, the bolts burned clean, objective 1 folded; the secure-room armour lever taken
+(d3 joins the d1/d2 sisters) → the walk advanced t6554 → t20440: THE HIND FIGHT. The fight
+measured: the launch gates starve (machine 0.0/598) and a hurt volume drains −2.0 every 6
+ticks over the WHOLE terminal floor (the anchor spot included). The anchor+zap variant tried
+and worse (reverted); the dodge-bias + zap-walk variant taken d3-gated (the ungated form
+regressed the d1 real-damage sister — caught on the whole-binary run, fixed). walkreal whole
+5/0/1, interactables 15/0. The suite died in the background again (the sandbox kill). Next
+levers in the ignore: the drain class, the launch starvation, the volume's source.

@@ -61,6 +61,18 @@ stayed byte-exact [L the whole-binary run: 5 passed / 0 failed / 1 ignored].
    (t20415 vs t20440 [L run-bleed4-5/6]). The variant is reverted; the ledger names the next
    shape (map the volume's bounds, anchor the fight outside it BEFORE the machine's first
    burst, and bias the dodge's strafe back toward the clear spot instead of alternating signs).
+8. **The dodge-bias + zap-walk variant: TAKEN (d3-gated) and measured (run-bleed4-7)** — the
+   dodge side now picks the anchor-ward component (the missile's miss band is symmetric, so the
+   side choice is free) and a world-hit zap walks Bond back to the ride-end spot against the
+   dodge. Bond held the anchor — death at (111.19, 13.52, −179.81), 0.15 u from it — and the
+   volume hit HIM THERE TOO: the same 33 world hits for 24.0. **The −2.0/6-tick law covers the
+   WHOLE terminal floor** (the anchor (111.09, −179.72), the east band (113.0, −180.6), the
+   south (111.14, −180.95)) — the "clear master spot" premise is falsified; the next lever is
+   the drain class (at health ≈ 25 the 0.33/tick drain kills in ~75 ticks wherever Bond stands;
+   the ride's rocket-ammo pickups went untaken on the measured roll).
+   The ungated first form of these blocks REGRESSED the d1 real-damage sister (the dodge runs
+   for every difficulty) — caught on the final-tree whole-binary run and d3-gated; the
+   re-run is green.
 
 ## How it was verified
 
@@ -74,8 +86,9 @@ judged on its own real run:
 | run-bleed4-3 (±8.0 band, 420-tick poll, the excursion) | poll caught #16 at t3414; the excursion walked; the return fire killed #16 (t4091) and #15 (t4205) for 16.0; the bolts burned; objective 1 folded; death t15465 at the boarding (#20 point-blank, health 24.0) |
 | run-bleed4-4 (+ the armour lever) | armour 50; the boarding cleared; the ride + cinematic ran; the Hind fight reached; death t20440 (the hurt volume drain, the machine 0.0/598) |
 | run-bleed4-5/6 (the anchor+zap variant) | byte-identical fight trace then a WORSE death (t20415, pinned at (111.14, −180.95)) — reverted |
-| **walkreal_07000008_live, whole binary, final tree** | **5 passed / 0 failed / 1 ignored** (the ignored is the ledgered d3 walk; the d1 plain, d1 real-damage, d2 Agent and both ally tests GREEN — their timelines byte-exact under the d3-gated changes) |
-| **interactables_07000008_live** | **15 passed / 0 failed** |
+| run-bleed4-7 (the dodge-bias + zap-walk, d3) | Bond held the anchor; the volume hit there too (the same 33 world hits / 24.0); death t20428 at (111.19, −179.81) |
+| **walkreal_07000008_live, whole binary, final tree (2nd run, after the d3 gates)** | **5 passed / 0 failed / 1 ignored** (the ignored is the ledgered d3 walk; the d1 plain, d1 real-damage, d2 Agent and both ally tests GREEN — their timelines byte-exact; the 1st whole-binary run caught the ungated dodge-bias regressing the d1 real-damage sister, fixed by the d3 gates) |
+| **interactables_07000008_live, final tree** | **15 passed / 0 failed** |
 
 The full suite was started in the background per the task (`tools/test/suite.py`); this sandbox
 kills background processes between tool calls (the same finding bleed-3 and the
