@@ -33,3 +33,5 @@ The health loss (72 -> 4.7) lands during the wedged peek walk (d 2.09 from (19.0
 Next: a peek spot that is reachable (or a shorter cap), not a hold.
 
 Merged 11-13 (my-16b): the pocket fight is survived - peek (19.3,-93.6) + the close pair fought in the pocket; death t4379 -> t12054 at the pit chaser fight with a dry gun (#8 took the last rounds). Next: ammo into the pit (take the pocket drops before the back-out, or a resupply before the pit floor).
+
+Measured 11-13 (dead ammo levers, on ced98413c): resupply from the pocket drops after the close pair - every step east of the pocket is exposed, death t4126/t3468; walking the pit floor west AR (-16.8,-167.9) / 0x15 (-15.5,-170.8) before the hand-back - neither was taken (gun unchanged 0x11 1+3) and the pit pulse killed the walking Bond, t10795. The pit-floor ARs exist (kind 1 0x1a 50 rounds at (18.8,-173.4) and (-16.8,-167.9)); check their pickup state before trying again (they may only arm at the hand-back).
