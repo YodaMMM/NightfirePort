@@ -18,3 +18,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   is on your branch: merge `origin/master` first). Read `tail -1 suite.out` and its FAILED/TIMEOUT lines before you push, and
   run it once more on your final tree (merged with `origin/master`). Report the total line.
 
+
+11-13 cover map (master eb89478f5, d3, Bond held at the start (5.17, -65.30) for 600 ticks, segment_bullet_clear from each live shooter to eye height, 0.75 u grid): live shooters #0 (11.43, 6.71, -76.65), #1 (10.37, 0.80, -113.09), #2 (2.39, 6.71, -106.68), #3 (-10.51, 6.71, -111.00), #4 (-10.39, 6.71, -85.45), #5 (-8.45, 6.71, -112.24). The approach middle (z -77..-100, x -6..12) is seen by 2-6 everywhere; the EAST edge is the only low-exposure band - x ~15-17 at z -77..-80 (seen by 0-1) and x ~8-13 at z -96..-100 (seen by 0); the ramp between (z -86..-92) was not sampled (floor above the 1.2 band). The current death (t1020 at (12.23, -89.00)) is mid-ramp with #2/#5/#3 (0x1a) landing 82.5. Next: route down the east edge, measure the ramp band with the floor filter widened, and hold at the 0-spots between volleys.
