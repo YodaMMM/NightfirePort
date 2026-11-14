@@ -16,3 +16,5 @@ fix it with a test that is red on the old code (a round fired from south of the 
 stop on the wall, or must not, per the decompile). Do not change the walk tests' tactics in this task.
 Tests: the copter unit tests in nf-game, walkreal_07000008_live, interactables_07000008_live.
 Branch: s/level-08-hind-gun-through-cabin.
+
+Main 11-14 lead: Copter_FireGun 0x17d828 fires through the plain Bullet_init (shooter = the gun obj, weapon 0x61 on 07000008, sound 0x5df) - no special collision. The port (drone.rs spawn_copter_bullet) spawns a normal Bullet; its flight is cel-scoped from find_cel(bullet pos) each tick (bullet.rs ~298 segment_flight_contacts_scoped). From the Hind s cel (outside) the carriage wall may not be in the scoped set while Bond s inside-cel trace sees it - compare the game s Collide_Pick scope for a round crossing from the outside cel into the carriage cel (does the game test the destination cel / the portal crossing?).
