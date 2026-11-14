@@ -53,3 +53,5 @@ Measured 11-13: the armour #648 walk between the room soldier and the chaser (re
 Measured 11-13: the squad-phase brute #12 (0x500001e, hp 100) taken first inside 10 u - dies t17282, no gain at 17 health.
 
 Measured 11-13: a shelter hold (visible guards in 90-tick stands, 600/1500 ticks) at the squad spawn dies inside the hold at t17306. Not shipped. The squad stage needs more than 17 health; the chaser fight (37 -> 17) is the place to save it.
+
+Merged 11-13 (00bc78f55): back to the blast room open floor (-14.45,-170.16) before the chaser - the chaser fight costs nothing (37.0 into the squad); squad slices answer any hostile inside 10 u first; one member falls; death t17678 to #15 (0x50000b2, 0x14, 10.0 a hit) and the brute #12 point-blank. Next: the squad stage close pair.
