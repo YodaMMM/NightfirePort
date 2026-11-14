@@ -31,3 +31,5 @@ Measured 11-13 (dead levers on the pocket fight, both on a793c19fa):
   south ground pair (#2 weapon 0x1a from (21.4,-103.2), #1 from (11.3,-111.1)) see into the pocket.
 The health loss (72 -> 4.7) lands during the wedged peek walk (d 2.09 from (19.0,-92.2), 3000-tick cap).
 Next: a peek spot that is reachable (or a shorter cap), not a hold.
+
+Merged 11-13 (my-16b): the pocket fight is survived - peek (19.3,-93.6) + the close pair fought in the pocket; death t4379 -> t12054 at the pit chaser fight with a dry gun (#8 took the last rounds). Next: ammo into the pit (take the pocket drops before the back-out, or a resupply before the pit floor).
