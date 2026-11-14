@@ -25,3 +25,5 @@ claimed-by: sandbox3 at 2026-11-14T14:35Z
 Main 11-14 (master 06db4a156, NF_DMG_TRACE): 21 hits to the t9134 death - the astronaut 5.0 rounds through the console phase (#9/#11 at x 43-48, #9/#13 at x 31-34), one 13.94 world blast (kind 107, damage 20, d 7.3) at (25.2,-6.9) t7541, then #16/#15/#18/#14 5.0 each and #13 3.72 at x 18-25.
 
 Main 11-14: the named round-8 lever, CONSOLE_ORDER_HARD [5,4,3,8,6,7,1,2] (k7 first after k6), measured on 7c721b2ea: k5/k4/k3/k8/k6 latch, the walk dies at t8344 at the x46 nest (46.00,3.74) - earlier than the current order (t9134). Not shipped.
+
+Main 11-14: a crouch press at the console phase start (hard) - Bond does not die, but the console 1 latch assert fails (line 1528, the real shot never latches it: crouched, the station shots miss the screen). Not shipped; a crouch would need to stand up for each console chain.
