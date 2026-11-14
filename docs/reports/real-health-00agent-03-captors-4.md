@@ -118,3 +118,18 @@ mid-approach); (5) the older levers stand (the north-of-door-8 approach (36.2,5.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-14 10:05-10:06 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out after 35 s with no output (killed, WGET-EXIT=0 from the timeout wrapper)
+
+The queue entry `done/50-real-health-00agent-03-captors-4.md` (with this report attached,
+commit e31a25b89) was pushed to `origin/queue` successfully, so the driver's queue watcher
+is the delivery path for this result.
