@@ -20,3 +20,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 
 11-13 (master dcf899951, de2695a97): (1) the landing-lane 20 u clear is exposed-only at 00 - the ch-55 pair then falls to the mouth stands (#19 +90, #20 +18) and the walk reaches the courtyard (tick 6255); (2) a live bullet-line scan from the courtyard bottom gives each east post one solo spot - #24 from (10.8, -34.2) (taken, dead at +19), #25 from (25.2, -45.4). Death now t7076 on the south-east corner leg (#23 deck 0x24 34.0 in 2, #25 30.2). Measured dead: #25 from the #24 spot (roof #11 lands 44.0, t6866); walking back down to reach #25 via the south edge (the spot is in #11 lane, 42.2, t6851). Next: #11 first from outside his band, or the corner leg in one push.
+
+Roof #11 first (live scan: his one solo spot from the courtyard bottom is (6.8, -32.6), 19 u, 13.5 u below him): measured dead - the aimed stand duel loses, #11 lands 58.8 in 11 while the taps take him 20 -> 16 (t6982).
