@@ -100,3 +100,4 @@ Task: the door-phase kill path — the hall-2 ledger's next lever. Either work o
   the dance a no-die-panic window. Battery with the WIP files: walkreal_07000001_live whole
   7 passed / 1 failed (the d3 ledger only [L 88.9s]); interactables_07000001_live 10/0
   (29.9s) — the d1/d2 streams byte-identical through the opt-ins.
+- [00:56-? UTC] real-health-00agent-01-hall-4: branch off origin/s/real-health-00agent-01-hall-3 (0a05db489), WORKLOG continued. Task: land the advance-dance lever with the hard exchange budget on the hall door phase, measure it on its own real run, then carry the d3 walk through the AND gate and the rest of the route (post-AND untouched, green on the older streams). Sandbox note: repo persisted in my-project; ISO re-download needed; toolchain reinstalled.
