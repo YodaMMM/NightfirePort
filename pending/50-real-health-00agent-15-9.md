@@ -18,3 +18,5 @@ Merged 11-13 (86f33752f): #462 shot from (65.0,-0.3) at 17.85 u (no hurt) + the 
 Measured 11-13 (86f33752f): a visible-guard stand at the door[51] threshold (radius 12/20) finds nobody exposed (23.2 kept) and the walk still dies at t12256 on the through leg - #14 (0x50000b2, weapon 0x1a from (3.1,5.8) behind the door) lands one 23.2 hit. Next: more health upstream (#4 33.0 in 11 on door[50] through) so the one hit is survivable, or a line on #14 before the door opens.
 
 Measured 11-13: an exposed-shooter-first stand at the door[50] threshold (before #5) picks #19 at 19.8 u and dies sooner, t10249 at (1.46,43.75). Not shipped.
+
+Measured 11-13 (86f33752f): #4 is NOT a plank chaser - at the door[38] stand he sits dormant (enabled false, st 0x1) at (0.0, 26.4) in the hall south. A head-first aimed stand on him from the door[50] threshold (before #5) kills him (visible, 58.7 kept) and Bond reaches door[51] at 40.1; the fights kill #13 and #14 there, but #14s grenade lands 206 ticks after his death for 33.07 on 33.1 health (t11988). Next: this #4 stand + a grenade dodge on the door[51] legs (step away from any live sim.drones.grenades entry within its radius).
