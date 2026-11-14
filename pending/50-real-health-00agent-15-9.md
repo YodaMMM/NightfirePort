@@ -12,3 +12,5 @@ Keep every change gated `difficulty >= 3 && !w.tops_up()`; the d1/d2 walks must 
 Tests: walkreal_07000015_live, interactables_07000015_live.
 
 Measured 11-13 (master 42aff3fcb): lever 1 (loop the 0x5000087 chaser stand, also widened to (31.5,35.5) tol 20) changes nothing - the finder returns None after #17, #4 is not near yet (62.3 health after the stands, death t11681 unchanged). Lever 2 (visible-guard stand at the door[51] threshold, radius 20/30) kills #12 then #14 but dies sooner, t11654 - 5.4 health cannot stand anywhere. The gap is upstream: health into the hall.
+
+Merged 11-13 (86f33752f): #462 shot from (65.0,-0.3) at 17.85 u (no hurt) + the solo-line walk holds the fights resupply nav: west room cleared at 73.7, door[51] reached at 23.2, death t12256 - #4 (0x5000087) 33.0 in 11 on door[50] through (58.7 -> 23.2), then #14 (0x50000b2, 0x1a at (3.1,5.8)) one 23.2 hit. Next: #4 before door[50]; #14 from the door[51] threshold.
