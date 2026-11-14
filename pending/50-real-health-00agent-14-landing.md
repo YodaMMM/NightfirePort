@@ -36,3 +36,5 @@ Merged 11-13 (d0b707fbf): the Kiko corridor end is held 600 ticks (short stands 
 Merged 11-13 (51fc82754): a second 300-tick hold at escape-touch node 4 (-44.2,27.6); the escape touch is reached; death t29197 at (-30.20,24.28) on the Rooks-wake legs to #30 (0x5000087, 0x14) with 2.9 health. Next: health into the Kiko corridor (27.9 there).
 
 Measured 11-13 (51fc82754): an extra hold-and-dodge at node 626 after the band stands (300/600) dies sooner at the door (t25726/t26118). Not shipped.
+
+Measured 11-13 (51fc82754): a hold at the escape touch (300/600) dies there at 2.9 (t29452/t29378); hold-length sweep (Kiko/second): 600/150 t27685, 600/450 t29335, 450/300 t29157 (12.9 after the second hold, same death area), 900/300 t26998. No stable gain; the shipped 600/300 stays. The 16 pattern that finished its squad (short 120-tick stands on close hostiles inside the slice loop) is the next thing to try on the Rooks-wake legs.
