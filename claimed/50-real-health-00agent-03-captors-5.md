@@ -21,3 +21,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-11-14T14:00Z
+
+Main 11-14 (master 06db4a156, NF_DMG_TRACE): the t74135 death is a DRY STAND at the east lawn saddle (23.18,5.50,7.20): Bond reaches the saddle with the P2K 3+13 and 41.2 health, the saddle wake sweep burns it, then the stand cycles weapons (0x1 clip 1 spare 0, cycling 0..11) while #7 (0x5000039, 0x12, hp 4) at (11.4,10.1,-16.1), 26.5 u, lands 1.8 a hit for ~40. A loot + resupply pass before the saddle finds nothing (3+13 unchanged). Next: leave the saddle line when dry (the sweep breaks on dry, but the stand inside it keeps cycling), or carry rounds from the servants-ground fights.
