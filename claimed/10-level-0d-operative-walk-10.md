@@ -38,3 +38,5 @@ Main 11-14 (on d1491c571): the climb-side bill is #10 14.0 (t10459, deck), #17 1
 Main 11-14 (on d1491c571): a rifle act on #17 from the walk-off strip before the catwalk (kill_guard_at_present (157.6, -226.0) +/- (5, 6), 600): #17 down at +500 but Bond is at 38.0 after it (the act window draws the same fire) and dies earlier in the yard, t18367 vs t19289. Not shipped.
 
 Main 11-14 (on d1491c571): sniping the yard from the gantry park before the hop - the yard guards (#2/#3/#5, 0x500006d/0x500007e) are already AWAKE (states 0x68-0x96) at the apex, the box acts land nothing (rifle 5+13 unfired), and the gantry carries Bond back east while he waits (x 140 -> 179); death on the gantry t20441. Dead lever: the hop must happen at the apex.
+
+Main 11-14 (on d1491c571): extending the ride fire to the nearest yard guard with a clear bullet line after #15 dies: no extra taps (30, no clear yard lines from the moving gantry), t19321 - noise. Not shipped.
