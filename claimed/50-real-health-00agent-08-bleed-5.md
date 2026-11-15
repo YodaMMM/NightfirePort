@@ -45,3 +45,5 @@ Main 11-14: crouched across the station hall (d697c77f2) and for the briefcase s
 Main 11-14 (cb29af974): over the ~14500-tick fight the Hind is in sight (eye_sees) at 140 sampled windows; in those, corridor_clear and machine_lane_clear are false in ~95%. Shortening the 12 u corridor/effective-corridor casts to 8/6 u is byte-identical (1 launch): machine_lane_clear (the forecast lane of the machine s own rounds) is the binding gate. Read that gate next.
 
 Main 11-14: stand-when-the-Hind-is-in-sight / crouch-otherwise in the fight loop - 0 launches, death t29954 (worse). Not shipped.
+
+Main 11-14: no live armour pickup within 150 u of the Hind fight anchor (Bond enters at 52.0/37.7, t27252).
