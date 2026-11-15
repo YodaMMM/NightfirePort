@@ -1507,14 +1507,28 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                             w.lenient = false;
                         }
                     }
-                    for round in 0..10 {
+                    // real-health-00agent-03-captors-8, lever 1 (the -7 ledger item 1): 3
+                    // guards = 48 hp (#2 24 + #18 12 + #19 12 [L the gas-rng-draws-6 probe])
+                    // against the ~11 spare rounds the walk carries — the fights' OWN drops
+                    // re-arm the loop (the kill-loot cycle the servants' ground runs:
+                    // loot_the_drops_03 + scoop_drops_03 between rounds; each drop carries the
+                    // guard's own weapon + its clip [M Pickup_Handler 0x18e650]). The dry
+                    // give-up no longer breaks the loop — run 56's break on !w.shoot lost #2 at
+                    // hp 4 and the survivors' point-blank fire finished the post-rescue chase at
+                    // 151214 (bond hp 9.0); the loop keeps shooting while ANY cluster member
+                    // lives. 16 rounds: 3 fights at ~2-5 rounds a fight with the loot legs
+                    // between.
+                    for round in 0..16 {
                         // The pocket walk takes ~2-3 s to bring the poppers into range (run 54:
                         // #18's load spot sits 12.6 u from the mouth — outside the 12 band —
                         // and the one-shot poll broke at round 0, leaving the awake cluster to
-                        // ambush the servant nav). Poll up to 600 ticks between rounds.
+                        // ambush the servant nav). Poll up to 600 ticks between rounds (the
+                        // round-0 popper is instant; the far members walk their pocket route
+                        // from the load spots — 12.6-15.3 u — and the 20-tick poll expired
+                        // between their kills, leaving the walker alive behind the funnel).
                         let di = {
                             let mut found = None;
-                            for _ in 0..20 {
+                            for _ in 0..600 {
                                 let sim = w.scene.sim.as_ref().unwrap();
                                 let b = sim.bond.pos;
                                 found = sim.drones.list.iter().enumerate().find(|(_, d)| {
@@ -1528,6 +1542,35 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                             found
                         };
                         let Some(di) = di else { break };
+                        // The pre-fight top-up (the -7 ledger item 1's volume half): a fight
+                        // that starts thin burns its clip into an unexposed walker while HE
+                        // closes (run 60 round 3: clip 5 spare 0 at an unexposed #19 at
+                        // 14.6 u — the shoot's flank push met his closing line and his two
+                        // 0xe point-blank rounds finished Bond at 23.4). A player tops up
+                        // from the fresh drops before engaging; the 12-u scoop walks the
+                        // 10-11 u death spots the loot's own 8-band misses. Bounded: a pass
+                        // that takes no new drop means the pocket is picked clean — fight on
+                        // whatever is held.
+                        for _ in 0..3 {
+                            let armed = {
+                                let sim = w.scene.sim.as_ref().unwrap();
+                                sim.gun.clip + sim.gun.spare >= 6
+                            };
+                            if armed { break; }
+                            let before = {
+                                let sim = w.scene.sim.as_ref().unwrap();
+                                sim.drones.pickups.iter().filter(|p| !p.gone).count()
+                            };
+                            w.lenient = true;
+                            loot_the_drops_03(&mut w, "the cluster funnel top-up");
+                            scoop_drops_03(&mut w, "the cluster funnel top-up scoop", 12.0);
+                            w.lenient = false;
+                            let after = {
+                                let sim = w.scene.sim.as_ref().unwrap();
+                                sim.drones.pickups.iter().filter(|p| !p.gone).count()
+                            };
+                            if after >= before { break; }
+                        }
                         let (hp, at) = {
                             let sim = w.scene.sim.as_ref().unwrap();
                             let d = &sim.drones.list[di];
@@ -1536,11 +1579,26 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                         eprintln!("[03] the cluster funnel round {round}: drone #{di} hp {hp:.1} at ({:.1},{:.1},{:.1}) bond hp {:.1}",
                             at[0], at[1], at[2],
                             { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.health.health });
-                        if !w.shoot(di, "the cluster funnel (the pocket walk)") { break; }
+                        let killed = w.shoot(di, "the cluster funnel (the pocket walk)");
                         for _ in 0..30 {
                             let sim = w.scene.sim.as_ref().unwrap();
                             if sim.drones.list[di].corpse || sim.drones.list[di].health <= 0.0 { break; }
                             w.tick(nf_game::player::Input::default(), false);
+                        }
+                        // The kill-loot cycle BETWEEN rounds (the -7 ledger item 1): each kill
+                        // drops its own weapon + clip (#18 0x1c, #2/#19 0xe [L the
+                        // gas-rng-draws-6 probe]) and the walk-over take files it [M
+                        // Pickup_Handler 0x18e650]. The 12-u scoop reaches the 10-11 u death
+                        // spots. Runs on the dry give-up too — the loop re-arms and keeps the
+                        // fight while any member lives.
+                        w.lenient = true;
+                        loot_the_drops_03(&mut w, "the cluster funnel loot");
+                        scoop_drops_03(&mut w, "the cluster funnel scoop", 12.0);
+                        w.lenient = false;
+                        {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            eprintln!("[03] the cluster funnel round {round}: killed {killed} — gun {:#x} clip {} spare {} hp {:.1}",
+                                sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
                         }
                     }
                 }
@@ -1947,9 +2005,65 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         loot_the_drops_03(&mut w, "the safe drops");
         stand_shooters_down_03(&mut w, "the safe shooters", 40.0);
     }
+    // real-health-00agent-03-captors-8: the safe->exit legs run into the exit captains
+    // #15/#16 and their chase cost 21.6 health across the back-through-gate nav (run 64:
+    // the return fights engaged 3x and missed all — killed false, #15 still hp 12). The
+    // hitters-only stand above picks nobody (neither captain had hit Bond yet), so the
+    // player's shape is the lane sweep's own: shoot the guard he can SEE before stepping
+    // into his field (the nearest-exposed pick, no recent-hit gate [L d3run6's law]).
+    // d>=3 only — the d2 streams' exit legs stay byte-identical.
+    if difficulty >= 3 {
+        for (i, d) in w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate() {
+            if d.team == 1 && !d.corpse && d.health > 0.0 && walker::dxz(d.pos, w.scene.sim.as_ref().unwrap().bond.pos) < 40.0 {
+                eprintln!("[03] safe exit census #{i} skin {:#x} weapon {:#x} hp {:.1} at ({:.1},{:.1},{:.1})",
+                    d.skin, d.weapon, d.health, d.pos[0], d.pos[1], d.pos[2]);
+            }
+        }
+        clear_exposed_nearest_03(&mut w, "the safe exit sweep", 40.0, 4, 300, false);
+        w.lenient = true;
+        loot_the_drops_03(&mut w, "the safe exit sweep drops");
+        scoop_drops_03(&mut w, "the safe exit sweep scoop", 12.0);
+        w.lenient = false;
+    }
 
     // 4. The exit: E on the Load Point loads 07000004 through the real reload path (the exit
     //    lawn first — the direct line rides the slope without settling).
+    // real-health-00agent-03-captors-8: the gate door auto-closed behind the safe visit —
+    // the exit's A* could not route back through it and detoured WEST around the courtyard
+    // (run 62's exit moat-node nav walked to (-1.83,-35.51) where the first visit's same nav
+    // reached (7.48,-33.71) direct), straight past the exit captain #15's stand at
+    // (-0.5,5.8,-32.8): his point-blank pistol (23.4 in 7 hits at d 2.6) finished Bond at
+    // 171891 while the return fight was still converging (err 0.918 at t0 — the nav left Bond
+    // facing the walk direction, and at 00 Agent the autoaim bit is closed [M Autoaim_HardMul
+    // 0], so the raw-view convergence lost the race). A player re-opens the door he came in
+    // through before walking back out: the exit nav then routes the direct gate line, 9+ u
+    // clear of #15's stand. d>=3 only — the d2 streams' exit legs stay byte-identical.
+    if difficulty >= 3 {
+        let gstate = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.doors.list[gate_door].state };
+        eprintln!("[03] the gate door state {gstate:#x} before the exit legs");
+        if gstate == nf_game::door::CLOSED {
+            eprintln!("[03] the gate door sits closed — re-opening it for the exit (the A* west detour past #15)");
+            w.use_door(gate_door, "the gate door (the exit re-open)");
+            w.wait(30);
+        }
+        // The measured A* (run 63): even with the gate door open, the exit moat-node nav
+        // from the safe heads NORTH-WEST (Bond died at (1.51,-37.30) mid nav 1) — the graph
+        // prefers the west line out of the safe room and #15 intercepts it point-blank.
+        // A player walks out the way he came: back through the gate door to the through-gate
+        // spot the first visit walked, EAST of #15's west choke — the exit's moat-node route
+        // then starts from there (6.2 u, clear).
+        w.walk_nav_to([14.7f32, 5.9, -36.8], "back through the gate (the exit)", 1.6);
+        // The chasers (#15/#16) cross the safe->gate line behind him (run 64: 21.6 health
+        // across the pre-leg nav, the fights engaged 3x and missed all). From the CONVERGED
+        // gate spot a player squares up and fights what followed: clear_near's full fights
+        // (the plain w.shoot shape — the same shape that killed the charger #14 and the
+        // pocket cluster) — not the nav-leg reactive taps that never converged.
+        clear_near(&mut w, 16.0, "the through-gate chasers");
+        w.lenient = true;
+        loot_the_drops_03(&mut w, "the through-gate drops");
+        scoop_drops_03(&mut w, "the through-gate scoop", 12.0);
+        w.lenient = false;
+    }
     let sim = w.scene.sim.as_ref().unwrap();
     let exit = sim.drones.triggers.iter().find(|t| t.kind == walker::trigger_kind::LOAD_LEVEL).map(|t| t.centre()).expect("the Load Point");
     drop(sim);
@@ -2109,7 +2223,7 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 /// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
 /// only difference.
 #[test]
-#[ignore = "00 Agent (real-health-00agent-03-captors-7 ledger, branch base master 4f3802517 merged with captors-6): the -6 ledger's mouth blocker FELL this round; the frontier moved 67488 -> 151214 (master dies 74135 dry at the saddle; captors-6 died 67488 to #14), all measured on real-input d3 runs (50-56). MEASURED this round, in run order: (50) the si-1 mouth nav from the duel line still rides the north lawn and its stuck handler E-opened the (39.0,12.9) door MID-NAV - the hits began during the door-open leg (67499) BEFORE the (38.9,11.1) plate hop - so the door OPEN CHANNEL is the #14 wake [L d3run50]; death 67870, #14 41.2 in 4 at d 1.4. (51) THE ROUTE PROBE (probe_mouth_approach_routes, cheap no-walking): EVERY nav route to the mouth (saddle->mouth, duel-line->mouth) crosses the doorway band - the only descent is nodes (39.93,13.55) -> (39.90,12.23) THROUGH the leaf; move_test says the east strip (x 40.0-40.2) is blocked exactly at the band (z 13.0->12.3 leg 0), x 40.6/41.0 crossings all 0, the direct south-lawn chain all 0 (the wall corner + the mouth approach) - THE DOORWAY IS THE ONLY WAY DOWN and the fight is forced. (52) the north-door funnel v1 (walk to the last pre-door node (39.9,14.4), cycle the wheel to the 0x2 heavy gun, pre-raise the aim, E-open the door MYSELF, the aimed sweep): the sweep's taps landed (12->4, ~8 a tap - the 0x2 heavy does ~8 [L d3run52]) but #14 FLANKED east through the x ~40.2-41 strip to point-blank d 1.5 and his burst (17.8 + 23.4, one 23.4 a round) won the race - death 67715; the aimed stand's STILL gate cannot tap a charger. (53) THE #14 FUNNEL v2 = THE FIX (the captor-chase shape): after the E-open, a plain w.shoot LOOP (no still gate) taps him THROUGH the charge - #14 died at the funnel for ONE 17.8 hit (bond 23.4 -> 5.6, survived), the walk PASSED the mouth. NOTE the hp: bond entered the funnel at 23.4 (the walk print) after 41.2 at the wake print - 17.8 disappeared between the prints with NO hit logged (the aggregate says #14 dealt 17.8 total, so it IS his one funnel hit; the print order needs a re-check next round). (54) the door-8 cluster blocker: the mouth nav ARRIVES without touching door 8 ((35.91,4.34)), the settle loop's at_pocket reads 0 (the sleeping cluster never walked), the d3 sweep finds nobody (they load enabled=false, present=true, state 0x1 [L the load probe - the WHOLE map loads that way]) and the servant nav's own door-8 E-opens wake the cluster MID-WALK - the pocket-walk ambush finished bond (death 107736: #18's point-blank shotgun 23.4 in 12 hits at d 1.0 - bond at 23.4 died to one volley). (55) the cluster funnel v1 (E-open door 8 at the mouth + a 600-tick poll): found NOBODY - the pops do NOT ride the door-8 open channel alone; AND the walk then SAVED SERVANT 1 (post-save state 0x13, ch 0x50 on - the rescue asserts PASSED for the first time past the wake) before dying at 106170 to the awake #19 point-blank (23.4 at d 1.4) during the servants'-ground fight chase. (56) THE CLUSTER FUNNEL v2 = the current shape: E-open door 8, walk INTO the pocket (38.7,0.2) (the pops ride the interior proximity - the round-0 print found #2 alive the moment bond stood inside), the plain shoot loop (10 rounds, 600-tick polls, r 16): #2 (24 hp captain) dropped 24->4 but SURVIVED (the loop's rounds could not finish him - killed false at 123072), the si-1 rescue SAVED, and the walk reached 151214 - death (34.75,8.69) mid the post-rescue fight chase at bond hp 9.0. WIRED this round (d>=3 gates only; the d<3 streams and the shared helpers untouched): the saddle re-take hop before the mouth nav, the #14 funnel (the north-door standoff, the 0x2 cycle, the E-open, the shoot loop + the aimed sweep backstop + loot + scoop), the door-8 cluster funnel (the E-open, the pocket entry, the patient shoot loop), the cheap route/load probes (both still #[ignore]d). NEXT levers, in order: (1) FINISH THE CLUSTER AT THE POCKET - the shoot loop needs the kill-loot cycle INSIDE it (each drop carries the guard's own weapon + clip: loot_the_drops_03 + scoop_drops_03 between rounds - 3 guards = 48 hp vs bond's ~11 spare rounds is not enough without the drops) and the loop must keep shooting while ANY cluster member lives (the current break on !w.shoot lost #2 at hp 4). (2) THE HP LEDGER - bond enters the endgame at 23.4 and dies at 9.0: trace the phase-boundary health prints (the 41.2 -> 23.4 gap before the funnel needs an owner; #14's one 17.8 funnel hit is the measured floor - a clean funnel = 41.2 at the cluster) and cut the pre-saddle 58.8 (the pre-crossing stands' 36.0 #11 + the crossing's 24.0 #11 are the two big lines - the driver's measured refutations stand: wider loot radius / dry-wheel skip / saddle armour / (14..20,0) stands all no gain). (3) THE POST-RESCUE CHASES - the servants'-ground fight's flank navs walk bond into the surviving cluster members' point-blank (both the 106170 and 151214 deaths); with the cluster dead at the pocket (lever 1) the chase walks empty ground. (4) the older levers stand: the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, the exit-lawn #16 post-kill volley, #7's upper-floor drop (11.41,9.09,-15.55) - the loot band's +-1.5 never sees it from the lawn. (5) live checks: (a) what EXACTLY pops the door-8 cluster - stand bond outside door 8, E-open it, watch #18/#2/#19's enable for 600 ticks (the funnel poll says NOT the open channel); then step 1 u inside and watch again (run 56 says the interior entry pops them); (b) the 41.2 -> 23.4 pre-funnel hp gap - a gdbwatch on the health address across the saddle re-take + the standoff walk would name the damager (the damage ledger credits #14 with exactly that 17.8, but at a frame AFTER the print). follow-up real-health-00agent-03-captors-8follow-up real-health-00agent-02-03-3"]
+#[ignore = "00 Agent (real-health-00agent-03-captors-8 ledger, base master 854334126): the -7 ledger's item 1 FELL - THE CLUSTER DIES AT THE POCKET and both servants save with bond hp UNTOUCHED (23.4 through the whole rescue); the frontier moved 151214 -> 172900, now on the EXIT legs. All measured on real-input d3 runs (57-61; the -7 runs 50-56 stand in the -7 report). MEASURED this round, in run order: (57) the funnel kill-loot cycle v2 (loot_the_drops_03 + scoop_drops_03 between rounds, the dry give-up no longer breaks the loop, the poll 20 -> 600 ticks, rounds 10 -> 16): #2 dropped 24->4 and died to the same-tick kill+dry give-up, the loot armed the 0x1c, #18 killed - but round 3 CHASED an unexposed #19 at clip 5 spare 0 and his two 0xe point-blanks (23.4 = exactly bond hp) finished Bond at 71192 [L d3run57]. (58) THE FUNNEL v3 = THE FIX (the pre-fight top-up while clip+spare < 6, bounded 3 passes, the 12-u scoop reaching the 10-11 u death spots the loot's 8-band misses): THE CLUSTER DIED AT THE POCKET (rounds 0-2: #2, #19 killed; the poll empty at round 3), bond 23.4 untouched through the funnel, both servants SAVED (post-save 0x13 x2), death 171891 on the exit's moat-node nav at (-1.85,5.96,-35.08) to #15 (0x5000036, 0x12) point-blank (23.4 in 7 hits at d 2.6) - the return fight engaged at err 0.918 (the nav left Bond facing away; 00 Agent autoaim is closed [M Autoaim_HardMul 0]) and lost the race [L d3run58]. (59) THE GATE DOOR AUTO-CLOSES behind the safe visit (state 0x2 [L d3run60's print]) and the exit's A* from the safe heads WEST (the first visit's same nav reached (7.48,-33.71) direct; with the door re-opened the graph STILL prefers the west line out of the safe room) - #15 intercepts. Wired the gate re-open (use_door, the stall-door idiom) + the back-through-the-gate pre-leg nav to (14.7,-36.8) (the first visit's own walked spot), d>=3: the pre-leg nav WORKED (arrived (13.51,-37.17)) but #15 AND #16 chased the safe->gate line and the return fights engaged 3x and MISSED ALL (killed false, #15 hp 12 untouched) - bond arrived 1.8 hp, death 172900 [L d3runs 60-61]. (60) the census at the safe: #15 (0x12, 12 hp) (3.8,-33.3), #16 (0x1c shotgun, 24 hp) (3.6,5.4,-25.8, the ditch floor) - the safe's key (ch 0x4e) arms the alarm responders and they walk their west posts during the exit; the safe exit sweep (the nearest-exposed pick, 300 wait) found NOBODY exposed from the safe room; the through-gate clear_near skipped them (the far+unexposed skip - their boxes buried from the gate spot while their muzzles reach). Death 172244 at (11.84,-36.87) - #16's shotgun (23.4 in 4 hits at d 13.2) while the fight stood Bond in his lane [L d3run62]. (61) THE EXIT FIGHT TRACE (NF_RF_TRACE): the fight on #16 CONVERGED (err 0.000 at t60, 12.5 u) and fired ONE shell that MISSED (hp 24.0 untouched), then the line-blocked retarget on live hostile #15 at t62 - the shoot_blockers retarget IS wired (the d>=3 block [L the 02-03-2 ledger]) but 2 ticks later the volley landed. The race is unwinnable from the gate band: bond's shells land ~1 per 50-60 ticks (the reload rhythm) against #16's 23.4-per-cluster volleys; the 0x1c's pellet scatter (0.0448 rad [L ee_start_05 weapon_data] = +-0.54 u at 12.5 u) against a ~0.4 u part box is a lottery even converged [L d3run63]. WIRED this round (d>=3 gates only; the d<3 streams byte-identical [L the whole-binary run: 6 passed / 0 failed / 3 ignored, 224.18 s]): the funnel v3 (the top-up + the 12-u scoops), the gate re-open + the back-through-gate pre-leg + the through-gate clear_near, the safe exit sweep + census. NEXT levers, in order: (1) THE HP LEDGER IS NOW THE WHOLE GAME - bond arrives at the exit at 23.4 = exactly one #16 volley cluster; the -7 ledger's clean-funnel floor (41.2 at the cluster, one 17.8 #14 hit) leaves 41.2 - 23.4 = 17.8 AFTER one volley and the fights (the shoot_blockers retarget proven) then win; find the 41.2 -> 23.4 gap's owner (the gdbwatch live check stands) or one more upstream save. (2) THE EXIT FIGHT GEOMETRY - #16's post (-1.3,-35.4) covers the gate band at 13 u; a player does not stand in it: route the exit's moat-node legs from outside his band, or pick a zero-spread aimed gun (the 0x2 heavy, ~8 a tap [L d3run52]) at the through-gate spot so the shells land. (3) the funnel v3 + the exit route shapes are KEEPERS (the cluster dies at the pocket, both servants save, hp untouched through the rescue). Live checks: (a) the 41.2 -> 23.4 pre-funnel hp gap - gdbwatch the health address across the saddle re-take + the north-door standoff walk, name the damager (the -7 ledger's check stands); (b) #16's volley geometry - fieldprobe bond at the through-gate spot (13.6,-37.3) against #16's post (-1.3,-35.4): does the disc's own 13-u band chunk a standing bond for 23.4 (the port's spread math vs the disc's). follow-up real-health-00agent-03-captors-8follow-up real-health-00agent-02-03-3"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }
