@@ -1,2 +1,4 @@
 
 Main 11-14 (merged 9efda0b2e): after the press kill Bond stands, return fire off, walks behind the door wall (7.0, 12.0) then the hold line - death t13141 -> t14138. A sightline scan from #5 read z > ~12.5 open, the wall line z <= 12.0 at x 6-8 blocked. Dead lever: luring #5 from the hold with the lip fight (any 0x5000038 within 25 u) - 78k ticks of flanks, killed at the hold down the open door lane from (7.0, 17.6). Next wall: the doorway step at 19.0 health with #5 roaming the hall.
+
+Main 11-14 (merged ccdd9de13): after the AND, the east armour (17.4, 6.2, -3.2, kind 3) through the side door (7.9, 2.9), the out-path retraced back (direct return wedged on the leaf) - armour 50, #16/#10 die on the way, death t14138 -> t15977 (#5 volley at 13.2 u from (-5.8, 17.4) on the route pre-clear legs). The other armour (-14.4, 6.5, 16.1) sits beside #5.
