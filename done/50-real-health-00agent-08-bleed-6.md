@@ -134,3 +134,5 @@ Main 11-14 (merged c65f36857): a held-health analysis of the whole fight (ten la
 Main 11-14 (on c65f36857): switch_to_armed before the east deck head (the P2K 7+41 up at 100 health) re-rolls the opening - death t20296, far worse. Not shipped.
 
 Main 11-14 (on c65f36857): the fight bill is now rocket 2 own blast -25.05 at t28226 (the low pass at 16 u, the blast 4.7 u from Bond), nine cannon chips (-2.0, 18.0) and the final -8.95 (a radius-4 blast at (112.3, 13.4, -176.6)). A 20/25-u launch minimum drops rocket 2 and later ones too - three rockets, t32801, worse.
+
+Main 11-14 (on c65f36857): no launch with the Hind within 8 u horizontally (the overhead pass that made rocket 2 burst on the ceiling): the same re-roll as the 20-u minimum - three rockets, t32801. Rocket 2 stays; its 25 is the price of the five-rocket stream.
