@@ -33,3 +33,8 @@ Main 11-15 (4): a lever from the copter state machine (copter.rs case 2, [M 0x17
 Main 11-15 (5): with a 4-u slit cast from three muzzle points 0.2 u below the eye (eye, eye +/- 0.25 right), the south-west launch ban can be LIFTED: l >= 17-22 + that cast + no SW ban = 4 rockets 401.7, NO self-blast, death t33138 (stable across l 17-22). Rocket 3 now lands at the SW machine (84.7, 22.3, -196.3) from the anchor. The bill that run: three machine missiles -23.7 (fight t3439-3873), then 14 cannon chips x -2.0 (t4218-5885); after rocket 4 (t5236, clip 0) no reload/launch before the death. Offsets 0.15/0.18 let a self-blast back in (5 launches, t32808); 16 waits stacked on it: best t34832 (5 launches, 402.3, one self-blast). Not shipped - no gain over master.
 
 Main 11-15 (6): THE WALK PASSES on master 69df8ef14 - the 0.22-u-low 3-point launch cast replacing the SW ban + cannon dodges from rocket 3 + a finisher after rocket 6 (aim within 0.2, l >= 10): seven rockets, the Hind down. Nothing left to do on this task.
+
+---
+## Report (done, main 11-15)
+
+The walk passes on master since 69df8ef14 - nothing left to do on this task.
