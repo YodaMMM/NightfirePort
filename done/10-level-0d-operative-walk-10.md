@@ -139,3 +139,5 @@ Main 11-14 (merged 92ee90c01): the yard sweep in 200-tick passes, a survivor not
 Main 11-14 (on 92ee90c01): the ride fire aimed at clear_box_aim (the posed box centre) instead of pos+1.3: #15 lands 16.0 twice and Bond dies on the ride at t18650 - worse. The yard: the sweep leaves Bond at 4.6, the plate leg trickle (#4/#25, 0.6) ends it at t20383.
 
 Main 11-14 (on 92ee90c01): the ride fire aimed at clear_box_aim (the posed box centre) instead of pos+1.3: #15 lands 16.0 twice and Bond dies on the ride at t18650 - worse. The yard: the sweep leaves Bond at 4.6, the plate leg trickle (#4/#25, 0.6) ends it at t20383.
+
+Main 11-14 (on 92ee90c01): ride-fire tap spacing 10 (50 taps) / 40 (18 taps): #15 never hit on this stream (10.0 left), t19286 / t19844 - worse than t20383. The ride misses look systematic on this roll (the first ride-fire roll killed him in 30) - check the rifle rounds from the moving gantry (carry velocity in the shot? the aim converges on a moving eye).
