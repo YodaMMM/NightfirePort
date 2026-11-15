@@ -173,3 +173,5 @@ Token/credit/context figures: `not visible to me` — this environment exposes n
 cost or context-window readout to the worker. What was visible: the task message's clock
 (sandbox expiry ~03:11 UTC; this report written ~02:00 UTC), `git` hashes, test outputs
 and process exit codes. No input/output token counters, no credit balance, no dollar cost.
+
+Main 11-14: the armour (-41.3, 1.5, 36.5) from the second hold: Bond leaves the hold at 7.9 and dies on the walk at t27643 - worse. The Kiko hold ends at 27.9, the second hold at 7.9: the holds themselves are the bleed.
