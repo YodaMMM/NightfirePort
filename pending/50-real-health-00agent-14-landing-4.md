@@ -21,3 +21,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 **Branch:** `s/real-health-00agent-14-landing-4`.
 
 Main 11-15 (merged ad2d99954 - master now carries the named idea): walker_b2 round_dodge (step perpendicular to an incoming 0x14 round whose line passes within 3 u, 1.5-20 u out, unless a hostile is within 5 u): the Kiko hold ends at 52.5 (was 27.9), death t29197 -> t31711 at (-45.68, 1.07, 26.88) by the second hold. Rebase on master before measuring.
+
+Main 11-15 (merged 9f5b13b6e): with the round dodge the second hold is dropped - death t31711 -> t35208 at (-13.09, 1.12, -23.10) past the escape touch on the Rook wake legs. Rebase on master.
