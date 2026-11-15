@@ -493,6 +493,32 @@ fn mezzanine_door_leg(w: &mut Walker) {
             "the ch-0x54 VentLatch #182 exists [D #182 p5]");
         assert!(!sim.drones.channels.on(0x54), "ch 0x54 is off before the burn [D #182]");
     }
+    // real-health-00agent-0c (11-15): the deck sits between two balcony snipers (#19 west, #20
+    // east, 0x1e, ~7.6 u up) [L the NF_DMG_TRACE runs]. The photograph leg leaves the micro-camera
+    // 0x54 in hand (no round spawns from it), so Bond takes the scooped sniper rifle and answers the
+    // visible shooters within 15 u (bounded 300-tick stands) before crossing, then steps back onto
+    // the arrival spot the crossing starts from.
+    if hard_0c(w) {
+        for _ in 0..120 {
+            if w.scene.sim.as_ref().unwrap().gun.weapon == 0x1e { break; }
+            w.tick(nf_game::player::Input { switch_to: Some(0x1e), ..Default::default() }, false);
+        }
+        for _ in 0..6 {
+            let pick = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                        && ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt() < 15.0 && (d.pos[1] - bp[1]).abs() < 6.0 })
+                    .filter(|&di| walker::DamageLog::visible(sim, di))
+                    .min_by(|&a, &b| { let (da, db) = (&sim.drones.list[a], &sim.drones.list[b]);
+                        ((da.pos[0] - bp[0]).powi(2) + (da.pos[2] - bp[2]).powi(2)).total_cmp(&((db.pos[0] - bp[0]).powi(2) + (db.pos[2] - bp[2]).powi(2))) })
+            };
+            let Some(di) = pick else { break };
+            let _ = w.shoot_bounded(di, "the deck sniper", 300);
+        }
+        w.walk_nav_to([54.0, 5.8, -158.0], "back to the deck arrival", 0.5);
+    }
     w.walk_to(Wp::new(54.0, 5.8, -160.8).r(0.8), "the deck south");
     // The deck's internal 0.56 step-down around z −161 holds the walk (the game's own lip-hold
     // [L 2026-10-31 walkway]); cross it with a grounded jump, real input.
@@ -948,6 +974,24 @@ pub fn walk_spawn_to_the_yard_ladder_base_at(iso: &str, difficulty: u32) -> Walk
     w.walk_to(Wp::new(13.2, 7.4, -116.0).r(0.9), "the ledge north 1");
     w.walk_to(Wp::new(13.2, 7.4, -113.4).r(0.8), "the ledge north 2");
     w.walk_to(Wp::new(10.5, 7.4, -113.4).r(0.9), "the display ground west");
+    // real-health-00agent-0c (11-15): the display ground carries live armour (kind 3, (9.2, 7.2,
+    // -115.7) [L the pickup dump]) 2.5 u off the leg, and the stair fights leave their guards' guns
+    // here; the 00 Agent walk arrives at 43 health with the clip spent and the deck snipers' 0x1e
+    // rounds take 41-46 a hit [L the NF_DMG_TRACE runs]. A player takes both before the deck.
+    if hard_0c(&w) {
+        w.walk_nav_to([9.2, 7.4, -115.7], "the display ground armour", 0.5);
+        w.walk_nav_to([10.5, 7.4, -113.4], "back to the display ground west", 0.9);
+        for j in 0..6 {
+            let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+            let t = w.scene.sim.as_ref().unwrap().drones.pickups.iter().filter(|p| !p.gone && !p.hidden && p.kind != 3)
+                .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                .filter(|q| ((q[0] - bp[0]).powi(2) + (q[2] - bp[2]).powi(2)).sqrt() < 12.0 && (q[1] - bp[1]).abs() < 1.5)
+                .min_by(|a, b| ((a[0] - bp[0]).powi(2) + (a[2] - bp[2]).powi(2)).total_cmp(&((b[0] - bp[0]).powi(2) + (b[2] - bp[2]).powi(2))));
+            let Some(t) = t else { break };
+            w.walk_nav_to(t, &format!("the display ground drop {j}"), 0.4);
+        }
+        w.walk_nav_to([10.5, 7.4, -113.4], "back from the drops", 0.9);
+    }
     w.walk_to(Wp::new(5.4, 7.35, -113.0).r(0.7), "the display eye");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1999,3 +2043,6 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, _label
     }
 }
 
+/// 00 Agent real damage (difficulty 3, the top-up off): the 0c walk's own levers below run only here,
+/// so the Operative/Agent sisters and the top-up walk keep their timelines byte-exact.
+fn hard_0c(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() }
