@@ -113,6 +113,7 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
         w.wait(20);
     }
     let ambush_rounds = if difficulty >= 3 { 16 } else { 5 };
+    let mut no_fire_streak = 0u32;
     for ambush_round in 0..ambush_rounds {
         let near: Vec<usize> = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -126,9 +127,65 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
         };
         if near.is_empty() { break; }
         eprintln!("[01] ambush round {ambush_round}: fighting {near:?} from the mouth");
+        let mut any_fired = false;
+        // 01-hall-7f (d3): the contact's lead does not wait for the ambush fight. In the r7_f2
+        // run he had walked the whole corridor by round 2 and stood shoulder-to-shoulder with
+        // the west SMG #4 (shield drone 1 at (-30.15,13.68) vs #4 at (-30.54,13.25)) — every
+        // tap at #4 crossed his cylinder (the game's bullets hit ANY drone [M NDrone2_
+        // DealWithObjHit 0x140968:85-95]; the shield gate kept the trigger down the whole
+        // window), and the fight went silent while #4's fire landed free. A player keeps his
+        // buddy out of his own fire line: between windows Bond re-takes a spot AHEAD of the
+        // contact (nearer his steering target [M 0x15ea28 PlayerInWay]) so the lead stalls
+        // with the contact BEHIND Bond — east of him along the westward aim, where the cone
+        // never reaches (ds < 1.0 along the ray) and the lead stops creeping into the zone.
+        if difficulty >= 3 && !w.scene.sim.as_ref().unwrap().drones.list[ci].corpse {
+            let (cp, ctgt) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let c = &sim.drones.list[ci];
+                (c.pos, c.route.as_ref().map(|r| r.target))
+            };
+            let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+            if walker::dxz(cp, bp) < 16.0 && cp[0] > bp[0] - 1.0 {
+                let dir = match ctgt {
+                    Some(t) if walker::dxz(t, cp) > 0.5 => {
+                        let (vx, vz) = (t[0] - cp[0], t[2] - cp[2]);
+                        let l = (vx * vx + vz * vz).sqrt();
+                        [vx / l, vz / l]
+                    }
+                    _ => [-1.0, 0.0],
+                };
+                let mut spot = [cp[0] + dir[0] * 2.2, cp[1], cp[2] + dir[1] * 2.2];
+                // East of the slab's west edge (-26.13 [D placement dump]) and inside the
+                // corridor's walkable band (z >= 13.4 [L the sight probe]): the hold never
+                // takes Bond into the pocket or off the floor.
+                spot[0] = spot[0].max(-24.5);
+                spot[2] = spot[2].clamp(13.6, 16.6);
+                if walker::dxz(spot, bp) > 0.8 {
+                    w.walk_nav_to(spot, "the in-way hold for the ambush window", 1.0);
+                }
+            }
+        }
         // Agent: the exposed guards first (a walled one spends the mouth window while the
         // others shoot free).
-        let order = if difficulty >= 2 {
+        let order = if difficulty >= 3 {
+            // 01-hall-7f (d3): the order's visibility test must be the SHOOTER'S OWN MODEL —
+            // exposed_aim (the game's ray_box-before-world rule [M Collide_Jointy 0x1ec180 /
+            // 0x1ea398:216-229], walker.rs exposed_aim), not the point-segment
+            // DamageLog::visible. The r7_trace run's rounds 0/2/3 burned their windows on the
+            // pocket guard #2 whose point rays cleared but whose box entries were all
+            // world-shadowed (fire_state false the whole window — no shot, no ammo burn, no
+            // gunshot-hearing draw), while the exposed SMG #4 waited outside the
+            // one-guard-per-round break; Bond died in round 4 with #4 at 12 hp, unhurt.
+            let mut hit_able: Vec<usize> = Vec::new();
+            let mut shadowed: Vec<usize> = Vec::new();
+            for g in route_order(&w, &near) {
+                let d = &w.scene.sim.as_ref().unwrap().drones.list[g];
+                if d.corpse || d.health <= 0.0 { continue; }
+                if w.exposed_aim(g).is_some() { hit_able.push(g); } else { shadowed.push(g); }
+            }
+            hit_able.extend(shadowed);
+            hit_able
+        } else if difficulty >= 2 {
             let (mut seen, walled): (Vec<usize>, Vec<usize>) = route_order(&w, &near).into_iter()
                 .partition(|&g| walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g));
             seen.extend(walled);
@@ -174,12 +231,39 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
                 continue;
             }
             if difficulty >= 3 {
-                // bounded: the round loop re-picks the exposed guard each window
+                // bounded: the round loop re-picks the exposed guard each window. 01-hall-7f: a
+                // window on a guard whose boxes never open (aim None at every re-pick) is
+                // SILENT by construction — the trigger never fires, no ammo burns, the
+                // gunshot-hearing draw never runs [M DroneFunc_SetNoiseHeard] — and running it
+                // only feeds the blocked sidestep ladder, whose strafes walked Bond off the
+                // in-way hold and into the west SMG's lane (the r7_f3 death at 19599). A
+                // no-entry guard is SKIPPED (no window at all); the round still ends on the
+                // first window that actually fired.
+                if w.exposed_aim(g2).is_none() {
+                    eprintln!("[01] ambush guard {g2}: no box entry from this stand — window skipped");
+                    continue;
+                }
+                let (clip0, spare0, hp0) = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    if let Some(s) = w.shield {
+                        eprintln!("[01] shield drone {s} at {:?} corpse {} bond {:?} tgt {:?} aim {:?}",
+                            sim.drones.list[s].pos, sim.drones.list[s].corpse, sim.bond.pos,
+                            sim.drones.list[g2].pos, w.exposed_aim(g2));
+                    }
+                    (sim.gun.clip, sim.gun.spare, sim.drones.list[g2].health)
+                };
                 if !w.shoot_bounded(g2, &format!("ambush guard {g2} (bounded)"), 300) {
                     let sim = w.scene.sim.as_ref().unwrap();
                     if sim.gun.clip + sim.gun.spare == 0 { let _ = sim; w.resupply("ambush ammo"); }
                 }
-                break;
+                let sim = w.scene.sim.as_ref().unwrap();
+                let fired = sim.gun.clip + sim.gun.spare < clip0 + spare0
+                    || sim.drones.list[g2].health < hp0;
+                drop(sim);
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                if fired { any_fired = true; break; }
+                eprintln!("[01] ambush guard {g2}: a silent window (no shot fired) — the order's next guard");
+                continue;
             }
             if !w.shoot(g2, &format!("ambush guard {g2}")) {
                 if w.resupply("ambush ammo") { w.shoot(g2, &format!("ambush guard {g2} retry")); }
@@ -187,6 +271,16 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
         }
         if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        // 01-hall-7f: when NOTHING in the corridor is hittable from any stand Bond holds (the
+        // upper-ledge #2 aim-None every round, a cone-blocked west SMG the contact hugs), the
+        // fight is boxed — more rounds only feed the blocked ladders and drift Bond into the
+        // lanes (the r7_f3 death). Four consecutive no-fire rounds end the ambush phase; the
+        // escort loop's own machinery takes the leftovers from behind the contact.
+        if !any_fired { no_fire_streak += 1; } else { no_fire_streak = 0; }
+        if no_fire_streak >= 4 {
+            eprintln!("[01] the ambush fight is boxed (4 no-fire rounds) — leaving the rest to the escort machinery");
+            break;
+        }
         // A pocket guard that will not step out yet: hold the mouth (the gunshot hearing
         // keeps drawing him) and give the fight machinery the next window.
         let still = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate().any(|(i, d)| {
