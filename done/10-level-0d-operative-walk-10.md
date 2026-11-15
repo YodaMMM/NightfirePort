@@ -147,3 +147,5 @@ Main 11-14 (on 92ee90c01): ride-fire round log: tap 1 met an empty clip (0+23 - 
 Main 11-14 (on 92ee90c01): ride fire with the aim bit held near convergence + a reload request on an empty clip: still no hit on #15 (30 taps), two 16.0s on the ride, t18800 - worse. The ride fire stays as merged (d1491c571).
 
 Main 11-14 (merged a7177a99c): the yard sweep fought STANDING (no landing crouch on the Operative walk) - four kills, the plate and the photograph pass, death t20383 -> t23462 at (135.2, 5.1, -282.4) by the shooting stand.
+
+Main 11-14 (merged f3c20899a): THE OPERATIVE REAL-DAMAGE WALK COMPLETES - the shooting-stand act on the yard-east gunner (#1 at (155.2, -295.1), box (156, -288) +/- 10) downs him at +210 and the top-up door phase follows. walkreal_0700000d_live 3 passed 0 ignored. Closed.
