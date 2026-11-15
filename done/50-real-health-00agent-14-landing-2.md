@@ -40,3 +40,7 @@ Main 11-14: the Kiko corridor fight as a 600-tick kiko_hold (nearest visible, gr
 ## Report (done, 2026-11-15T02:00Z)
 
 Closed by the driver: the report is on `s/real-health-00agent-14-landing-2` (docs/reports/real-health-00agent-14-landing-2.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-11-15T02:03Z)
+
