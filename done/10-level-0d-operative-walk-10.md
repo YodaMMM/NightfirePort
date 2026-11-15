@@ -137,3 +137,5 @@ Main 11-14 (on d1491c571): the Agent-only pre-wake west-roof head acts (#461/#46
 Main 11-14 (merged 92ee90c01): the yard sweep in 200-tick passes, a survivor not re-picked - three kills, death t19957 -> t20383 at (135.9, 5.0, -306.7) on the plate leg.
 
 Main 11-14 (on 92ee90c01): the ride fire aimed at clear_box_aim (the posed box centre) instead of pos+1.3: #15 lands 16.0 twice and Bond dies on the ride at t18650 - worse. The yard: the sweep leaves Bond at 4.6, the plate leg trickle (#4/#25, 0.6) ends it at t20383.
+
+Main 11-14 (on 92ee90c01): the ride fire aimed at clear_box_aim (the posed box centre) instead of pos+1.3: #15 lands 16.0 twice and Bond dies on the ride at t18650 - worse. The yard: the sweep leaves Bond at 4.6, the plate leg trickle (#4/#25, 0.6) ends it at t20383.
