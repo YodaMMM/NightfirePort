@@ -139,3 +139,5 @@ All new/changed behaviour is gated to `difficulty >= 3` (+ the si-1 leg where no
 ### Usage
 
 not visible to me
+
+Main 11-14: the saddle cycling is a truly DRY wheel (the saddle wake sweep spent the P2K; 0x1 stays in hand through all 12 cycles). An opt-in walker skip of the cycle when no owned gun holds a round: t74105 - Bond still stands at the saddle in #7s line. Not shipped.
