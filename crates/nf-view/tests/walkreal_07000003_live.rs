@@ -2053,6 +2053,49 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // spot the first visit walked, EAST of #15's west choke — the exit's moat-node route
         // then starts from there (6.2 u, clear).
         w.walk_nav_to([14.7f32, 5.9, -36.8], "back through the gate (the exit)", 1.6);
+        // real-health-00agent-03-captors-9 (the -8 ledger lever 2, the exit fight geometry):
+        // the fights' plain taps at the gate spot never landed — run 63's NF_RF_TRACE: the
+        // fight on #16 CONVERGED (err 0.000 at t60, 12.5 u) and the in-hand shell MISSED (hp
+        // 24.0 untouched), because the 0x1c's own pellet scatter (0.0448 rad [L ee_start_05
+        // weapon_data] = +-0.54 u at 12.5 u) is a lottery against a ~0.4 u part box even
+        // converged. A player picks the gun whose aimed round has no such cone: the 0x2 heavy
+        // (the -6 ledger's own stand-off pick; ~8 a tap [L d3run52]) with the aim-bit
+        // zero-spread act [M Bullet_init 0x12c5a0:139-170], and squares up on the gate band
+        // where #16 stood still (his fire-stop root [M drone.rs ZERO_ROOT 0x03] gives the
+        // stand its still window). The stand's own gates keep it safe: no exposed part (UNSEEN)
+        // or a still-less charger bails inside the cap and the plain clear_near below still
+        // runs. d>=3 only — the d<3 streams stay byte-identical.
+        for _ in 0..8 {
+            let wnow = { let sim = w.scene.sim.as_ref().unwrap(); sim.gun.weapon };
+            if wnow == 0x2 { break; }
+            w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+            for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        }
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[03-ammo] at the through-gate stand: gun {:#x} clip {} spare {} hp {:.1}",
+                sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+        }
+        for k in 0..4 {
+            let near = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.team == 1 && d.enabled && d.present && !d.corpse && d.health > 0.0
+                        && (d.pos[1] - b[1]).abs() < 2.5 && walker::dxz(d.pos, b) < 18.0)
+                    .min_by(|a, c| walker::dxz(a.1.pos, b).total_cmp(&walker::dxz(c.1.pos, b)))
+                    .map(|(i, _)| i)
+            };
+            let Some(di) = near else { break };
+            let (hp, pos) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                (d.health, d.pos)
+            };
+            eprintln!("[03] the through-gate aimed sweep round {k}: drone #{di} hp {hp:.1} at ({:.1},{:.1},{:.1})",
+                pos[0], pos[1], pos[2]);
+            if !aimed_stand_03(&mut w, di, "the through-gate aimed sweep", 900, false) { break; }
+        }
         // The chasers (#15/#16) cross the safe->gate line behind him (run 64: 21.6 health
         // across the pre-leg nav, the fights engaged 3x and missed all). From the CONVERGED
         // gate spot a player squares up and fights what followed: clear_near's full fights
@@ -2222,8 +2265,31 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 01-04 group]; the min-difficulty
 /// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
 /// only difference.
+///
+/// The route ledger (real-health-00agent-03-captors, -2/-3/-4/-5/-6/-7/-8/-9): the frontier
+/// moved 53672 (the wedge-ladder sniper) -> 71192 (the dry chase) -> 106888 (the pocket ambush)
+/// -> 151214 (the post-rescue chase) -> 172900/172244 (the exit legs) -> GREEN. The keepers, in
+/// the order they landed: the direct_sidestep_03 ground sidestep at the lane wedge (the A* rode
+/// the building's upper row into sniper #6's windows); the pre-crossing + lane-north aimed
+/// stands (the lane cluster's fire lines answered from the mouth line, the kill-loot cycle
+/// re-arming between stands); the saddle-cell mouth approach (the si-0 way keeps #14 asleep
+/// through the trio fight); the north-door standoff + funnel (E-open the door himself, fight
+/// the charger at the pass); the cluster funnel v3 (the pre-fight top-up + the 12-u scoops —
+/// the cluster dies at the pocket, both servants save, hp untouched through the rescue); the
+/// gate re-open + the back-through-the-gate pre-leg (the safe's exit A* otherwise detours west
+/// past #15); the safe exit sweep + census. The -8 round proved the exit race unwinnable from
+/// the gate band with the in-hand 0x1c (run 63: the fight on #16 converged err 0.000 at 12.5 u
+/// and the shell MISSED — the 0x1c's own pellet scatter 0.0448 rad [L ee_start_05 weapon_data]
+/// is a lottery against a ~0.4 u part box even converged), and the -9 round is the fix: the
+/// through-gate stand cycles to the 0x2 heavy and runs the aimed stands (the aim-bit
+/// zero-spread act [M Bullet_init 0x12c5a0:139-170]) on what stands within 18 u before the
+/// plain clear_near. Measured (runs 64-66): the walk runs 172244 -> 175712 and completes every
+/// objective — the Load Point loads 07000004 — with bond 16.2 at the end (18 hits for 83.8
+/// whole-route; the upstream floor is 23.4 at the exit, exactly one #16 volley cluster, the
+/// 41.2 -> 23.4 gap's owner being #14's single 17.8 charger round at the north-door funnel —
+/// the -8 ledger's live check (a) answered from the trace). The d<3 streams stay byte-identical
+/// (every -9 arm is d>=3-gated).
 #[test]
-#[ignore = "00 Agent (real-health-00agent-03-captors-8 ledger, base master 854334126): the -7 ledger's item 1 FELL - THE CLUSTER DIES AT THE POCKET and both servants save with bond hp UNTOUCHED (23.4 through the whole rescue); the frontier moved 151214 -> 172900, now on the EXIT legs. All measured on real-input d3 runs (57-61; the -7 runs 50-56 stand in the -7 report). MEASURED this round, in run order: (57) the funnel kill-loot cycle v2 (loot_the_drops_03 + scoop_drops_03 between rounds, the dry give-up no longer breaks the loop, the poll 20 -> 600 ticks, rounds 10 -> 16): #2 dropped 24->4 and died to the same-tick kill+dry give-up, the loot armed the 0x1c, #18 killed - but round 3 CHASED an unexposed #19 at clip 5 spare 0 and his two 0xe point-blanks (23.4 = exactly bond hp) finished Bond at 71192 [L d3run57]. (58) THE FUNNEL v3 = THE FIX (the pre-fight top-up while clip+spare < 6, bounded 3 passes, the 12-u scoop reaching the 10-11 u death spots the loot's 8-band misses): THE CLUSTER DIED AT THE POCKET (rounds 0-2: #2, #19 killed; the poll empty at round 3), bond 23.4 untouched through the funnel, both servants SAVED (post-save 0x13 x2), death 171891 on the exit's moat-node nav at (-1.85,5.96,-35.08) to #15 (0x5000036, 0x12) point-blank (23.4 in 7 hits at d 2.6) - the return fight engaged at err 0.918 (the nav left Bond facing away; 00 Agent autoaim is closed [M Autoaim_HardMul 0]) and lost the race [L d3run58]. (59) THE GATE DOOR AUTO-CLOSES behind the safe visit (state 0x2 [L d3run60's print]) and the exit's A* from the safe heads WEST (the first visit's same nav reached (7.48,-33.71) direct; with the door re-opened the graph STILL prefers the west line out of the safe room) - #15 intercepts. Wired the gate re-open (use_door, the stall-door idiom) + the back-through-the-gate pre-leg nav to (14.7,-36.8) (the first visit's own walked spot), d>=3: the pre-leg nav WORKED (arrived (13.51,-37.17)) but #15 AND #16 chased the safe->gate line and the return fights engaged 3x and MISSED ALL (killed false, #15 hp 12 untouched) - bond arrived 1.8 hp, death 172900 [L d3runs 60-61]. (60) the census at the safe: #15 (0x12, 12 hp) (3.8,-33.3), #16 (0x1c shotgun, 24 hp) (3.6,5.4,-25.8, the ditch floor) - the safe's key (ch 0x4e) arms the alarm responders and they walk their west posts during the exit; the safe exit sweep (the nearest-exposed pick, 300 wait) found NOBODY exposed from the safe room; the through-gate clear_near skipped them (the far+unexposed skip - their boxes buried from the gate spot while their muzzles reach). Death 172244 at (11.84,-36.87) - #16's shotgun (23.4 in 4 hits at d 13.2) while the fight stood Bond in his lane [L d3run62]. (61) THE EXIT FIGHT TRACE (NF_RF_TRACE): the fight on #16 CONVERGED (err 0.000 at t60, 12.5 u) and fired ONE shell that MISSED (hp 24.0 untouched), then the line-blocked retarget on live hostile #15 at t62 - the shoot_blockers retarget IS wired (the d>=3 block [L the 02-03-2 ledger]) but 2 ticks later the volley landed. The race is unwinnable from the gate band: bond's shells land ~1 per 50-60 ticks (the reload rhythm) against #16's 23.4-per-cluster volleys; the 0x1c's pellet scatter (0.0448 rad [L ee_start_05 weapon_data] = +-0.54 u at 12.5 u) against a ~0.4 u part box is a lottery even converged [L d3run63]. WIRED this round (d>=3 gates only; the d<3 streams byte-identical [L the whole-binary run: 6 passed / 0 failed / 3 ignored, 224.18 s]): the funnel v3 (the top-up + the 12-u scoops), the gate re-open + the back-through-gate pre-leg + the through-gate clear_near, the safe exit sweep + census. NEXT levers, in order: (1) THE HP LEDGER IS NOW THE WHOLE GAME - bond arrives at the exit at 23.4 = exactly one #16 volley cluster; the -7 ledger's clean-funnel floor (41.2 at the cluster, one 17.8 #14 hit) leaves 41.2 - 23.4 = 17.8 AFTER one volley and the fights (the shoot_blockers retarget proven) then win; find the 41.2 -> 23.4 gap's owner (the gdbwatch live check stands) or one more upstream save. (2) THE EXIT FIGHT GEOMETRY - #16's post (-1.3,-35.4) covers the gate band at 13 u; a player does not stand in it: route the exit's moat-node legs from outside his band, or pick a zero-spread aimed gun (the 0x2 heavy, ~8 a tap [L d3run52]) at the through-gate spot so the shells land. (3) the funnel v3 + the exit route shapes are KEEPERS (the cluster dies at the pocket, both servants save, hp untouched through the rescue). Live checks: (a) the 41.2 -> 23.4 pre-funnel hp gap - gdbwatch the health address across the saddle re-take + the north-door standoff walk, name the damager (the -7 ledger's check stands); (b) #16's volley geometry - fieldprobe bond at the through-gate spot (13.6,-37.3) against #16's post (-1.3,-35.4): does the disc's own 13-u band chunk a standing bond for 23.4 (the port's spread math vs the disc's). follow-up real-health-00agent-03-captors-8follow-up real-health-00agent-02-03-3"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }
@@ -2355,6 +2421,54 @@ fn probe_door8_cluster_load_state() {
         for (di, dr) in sim.drones.doors.list.iter().enumerate() {
             eprintln!("[03-probe] door #{di} at ({:.2},{:.2},{:.2}) state {:#x} pos01 {:.2}",
                 dr.pos[0], dr.pos[1], dr.pos[2], dr.state, dr.pos01);
+        }
+    }
+}
+
+/// Cheap probe (no walking): the saddle-area armour pickup (kind 3 [M pickup::kind::ARMOUR],
+/// the -8 ledger's "one more upstream save" candidate — armour absorbs the #14 charger's
+/// burst before the health ledger). Dumps the pickup's exact spot, the nav routes to it from
+/// the saddle / the duel line / the wake spot, and the nav nodes within 6 u of it.
+#[test]
+#[ignore = "probe: the saddle armour pickup (kind 3) reachability"]
+fn probe_saddle_armour_pickup() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
+    w.wait(100);
+    let sim = w.scene.sim.as_ref().unwrap();
+    for (i, p) in sim.drones.pickups.iter().enumerate() {
+        if p.gone { continue; }
+        if walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], [21.5f32, 9.2, 11.6]) < 10.0 {
+            eprintln!("[03-probe] pickup #{i} kind {} weapon {:#x} rounds {} at ({:.3},{:.3},{:.3}) ch {:#x}",
+                p.kind, p.weapon, p.rounds, p.m[3][0], p.m[3][1], p.m[3][2], p.switch_channel);
+        }
+    }
+    eprintln!("[03-probe] all pickups within 25 u of the saddle (23.5,6.3,8.4):");
+    for (i, p) in sim.drones.pickups.iter().enumerate() {
+        if p.gone { continue; }
+        if walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], [23.5f32, 6.3, 8.4]) < 25.0 {
+            eprintln!("[03-probe] pickup #{i} kind {} weapon {:#x} rounds {} at ({:.3},{:.3},{:.3}) ch {:#x}",
+                p.kind, p.weapon, p.rounds, p.m[3][0], p.m[3][1], p.m[3][2], p.switch_channel);
+        }
+    }
+    let saddle = [23.5f32, 6.3, 8.4];
+    let duel = [22.3f32, 5.3, 10.9];
+    let wake = [26.9f32, 6.4, 16.1];
+    let armour = [21.47f32, 9.17, 11.59];
+    for (name, from) in [("saddle->armour", saddle), ("duel-line->armour", duel), ("wake->armour", wake)] {
+        let pts = walker::nav_route(&sim, from, armour);
+        eprintln!("[03-probe] {name}: {}", match &pts {
+            Some(p) => p.iter().map(|q| format!("({:.1},{:.1},{:.1})", q[0], q[1], q[2])).collect::<Vec<_>>().join(" -> "),
+            None => "NO ROUTE".to_string(),
+        });
+    }
+    eprintln!("[03-probe] nav nodes within 6 of the armour spot:");
+    for (pi, p) in sim.nav.paths.iter().enumerate() {
+        if p.kind & 0xd != 0 { continue; }
+        for (ni, n) in p.nodes.iter().enumerate() {
+            if walker::dxz(n.pos, armour) < 6.0 {
+                eprintln!("[03-probe] path {pi} node {ni} at ({:.2},{:.2},{:.2}) kind {:#x}", n.pos[0], n.pos[1], n.pos[2], p.kind);
+            }
         }
     }
 }
