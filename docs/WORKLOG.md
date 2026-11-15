@@ -9,3 +9,11 @@
   to the escape touch (t31000-32000, #20 and #30 15.0 each) and survive the Rook's-wake legs.
 - Plan: reproduce with NF_DMG_TRACE, identify the unaccounted 20.0 of the 50.0 bill, measure
   the next lever (round_dodge coverage for the 0x1a rounds on the wake legs is unmeasured).
+- Measured (11-15, 5 NF_DMG_TRACE runs): master's baseline re-verified (death t35208, the
+  east bill 50.0 itemised); the east lane detour (lenient walk_to (-44.5, 34.0) + aimed
+  pass) reaches the touch at 26.6, death t41509 past door #121 to #40/#41's 0x1a posts;
+  two other lanes measured worse (t32831 / t37624, closed); the position-keyed post scan
+  measured dead (the guards converge, a fight displacement hit the live wire). Next lever
+  in the ignore message: the visibility-keyed scan from (-15.5, -22.6).
+- walkreal_07000014_live 9 passed / 1 ignored (171.7 s), interactables_07000014_live 10
+  passed (13.2 s). Report: docs/reports/real-health-00agent-14-landing-4.md.
