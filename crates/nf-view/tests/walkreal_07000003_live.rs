@@ -726,9 +726,23 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     // so a player squares up on the mouth line and answers the shooters BEFORE stepping
     // through. d>=3 only: the d<3 streams keep their crossing byte-identical.
     if difficulty >= 3 {
+        // real-health-00agent-03-captors-6, run 31 MEASURED (the -5 ledger item 2's "colder"
+        // answer, tried and REFUTED): with the pre-crossing stands dropped the mouth runs cold
+        // and the crossing itself is lethal — Bond reached the mouth at 65.2 (the
+        // mid-courtyard fights' own price) and died at tick 10009 with 100.0 across 9 hits,
+        // 5 fights: the fights are OFF across the crossing legs by the run-9 doctrine, so the
+        // lane cluster's (#11/#17/#9/#10) fire through the glass ran unanswered [L d3run31].
+        // The pre-crossing stands STAY: 48.0 (36.0 #11 in 3 hits, 12.0 #17 in 1) is the
+        // measured price of the two kills and a crossing that lands on the lane at ~41 with
+        // the lane-north stands still ahead [L d3run29/30 vs d3run31].
         w.walk_to(Wp { at: [10.93, 5.35, -19.0], act: Act::None, arrive: 0.35 },
             "the lane mouth line (pre-crossing)");
         clear_exposed_nearest_03(&mut w, "the lane mouth shooters (pre-crossing)", 40.0, 8, 600, false);
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[03-ammo] after the pre-crossing stands: gun {:#x} clip {} spare {} hp {:.1}",
+                sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+        }
     }
     let mut on_lane = false;
     // 00 Agent (run 9): the through-crossing's plain fight vs #11 stopped Bond on the lane for
@@ -1057,6 +1071,13 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             // stand itself (a gate checked before a walk is not the gun at the stand's t0).
             w.dmg.return_fire = false;
             w.walk_nav_to([22.1, 5.5, -2.0], "the mouth path east anchor (si-1)", 1.2);
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let inv = &sim.drones.inventory;
+                let total: i16 = inv.carried.iter().sum();
+                eprintln!("[03-ammo] si-1 anchor: gun {:#x} clip {} spare {} carried-total {} hp {:.1}",
+                    sim.gun.weapon, sim.gun.clip, sim.gun.spare, total, sim.drones.health.health);
+            }
             // real-health-00agent-03-captors-5, lever 2 (the -4 ledger item 3): #7 is the
             // endgame drain — 43-51 hip hits for 27.4-41.2 across runs 20/21, alive at hp 4-10
             // at both deaths [L d3run20/21]. A player with rounds takes the aimed stand from
@@ -1090,6 +1111,9 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                     };
                     if armed && w.exposed_aim(di).is_some() {
                         aimed_stand_03(&mut w, di, "the #7 aimed stand (si-1 saddle approach)", 1800, false);
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        eprintln!("[03-ammo] after the #7 stand: gun {:#x} clip {} spare {} hp {:.1}",
+                            sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
                     }
                 }
             }
@@ -1126,12 +1150,79 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                             && walker::dxz(d.pos, pc) < 12.0)
                     };
                     if trio_alive {
+                        {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let inv = &sim.drones.inventory;
+                            eprintln!("[03-ammo] at the plate: gun {:#x} clip {} spare {} carried-total {} hp {:.1}",
+                                sim.gun.weapon, sim.gun.clip, sim.gun.spare, inv.carried.iter().sum::<i16>(), sim.drones.health.health);
+                            for (i, d) in sim.drones.list.iter().enumerate() {
+                                if d.team == 1 && !d.corpse && d.health > 0.0 && walker::dxz(d.pos, pc) < 12.0 {
+                                    eprintln!("[03-ammo] trio #{i} skin {:#x} weapon {:#x} hp {:.1} at ({:.1},{:.1},{:.1}) enabled {}",
+                                        d.skin, d.weapon, d.health, d.pos[0], d.pos[1], d.pos[2], d.enabled);
+                                }
+                            }
+                        }
                         w.walk_nav_to([pc[0], pc[1], pc[2]], "onto the 0x23 plate (si-1, the trio wake)", 1.6);
                         w.wait(30);
+                        // real-health-00agent-03-captors-6, lever 1 (the -5 ledger item 1, the
+                        // trio wake race, MEASURED on runs 29/30): the wake sweep's 600-tick
+                        // budget found NOBODY — the trio's scripted wake walk ends at the
+                        // east-lawn door (22.3,5.3,10.9) and that door stands CLOSED through
+                        // the whole block (the si-0 saddle walk went through it, but the leaf
+                        // shut again before si-1), so the trio bunches BEHIND the leaf and the
+                        // single eye ray never reaches their boxes; they crossed only when the
+                        // servant nav's own wedge E-opened the door mid-walk, and the doorway
+                        // point-blank finished Bond at 73318 with the trio at FULL hp — the
+                        // wake sweep never fired a shot (the gun state at the post-wake print
+                        // is unchanged: clip 5 spare 6) [L d3run29/30]. The player's shape is
+                        // the door funnel: open the door he is about to need HIMSELF, step
+                        // back south off the doorway line, and fight what comes through — one
+                        // guard crosses the door plane at a time, exposed from the moment his
+                        // boxes cross, and his drop re-arms the next fight (the kill-loot
+                        // cycle the servants' ground runs).
+                        {
+                            let east_door = {
+                                let sim = w.scene.sim.as_ref().unwrap();
+                                sim.drones.doors.list.iter().enumerate()
+                                    .find(|(_, d)| walker::dxz(d.pos, [22.3f32, 5.3, 10.9]) < 1.0)
+                                    .map(|(i, d)| (i, d.state, d.pos))
+                            };
+                            if let Some((di, state, dpos)) = east_door {
+                                if state == nf_game::door::CLOSED {
+                                    eprintln!("[03] the east-lawn door #{di} sits closed — opening it for the trio funnel");
+                                    w.walk_to(Wp { at: [dpos[0], 5.9, dpos[2] - 1.1], act: Act::None, arrive: 0.7 },
+                                        "the east-lawn door threshold (the trio wake)");
+                                    w.use_door(di, "the east-lawn door (the trio wake funnel)");
+                                }
+                            }
+                        }
+                        // The standoff: south of the door line, out of the shotgun's under-3.0
+                        // every-round-hits band [M DroneWeap_DoBulletAccuracy 0x179740:113-115]
+                        // while the funnel pours through.
+                        w.walk_to(Wp { at: [22.6, 5.9, 8.0], act: Act::None, arrive: 0.8 }, "the trio wake standoff (south of the door)");
                         clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1)", 40.0, 4, 600, true);
                         w.lenient = true;
                         loot_the_drops_03(&mut w, "the 0x23 trio wake (si-1)");
                         w.lenient = false;
+                        // The funnel's second round: the loot's walk may have stepped Bond back
+                        // toward the doorway mid-fight — re-stand, re-loot (the servants'
+                        // ground cycle's shape).
+                        w.walk_to(Wp { at: [22.6, 5.9, 8.0], act: Act::None, arrive: 0.8 }, "the trio wake standoff (again)");
+                        clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1, again)", 40.0, 4, 600, true);
+                        w.lenient = true;
+                        loot_the_drops_03(&mut w, "the 0x23 trio wake (si-1, again)");
+                        w.lenient = false;
+                        {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            eprintln!("[03-ammo] after the wake: gun {:#x} clip {} spare {} hp {:.1}",
+                                sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+                            for (i, d) in sim.drones.list.iter().enumerate() {
+                                if d.team == 1 && walker::dxz(d.pos, pc) < 14.0 && d.skin & 0xffff != 0x2b {
+                                    eprintln!("[03-ammo] post-wake #{i} skin {:#x} hp {:.1} corpse {} at ({:.1},{:.1},{:.1})",
+                                        d.skin, d.health, d.corpse, d.pos[0], d.pos[1], d.pos[2]);
+                                }
+                            }
+                        }
                     }
                 }
             }
