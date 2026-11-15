@@ -17,3 +17,18 @@
   refreshed ledger + next lever. Then run the whole walkreal_0700000d_live binary and
   interactables_0700000d_live.
 - (00:58) Branch cut from origin/master 820819cb3, WORKLOG started, first checkpoint.
+- (02:05) Recon: probe_0d_ray_stands (fresh) — every ground stand's ray to the trio's load
+  placements dies 0.83-0.90 (the slab edge from below). probe_0d_ground_wake (new): wake at
+  the drop point + 700-tick settle, then (a) the 14 route-stand matrix, (b) the full
+  186..216 x -240..-222 grid at 2 u. Result: the settled roof snipers carry HEALTH 10 (one
+  aimed hit each); the CLEAR ground lines exist ONLY to g29 (56 spots: x 204-216, z
+  -234..-240, trench a (210,-240) d 59 stable across rounds); g27 has ZERO ground spots
+  (her south spawn's clear-ray law is the ladder-top wake dump only); g28 absent from the
+  parked timeline (the run shows the strip-mouth #10 kill shot wakes her).
+- (02:05) Run 1 (the lever's own real run): the trench-a leg walked +79 ticks, the act
+  found the whole trio (g27 (151.35,-255.80), g28 (151.43,-241.25), g29 (151.39,-245.26),
+  health 10 each), the ray to g29 full CLEAR, two shots, and #29 DIED pre-climb (hp 0 by
+  frame 3854) with ZERO incoming during the shuttle+act (no hits before 3367 — the
+  strip-mouth #10 kill also landed, #10 never fired). Death t5132 (the crouched baseline
+  t5532 on this dice): the bill this roll is #27 x3 48.0 (her south spawn) + #29 16.0
+  (pre-death) + #28 16.0. The ground-answer shape is proven safe; #27 is ground-unreachable.

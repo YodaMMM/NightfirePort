@@ -267,6 +267,29 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     ] {
         assert!(w.try_walk_to(Wp { at, act: Act::None, arrive: r }, label), "{label} must walk");
     }
+    // THE GROUND ANSWER (level-0d-operative-walk-10, the driver's lever "answer #29/#27 before
+    // the climb, from a line the scans already found"): probe_0d_ground_wake (fresh on this
+    // tree, the wake + a 700-tick settle) censuses the settled roof snipers g29 (151.35, 22.70,
+    // −245.4..−245.6) and g27 (151.00, 22.70, −251.40) at HEALTH 10 each — one aimed hit drops
+    // either — and prints the eye→chest ray CLEAR from trench a (210,−240) to g29 at d 59 and
+    // from trench f (214,−245) at d 63, stable across two rounds 400 ticks apart, while every
+    // route stand's roof ray dies 0.83-0.97 from below (the slab-edge law [probe_0d_ray_stands]
+    // — the ground CLEAR lines exist only past the slab edge to the settled x ~151.4 spots).
+    // The trench stand is incoming-blind in the walked timeline: #10 is dead (the strip-mouth
+    // kill above), the deck guard's ray dies 0.89, the bay #18 is placement-held asleep
+    // (enabled false until the bay phase — the walk-2 bill's first #18 hit is the bay-enter),
+    // g27's settled spot has no line to the trench, and the platform kills already took
+    // #31/#33. Removing #29 takes her 32.0 off the phase bill (2 hits on every roll: 3042/3222
+    // [walk-9 ledger]) BEFORE the climb. Gated real_damage at difficulty 1: the plain replay
+    // and the d2 twin keep their trees byte-identical. Judge on its own real run.
+    if real_damage && difficulty == 1 {
+        assert!(w.try_walk_to(Wp { at: [210.0, 0.5, -240.0], act: Act::None, arrive: 1.5 },
+            "the trench-a ground-answer leg"), "the trench-a ground-answer leg must walk");
+        let _ = kill_guard_at_present(&mut w, [151.35, -245.5], [3.0, 3.0],
+            "the west roof #29 (the ground answer from trench a — the ray CLEAR@d59 [probe_0d_ground_wake])", 450);
+        assert!(w.try_walk_to(Wp { at: [213.2, 1.5, -234.8], act: Act::None, arrive: 0.8 },
+            "the ground-answer return leg"), "the ground-answer return leg must walk");
+    }
     // LEVERS (a)+(b) FROM THE BASE — MEASURED DEAD this session (level-0d-operative-walk-7,
     // four + one real runs, the walk-6 ledger's first two named levers, the #18-leg precedent
     // "the net is NEGATIVE: the leg stays out" applies):
