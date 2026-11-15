@@ -14,3 +14,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 **Run the crates your tests touch before pushing**, and report what you ran.
 **Branch:** `s/real-health-00agent-0d-1`.
+
+Main 11-15: the test ignore text (master d73cf126a) carries the measured ledger. Short form: the Operative deck crouch at difficulty 3 reaches the gantry ride; nearest clear-line ride fire (20-60 u) gets Bond off it on ~20 health; the 10 m slot drop then costs 30 at 00 Agent (Plr_DMod 1.2, the fall skips armour) and kills him. Probe patch: audits-side, NF_0DOP/NF_0DRIDE/NF_0DPAUSE env switches. Next: more health into the slot drop.
