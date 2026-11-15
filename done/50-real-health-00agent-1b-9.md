@@ -35,3 +35,104 @@ Main 11-14: the two world blasts (kind 107, owner -2: t4658 -12.34 at d 3.9, t75
 ---
 ## Report (done, 2026-11-15T01:10Z)
 
+
+---
+## Report from the worker (done, 2026-11-15T01:10Z)
+
+# real-health-00agent-1b-9
+
+Task: take the round-8 ledger's named lever (the k7-first order swap, with the con1/con2
+stance-exposure measurement first) on 0700001b's 00 Agent real-health walk
+(`walkreal_0700001b_live::walk_arrival_to_drakes_defeat_on_real_health_00agent`, still
+ignored), measure each change on its own real run, and write the ledger back.
+
+## What's done
+
+All work is in `crates/nf-view/tests/walkreal_0700001b_live.rs` (the 00 Agent walk only —
+every change is inside the `hard` branch or hard-gated blocks, so the d1/d2 walks are
+byte-identical: the whole `walkreal_0700001b_live` binary ran 18 passed / 0 failed / 1
+ignored, and the d1/d2 real-health walks and replays take the same paths as master). The
+test is still ignored (still red), but the round advanced more than any round since 6:
+
+1. **The [expo] stance-exposure dump the round-8 ignore message asked for** (first item):
+   the ring scan now prints the lined/close muzzle count for every shootable+roomed ring
+   stance ([expo] lines, read-only queries). Measured: the nest ring's 27/120
+   shootable+roomed stances sit at lined 0-3 (rad14 b6 (65.8,-7.4,-9.3) lined 0), while
+   the round-8 x20 scan read lined 5-8 — the nest is the better tail shelter.
+
+2. **Lever 1 (the named k7-first order swap, CONSOLE_ORDER_HARD [5,4,3,8,6,7,1,2]) measured
+   RED [L /tmp/lever1_r9.log]: death 8344 (round-8: 9134), m1/m7 launched.** The run proved
+   WHY: the tail consoles' held targets DO NOT EXIST during the whole approach — zero
+   [cands]/[ring] dumps for con7/con1/con2, zero taps 7453..8053 — the UI scripts' first
+   hold lands ~1000 ticks later than the modeled armed+359 gate. The round-8 shape's
+   exposed idle at the nest then lost the 8053 fight.
+
+3. **The dead window discovered and mapped.** missile_start [9084,9084,4175,2975,1775,
+   5375,9084,5375] [L lever5] — the tail missiles' p0s start ~1009 past the modeled 8075
+   (the same late-p0 pattern the ledger's m4 outlier showed, now on all three tail
+   missiles), so the UI gates fire ~9443 and the first holds ~10120: NO tail console work
+   exists ~7119..~10120 (~3000 ticks, not the modeled 1300). The window is pure survival.
+
+4. **The dead-window survival shape measured, three attempts:**
+   - static shelter rad 10: hp 47.7 → 0.0 in 1382 ticks [L lever2] — the hysteresis froze
+     Bond while the 6-9 chasers converged and lined him through the open arcs;
+   - deep shelter rad 15 (reaching the measured lined-0 east pocket): the pick froze IN the
+     bank pocket (40.9,-9.0,1.7), death 8502 with clip 100 untouched [L lever3] — a static
+     spot cannot beat a chaser wave anywhere in the room;
+   - **the KITE (kept in the code): unconditional 30-tick re-picks (the fight cover's own
+     no-hysteresis pattern) + a wave-repulsion term 0.05*(40-d) over the live wave + the
+     rad-15 reach + the 3.5 u melee fights as the only fights.** The grind slowed ~2.5x:
+     hp 47.7 → 27.0 over 1963 ticks at 6-10 shooters [L lever4/lever5]. Two window bugs
+     found and fixed on the way: the shelter stopped at the TAIL_RESERVE boundary while
+     the target was still not live, and a 0-tick break + continue spun the block forever
+     without advancing the sim (the lever-4 run froze at 8973).
+
+5. **Result [L /tmp/lever5_r9.log]: death 9134 → 10816 (+1682), k6's write ~7119, k7
+   LATCHED ~10816 and m2 DISARMED** (the fights' stray shots latch the screens BEHIND the
+   wave — the taps fire west through the wave onto the x20 screens, k2's UI held from
+   ~10120, the stray rounds resumed its holds, ch2 rose ~10800 — the same mechanism that
+   rode k6's latch in round-8). m1/m7's reads sit at 12384, 1568 ticks past the death.
+
+## Live checks for the main agent
+
+- Whether the tail consoles' UI scripts really hold ~10120 on a fresh boot (the port's
+  missile_start 9084 vs the modeled 8075: decode the p0's first 100 ticks of m1 on the
+  disc stream — is the p0's own t0 delayed by a wait event, or does the port's state-0
+  exit fire late?). Address: the missile p0 scripts (SP#205-207 area), gate 30+k writes.
+- The kite's wave-repulsion weight (0.05) vs the exposure terms: a live check at Agent,
+  Bond kiting at the x46 nest with 8+ astronauts — record the hit rate per 300 ticks at
+  repulsion 0.05 vs 0.1 (the grind rate is the round's binder).
+
+## How it was verified
+
+- 5 real runs of the walk itself, each a full deterministic in-process sim from the
+  shuttle arrival on real input only (no top-ups, no health/ammo/channel writes):
+  /tmp/lever1_r9.log .. /tmp/lever5_r9.log. Every lever was measured on its own run; the
+  anti-levers (the static shelters) are documented in the ignore message.
+- `walkreal_0700001b_live` whole binary: **18 passed, 0 failed, 1 ignored** (the 00 Agent
+  walk itself) — includes the d1 and d2 real-health walks, byte-identical paths.
+- `interactables_0700001b_live`: **9 passed, 0 failed**.
+- The full four-crate suite did not fit again: this sandbox kills background jobs between
+  tool calls (the nohup runner died within seconds twice) and the cold release build of
+  the other three crates alone exceeds the remaining window; the change is confined to
+  this one test file (`grep -l` for the changed symbols across `crates/*/tests/*.rs`
+  matches only walkreal_0700001b_live.rs and interactables_0700001b_live.rs — both run
+  green above; the `mp_death_hands_online.rs` "dead window" match is an unrelated netcode
+  comment).
+
+## What's left
+
+The walk still dies at **10816** with the wave 10 strong and k1 unlatched (k2's channel
+rose via the stray shots, m2 disarmed; k7's write landed ~10816 — m7 would disarm at its
+12384 read). The next lever is named in the ignore message: (a) the kite's kill arm (the
+aim_close pick on the lowest in-cap shooter while kiting — the wave's 4-13 riders have
+4-7 aims inside the max_y 7.0 cap, each tap one kill) or (b) thin the wave at the mid
+phase (the 5514/5814 zero-kill fights opened the screen window while the f5100 spawn wave
+landed 4 → 7 un-thinned — gate the streak window on the wave count across the spawn).
+Then the chains k7 → k1/k2 against the 12384 read. The full ledger with all evidence tags
+is in the test's ignore message.
+
+## Usage
+
+Context window/cost figures are not visible to me (no token or cost readout is exposed in
+this environment; the session ran from ~00:29 to ~02:07 UTC on 2026-11-15).
