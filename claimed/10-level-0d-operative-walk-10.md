@@ -30,3 +30,5 @@ Main 11-14 (on afec3f768, not shipped): the gantry-ride killer is #15 (skin 0x50
 Main 11-14 (merged d1491c571): the rifle (switched back from the Q-Claw) aims and taps at #15 on clear lines during the gantry ride - #15 dead in 30 taps, ride ends at 26.2, the slot drop lands, death t19289 in the yard at (137.7, 4.6, -296.1) to the SMG trickle (0x500006d #2/#3/#6/#8, 0x500007e #1, 0.6-1.2 a hit, 44 hits for 83.6 total + 16.4 other).
 
 Main 11-14 (on d1491c571, not shipped): the yard landing arrives at ~10 (26.2 on the ride minus the 16.4 slot fall) and dies in ~200 ticks to the SMG trickle. The armour at (192.8, 10.8, -272.0) is NOT reachable from bay enter (194, 10.6, -282): a wall at z -276.4 stops the nav 4.4 u short (12k ticks lost, death on the ride t31750). Health for the landing must come from the climb hits (#17 32.0 at 71 u, #28 16.0, #10 14.0).
+
+Main 11-14 (on d1491c571): the ladder-top band sweep at 3 x 600 / 3 x 900 (was 200) never lands on #17 at (163.3, 1.0, -214.0), 53.7 u, and dies earlier (t15093 in the bay) - the 200 cap stays.
