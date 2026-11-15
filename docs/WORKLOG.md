@@ -17,3 +17,9 @@
   in the ignore message: the visibility-keyed scan from (-15.5, -22.6).
 - walkreal_07000014_live 9 passed / 1 ignored (171.7 s), interactables_07000014_live 10
   passed (13.2 s). Report: docs/reports/real-health-00agent-14-landing-4.md.
+- Measured (11-15, 2 more runs): the wake-leg scan levers are dead BOTH ways — the route
+  split at (-15.5, -22.6) diverges the nav path into #35's post line (death t40255) and the
+  walker's opt-in per-node scan diverges the early timeline (south-loop wedge, panic
+  t15313); both reverted, the tree is byte-identical to the tested detour state. Next lever
+  in the ignore message: the scan scoped to the nodes past door #121 only.
+- walkreal_07000014_live re-run on the final tree: 9 passed / 1 ignored (178.1 s).

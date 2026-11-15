@@ -48,31 +48,44 @@ sighted guard — the pocket #30 at d ~6.7 — before the nav route's d 1.0 poin
   #23 3 x 2.5 at d 3.6, #29's explosive -10.0 at d 2.6, #22's final -25.0 at d 3.5 — death
   **t37624**. The measured lane is z 34.0.
 
-**4. The position-keyed posted-guard scan on the wake legs measured DEAD [L the run].** The
-wake route's 0x1a guards sit near the path (#24's post (-28.8, 16.4) took -7.00 at d 1.0),
-so a pass fighting the nearest alive guard within 2 u of the measured posts was tried at a
-south-bend stop (-29.5, 21.0): the guards CONVERGE off their posts between timelines (#24
-fought at (-29.9, 21.9) that run), the pass engaged the wrong guard (#36, 300 ticks for -2
-damage), and a fight's repositioning displacement pushed Bond into the route's live wire
-(-13.28/-9.79 world damage at (-32.2, 14.6), death t40215). The helper is removed from the
-tree; the finding is recorded in the ignore message.
+**4. The wake-leg scan levers measured DEAD BOTH WAYS — closed [L two NF_DMG_TRACE runs].**
+The delta approach's 0x1a posts (#40 (-6.8, -23.3), #41 (-5.2, -23.3)) end the walk, so an
+early fight start was tried both ways it can begin:
+- **Position-keyed post scan** (the nearest alive guard within 2 u of the measured posts, at
+  a south-bend stop (-29.5, 21.0)): the guards CONVERGE off their posts between timelines
+  (#24 measured at (-28.8, 16.4) in the shipped timeline, at (-29.9, 21.9) in the scan
+  timeline), the pass engaged the wrong guard (#36, 300 ticks for -2 damage), and a fight's
+  repositioning displacement pushed Bond into the route's live wire (-13.28/-9.79 world
+  damage at (-32.2, 14.6), death t40215).
+- **Route split at the death spot** (leg 5 walked as two follow_nav_route calls split at
+  (-15.5, 0.9, -22.6) with a visibility scan between): the split's first leg recomputes the
+  nav route and the node path DIVERGES from the shipped route's suffix — it hugs #35's post
+  line (0x50000b2, (-30.4, 3.5), a third 0x1a sniper the shipped route fights cleanly at
+  node 8) and eats 3 x -7.00 at d 8.7-5.5, death t40255.
+- **The walker's opt-in per-node scan** (`scan_fights` on every follow_nav_route node,
+  shared helper, flag-set-by-own-test): the scan fires on the EARLY legs too and diverges
+  the timeline there — the south loop wedges at door node 43 with the corner pair #14
+  chewing point-blank (-5.00 x 3 at d 2.5-2.6), walk_to cap panic t15313.
+All three reverted (the helper carries no trace in the final tree). The wake legs' 0x1a
+tax stands as the wall: 26.56 total (#43 -3.50 at d 13.3, #24 -14.0 with the -7.00 at
+d 1.0-1.3 ON the path, #40 -7.00 at d 9.1, #41 -2.06 on 2.1) — and every fight AFTER each
+guard's first round ran clean.
 
-**5. The refreshed ledger and the next lever are in the ignore message.** Next lever: the
-delta approach's 0x1a posts (#40 (-6.8, -23.3), #41 (-5.2, -23.3), ~9-11 u past door #121)
-answered by a VISIBILITY-keyed scan from (-15.5, 0.9, -22.6) (the landing-4 stop B — never
-measured: its south-bend sibling died first) with capped fights, then the Rook fight and
-the exit legs at the resulting health. The east bill still carries #20's 15.0 (the z 34
-crossing passes d 2.7-2.8; the lanes that avoid it die to the south squad) and #23's 5.0
-(in-flight 0x14 at d 8.5 the round dodge cannot clear — the round's flight is too short for
-the 3 u miss band).
+**5. The refreshed ledger and the next lever are in the ignore message.** Next lever: a
+divergence-free early start for the delta approach's fights ONLY — the scan scoped to the
+nodes past door #121 (node 21 (-19.3, -22.8) onward; #39's node-21 fight already ran clean
+there), then the Rook fight and the exit legs at the resulting health. The east bill still
+carries #20's 15.0 (the z 34 crossing passes d 2.7-2.8; the lanes that avoid it die to the
+south squad) and #23's 5.0 (in-flight 0x14 at d 8.5 the round dodge cannot clear — the
+round's flight is too short for the 3 u miss band).
 
 ## How it was verified
 
-- The baseline and all five lever runs: `NF_DMG_TRACE=1` runs of the 00 Agent test on the
+- The baseline and all seven lever runs: `NF_DMG_TRACE=1` runs of the 00 Agent test on the
   built release test binary, each judged on its own real run [L].
 - `walkreal_07000014_live` (whole binary, --test-threads=1): **9 passed, 0 failed, 1
-  ignored** [L 171.7 s on the final tree; the ignore is the 00 Agent walk's refreshed
-  ledger].
+  ignored** [L 178.1 s on the final tree (the scan experiments reverted, the refreshed
+  ledger in); the ignore is the 00 Agent walk's own refreshed ledger].
 - `interactables_07000014_live`: **10 passed, 0 failed** [L 13.2 s on the final tree].
 - The tree carries NO `crates/*/src` change and NO `crates/nf-view/tests/common/` change
   (the round_dodge helper is untouched; the post_pass experiment is removed) — only the
