@@ -22,3 +22,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox1 at 2026-11-15T07:06Z
+
+Main 11-15 (on 854334126): damage by 10000 ticks - 58.8 in t0-10000 (#11 0x5000038 36.0 = three 12.0 hits from (14.5, 6.3, -29.0) at 10.8-13.1 u during the mid-courtyard leg return-fire duels and the lane-mouth aimed stand; #17 12.0), 17.8 (#14) in t60000s, 14.4 (#18 0x1c) in t120000s, 9.0 (#19) at the end. A crouch press before the mid-courtyard crossing: death t9971 - far worse.
