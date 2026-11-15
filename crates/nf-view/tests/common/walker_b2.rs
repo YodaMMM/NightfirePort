@@ -104,6 +104,10 @@ pub struct Walker {
     pub top_up_health: bool,
     /// OPT-IN: step away from incoming 0x14 rounds (see tick_inner). False by default.
     pub round_dodge: bool,
+    /// OPT-IN (the 07000014 00 Agent walk): one scripted stand-still — once `total_ticks`
+    /// reaches the first value, Bond idles (default input) for the second, whatever leg is
+    /// running. A shared-stream re-roll the walk measured, not a tactic. None = no pause.
+    pub pause_at: Option<(u32, u32)>,
     /// Real-damage bookkeeping (damage_log.rs): live whenever the top-up is off.
     pub dmg: DamageLog,
     /// Called after every stepped tick with the scene and the tick count (an observer, as in
@@ -214,7 +218,7 @@ impl Walker {
         nf_view::attach_headless_sound(&mut scene);
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
-            scene, top_up_health: true, round_dodge: false, dmg: DamageLog::new(), on_step: None, stop_on_exit: true,
+            scene, top_up_health: true, round_dodge: false, pause_at: None, dmg: DamageLog::new(), on_step: None, stop_on_exit: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
@@ -338,6 +342,7 @@ impl Walker {
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
+        if let Some((t, n)) = self.pause_at { if self.total_ticks >= t { self.pause_at = None; for _ in 0..n { self.tick_inner(Input::default(), false, false, false); } } }
         // OPT-IN round_dodge (the 07000014 00 Agent walk): a live 0x14 round (the explosive
         // grenade-launcher class that killed the walk) whose line passes within 3 u of Bond's chest,
         // 1.5-20 u out, makes Bond step perpendicular to its flight - unless a hostile is within
