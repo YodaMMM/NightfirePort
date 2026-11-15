@@ -145,6 +145,13 @@ fn walk_spawn_to_the_shaft_exit_real_damage_agent() {
         walker::with_real_damage_unseen_fights(|| walk_spawn_to_the_shaft_exit_at(2)))
 }
 
+/// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister.
+#[test]
+fn walk_spawn_to_the_shaft_exit_real_damage_00agent() {
+    walker::with_real_damage_head_hunting(||
+        walker::with_real_damage_unseen_fights(|| walk_spawn_to_the_shaft_exit_at(3)))
+}
+
 /// Operative sister of `..._real_damage_agent`: the same route at difficulty 1. Operative
 /// creates only the p2 = 1 placements [M Drone_Create 0x136be0:49] and the keypad locks unlock
 /// at create [M Lock_Create 0x1ae1f8 tail: param 6 = 1 on difficulty 1] (the route's unlock

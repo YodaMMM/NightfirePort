@@ -517,6 +517,15 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
     });
 }
 
+/// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister.
+#[test]
+#[ignore = "00 Agent (11-15, new): dies at t5327 at (53.93, 6.94, -163.03) - #20 (skin 0x5000087, the 0x1e sniper rifle) -41.20 in one round at d 17.4 on 41.2 health; #31 (0x500007e, 0x12) chips -1.8 at 38 u before it. Next: the sniper levers that finished 0d Operative (crouched long-range legs, a counter-snipe stand)."]
+fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_00agent() {
+    walker::with_yard_aimed_stands(|| {
+        walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(3))
+    });
+}
+
 
 /// Sister (ladder-0c): the 0c's OTHER ladder, #495 `Ladder` (−6.42, 1.0, −177.39, yaw −0.2618,
 /// mesh bounds x ±0.204 / y 0..2.0 / z degenerate [D placement #495 + its map object]) — the same

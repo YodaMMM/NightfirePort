@@ -1722,6 +1722,13 @@ fn walk_arrival_to_the_c5_door_real_damage_agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true));
 }
 
+/// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister.
+#[test]
+#[ignore = "00 Agent (11-15, new): dies at t15731 at (197.95, 10.56, -278.88) - two 0x1e sniper rounds carry the bill: #22 (0x5000090) -46.0 at d 55.2 (t2609) and #36 (0x5000090) -48.0 at d 55.5 (t13857). Next: crouch on the open legs within the snipers' lines, counter-snipe #22/#36 first."]
+fn walk_arrival_to_the_c5_door_real_damage_00agent() {
+    walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(3, true));
+}
+
 /// Shoot a live guard standing near (x, z) through the real fire path (the walker's aim +
 /// trigger taps; the same fights every real-damage walk is pinned against). `tol` is the
 /// (x, z) search box; the y is not tested — the yard's shooters sit on distinct (x, z).
