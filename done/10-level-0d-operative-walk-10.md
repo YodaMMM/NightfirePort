@@ -145,3 +145,5 @@ Main 11-14 (on 92ee90c01): ride-fire tap spacing 10 (50 taps) / 40 (18 taps): #1
 Main 11-14 (on 92ee90c01): ride-fire round log: tap 1 met an empty clip (0+23 - no reload request), tap 2 spawned a round, taps 3-6 spawned NONE (clip stays 4) - the rifle needs the aim bit (shoot_far_aim raises aiming: true and fires only with sim.aiming), which the ride fire never sets; on the first roll it happened to land. The aimed box act (shoot_far_box, 500) at the ride start finds no clear box on #15 in the window (hp 10.0) - t19854, worse. Next: the ride fire WITH the aim edge + reload request (the cursor mode steers differently - free aim drives the cross).
 
 Main 11-14 (on 92ee90c01): ride fire with the aim bit held near convergence + a reload request on an empty clip: still no hit on #15 (30 taps), two 16.0s on the ride, t18800 - worse. The ride fire stays as merged (d1491c571).
+
+Main 11-14 (merged a7177a99c): the yard sweep fought STANDING (no landing crouch on the Operative walk) - four kills, the plate and the photograph pass, death t20383 -> t23462 at (135.2, 5.1, -282.4) by the shooting stand.
