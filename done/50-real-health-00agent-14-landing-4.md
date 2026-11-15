@@ -159,3 +159,137 @@ Main 11-15: measurement round — the east lane detour moves death t35208 -> t41
 touch 2.5 -> 26.6; not merged (the walk still dies on the delta approach).
 
 Main 11-15 (merged fcd3ca397): on master the escape touch at 26.6, death t41509 at (-15.85, 1.13, -22.71) on the Rook legs.
+
+---
+## Report from the worker (done, 2026-11-15T09:18Z)
+
+# real-health-00agent-14-landing-4
+
+Branch `s/real-health-00agent-14-landing-4`, cut from origin/master 9f5b13b6e (the merged
+walker_b2 round_dodge state: the Kiko hold ends at 52.5, the second hold dropped, death
+t35208 at (-13.09, 1.12, -23.10) past the escape touch on the Rook's-wake legs to #39,
+0x500008c 0x1a, with Bond limping at 2.5). The task: 07000014's 00 Agent real-damage walk
+(`walkreal_07000014_live::walk_the_infiltration_to_the_delta_exit_real_damage_00agent`) —
+reduce the 50.0 bill on the walk east to the escape touch and get the walk to the delta exit.
+
+## What's done
+
+**1. The master baseline re-verified byte-identical [L the NF_DMG_TRACE run].** Death t35208
+at (-13.09, 1.12, -23.10) to #39 (0x500008c, 0x1a) at (-4.8, 1.0, -22.1) d 8.4, on 2.5
+health. The post-Kiko-hold bill measured hit by hit: #20 (0x5000090, the pocket) 15.0 in
+3 x 5.0 at d 1.8-2.2 (t31076-84), #31 (dead, in-flight) 4.98 at d 5.0, #23 10.0 in 4 x 2.5
+at d 9.7-9.8, #30 (0x5000087) 15.0 in 3 x 5.0 at d 1.0 (t31680-88), #23 2.5, #62 2.5 — the
+touch reached at 2.5. On the wake legs every fight is CLEAN (killed true, no damage: #43,
+#24, #39, #35, #37, #36) and #39's single 0x1a round (-2.52) ends it. The whole game is the
+east-walk bill: every point saved there converts into wake-leg survival.
+
+**2. The east lane detour — the round's lever, measured on real runs [L five NF_DMG_TRACE
+runs].** A d3+round_dodge-only lenient `walk_to(Wp::new(-44.5, 0.9, 34.0).r(1.2))` inserted
+between the Kiko hold and the escape-touch nav route (plus an aimed pass on the lane's
+sighted guard — the pocket #30 at d ~6.7 — before the nav route's d 1.0 point-blank pass):
+
+- **The lane crosses the pocket line outside the fights' point-blank**: the fights along the
+  leg kill #20 (2.5-5.0 vs the shipped 20.0), #23, #29, #30 (clean), #62, #31 — the escape
+  touch is reached at **26.6 health (was 2.5)** and death moves **t35208 -> t41509** at
+  (-15.85, 1.13, -22.71), past door #121 on the delta approach. #40 (0x50000b2, 0x1a, hp 20)
+  lands -7.00 at d 9.1 on 9.1 health, then #41 (0x500008c, 0x1a) -2.06 on 2.1. The walk's
+  fights kill 12 guards on the wake legs with zero extra damage taken.
+- The corridor's north band east of the hold spot FLOATS (the level's hover cells: the first
+  non-lenient leg wedged grounded=false at (-48.12, 1.14, 38.02), d 4.14 short of the
+  target) — the leg is lenient: the fights along it do the killing, a float gives the leg up
+  and the nav route carries on with the pocket empty. At z 34 the leg ARRIVES (no float).
+- The d1/d2 streams are untouched: the detour is gated `difficulty >= 3 && !tops_up() &&
+  w.round_dodge` (only the 00 Agent d3 test sets round_dodge), reads no sim state that
+  mutates, consumes no ticks on the other walks. The whole walkreal binary (d1 + d2 sisters
+  included) passed green.
+
+**3. Two other east lanes measured WORSE — closed so they stay closed [L the runs]:**
+- Two legs keeping d >= 4.5 from the pocket ((-47.2, 34.8) then (-44.5, 34.5)): the leg
+  stalled at the z 35 stand x -49 and the south-side squad chewed it (#29 0x5000093 3 x 5.0
+  at d 5.8, #63 2 x 2.5, #62 7 x 5.0 at d 7.1-7.7) — death **t32831**. #20's own hits did
+  drop to 2 x 2.5 at d 3.3 (outside the 3.0 u auto-hit band [M DroneWeap_DoBulletAccuracy
+  0x179740:113-115] the explosive round's damage halves), but the stand cost is fatal.
+- The z 33.5 endpoint (-44.0, 33.5): the lower lane walks INTO the south squad's line —
+  #23 3 x 2.5 at d 3.6, #29's explosive -10.0 at d 2.6, #22's final -25.0 at d 3.5 — death
+  **t37624**. The measured lane is z 34.0.
+
+**4. The wake-leg scan levers measured DEAD BOTH WAYS — closed [L two NF_DMG_TRACE runs].**
+The delta approach's 0x1a posts (#40 (-6.8, -23.3), #41 (-5.2, -23.3)) end the walk, so an
+early fight start was tried both ways it can begin:
+- **Position-keyed post scan** (the nearest alive guard within 2 u of the measured posts, at
+  a south-bend stop (-29.5, 21.0)): the guards CONVERGE off their posts between timelines
+  (#24 measured at (-28.8, 16.4) in the shipped timeline, at (-29.9, 21.9) in the scan
+  timeline), the pass engaged the wrong guard (#36, 300 ticks for -2 damage), and a fight's
+  repositioning displacement pushed Bond into the route's live wire (-13.28/-9.79 world
+  damage at (-32.2, 14.6), death t40215).
+- **Route split at the death spot** (leg 5 walked as two follow_nav_route calls split at
+  (-15.5, 0.9, -22.6) with a visibility scan between): the split's first leg recomputes the
+  nav route and the node path DIVERGES from the shipped route's suffix — it hugs #35's post
+  line (0x50000b2, (-30.4, 3.5), a third 0x1a sniper the shipped route fights cleanly at
+  node 8) and eats 3 x -7.00 at d 8.7-5.5, death t40255.
+- **The walker's opt-in per-node scan** (`scan_fights` on every follow_nav_route node,
+  shared helper, flag-set-by-own-test): the scan fires on the EARLY legs too and diverges
+  the timeline there — the south loop wedges at door node 43 with the corner pair #14
+  chewing point-blank (-5.00 x 3 at d 2.5-2.6), walk_to cap panic t15313.
+All three reverted (the helper carries no trace in the final tree). The wake legs' 0x1a
+tax stands as the wall: 26.56 total (#43 -3.50 at d 13.3, #24 -14.0 with the -7.00 at
+d 1.0-1.3 ON the path, #40 -7.00 at d 9.1, #41 -2.06 on 2.1) — and every fight AFTER each
+guard's first round ran clean.
+
+**5. The refreshed ledger and the next lever are in the ignore message.** Next lever: a
+divergence-free early start for the delta approach's fights ONLY — the scan scoped to the
+nodes past door #121 (node 21 (-19.3, -22.8) onward; #39's node-21 fight already ran clean
+there), then the Rook fight and the exit legs at the resulting health. The east bill still
+carries #20's 15.0 (the z 34 crossing passes d 2.7-2.8; the lanes that avoid it die to the
+south squad) and #23's 5.0 (in-flight 0x14 at d 8.5 the round dodge cannot clear — the
+round's flight is too short for the 3 u miss band).
+
+## How it was verified
+
+- The baseline and all seven lever runs: `NF_DMG_TRACE=1` runs of the 00 Agent test on the
+  built release test binary, each judged on its own real run [L].
+- `walkreal_07000014_live` (whole binary, --test-threads=1): **9 passed, 0 failed, 1
+  ignored** [L 178.1 s on the final tree (the scan experiments reverted, the refreshed
+  ledger in); the ignore is the 00 Agent walk's own refreshed ledger].
+- `interactables_07000014_live`: **10 passed, 0 failed** [L 13.2 s on the final tree].
+- The tree carries NO `crates/*/src` change and NO `crates/nf-view/tests/common/` change
+  (the round_dodge helper is untouched; the post_pass experiment is removed) — only the
+  walk file's detour + aimed pass + refreshed ignore ledger. The d1 walk and the d2 sister
+  passed inside the same binary run above.
+- The full `cargo test` suite was not run: the tree carries no shared-code delta for the
+  suite to judge beyond the two binaries above, the sandbox kills background processes
+  between tool calls (the landing-3 round measured the same), and the remaining window did
+  not fit a foreground full run. The two binaries the task names are what the change can
+  affect.
+
+## What's left
+
+- The walk's frontier is the delta approach: the touch is reached at 26.6, the wake legs'
+  fights are clean, and the 0x1a posts past door #121 (#40/#41) end the walk at 2.1. The
+  next round's lever (visibility-keyed scan at stop B) is measured-ready in the ignore
+  message; behind it stand the Rook fight (the wake-touch machinery already closes to 10 u
+  and shoots) and the exit legs — both unexplored at real health.
+
+## Live checks for the main agent (PCSX2, fresh boot)
+
+1. The delta approach's posts: stand at (-15.5, 1.05, -22.6) past door #121 with the
+   0x50000b2 guard at (-6.8, 1.0, -23.3) — confirm the real game's guard is visible from
+   there (the port's fights kill #39/#24/#43 cleanly once visible; if #40/#41 are visible
+   from stop B, the scan lever is live).
+2. The wake route's live wire at (-32.2, 1.1, 14.6): confirm the real game's hurt volume —
+   the port's world damage (-13.28/-9.79) killed the scan run there; a player hugging the
+   nav nodes does not touch it (the shipped single nav route crossed clean in the same
+   timeline).
+3. The 0x1a round class: confirm the real game's damage per round at d 7-13 u (the port
+   measured -3.50/-7.00/-2.52 across #39/#24/#40/#41/#43) — if the real rounds are gentler,
+   the touch at 26.6 already survives to the wake touch without any scan.
+
+## Usage
+
+Token/credit/context figures: `not visible to me` — this environment exposes no token, cost
+or context-window readout to the worker. What was visible: the task message's clock (sandbox
+expiry ~10:38 UTC; this report written ~10:00 UTC), `git` hashes, test outputs and process
+exit codes. No input/output token counters, no credit balance, no dollar cost.
+
+Main 11-15: measurement round — the east lane detour moves death t35208 -> t41509 and the
+touch 2.5 -> 26.6; not merged (the walk still dies on the delta approach).
