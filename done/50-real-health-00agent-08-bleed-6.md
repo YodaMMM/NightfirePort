@@ -132,3 +132,5 @@ Main 11-14: not merged - master 3e1563c55 lands three rockets (287.7) to t32039;
 Main 11-14 (merged c65f36857): a held-health analysis of the whole fight (ten launches, the Hind killed at fight t10131 with 688 dealt) showed every self-blast launch with the machine SOUTH-WEST of the car ((83.4, -190.0), (91.2, -210.2), (85.2, -188.9)); one more failed at (102.6, -152.5) NW. No launch at x < 105 && z < -165: five rockets land, the Hind 489.6 of 598 (ONE rocket short), death t33393 with 8.95 left. Next: ~20 more health into the fight (the east deck head fight costs 40) or one more launch before the late missiles.
 
 Main 11-14 (on c65f36857): switch_to_armed before the east deck head (the P2K 7+41 up at 100 health) re-rolls the opening - death t20296, far worse. Not shipped.
+
+Main 11-14 (on c65f36857): the fight bill is now rocket 2 own blast -25.05 at t28226 (the low pass at 16 u, the blast 4.7 u from Bond), nine cannon chips (-2.0, 18.0) and the final -8.95 (a radius-4 blast at (112.3, 13.4, -176.6)). A 20/25-u launch minimum drops rocket 2 and later ones too - three rockets, t32801, worse.
