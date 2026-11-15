@@ -54,6 +54,7 @@ fn loot_the_drops_03(w: &mut Walker, label: &str) {
             // servant legs after it never recovered.
             .filter(|t| sim.world.segment([bp[0], bp[1] + 0.9, bp[2]], [t[0], t[1] + 0.3, t[2]]).is_none());
         let Some(t) = t else { break };
+        drop(sim);
         w.walk_nav_to(t, &format!("{label} loot"), 0.6);
     }
     for _ in 0..12 {
@@ -131,6 +132,47 @@ fn direct_sidestep_03(w: &mut Walker, side: f32, label: &str) -> bool {
         if walker::dxz(cur, start) >= 1.0 { return true; }
     }
     walker::dxz(cur, start) >= 1.0
+}
+
+/// The wake drops' scoop (real-health-00agent-03-captors-6, the 0x23 trio wake block only):
+/// the shared loot helper's nav arrives up to ~1.3 u short of a drop (run 35: its nav 2 ended
+/// at (24.28,13.19), 1.29 u from drop #13 at (24.84,14.35)) and the walk-over take's radius
+/// never reached it — the post-sweep wheel carried NO 0x1c/0x12 entries while both kind-0
+/// drops sat unclaimed inside the loot band [L d3run35]. A player walks ONTO the drop: the
+/// nav gets Bond through the doorway, then a short DIRECT leg lands on the spot so the
+/// walk-over take [M Pickup_Handler 0x18e650] fires.
+fn scoop_drops_03(w: &mut Walker, label: &str, r: f32) {
+    let mut skip: Vec<[f32; 3]> = Vec::new();
+    for _ in 0..4 {
+        let t = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            sim.drones.pickups.iter().filter(|p| !p.gone)
+                .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.5)
+                .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                .filter(|t| !skip.iter().any(|s| walker::dxz(*s, *t) < 0.6))
+                .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
+                .filter(|t| walker::dxz(*t, bp) < r)
+        };
+        let Some(t) = t else { break };
+        w.lenient = true;
+        w.walk_nav_to(t, &format!("{label} scoop"), 0.35);
+        // The direct finisher only when the nav already brought Bond close: walk_to's own
+        // 6000-tick cap panics unconditionally [walker.rs:1381], and an unreachable void-edge
+        // drop (run 40/42's west ditch, grounded=false at d 4.6) must never walk it.
+        let near = { let sim = w.scene.sim.as_ref().unwrap(); walker::dxz(sim.bond.pos, t) < 2.0 };
+        if near { w.walk_to(Wp { at: t, act: Act::None, arrive: 0.3 }, &format!("{label} scoop (direct)")); }
+        w.lenient = false;
+        // The walk-over take [M Pickup_Handler 0x18e650] clears the pickup on success; a drop
+        // the nav cannot reach (the west ditch's void edge — run 40's grounded=false wedge)
+        // is skipped for the rest of this scoop so the loop cannot cycle it.
+        let still_there = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.pickups.iter().any(|p| !p.gone
+                && walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], t) < 0.5)
+        };
+        if still_there { skip.push(t); }
+    }
 }
 
 fn mission_row() -> (usize, usize, usize, usize) {
@@ -726,9 +768,23 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
     // so a player squares up on the mouth line and answers the shooters BEFORE stepping
     // through. d>=3 only: the d<3 streams keep their crossing byte-identical.
     if difficulty >= 3 {
+        // real-health-00agent-03-captors-6, run 31 MEASURED (the -5 ledger item 2's "colder"
+        // answer, tried and REFUTED): with the pre-crossing stands dropped the mouth runs cold
+        // and the crossing itself is lethal — Bond reached the mouth at 65.2 (the
+        // mid-courtyard fights' own price) and died at tick 10009 with 100.0 across 9 hits,
+        // 5 fights: the fights are OFF across the crossing legs by the run-9 doctrine, so the
+        // lane cluster's (#11/#17/#9/#10) fire through the glass ran unanswered [L d3run31].
+        // The pre-crossing stands STAY: 48.0 (36.0 #11 in 3 hits, 12.0 #17 in 1) is the
+        // measured price of the two kills and a crossing that lands on the lane at ~41 with
+        // the lane-north stands still ahead [L d3run29/30 vs d3run31].
         w.walk_to(Wp { at: [10.93, 5.35, -19.0], act: Act::None, arrive: 0.35 },
             "the lane mouth line (pre-crossing)");
         clear_exposed_nearest_03(&mut w, "the lane mouth shooters (pre-crossing)", 40.0, 8, 600, false);
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[03-ammo] after the pre-crossing stands: gun {:#x} clip {} spare {} hp {:.1}",
+                sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+        }
     }
     let mut on_lane = false;
     // 00 Agent (run 9): the through-crossing's plain fight vs #11 stopped Bond on the lane for
@@ -835,6 +891,26 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             // leg's reactive window had passed); the plain clear stays as the backstop.
             clear_exposed_nearest_03(&mut w, name, 12.0, 4, 0, false);
             clear_near(&mut w, 9.0, name);
+            // real-health-00agent-03-captors-5 (the -4 ledger item 1, arming the walk to the
+            // saddle): the clears' kills leave their guns at the guards' feet — run 21 reached
+            // the saddle DRY (clip 0 spare 0, the wheel cycled to the fists) and #7's hip taps
+            // finished Bond there [L d3run21]; the si-1 saddle walk's own pickup scan found
+            // every weapon/ammo pickup within 45 u of the saddle already gone, so the rounds
+            // for the endgame must come from the route's own drops [L the captors-5 pickup
+            // scan, queue 11-14]. The servants'-ground loop already runs the same cycle.
+            w.lenient = true;
+            loot_the_drops_03(&mut w, &format!("{name} drops"));
+            w.lenient = false;
+            // real-health-00agent-03-captors-6 (run 38's loot diag): the lane kills' guns sit
+            // in the moat ditch BELOW the lane's east edge — #11's at (14.50,5.35,-29.03)
+            // dxz 4.2, (14.19,5.34,-28.02) dxz 3.6, (9.66,5.52,-33.13) dxz 4.5 from the leg
+            // spots — every one in the loot's 8-u/±1.5-y band but DECLINED by the helper's
+            // sight filter (the ditch lip blocks the eye ray from the lane floor). The loot
+            // declined on EVERY leg [L d3run38's diag], so the route's own machine-gun clips
+            // (~30 a 0xe) were never claimed and the walk fought the whole mid-game on the
+            // starting 23 rounds. The ditch scoop drops the sight filter (the nav finds its
+            // own path down; the walk-over take needs no sight) and walks onto each drop.
+            scoop_drops_03(&mut w, &format!("{name} ditch scoop"), 8.0);
         }
         w.walk_nav_to(at, name, 1.6);
     }
@@ -910,7 +986,15 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // at tick 52087 with weapon 0x12 clip 0 spare 0 (nav 6 was "cycling weapons (0)") —
         // so the arm extends to the Agent pick (difficulty 2 keeps difficulty 1's two green
         // walks byte-identical).
-        let _ = w.resupply("before the servants' rescue (agent)");
+        // real-health-00agent-03-captors-5 (the -4 ledger item 1, the d3 half): the resupply's
+        // attempt-0 target (-10.9,-38.0) walked Bond 25.7 u WEST through the moat for nothing
+        // — `resupply done (false) clip 3 spare 13` [L d3run20] — and its return puts the si-1
+        // saddle nav's A* on the wedging lane-doors route (run 22's 22 stuck stops at
+        // (11.88,6.46,-20.90) all start from the resupply's end). d3 drops this walk (its own
+        // loot cycle above is the arm); d2 keeps it byte-identically under == 2.
+        if difficulty == 2 {
+            let _ = w.resupply("before the servants' rescue (agent)");
+        }
     }
     for (plate, want_ch) in [(None, 0x4fu8), (Some(plate0x25), 0x50u8)] {
         let (si, at, rescue_ch) = *servants.iter().find(|(_, _, ch)| *ch == want_ch)
@@ -1020,12 +1104,211 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             // mouth nav's own crossing then rode the saddle zone at (25.30,7.37,8.79) with the
             // 0x23 plate firing mid-climb — #5's charge reached d 2.5 and the 8-pellet volleys
             // finished Bond at 80288 [L d3run20]. Stand at the saddle BEFORE the mouth nav.
+            // real-health-00agent-03-captors-5, run 22 MEASURED (ledger item 2, the anchorless
+            // saddle route): dropping the anchor nav REGRESSED the phase back to run 20's shape
+            // byte-identically — the saddle nav from the si-1 resupply end wedged on the lane
+            // doors (22 stuck stops at (11.88,6.46,-20.90)), the climb never engaged, and the
+            // walk died at 80288 at (25.30,7.37,8.79) mid-mouth-crossing, run 20's exact tick
+            // and spot [L d3run22]. The anchor nav's own wedged-bridge ladder is what moves
+            // Bond onto the route the saddle nav can climb from (run 21: the anchor capped
+            // 20x3000, the saddle nav then worked and arrived (23.18,5.50,7.20)). The anchor
+            // stays; the DRY arrival (run 21's real killer) is the arming lever below.
+            // real-health-00agent-03-captors-5, run 23 MEASURED: the armed-gate stand from
+            // (20,3) landed NOTHING — the diagnostic trace shows the aim CONVERGED (err
+            // 0.0000, perr 0.0000, aim on #7's boxes, still 1502, aiming true) but the gun was
+            // the FISTS (clip 1 spare 0) from tap-gate t0: the return-fire fights on the
+            // (20,3) approach walk drained the 16 rounds before the stand [L d3run23/run24
+            // trace]. Lever: the si-1 approach runs COLD (the crossing-legs doctrine — run 13
+            // kept 3+13 cold) so the rounds reach the stand, and the ammo is re-checked at the
+            // stand itself (a gate checked before a walk is not the gun at the stand's t0).
+            w.dmg.return_fire = false;
             w.walk_nav_to([22.1, 5.5, -2.0], "the mouth path east anchor (si-1)", 1.2);
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let inv = &sim.drones.inventory;
+                let total: i16 = inv.carried.iter().sum();
+                eprintln!("[03-ammo] si-1 anchor: gun {:#x} clip {} spare {} carried-total {} hp {:.1}",
+                    sim.gun.weapon, sim.gun.clip, sim.gun.spare, total, sim.drones.health.health);
+            }
+            // real-health-00agent-03-captors-5, lever 2 (the -4 ledger item 3): #7 is the
+            // endgame drain — 43-51 hip hits for 27.4-41.2 across runs 20/21, alive at hp 4-10
+            // at both deaths [L d3run20/21]. A player with rounds takes the aimed stand from
+            // the lawn band the saddle approach crosses BEFORE the climb: #7's boxes are clear
+            // from (20,2..4) and (18..24,8) while the saddle itself (23.2,7.2) is not
+            // [L the captors-5 bullet-line scan, queue 11-14]. Gated on the rounds at the
+            // stand (>= 5: a 12-hp guard at the P2K's 3.5 a hit needs 4) and the walker's own
+            // eye-ray exposure (the shared rule) — an unseen or dry walk skips the stand and
+            // climbs as before.
+            {
+                let seven = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    sim.drones.list.iter().enumerate().find(|(_, d)| {
+                        d.team == 1 && d.skin & 0xffff == 0x39
+                            && !d.corpse && d.health > 0.0 && d.present
+                    }).map(|(i, _)| i)
+                };
+                let armed = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let g = &sim.gun;
+                    (2..=0x47).contains(&g.weapon) && g.weapon != 0x34 && g.weapon != 0x37
+                        && g.clip + g.spare >= 5
+                };
+                if let (Some(di), true) = (seven, armed) {
+                    w.walk_nav_to([20.0, 5.9, 3.0], "the #7 line spot (si-1 saddle approach)", 1.5);
+                    let armed = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let g = &sim.gun;
+                        (2..=0x47).contains(&g.weapon) && g.weapon != 0x34 && g.weapon != 0x37
+                            && g.clip + g.spare >= 5
+                    };
+                    if armed && w.exposed_aim(di).is_some() {
+                        aimed_stand_03(&mut w, di, "the #7 aimed stand (si-1 saddle approach)", 1800, false);
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        eprintln!("[03-ammo] after the #7 stand: gun {:#x} clip {} spare {} hp {:.1}",
+                            sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+                    }
+                }
+            }
+            w.dmg.return_fire = true;
             w.walk_nav_to([23.5, 6.3, 8.4], "the east lawn saddle (00agent, si-1 before the mouth)", 1.5);
             clear_exposed_nearest_03(&mut w, "the east lawn saddle wake (00agent, si-1)", 40.0, 4, 600, true);
             w.lenient = true;
             loot_the_drops_03(&mut w, "the east lawn saddle (00agent, si-1)");
             w.lenient = false;
+            // real-health-00agent-03-captors-5, run 25 MEASURED (the -4 ledger item 4): with
+            // #7 answered the run reached PAST the saddle and died at (23.61,6.37,10.57) — the
+            // mouth nav's own door crossing fired the 0x23 plate mid-leg and the waking trio
+            // point-blanked a DRY Bond before any stand could react (#5 charged to d 3.3 for
+            // 16.8, #4 12.6 in 7, #3 11.8 in 2 — the wake sweep at the saddle had found nobody:
+            // the trio is DISABLED until the plate fires [L d3run25, the no-op sweep]). The
+            // player's shape is the door-8 cluster block's own: step ONTO the plate, let the
+            // trio pop, and fight the wake from the saddle side with the kill-loot cycle
+            // instead of walking into it mid-nav — #5's drop (his own 0x1c) re-arms the endgame
+            // the pickup scan says is otherwise dry [L the captors-5 pickup scan, queue 11-14].
+            {
+                let plate0x23 = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    sim.drones.triggers.iter()
+                        .find(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x23)
+                        .map(|t| t.centre())
+                };
+                if let Some(pc) = plate0x23 {
+                    // 12.0: the trio's LOAD spots sit 8-10.5 u from the plate centre ((29.36,16.36)
+                    // #5, (28.8,16.3) #3, (26.3,16.4) #4 [L d3run27's census]) — they only WALK to
+                    // the plate's doorway once it fires.
+                    let trio_alive = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        sim.drones.list.iter().any(|d| d.team == 1 && !d.corpse && d.health > 0.0
+                            && walker::dxz(d.pos, pc) < 12.0)
+                    };
+                    if trio_alive {
+                        {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let inv = &sim.drones.inventory;
+                            eprintln!("[03-ammo] at the plate: gun {:#x} clip {} spare {} carried-total {} hp {:.1}",
+                                sim.gun.weapon, sim.gun.clip, sim.gun.spare, inv.carried.iter().sum::<i16>(), sim.drones.health.health);
+                            for (i, d) in sim.drones.list.iter().enumerate() {
+                                if d.team == 1 && !d.corpse && d.health > 0.0 && walker::dxz(d.pos, pc) < 12.0 {
+                                    eprintln!("[03-ammo] trio #{i} skin {:#x} weapon {:#x} hp {:.1} at ({:.1},{:.1},{:.1}) enabled {}",
+                                        d.skin, d.weapon, d.health, d.pos[0], d.pos[1], d.pos[2], d.enabled);
+                                }
+                            }
+                        }
+                        w.walk_nav_to([pc[0], pc[1], pc[2]], "onto the 0x23 plate (si-1, the trio wake)", 1.6);
+                        w.wait(30);
+                        // real-health-00agent-03-captors-6, lever 1 (the -5 ledger item 1, the
+                        // trio wake race, MEASURED on runs 29/30): the wake sweep's 600-tick
+                        // budget found NOBODY — the trio's scripted wake walk ends at the
+                        // east-lawn door (22.3,5.3,10.9) and that door stands CLOSED through
+                        // the whole block (the si-0 saddle walk went through it, but the leaf
+                        // shut again before si-1), so the trio bunches BEHIND the leaf and the
+                        // single eye ray never reaches their boxes; they crossed only when the
+                        // servant nav's own wedge E-opened the door mid-walk, and the doorway
+                        // point-blank finished Bond at 73318 with the trio at FULL hp — the
+                        // wake sweep never fired a shot (the gun state at the post-wake print
+                        // is unchanged: clip 5 spare 6) [L d3run29/30]. The player's shape is
+                        // the door funnel: open the door he is about to need HIMSELF, step
+                        // back south off the doorway line, and fight what comes through — one
+                        // guard crosses the door plane at a time, exposed from the moment his
+                        // boxes cross, and his drop re-arms the next fight (the kill-loot
+                        // cycle the servants' ground runs).
+                        {
+                            let east_door = {
+                                let sim = w.scene.sim.as_ref().unwrap();
+                                sim.drones.doors.list.iter().enumerate()
+                                    .find(|(_, d)| walker::dxz(d.pos, [22.3f32, 5.3, 10.9]) < 1.0)
+                                    .map(|(i, d)| (i, d.state, d.pos))
+                            };
+                            if let Some((di, state, dpos)) = east_door {
+                                if state == nf_game::door::CLOSED {
+                                    eprintln!("[03] the east-lawn door #{di} sits closed — opening it for the trio funnel");
+                                    w.walk_to(Wp { at: [dpos[0], 5.9, dpos[2] - 1.1], act: Act::None, arrive: 0.7 },
+                                        "the east-lawn door threshold (the trio wake)");
+                                    w.use_door(di, "the east-lawn door (the trio wake funnel)");
+                                }
+                            }
+                        }
+                        // The duel line: run 32 MEASURED the trio does NOT pour through — they
+                        // halt NORTH of the open door and duel through the opening (#4 held
+                        // (26.5,16.7) d 8.4 for 13 hits, #5 (24.7,14.9) d 6.1 for 16, both
+                        // alive at the death): from the (22.6,8.0) standoff Bond's eye ray to
+                        // their boxes crosses the wall plane EAST of the doorway band (the ray
+                        // to (26.5,16.7) exits at x 23.47) — the plain fight on #4 ran 436
+                        // ticks killed-false with every tap unseen-gated off [L d3run32]. The
+                        // player steps ONTO the doorway line (the door-8 mouth fights' own
+                        // shape — fought from (36.2,5.7) THROUGH the open doorway), where the
+                        // ray passes the opening; the trio's halt keeps them out of the
+                        // under-3.0 point-blank band [M DroneWeap_DoBulletAccuracy
+                        // 0x179740:113-115] at d 4.7-5.9.
+                        w.walk_to(Wp { at: [22.3, 5.9, 9.6], act: Act::None, arrive: 0.6 }, "the trio wake duel line (the doorway sight line)");
+                        // THE KILL-LOOT CYCLE (runs 33-39): with the ditch rounds in the wheel
+                        // (the leg scoops above) the serial sweep kills ALL THREE through the
+                        // stands — the single-sweep shape runs 37/38 measured (engage #5 → #4
+                        // → the captain back-to-back, keep_aim serial, ZERO damage taken: the
+                        // interleave's post-stand gap in run 39 instead let #4/#3 pour 41.2
+                        // through the doorway while Bond levelled the aim). The loot + the
+                        // scoop after the sweep re-arm from the trio's own drops.
+                        clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1)", 40.0, 4, 900, true);
+                        w.lenient = true;
+                        loot_the_drops_03(&mut w, "the 0x23 trio wake (si-1)");
+                        scoop_drops_03(&mut w, "the 0x23 trio wake drops", 8.0);
+                        loot_the_drops_03(&mut w, "the 0x23 trio wake (armed cycle)");
+                        w.lenient = false;
+                        // The funnel's second round: re-take the duel line, re-sweep, re-loot
+                        // (the servants' ground cycle's shape).
+                        w.walk_to(Wp { at: [22.3, 5.9, 9.6], act: Act::None, arrive: 0.6 }, "the trio wake duel line (again)");
+                        clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1, again)", 40.0, 4, 900, true);
+                        w.lenient = true;
+                        loot_the_drops_03(&mut w, "the 0x23 trio wake (si-1, again)");
+                        w.lenient = false;
+                        {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            eprintln!("[03-ammo] after the wake: gun {:#x} clip {} spare {} hp {:.1}",
+                                sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+                            let inv = &sim.drones.inventory;
+                            let clips: Vec<String> = inv.clip.iter().enumerate()
+                                .filter(|(_, c)| **c != 0)
+                                .map(|(w, c)| format!("{w:#x}:{c}")).collect();
+                            let carried: Vec<String> = inv.carried.iter().enumerate()
+                                .filter(|(_, c)| **c != 0)
+                                .map(|(t, c)| format!("{t}:{c}")).collect();
+                            eprintln!("[03-ammo] wheel clips [{}] carried [{}]", clips.join(" "), carried.join(" "));
+                            for (i, p) in sim.drones.pickups.iter().enumerate() {
+                                if !p.gone && walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], sim.bond.pos) < 20.0 {
+                                    eprintln!("[03-ammo] pickup #{i} kind {} at ({:.2},{:.2},{:.2}) ch {:#x}",
+                                        p.kind, p.m[3][0], p.m[3][1], p.m[3][2], p.switch_channel);
+                                }
+                            }
+                            for (i, d) in sim.drones.list.iter().enumerate() {
+                                if d.team == 1 && walker::dxz(d.pos, pc) < 14.0 && d.skin & 0xffff != 0x2b {
+                                    eprintln!("[03-ammo] post-wake #{i} skin {:#x} hp {:.1} corpse {} at ({:.1},{:.1},{:.1})",
+                                        d.skin, d.health, d.corpse, d.pos[0], d.pos[1], d.pos[2]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // gas-rng-draws: the door-8 cluster (#18/#19/#2 behind the leaves at (38.7, 0.2)) can
@@ -1058,7 +1341,209 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                 })
             };
             if cluster_alive {
+                // real-health-00agent-03-captors-6, runs 43-48: the mouth walk's A* route
+                // detours NORTH-EAST through (38.69,10.96)/(39.73,14.82) — over the door-8
+                // area's own wake (the (39.0,12.9) door's open channel and/or the (38.9,11.1)
+                // 0x23 plate [L d3run43/45]) — and that wake pops #14 (skin 0x5000039, weapon
+                // 0xe, load disabled (30.7,6.2,4.1) [L d3run35's census], enabled false
+                // through the whole trio fight): he closed to d 2.5 and his machine-gun
+                // bursts (41.2 in 3 hits, one 24.0 a round) finished Bond mid-walk at
+                // (35.96,4.27) with the plain return fire killed-false on him [L d3run43].
+                // The tried player shapes (the si==0 south legs z 5.7-6.8 [runs 45-47: the
+                // garden wall corner wedges the direct legs and the A* rides the north lawn
+                // into the plate anyway] and the leg-0 aimed sweep [run 46: #14 unexposed
+                // behind the building's west face]) did not beat it — the d3 sweep below
+                // (after the settle loop) is this round's answer and the approach problem is
+                // the ledger's open item.
+                // real-health-00agent-03-captors-7, lever 1 (the -6 ledger item 1, the mouth
+                // approach): the si-1 mouth nav's A* starts from the duel line (22.3,9.6) and
+                // runs 43/49's route detoured NORTH-EAST over the door-8 wake zone
+                // ((38.69,10.96)/(39.73,14.82) [L d3run43]) — popping #14 mid-walk, death 67488.
+                // The si-0 mouth nav STARTS from the saddle (the si==0 block walks Bond onto
+                // (23.5,6.3,8.4) before this block) and its route left #14 asleep through the
+                // whole trio fight [L d3run43: #14 enabled false until the si-1 mouth walk] — a
+                // player walks the mouth approach from the saddle cell the si==0 way, not from
+                // the duel line's cell. The hop is a no-op when Bond already stands on the
+                // saddle (the si-0 iteration; the gate reads his live spot).
+                if difficulty >= 3 {
+                    let off_saddle = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        walker::dxz(sim.bond.pos, [23.5f32, 6.3, 8.4]) > 2.0
+                    };
+                    if off_saddle {
+                        w.lenient = true;
+                        w.walk_nav_to([23.5, 6.3, 8.4], "the saddle re-take (the si-0 way to the door-8 mouth)", 1.0);
+                        w.lenient = false;
+                    }
+                    // real-health-00agent-03-captors-7, lever 2 (the #14 funnel): the route
+                    // probe [L d3run51] shows EVERY nav route to the mouth crosses the
+                    // (39.0,12.9) doorway band (the only descent is nodes (39.93,13.55) ->
+                    // (39.90,12.23) through the leaf) — the mouth nav's stuck handler E-opens
+                    // that door MID-NAV and #14 pops on the open channel unprepared (run 50:
+                    // the hits began during nav 9, 41.2 in 4 at d 1.4, death 67870). The
+                    // player's shape is the trio wake funnel's own: take the last pre-door
+                    // node, hold the aim up, E-open the door HIMSELF, and fight what pops
+                    // through the pass with the aimed stands — one charger crosses the
+                    // doorway plane at a time, exposed the whole run.
+                    w.walk_nav_to([39.9, 6.3, 14.4], "the north-door standoff (the #14 funnel)", 1.0);
+                    {
+                        // The -6 ledger item 2 [S unverified]: cycle the wheel to the 0x2
+                        // heavy gun before the fight (the 0x12's 7 light rounds outrank it in
+                        // the default cycle; the fight needs rounds that kill a 12-hp
+                        // machine gunner fast). Fallback: after 8 cycles the walk fights on
+                        // whatever armed gun the wheel holds.
+                        for _ in 0..8 {
+                            let wnow = { let sim = w.scene.sim.as_ref().unwrap(); sim.gun.weapon };
+                            if wnow == 0x2 { break; }
+                            w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+                            for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+                        }
+                        {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            eprintln!("[03-ammo] at the north-door standoff: gun {:#x} clip {} spare {} hp {:.1}",
+                                sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+                        }
+                        // Pre-raise the aim so the sweep's first stand converges while #14 is
+                        // still crossing the pass.
+                        for _ in 0..240 {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            if sim.aiming { break; }
+                            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+                            w.total_ticks += 1;
+                        }
+                        let north_door = {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            sim.drones.doors.list.iter().enumerate()
+                                .find(|(_, d)| walker::dxz(d.pos, [39.0f32, 5.4, 12.9]) < 1.0)
+                                .map(|(i, d)| (i, d.state))
+                        };
+                        if let Some((di, state)) = north_door {
+                            if state == nf_game::door::CLOSED {
+                                eprintln!("[03] the (39.0,12.9) door #{di} sits closed — E-opening it for the #14 funnel");
+                                w.use_door(di, "the (39.0,12.9) door (the #14 funnel)");
+                            }
+                        }
+                        // The funnel's answer, captor-chase shape (the blockers'/chase's own
+                        // w.shoot law — no STILL gate: #14 is a CHARGER, he never holds still
+                        // until point-blank, and the aimed stand's tap gate loses that race
+                        // (run 52: one 8-dmg tap landed, his 41.2 point-blank burst won)). The
+                        // real-fire shoot path taps him THROUGH the charge: 2-3 heavy taps
+                        // land while he runs the ~11 u from his load spot to Bond's position.
+                        for round in 0..6 {
+                            let di = {
+                                let sim = w.scene.sim.as_ref().unwrap();
+                                sim.drones.list.iter().enumerate().find(|(_, d)| {
+                                    d.team == 1 && d.skin & 0xffff == 0x39 && d.weapon == 0xe
+                                        && !d.corpse && d.health > 0.0 && d.present && d.enabled
+                                }).map(|(i, _)| i)
+                            };
+                            let Some(di) = di else { break };
+                            let (hp, at) = {
+                                let sim = w.scene.sim.as_ref().unwrap();
+                                let d = &sim.drones.list[di];
+                                (d.health, d.pos)
+                            };
+                            eprintln!("[03] the #14 funnel round {round}: drone #{di} hp {hp:.1} at ({:.1},{:.1},{:.1}) bond ({:.1},{:.1},{:.1}) hp {:.1}",
+                                at[0], at[1], at[2],
+                                { let sim = w.scene.sim.as_ref().unwrap(); let b = &sim.bond; b.pos[0] }, { let sim = w.scene.sim.as_ref().unwrap(); let b = &sim.bond; b.pos[1] }, { let sim = w.scene.sim.as_ref().unwrap(); let b = &sim.bond; b.pos[2] },
+                                { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.health.health });
+                            if !w.shoot(di, "the #14 funnel (the charger)") { break; }
+                            for _ in 0..30 {
+                                let sim = w.scene.sim.as_ref().unwrap();
+                                if sim.drones.list[di].corpse || sim.drones.list[di].health <= 0.0 { break; }
+                                w.tick(nf_game::player::Input::default(), false);
+                            }
+                        }
+                        // The aimed sweep stays as the backstop (a survivor at range).
+                        clear_exposed_nearest_03(&mut w, "the north-door funnel (#14)", 40.0, 4, 900, false);
+                        w.lenient = true;
+                        loot_the_drops_03(&mut w, "the north-door funnel drops");
+                        scoop_drops_03(&mut w, "the north-door funnel scoop", 8.0);
+                        w.lenient = false;
+                        {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let fourteen = sim.drones.list.iter().enumerate().find(|(_, d)| d.skin & 0xffff == 0x39 && d.weapon == 0xe);
+                            if let Some((i, d)) = fourteen {
+                                eprintln!("[03-ammo] #14 after the funnel: #{i} hp {:.1} corpse {} enabled {} at ({:.1},{:.1},{:.1})",
+                                    d.health, d.corpse, d.enabled, d.pos[0], d.pos[1], d.pos[2]);
+                            }
+                            eprintln!("[03-ammo] after the funnel: gun {:#x} clip {} spare {} hp {:.1}",
+                                sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+                        }
+                    }
+                }
                 w.walk_nav_to([35.6f32, 6.4f32, 3.4f32], "the door-8 mouth (the cluster holds)", 1.0);
+                // real-health-00agent-03-captors-7, lever 3 (the door-8 funnel): the mouth nav
+                // ARRIVES without touching door 8 (run 53: the arrival (35.91,4.34), the door
+                // still closed) — the settle loop's at_pocket reads 0 (the sleeping cluster
+                // never walked to the pocket) and breaks, the d3 sweep finds nobody exposed,
+                // and the servant nav's own door-opening then wakes the cluster MID-WALK —
+                // their pocket walk ambushed the rescue chase point-blank (death 106888: #2
+                // 12.0 + #19 11.4 at d 5.3/5.7). The player's shape is the #14 funnel's own:
+                // E-open door 8 HIMSELF at the mouth, then shoot down what walks out (they
+                // cross the doorway exposed on their pocket route to (38.7,0.2)).
+                if difficulty >= 3 {
+                    let door8 = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        sim.drones.doors.list.iter().enumerate()
+                            .find(|(_, d)| walker::dxz(d.pos, [35.62f32, 6.51, 2.71]) < 1.0)
+                            .map(|(i, d)| (i, d.state, d.pos))
+                    };
+                    if let Some((di, state, dpos)) = door8 {
+                        if state == nf_game::door::CLOSED {
+                            eprintln!("[03] door 8 #{di} sits closed — E-opening it for the cluster funnel");
+                            w.lenient = true;
+                            w.walk_to(Wp { at: [dpos[0] + 0.6, 5.9, dpos[2] + 1.2], act: Act::None, arrive: 0.7 },
+                                "the door-8 threshold (the cluster funnel)");
+                            w.lenient = false;
+                            w.use_door(di, "door 8 (the cluster funnel)");
+                            // The pops ride the pocket route, not the door channel alone
+                            // (run 55: the funnel's open + 600-tick poll found nobody — the
+                            // cluster woke only under the servant nav's interior legs). The
+                            // player steps INTO the pocket the way the rescue walk does and
+                            // fights the poppers there, where their own pocket route ends.
+                            w.lenient = true;
+                            w.walk_nav_to([38.7f32, 6.2, 0.2], "into the door-8 pocket (the cluster funnel)", 1.2);
+                            w.lenient = false;
+                        }
+                    }
+                    for round in 0..10 {
+                        // The pocket walk takes ~2-3 s to bring the poppers into range (run 54:
+                        // #18's load spot sits 12.6 u from the mouth — outside the 12 band —
+                        // and the one-shot poll broke at round 0, leaving the awake cluster to
+                        // ambush the servant nav). Poll up to 600 ticks between rounds.
+                        let di = {
+                            let mut found = None;
+                            for _ in 0..20 {
+                                let sim = w.scene.sim.as_ref().unwrap();
+                                let b = sim.bond.pos;
+                                found = sim.drones.list.iter().enumerate().find(|(_, d)| {
+                                    d.team == 1 && !d.corpse && d.health > 0.0 && d.present && d.enabled
+                                        && walker::dxz(d.pos, b) < 16.0 && (d.pos[1] - b[1]).abs() < 2.5
+                                }).map(|(i, _)| i);
+                                if found.is_some() { break; }
+                                drop(sim);
+                                w.tick(nf_game::player::Input::default(), false);
+                            }
+                            found
+                        };
+                        let Some(di) = di else { break };
+                        let (hp, at) = {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let d = &sim.drones.list[di];
+                            (d.health, d.pos)
+                        };
+                        eprintln!("[03] the cluster funnel round {round}: drone #{di} hp {hp:.1} at ({:.1},{:.1},{:.1}) bond hp {:.1}",
+                            at[0], at[1], at[2],
+                            { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.health.health });
+                        if !w.shoot(di, "the cluster funnel (the pocket walk)") { break; }
+                        for _ in 0..30 {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            if sim.drones.list[di].corpse || sim.drones.list[di].health <= 0.0 { break; }
+                            w.tick(nf_game::player::Input::default(), false);
+                        }
+                    }
+                }
                 // The mouth stand opens door #8 the way the mid-nav approach did [L the d2
                 // ledger — the door opened under the servant nav]; the popped members then
                 // walk their pocket route (to (38.7, 0.2) [L the d2 ledger]) — ~6.9 u from
@@ -1075,6 +1560,22 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                     };
                     clear_near(&mut w, 9.0, "the door-8 mouth");
                     if at_pocket == 0 && round >= 1 { break; }
+                }
+                // real-health-00agent-03-captors-6 (run 43): the mouth walk's own route crosses
+                // the door-8 area's second 0x23 plate (census (38.9,11.1) [L d3run27]) and that
+                // wake pops #14 (skin 0x5000039, weapon 0xe, load disabled (30.7,6.2,4.1) [L
+                // d3run35's census]) — he closed to d 2.5 and his machine-gun bursts (41.2 in
+                // 3 hits, one 24.0) finished Bond at (35.96,4.27) with the walk's plain return
+                // fire killed-false on him (the 0x12's 7 light rounds) [L d3run43]. A player at
+                // a door that just hissed open squares up and AIMED-stands what popped: the
+                // aim-bit zero-spread taps kill his 12 hp in 2-4 taps where the plain exchange
+                // ate the whole health. d>=3 only — the d<3 streams keep their settle loop.
+                if difficulty >= 3 {
+                    clear_exposed_nearest_03(&mut w, "the door-8 mouth (d3 wake sweep)", 40.0, 4, 900, true);
+                    w.lenient = true;
+                    loot_the_drops_03(&mut w, "the door-8 mouth (d3 wake drops)");
+                    scoop_drops_03(&mut w, "the door-8 mouth (d3 wake scoop)", 8.0);
+                    w.lenient = false;
                 }
                 // los-mask-repins-03 (Agent): the cluster's guns (#18 0x1c, #2/#19 0xe [L the
                 // gas-rng-draws-6 probe]) are the route's own ammo from here on — the exit legs
@@ -1608,9 +2109,108 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 /// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
 /// only difference.
 #[test]
-#[ignore = "00 Agent (real-health-00agent-03-captors-4 ledger, on the merged tree (branch base master 385ebb66d merged with captors-3 a283cb626)): the lane-north kill-loot cycle (stands -> loot_the_drops_03 -> re-stand) and the si-1 saddle-wake block took the walk 15555 -> 80288 [L d3run18-21]. Best this round, run 20 (80288): the lane crossed at 41.2 (the re-armed clear engaged #6 and no 40-class round landed after the lane), the servants' phase reached, and the end was the 0x23 plate's trio wake MID-mouth-crossing — the si-1 saddle nav (from the post-resupply spot) detoured WEST through the whole moat band and wedged 7x3000 on the lane doors, so the mouth nav rode the saddle zone at (25.30,7.37,8.79) with the plate firing mid-climb and trio shotgun #5 (skin 0x500003a weapon 0x1c) charged to d 2.5 for 13.8 in 8; #7 (skin 0x5000039 weapon 0x12, (11.4,10.1,-16.1), hp 10) chipped 27.4 in 43 [L d3run20]. THIS round's experiments, all measured: (a) the resupply-sprint lever 1 (resupply + switch_to_armed + re-take the node, fights on) REGRESSED to 10463 — the sprint walked Bond INTO the uncleared lane cluster and #10's 18-hit point-blank drain ended it [L d3run18]; (b) the same sprint COLD (return_fire off, the crossing-legs doctrine) survived the walk but the corridor's only pickup (14.2,-28.0) is an EMPTY gun (no ammo gain; run 13's `cycling weapons (0) (weapon 0x1c clip 0 spare 0)` is the same box) and attempt 1's target (14.5,-29.0) sits behind the (14.0,-30.3) door — the walk ate 25 hits and died 10764 [L d3run19]; the kill-loot cycle replaced it (run 20's shape, kept). (c) the saddle via the mouth-path anchor (22.1,-2.0) REGRESSED the phase — the anchor nav itself wedged 20x3000 (60k ticks wasted), the saddle nav then worked and arrived (23.18,5.50,7.20), but Bond arrived DRY (clip 0 spare 0, the wheel cycled to the fists) and the sweep stood no chance; #7 landed 41.2 in 51 hip taps; died 74135 at the saddle doorstep [L d3run21]. Wired this round (d>=3 only, the d<3 streams untouched): the lane-north kill-loot cycle, the si-1 saddle-wake block (walk the saddle before the cluster block; the aimed sweep, sniper-first, wait 600). NEXT levers, in order: (1) ARM THE WALK TO THE SADDLE — run 21 died DRY at the saddle: loot_the_drops_03 after each lane/moat leg's d3 clears (the kills leave drops at the guards' feet; the servants'-ground loop already runs the same cycle) and gate the west-dragging `before the servants' rescue (agent)` resupply to difficulty == 2 only (its attempt-0 target (-10.9,-38.0) walked Bond 25.7 u WEST through the moat for nothing — `resupply done (false) clip 3 spare 13` [L d3run20]; d2's byte-identity holds under == 2). (2) THE SADDLE ROUTE WITHOUT THE ANCHOR — the (22.1,-2.0) anchor wedges from the servants' ground (run 21); the saddle nav from the east-lane legs' end works (run 21's legs crossed the doors and climbed: (11.42,-20.71)->(14.3,-18.57)->(19.31,-7.5)->(23.16,7.16)); keep ONLY the saddle nav, drop the anchor nav. (3) #7 IS THE ENDGAME DRAIN — 43-51 hip hits for 27.4-41.2 across runs 20/21, alive at hp 4-10 at both deaths; the saddle's aimed stand (once armed) is the first shot at him (d ~26 from (23.5,6.3,8.4), exposure unverified — a live check: whether #7's window opens from the saddle or from the mouth (35.6,6.4,3.4)). (4) the trio wake's first volley: the sweep's settle+raise (~330 ticks) may lose the race to #5's charge from (22.8,9.8) — if the next run still eats a point-blank volley mid-approach, sweep from the climb's midpoint before the last hop. (5) the older levers stand: an approach north of door 8 ((36.2,5.7) through the open doorway), the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, the exit-lawn #16 post-kill volley; follow-up real-health-00agent-02-03-3"]
+#[ignore = "00 Agent (real-health-00agent-03-captors-7 ledger, branch base master 4f3802517 merged with captors-6): the -6 ledger's mouth blocker FELL this round; the frontier moved 67488 -> 151214 (master dies 74135 dry at the saddle; captors-6 died 67488 to #14), all measured on real-input d3 runs (50-56). MEASURED this round, in run order: (50) the si-1 mouth nav from the duel line still rides the north lawn and its stuck handler E-opened the (39.0,12.9) door MID-NAV - the hits began during the door-open leg (67499) BEFORE the (38.9,11.1) plate hop - so the door OPEN CHANNEL is the #14 wake [L d3run50]; death 67870, #14 41.2 in 4 at d 1.4. (51) THE ROUTE PROBE (probe_mouth_approach_routes, cheap no-walking): EVERY nav route to the mouth (saddle->mouth, duel-line->mouth) crosses the doorway band - the only descent is nodes (39.93,13.55) -> (39.90,12.23) THROUGH the leaf; move_test says the east strip (x 40.0-40.2) is blocked exactly at the band (z 13.0->12.3 leg 0), x 40.6/41.0 crossings all 0, the direct south-lawn chain all 0 (the wall corner + the mouth approach) - THE DOORWAY IS THE ONLY WAY DOWN and the fight is forced. (52) the north-door funnel v1 (walk to the last pre-door node (39.9,14.4), cycle the wheel to the 0x2 heavy gun, pre-raise the aim, E-open the door MYSELF, the aimed sweep): the sweep's taps landed (12->4, ~8 a tap - the 0x2 heavy does ~8 [L d3run52]) but #14 FLANKED east through the x ~40.2-41 strip to point-blank d 1.5 and his burst (17.8 + 23.4, one 23.4 a round) won the race - death 67715; the aimed stand's STILL gate cannot tap a charger. (53) THE #14 FUNNEL v2 = THE FIX (the captor-chase shape): after the E-open, a plain w.shoot LOOP (no still gate) taps him THROUGH the charge - #14 died at the funnel for ONE 17.8 hit (bond 23.4 -> 5.6, survived), the walk PASSED the mouth. NOTE the hp: bond entered the funnel at 23.4 (the walk print) after 41.2 at the wake print - 17.8 disappeared between the prints with NO hit logged (the aggregate says #14 dealt 17.8 total, so it IS his one funnel hit; the print order needs a re-check next round). (54) the door-8 cluster blocker: the mouth nav ARRIVES without touching door 8 ((35.91,4.34)), the settle loop's at_pocket reads 0 (the sleeping cluster never walked), the d3 sweep finds nobody (they load enabled=false, present=true, state 0x1 [L the load probe - the WHOLE map loads that way]) and the servant nav's own door-8 E-opens wake the cluster MID-WALK - the pocket-walk ambush finished bond (death 107736: #18's point-blank shotgun 23.4 in 12 hits at d 1.0 - bond at 23.4 died to one volley). (55) the cluster funnel v1 (E-open door 8 at the mouth + a 600-tick poll): found NOBODY - the pops do NOT ride the door-8 open channel alone; AND the walk then SAVED SERVANT 1 (post-save state 0x13, ch 0x50 on - the rescue asserts PASSED for the first time past the wake) before dying at 106170 to the awake #19 point-blank (23.4 at d 1.4) during the servants'-ground fight chase. (56) THE CLUSTER FUNNEL v2 = the current shape: E-open door 8, walk INTO the pocket (38.7,0.2) (the pops ride the interior proximity - the round-0 print found #2 alive the moment bond stood inside), the plain shoot loop (10 rounds, 600-tick polls, r 16): #2 (24 hp captain) dropped 24->4 but SURVIVED (the loop's rounds could not finish him - killed false at 123072), the si-1 rescue SAVED, and the walk reached 151214 - death (34.75,8.69) mid the post-rescue fight chase at bond hp 9.0. WIRED this round (d>=3 gates only; the d<3 streams and the shared helpers untouched): the saddle re-take hop before the mouth nav, the #14 funnel (the north-door standoff, the 0x2 cycle, the E-open, the shoot loop + the aimed sweep backstop + loot + scoop), the door-8 cluster funnel (the E-open, the pocket entry, the patient shoot loop), the cheap route/load probes (both still #[ignore]d). NEXT levers, in order: (1) FINISH THE CLUSTER AT THE POCKET - the shoot loop needs the kill-loot cycle INSIDE it (each drop carries the guard's own weapon + clip: loot_the_drops_03 + scoop_drops_03 between rounds - 3 guards = 48 hp vs bond's ~11 spare rounds is not enough without the drops) and the loop must keep shooting while ANY cluster member lives (the current break on !w.shoot lost #2 at hp 4). (2) THE HP LEDGER - bond enters the endgame at 23.4 and dies at 9.0: trace the phase-boundary health prints (the 41.2 -> 23.4 gap before the funnel needs an owner; #14's one 17.8 funnel hit is the measured floor - a clean funnel = 41.2 at the cluster) and cut the pre-saddle 58.8 (the pre-crossing stands' 36.0 #11 + the crossing's 24.0 #11 are the two big lines - the driver's measured refutations stand: wider loot radius / dry-wheel skip / saddle armour / (14..20,0) stands all no gain). (3) THE POST-RESCUE CHASES - the servants'-ground fight's flank navs walk bond into the surviving cluster members' point-blank (both the 106170 and 151214 deaths); with the cluster dead at the pocket (lever 1) the chase walks empty ground. (4) the older levers stand: the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, the exit-lawn #16 post-kill volley, #7's upper-floor drop (11.41,9.09,-15.55) - the loot band's +-1.5 never sees it from the lawn. (5) live checks: (a) what EXACTLY pops the door-8 cluster - stand bond outside door 8, E-open it, watch #18/#2/#19's enable for 600 ticks (the funnel poll says NOT the open channel); then step 1 u inside and watch again (run 56 says the interior entry pops them); (b) the 41.2 -> 23.4 pre-funnel hp gap - a gdbwatch on the health address across the saddle re-take + the standoff walk would name the damager (the damage ledger credits #14 with exactly that 17.8, but at a frame AFTER the print). follow-up real-health-00agent-03-captors-8follow-up real-health-00agent-02-03-3"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
+}
+
+/// Cheap route probe (no walking): does ANY nav route reach the door-8 mouth / the south
+/// pocket from the saddle WITHOUT crossing the (39.0,12.9) doorway band (the door whose open
+/// channel wakes #14 [L d3run50: the hits began during the mouth nav's own door-open leg])?
+/// Dumps the A* node chains for the approach starts and every nav node near the door band.
+#[test]
+#[ignore = "probe: the mouth approach's nav routes (no walking)"]
+fn probe_mouth_approach_routes() {
+    let iso = iso();
+    let mut w = Walker::new(nf_view::load(&iso, "07000003.bin", false).expect("load 07000003"));
+    w.wait(30);
+    let sim = w.scene.sim.as_ref().unwrap();
+    let saddle = [23.5f32, 6.3, 8.4];
+    let mouth = [35.6f32, 6.4, 3.4];
+    let door_south = [38.69f32, 6.37, 10.96];
+    let north_lawn = [39.81f32, 6.37, 13.52];
+    for (name, from, to) in [
+        ("saddle->mouth", saddle, mouth),
+        ("door-south->mouth", door_south, mouth),
+        ("north-lawn->door-south", north_lawn, door_south),
+        ("saddle->door-south", saddle, door_south),
+        ("duel-line->mouth", [22.3f32, 5.9, 9.6], mouth),
+    ] {
+        let pts = walker::nav_route(&sim, from, to);
+        eprintln!("[03-probe] {name}: {}", match &pts {
+            Some(p) => p.iter().map(|q| format!("({:.1},{:.1},{:.1})", q[0], q[1], q[2])).collect::<Vec<_>>().join(" -> "),
+            None => "NO ROUTE".to_string(),
+        });
+    }
+    eprintln!("[03-probe] nodes near the (39.0,12.9) door band (dxz < 8):");
+    for (pi, p) in sim.nav.paths.iter().enumerate() {
+        if p.kind & 0xd != 0 { continue; }
+        for (ni, n) in p.nodes.iter().enumerate() {
+            if walker::dxz(n.pos, [39.0f32, 6.4, 12.9]) < 8.0 {
+                eprintln!("[03-probe] path {pi} node {ni} at ({:.2},{:.2},{:.2}) kind {:#x}", n.pos[0], n.pos[1], n.pos[2], p.kind);
+            }
+        }
+    }
+    eprintln!("[03-probe] nodes near (40.8,11.0) east of the door band (dxz < 6):");
+    for (pi, p) in sim.nav.paths.iter().enumerate() {
+        if p.kind & 0xd != 0 { continue; }
+        for (ni, n) in p.nodes.iter().enumerate() {
+            if walker::dxz(n.pos, [40.8f32, 6.4, 11.0]) < 6.0 {
+                eprintln!("[03-probe] path {pi} node {ni} at ({:.2},{:.2},{:.2})", n.pos[0], n.pos[1], n.pos[2]);
+            }
+        }
+    }
+    // The east-strip descent: move_test the legs from the last north node (39.93,13.55) down
+    // x ~40.0-40.2 (east of the closed leaf plane) to the south node (40.16,9.78), then the
+    // mouth. If every leg passes, Bond descends WITHOUT the doorway (and #14 never wakes).
+    let strip: [([f32; 3], [f32; 3]); 6] = [
+        ([39.93, 6.37, 13.55], [40.05, 6.37, 13.0]),
+        ([40.05, 6.37, 13.0], [40.10, 6.37, 12.3]),
+        ([40.10, 6.37, 12.3], [40.16, 6.37, 11.0]),
+        ([40.16, 6.37, 11.0], [40.16, 6.37, 9.78]),
+        ([40.16, 6.37, 9.78], [38.12, 6.37, 9.82]),
+        ([38.12, 6.37, 9.82], [35.6, 6.4, 3.4]),
+    ];
+    for (a, b) in strip {
+        let (res, _) = sim.nav.move_test(&sim.world, a, b, false, false);
+        eprintln!("[03-probe] move_test ({:.1},{:.1})->({:.1},{:.1}): {}", a[0], a[2], b[0], b[2], res);
+    }
+    // Wider crossings of the doorway band z 13.55->12.23 at x 40.6/41.0 (east of the leaf's
+    // east edge?) and x 38.4/38.0 (west of the leaf's west edge?).
+    let cross: [([f32; 3], [f32; 3]); 8] = [
+        ([39.93, 6.37, 13.55], [40.6, 6.37, 13.3]),
+        ([40.6, 6.37, 13.3], [40.6, 6.37, 12.3]),
+        ([40.6, 6.37, 12.3], [40.6, 6.37, 11.0]),
+        ([40.6, 6.37, 11.0], [40.16, 6.37, 9.78]),
+        ([39.93, 6.37, 13.55], [41.0, 6.37, 12.9]),
+        ([41.0, 6.37, 12.9], [41.0, 6.37, 10.5]),
+        ([41.0, 6.37, 10.5], [40.16, 6.37, 9.78]),
+        ([39.93, 6.37, 13.55], [38.4, 6.37, 12.5]),
+    ];
+    for (a, b) in cross {
+        let (res, _) = sim.nav.move_test(&sim.world, a, b, false, false);
+        eprintln!("[03-probe] move_test cross ({:.1},{:.1})->({:.1},{:.1}): {}", a[0], a[2], b[0], b[2], res);
+    }
+    // The direct south-lawn chain (west of the wall corner) to the mouth.
+    let south: [([f32; 3], [f32; 3]); 6] = [
+        ([23.5, 6.37, 8.4], [25.5, 6.37, 6.5]),
+        ([25.5, 6.37, 6.5], [27.5, 6.37, 5.5]),
+        ([27.5, 6.37, 5.5], [30.0, 6.37, 4.8]),
+        ([30.0, 6.37, 4.8], [33.0, 6.37, 4.5]),
+        ([33.0, 6.37, 4.5], [34.5, 6.37, 4.0]),
+        ([34.5, 6.37, 4.0], [35.6, 6.4, 3.4]),
+    ];
+    for (a, b) in south {
+        let (res, _) = sim.nav.move_test(&sim.world, a, b, false, false);
+        eprintln!("[03-probe] move_test south ({:.1},{:.1})->({:.1},{:.1}): {}", a[0], a[2], b[0], b[2], res);
+    }
+    // The leaf's span: the north door's own fields.
+    for (i, d) in sim.drones.doors.list.iter().enumerate() {
+        if walker::dxz(d.pos, [39.0f32, 5.4, 12.9]) < 3.0 {
+            eprintln!("[03-probe] door #{i} at ({:.2},{:.2},{:.2}) state {:#x} pos01 {:.2} ch_lock {:#x}",
+                d.pos[0], d.pos[1], d.pos[2], d.state, d.pos01, d.ch_lock);
+        }
+    }
 }
 
 /// The door-8 cluster's LOAD-state probe (gas-rng-draws-6; run with `--ignored --nocapture`):
