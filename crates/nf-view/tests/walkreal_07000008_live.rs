@@ -1662,7 +1662,18 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // real-health-00agent-08-bleed-4 (d3): the ZAP hold — a world hit under Bond's feet (owner
     // past the drone list — the volume law, no blast row) means he is standing IN the terminal's
     // hurt volume; the walk-out holds for 40 ticks against the dodge (run-bleed4-4/6).
+    // real-health-00agent-08-bleed-5's class fix: on 00 Agent those hits are the HIND'S CANNON
+    // rounds (owner past the drone list — the copter is not in drones.list), not a volume.
     let mut zap_hold = 0u32;
+    // real-health-00agent-08-bleed-6 (d3): the cannon step-out latch + its episode flag + the
+    // zap tallies (the cadence diagnostic). A cannon zap latches the step-out; the strafe
+    // episodes chain on the latch until Bond's z leaves the west doorway band's north edge
+    // (the strip's z), then the drift walk returns him to the anchor — the firing spot.
+    let mut cannon_step_out = false;
+    let mut cannon_ep = false;
+    let mut cannon_zaps = 0u32;
+    let mut cannon_zaps_missiles = 0u32;
+    let mut cannon_steps = 0u32;
     if difficulty >= 3 { w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false); }
     for t in 0..20000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
@@ -1897,21 +1908,75 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // death t31593, EARLIER than the anchor's t34720 [L run-bleed5-3]. NOT shipped: the
         // anchor stays (112.5, −179.4).
         let ANCHOR: [f32; 2] = if difficulty >= 3 { [112.5, -179.4] } else { [111.09, -179.72] };
+        // real-health-00agent-08-bleed-6 (d3): the step-out's z target — the north strip the
+        // north-strip run measured cannon-silent ([L run-bleed5-3: no −2.0 rows on (112.3,
+        // −177.6)]). The band's north edge is −178.25 [L the round log] and the south spread
+        // overran its edge by 0.35 (−180.95 rows [L run-bleed4-7 — the cannon rounds, the
+        // bleed-5 class fix]), so the exit takes the strip's full 0.65 margin past the edge.
+        let STEP_OUT_Z: f32 = -177.6;
         // The zap detector: the newest player_hit is a world hit (owner past the drone list)
-        // whose frame is fresh — the volume law's −2.0 rows (run-bleed4-4: frames 20344-20441,
-        // (113.0, 13.5, −180.6), no explosion lines).
+        // whose frame is fresh — on 00 Agent the HIND'S CANNON rounds (the bleed-5 class fix:
+        // the −2.0/−1.69 rows, the copter not in drones.list), come down through the west
+        // doorway's z band (−178.25..−180.6 [L the round log]) that covers the fight anchor.
         {
             let zap_now = sim.drones.player_hits.last().is_some_and(|h| {
                 h.1 >= sim.drones.list.len() && sim.drones.frame.saturating_sub(h.0) <= 3
             });
-            if zap_now { zap_hold = 40; } else if zap_hold > 0 { zap_hold -= 1; }
+            if zap_now {
+                zap_hold = 40;
+                // real-health-00agent-08-bleed-6 (d3): the cadence diagnostic — the ledger's
+                // "does the machine's cannon cadence pause while its missiles fly": every zap
+                // logs Bond's health, the step-out state and the live drone bullets' weapon
+                // ids (the cannon is 0x61; the machine's missiles are the others).
+                if difficulty >= 3 {
+                    let live: Vec<u16> = sim.drones.bullets.iter()
+                        .filter(|bu| bu.state != 2).map(|bu| bu.weapon).collect();
+                    cannon_zaps += 1;
+                    if live.iter().any(|&wp| wp != 0x61) { cannon_zaps_missiles += 1; }
+                    eprintln!("[08 cannon zap] f{} hp {:.1} at ({:.2},{:.2},{:.2}) step_out {} live {:?}",
+                        sim.drones.frame, sim.drones.health.health, b[0], b[1], b[2], cannon_step_out, live);
+                }
+            } else if zap_hold > 0 { zap_hold -= 1; }
         }
+        // real-health-00agent-08-bleed-6 (d3): the CANNON STEP-OUT — the ledger's lever. The
+        // zap walk-out below used to answer the cannon rounds by walking Bond back to the
+        // anchor — INTO the very lane they come down through. A cannon zap now LATCHES the
+        // step-out and the strafe episodes chain on the latch until Bond's z leaves the band's
+        // north edge at the strip's z (−177.6 [L run-bleed5-3: the cannon stopped there]) —
+        // then the latch clears and the drift walk returns him to the anchor, the firing spot.
+        // The arm is gated to INSIDE the band: north of the edge the spread still lands (−177.38
+        // rows [L run-bleed6-3]) and re-arming there only parked him in the fire (the fresh arm
+        // met the arrival-cancel the same tick — 21 ticks stationary at (112.61, −177.38), f32053-74).
+        // The MISSILE dodge keeps priority (the blasts are the killers: −25.1/−10.9/−13.1
+        // [L the update-5 run]): the latch arms only on dodge_hold == 0 and a missile dodge
+        // flips the episode anchor-ward. D3-GATED: the sisters' timelines stay byte-exact.
+        let cannon_step = difficulty >= 3 && rocket.is_none() && zap_hold > 0 && dodge_hold == 0
+            && b[2] < STEP_OUT_Z;
+        if cannon_step && !cannon_step_out { cannon_steps += 1; }
+        if cannon_step { cannon_step_out = true; }
         if dodge_now {
             if dodge_hold == 0 { dodge_sign = -dodge_sign; }
             dodge_hold = 24;
+            cannon_ep = false;
+        } else if dodge_hold == 0 && cannon_step_out {
+            dodge_hold = 24;
+            cannon_ep = true;
         } else if dodge_hold > 0 {
             dodge_hold -= 1;
         }
+        // The latch clears once Bond stands north of the band's north edge (the strip's z):
+        // cannon-silent there [L run-bleed5-3], and the step-out ENDS there — the episode is
+        // cancelled so the strafe cannot overshoot north into the terminal's north-east corner
+        // (run-bleed6-2: the overshoot carried Bond to z −177.19, where the flight-query sight
+        // passes through the EAST panes at oblique angles and a launch detonated −52.0 on the
+        // pane frames — a self-blast death at t29509). The drift walk returns him to the anchor.
+        if cannon_step_out && difficulty >= 3 && b[2] >= STEP_OUT_Z {
+            cannon_step_out = false;
+            if cannon_ep { dodge_hold = 0; }
+        }
+        // real-health-00agent-08-bleed-6 (d3): the sprint law's movement flag — any dodge /
+        // step-out episode or drift walk this tick (the crouch toggle below reads it).
+        let mut moving = false;
         if dodge_hold > 0 {
             if difficulty >= 3 {
             // real-health-00agent-08-bleed-4 (d3): the dodge SIDE is the one that also walks the
@@ -1930,25 +1995,39 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // final-binary run]).
             let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
             let right = [cy, 0.0, -fy];
-            let (ax, az) = (ANCHOR[0] - b[0], ANCHOR[1] - b[2]);
-            let dot = right[0] * ax + right[2] * az;
-            input.strafe = if dot > 0.05 { 1.0 } else if dot < -0.05 { -1.0 } else { dodge_sign };
+            if cannon_ep {
+                // real-health-00agent-08-bleed-6 (d3): the step-out episode's side — the strafe
+                // that walks OUT of the doorway's z band (north, toward the strip's z). The
+                // strafe is perpendicular to the view; the right vector's z component picks the
+                // sign (strafe +1 moves +z·right[2] — the view aims at the machine, mostly west
+                // from the anchor, so +1 is the north step). When the view is near north/south
+                // the perpendicular carries no z and the sign falls to the alternating default
+                // (the next tick's view usually carries z again).
+                input.strafe = if right[2] > 0.05 { 1.0 } else if right[2] < -0.05 { -1.0 } else { dodge_sign };
+            } else {
+                let (ax, az) = (ANCHOR[0] - b[0], ANCHOR[1] - b[2]);
+                let dot = right[0] * ax + right[2] * az;
+                input.strafe = if dot > 0.05 { 1.0 } else if dot < -0.05 { -1.0 } else { dodge_sign };
+            }
             input.forward = 0.0;
+            moving = true;
             } else {
                 input.strafe = dodge_sign;
                 input.forward = 0.0;
             }
         }
         let _ = exit_ticks;
-        // real-health-00agent-08-bleed-4 (d3): the ZAP walk-out + the drift walk. The dodge bias
-        // above keeps the episodes anchor-ward; when a zap lands anyway (or plain drift over
-        // 1.2 u between episodes) Bond walks back to the ride-end anchor — a player being zapped
-        // steps out of the volume, and the aim re-converges on the spot (the launch gates read
-        // the live spot every tick, so nothing fires mid-walk). The walk never runs while a
-        // rocket rides. D3-GATED: the d1/d2 sisters keep their byte-exact timelines.
-        if difficulty >= 3 && rocket.is_none() && (zap_hold > 0 || dodge_hold == 0) {
+        // real-health-00agent-08-bleed-6 (d3): the DRIFT walk only now. The old zap clause is
+        // gone — the zaps are the cannon rounds (the bleed-5 class fix) and they latch the
+        // step-out above instead of walking Bond back INTO the doorway lane; the walk runs only
+        // when no dodge/step-out episode holds, and only for plain drift over 1.2 u between
+        // episodes (the aim re-converges on the spot; the launch gates read the live spot every
+        // tick, so nothing fires mid-walk). The walk never runs while a rocket rides. D3-GATED:
+        // the d1/d2 sisters keep their byte-exact timelines.
+        if difficulty >= 3 && rocket.is_none() && dodge_hold == 0 {
             let (dx, dz) = (ANCHOR[0] - b[0], ANCHOR[1] - b[2]);
             if dx * dx + dz * dz > 1.2 * 1.2 {
+                moving = true;
                 let want_yaw = dx.atan2(dz);
                 let yaw_err_a = walker::wrap_pi(want_yaw - sim.bond.yaw);
                 input.turn = yaw_err_a.clamp(-0.08, 0.08);
@@ -2063,12 +2142,50 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // rockets land, the Hind 100.7 -> 287.7 of 598 (the fight ends sooner - death t34720 ->
         // t30165 to the Hind missile blasts). Loose gates alone (with the cannon dodge): t28440.
         let loose08 = difficulty >= 3;
+        // real-health-00agent-08-bleed-6 (d3): the ANCHOR FIRE GATE — the launch only fires from
+        // the fight anchor's vicinity. The anchor's sight lines (the west doorway and the panes
+        // it threads) carried every measured launch (update 5: three rockets, 100.7 → 287.7
+        // [L the master run]); off-anchor spots are launch traps — run-bleed6-2's north-east
+        // corner fired through the east panes' flight-query lane and the round detonated on the
+        // pane frames −52.0 next to Bond [L the same run]. D3-GATED: the sisters' timelines
+        // stay byte-exact.
+        let at_anchor_fire = difficulty < 3 || {
+            let (ax, az) = (ANCHOR[0] - b[0], ANCHOR[1] - b[2]);
+            ax * ax + az * az <= 1.5 * 1.5
+        };
         let ready = rocket.is_none() && sim.missile_cam.is_none() && dodge_hold == 0
             && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
-            && l >= 10.0 && (loose08 || (slit_clear && corridor_clear
+            && l >= 10.0 && at_anchor_fire && (loose08 || (slit_clear && corridor_clear
             && effective_corridor_clear)) && eye_sees && machine_lane_clear
             && (loose08 || machine_lane_fore_clear);
+        // real-health-00agent-08-bleed-6 (d3): the SPRINT law — the crouched+aiming walk is
+        // 0.011 u/tick [L run-bleed6-1: the step-out strafe crossed 0.31 u in 28 ticks], seven
+        // times slower than the standing walk; the cannon's clear-line bursts land every ~25
+        // ticks [L run-bleed6-1 f27503/f27528] and the machine's missiles punish any spot held
+        // long (−12.5/−12.1/−15.0 blasts [L the same run]). A player stands up to move and
+        // crouches to hold: the dodge strafes, the cannon step-out and the drift walk run
+        // STANDING, and Bond re-crouches the tick the movement ends — the crouch is the
+        // anchor's own cannon cover [L update 1: crouched t20428 → t26671]. The toggle is the
+        // game's crouch press edge, one tick [M Player_SSCrouch 0x1924c0:84-105, Toggle default
+        // Input_Init 0x17edd8], skipped on a launch tick so the fire stays clean. D3-GATED: the
+        // sisters keep their byte-exact timelines.
+        // real-health-00agent-08-bleed-6 (d3): the PHASE-CROUCH variant (the ledger's next
+        // lever — the settled crouch keyed on the machine's height, standing for the low
+        // passes cp[1] < 15) was TAKEN and measured WORSE: run-bleed6-5 — ZERO launches, the
+        // cannon took 34.3 in 37 world hits (standing at the anchor invites the fire), death
+        // t29593 — EARLIER than the sprint law's t32706. NOT shipped: the anchor's sight
+        // lines are the WEST doorway/panes and the low passes they catch do not line up with
+        // the machine's height alone. NEXT LEVER: name the west-doorway sight window per
+        // machine pass (the lintel y 14.31 vs the standing eye 14.24 — which machine
+        // positions/bearings the eye_sees + machine_lane_clear flight queries actually catch,
+        // logged per pass), and place the firing spot to catch more of them; then the
+        // missiles: pin the chase's per-tick steer clamp [M Bullet_update 0x12e7b0:177-244]
+        // and dodge with a sustained standing sprint perpendicular to the missile's line
+        // while it is 2-30 u out (not 24-tick episodes).
+        if difficulty >= 3 && rocket.is_none() && !ready && moving != sim.bond.crouched {
+            input.crouch = true;
+        }
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 100 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -2124,6 +2241,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     }
     let damage = w.scene.sim.as_ref().unwrap().drones.copters[ci].damage;
     eprintln!("[08] the shoot-down: {rockets} rockets; damage {damage} vs hp {hp}; best single rocket {best_rocket}");
+    // real-health-00agent-08-bleed-6: the cannon cadence tally (the diagnostic above).
+    eprintln!("[08 cannon] zaps {} with-missiles-live {} step-outs {}", cannon_zaps, cannon_zaps_missiles, cannon_steps);
     // hind-flight-pin: the measured flight. The machine sweeps the valley the whole window —
     // the log's samples run (70.95, 22.16, −165.04) f25860 → (171.16, 16.32, −192.44) f26640 at
     // the path's 0.2533/t step (the old half-rate build; 0.5062 since agent-copter-rate [M 0x17d340, L ee_start_05.bin]), ≈120-170 u of travel per run, with NOT ONE 30-tick stretch below
@@ -2491,7 +2610,7 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// plus the pin of the round's actual spawn direction (lock-on vs the effective aim) in
 /// PCSX2 (the report's live check).
 #[test]
-#[ignore = "00 Agent (11-14, main, update 5): the cannon rounds no longer start dodges and the launch gate is the sisters' shape - three rockets land, the Hind 100.7 -> 287.7 of 598; Bond dies to the Hind missile blasts at t30165 (25.1/10.9/13.1) with one rocket in the clip. Next: survive the missiles for ~3 more launches (the car boxes refill after a reload). 11-14 correction: the rocket pool DOES refill in the fight - the car carries three live 0x2c pickups at (112.0, 18.0, -179.4) (two ammo boxes + the launcher, 4 rounds each) 4.6-5.0 u from the anchor, in take range; carried caps at 4, so a box is refused only until a reload moves a round into the clip (measured: clip 3/carried 4 -> 4/3, then a box tops carried back to 4). The limit is the launch windows (one launch in ~7000 ticks), not ammo. The note below (update 4) is superseded on the cap: the ride's rocket-ammo pickups CANNOT grow the pool - ammo_data type 0xe caps carried at 4 [D ammo_data +0x02, the ACTION.ELF static initialiser] and clip[0x2c] at clip_size 4 - the pool entering the fight is hard-capped at 8 (clip 4 + carried 4). The run-bleed5-1 NF_PICKUPLOG roll: Bond took the mouth box the moment his carry had room (tick 24599, Some(Ammo 4), carry 0->4 at the gondola mouth) and the ride's remaining box + launcher refuse at the cap every tick after ([take] -> None from tick 24600 on) - the passive-collection path WORKS (the follow link poses the pickups with the carriage; the touch passes with los true in the ride's final ticks), only the cap refuses. So the drain-class pool-growth lever is EXHAUSTED by the game's own data, and the -2.0/-1.69 rows are NOT a hurt volume at all: they are the HIND'S CANNON rounds (owner past the drone list - the copter is not in drones.list; the walker's zap class calls them world) - the level's only 0xE4 placements are the kill-floor quads #42-44 [D the 0xE4 census probe, run-bleed5-1]. The ledger's lever (2) 'one gate's relaxation' was TAKEN: the d3 launch distance gate 16 -> 10 (the sisters' own law and the blast rule; the slit/corridor/effective-corridor/sight/lane/forecast gates all stay) - MEASURED (run-bleed5-2): rocket 1 launched at fight t4907 and LANDED 100.7, but the death stayed t34720 - the cannon riddled the anchor (46 hits for 52.0, the -2.0 rows) and the SECOND launch never opened (the lane/sight gates bind now: the machine's circuit dist 20-42 with its lintel-clear low passes rare). The north-strip anchor variant ([112.3, -177.6], off the doorway's cannon lane) was TAKEN and measured WORSE: the cannon stopped but the machine's missiles chase the strip (-5.94/-13.16/-15.00/-15.00 blast rows) - death t31593 [L run-bleed5-3]; NOT shipped, the anchor stays (112.5, -179.4). walkreal_07000008_live whole: 5 passed 1 failed (the d1/d2 sisters and the ally tests byte-exact); interactables_07000008_live 15/0. NEXT LEVER: the cannon class - the rounds come down through the west doorway (x 103 -> 111, y 16 -> 14 [L the round log]) and the doorway's z band (-178.25..-180.6) covers the anchor; bias the d3 dodge to step OUT of the doorway band on a cannon zap (the anchor walk stays for drift) while the anchor remains the firing spot, and measure whether the machine's cannon cadence pauses while its missiles fly. Live check: pin in PCSX2 the cannon rounds' impact band inside the cabin at the anchor (the z rows the -2.0s land in) and whether the gun pauses during missile volleys. Update 3: crouched for the briefcase stretch too - death t29598 -> t34720 in the Hind fight (one rocket, 100.7). Update 2: the station hall is crossed crouched - death t26671 -> t29598 (still one rocket). Update 1: the Hind fight is fought CROUCHED from the carriage anchor (112.5, -179.4) - the Hind gun (rounds down through the west doorway, not through the walls [L the round log]) stops landing; death t20428 -> t26671, rocket 1 LANDED 100.7 (the Hind has 598). Bond dies to the Hind missile blasts (-7.13 at 25838, -10.58 at 26552). Next: more rockets - the launch line opens rarely from the deeper anchor (one launch in ~6500 ticks). Earlier: 00 Agent (11-14, bleed-4): the FUSEBOX PIT lever is TAKEN and measured — the hurting pick (the guard who actually LANDED THE LAST HIT inside the wide ring — the walker's hurt bookkeeping, player_hits, names him — falls back to the in-ring guard whose muzzle is live on Bond before his first round lands) + the OPENING-VOLLEY POLL (the pre-burn stands ran BEFORE the pit pair ever fired: #16's first volley lands during the burn itself (t3414) and a SECOND pit shooter #15 (skin 0x500002e, (151.7, 39.2, −111.5)) opened 275 ticks after the burn ended — both call sites were silent no-ops on the first lever run [L run-bleed4-1/2]) + the PIT EXCURSION (the pick is NOT visible from the burn spot and sits 4.4-7.1 u BELOW, so the fight walks the route's OWN descent legs — landing east, through the door, ramp south, ramp mid, ramp turn — with a sight check after every leg; the stand fires the moment the line opens, the return walks the legs back to the burn spot). The y band is ±8.0, not the ledger's ±6.0: the pit pair MOVES — #16 fired from (144.4, 37.2, −111.1) mid-descent and the poll at the burn spot (y 44.3) read dy 7.1 — outside ±6 [L run-bleed4-2]. MEASURED (run-bleed4-3): the poll caught #16's round at t3414, the excursion walked, the RETURN FIRE from the ramp mid killed BOTH pit shooters (#16 t4091, #15 t4205) for 16.0 total, the pit stand confirmed #16 down; the bolt burns ran clean, objective 1 folded, and the walk advanced from the bleed-3 death t6554 to the boarding legs (the burst rifle #20 (skin 0x500002f) closed to 3.3 u and burst for the last 24.0 — death t15465 at (108.70, 28.37, −118.08)). The SECURE-ROOM ARMOUR lever then taken (the d3 walk joins the d1/d2 real-damage sisters; a player at 24 health puts on the armour lying in his room): MEASURED (run-bleed4-4) the boarding cleared, the ride and the cinematic ran, and the walk reached THE HIND FIGHT — death t20440 at (113.04, 13.51, −178.54), 61 hits for 100.0, 17 return-fire fights, the machine 0.0/598. The Hind fight's shape on that roll: every end pane shot out (both 30 u bearings CLEAR), rockets owned clip 4 carried 4, the machine state 2 route flight at dist 17.6-28.9 — NO launch ever opened (the d3 slit/corridor/forecast gates starved through the whole fight) and the dodge strafes DRIFTED Bond 2 u east of the ride-end spot into a HURT VOLUME that drained −2.0 every 6 ticks for the last 12.0 (frames 20344-20441 at (113.0, 13.5, −180.6), no blast rows — the volume law). The anchor+zap variant (walk back to the ride-end anchor (111.09, −179.72) on a world-hit zap, overriding the dodge) was TRIED and MEASURED WORSE: the machine's burst cadence kept dodge_hold > 0 through the drain, the zap walk pinned Bond at (111.14, 13.52, −180.95) — the volume reaches the SOUTH band too — and the death came EARLIER (t20415 [L run-bleed4-5/6]); NOT shipped. The dodge-bias + zap-walk variant (the dodge side picks the anchor-ward component; a world-hit zap walks Bond back to the ride-end spot against the dodge) was then TAKEN and measured (run-bleed4-7): Bond held the anchor (death at (111.19, 13.52, −179.81), 0.15 u from it) — and the volume hit HIM THERE TOO, the same 33 world hits for 24.0 — the −2.0/6-tick law covers the WHOLE terminal floor (the anchor (111.09, −179.72), the east band (113.0, −180.6), the south (111.14, −180.95)). NEXT LEVERS: (1) the drain class: at health ≈ 25 entering the fight the −2.0/6-tick drain (0.33/tick) kills in ~75 ticks wherever Bond stands — the fight must be won inside that window or the pool entering the fight must grow (the ride's rocket-ammo pickups — the (1, 4) boxes at (111.99, 18.04, −179.42) [D 0x0600004C streams 37-39, collected standing in the car] — went UNTAKEN on the measured roll, carried stayed 4 — check the ride's passive collection); (2) the launch starvation — the machine's low passes vs the slit: the d1/d2 gates fire from inside the cabin on l >= 10 with no corridor gates (the guided round threads the openings [M Bullet_update 0x12e7b0:177-244]); the d3 gates (16 u + slit + corridor + forecast) never opened on this roll — measure one gate's relaxation (the machine's own rounds through the launch-time forecast law still stand); (3) the volume's source: name the hurt volume at the terminal (the placement census / the volumes table) and check whether a spot 2-3 u west (x ≈ 110.3-110.5, the slit) reads clear in the real game. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
+#[ignore = "00 Agent (11-14, main, update 6, bleed-6): the cannon step-out lever is TAKEN and measured (four runs). The lever: a cannon zap (the Hind's cannon rounds, the bleed-5 class fix) LATCHES a d3 step-out and the strafe episodes chain on the latch until Bond's z leaves the west doorway's z band (-178.25..-180.6) north edge at the strip's z -177.6, then the drift walk returns him to the anchor (112.5, -179.4) - the firing spot (d3 `ready` is ANCHOR-GATED to 1.5 u: run-bleed6-2's north-east corner fired through the east panes' flight-query lane and the round detonated on the pane frames -52.0 at f29510 - a launch trap; the step-out episode is also CANCELLED on arrival so the strafe cannot overshoot). Plus the SPRINT law (stand to move - the crouched+aiming walk is 0.011 u/tick [L run-bleed6-1: 0.31 u in 28 ticks] while the cannon's clear-line bursts land every ~25 ticks [L f27503/f27528]: the dodge strafes, the step-out and the drift walk run STANDING, Bond re-crouches the tick the movement ends, the toggle skipped on a launch tick [M Player_SSCrouch 0x1924c0:84-105, the Toggle default Input_Init 0x17edd8]). MEASURED: run-bleed6-1 (crouched step-out, as prescribed): death t31380, 1 rocket 100.2 - the crouched strafe cannot outrun the bursts and the cannon zapped the strip z too (-177.50/-177.34 rows). run-bleed6-2 (+sprint): the cannon class SOLVED - 16 zap ticks, hp held 52.0 for 2000+ ticks - but the episode overshoot carried Bond into the corner (death t29509, the -52.0 self-blast). run-bleed6-3/4 (+arrival-cancel +anchor fire gate +the inside-band arm gate): death t32706 at (112.41, 13.09, -177.61), still 1 rocket - the BEST death (2540 ticks past update 5's t30165) and the cannon drain fell, but the cannon spread reaches EVERY cabin spot (rows at -180.95, -179.4, -178.1, -177.61, -177.38 across the runs; bleed5-3's cannon-silent strip was a circuit phase, not a law), and the machine's cannon does NOT pause while its missiles fly (zaps with live [98] - a missile in flight - at f29462/f30555 [L the runs]). The BINDING constraints: (1) the launch windows are rare from inside the cabin (1-3 per ~10000 fight ticks; 598 hp at ~100/rocket needs ~6); (2) the missile blasts - the 24-tick dodge episodes (standing ~1.85 u) cannot beat the homing; (3) the cannon spread covers the cabin. The PHASE-CROUCH variant (the settled crouch keyed on the machine's height - standing for the low passes cp[1] < 15, bleed-2's own law [L run14]) was TAKEN and measured WORSE: run-bleed6-5 - ZERO launches, the cannon took 34.3 in 37 world hits (standing at the anchor invites the fire), death t29593 - the anchor's sight lines are the WEST doorway/panes and the low passes they catch do not line up with the machine's height alone; NOT shipped, the sprint law's settled-crouch stays. NEXT LEVER: name the west-doorway sight window per machine pass - log which machine positions/bearings the eye_sees + machine_lane_clear flight queries catch (the lintel y 14.31 [D the tri dump] vs the standing eye 14.24 / the crouched eye ~13.3), and place the firing spot (or the fight itself) to catch more of them; then the missiles: pin the chase's per-tick steer clamp [M Bullet_update 0x12e7b0:177-244] and dodge with a sustained standing sprint perpendicular to the missile's line while it is 2-30 u out (not 24-tick episodes). Live check: pin in PCSX2 the missile's turn rate at 10-20 u and the west-doorway sight window's y band from the anchor. History, update 5: the cannon rounds no longer start dodges and the launch gate is the sisters' shape - three rockets land, the Hind 100.7 -> 287.7 of 598; Bond dies to the Hind missile blasts at t30165 (25.1/10.9/13.1) with one rocket in the clip. Next: survive the missiles for ~3 more launches (the car boxes refill after a reload). 11-14 correction: the rocket pool DOES refill in the fight - the car carries three live 0x2c pickups at (112.0, 18.0, -179.4) (two ammo boxes + the launcher, 4 rounds each) 4.6-5.0 u from the anchor, in take range; carried caps at 4, so a box is refused only until a reload moves a round into the clip (measured: clip 3/carried 4 -> 4/3, then a box tops carried back to 4). The limit is the launch windows (one launch in ~7000 ticks), not ammo. The note below (update 4) is superseded on the cap: the ride's rocket-ammo pickups CANNOT grow the pool - ammo_data type 0xe caps carried at 4 [D ammo_data +0x02, the ACTION.ELF static initialiser] and clip[0x2c] at clip_size 4 - the pool entering the fight is hard-capped at 8 (clip 4 + carried 4). The run-bleed5-1 NF_PICKUPLOG roll: Bond took the mouth box the moment his carry had room (tick 24599, Some(Ammo 4), carry 0->4 at the gondola mouth) and the ride's remaining box + launcher refuse at the cap every tick after ([take] -> None from tick 24600 on) - the passive-collection path WORKS (the follow link poses the pickups with the carriage; the touch passes with los true in the ride's final ticks), only the cap refuses. So the drain-class pool-growth lever is EXHAUSTED by the game's own data, and the -2.0/-1.69 rows are NOT a hurt volume at all: they are the HIND'S CANNON rounds (owner past the drone list - the copter is not in drones.list; the walker's zap class calls them world) - the level's only 0xE4 placements are the kill-floor quads #42-44 [D the 0xE4 census probe, run-bleed5-1]. The ledger's lever (2) 'one gate's relaxation' was TAKEN: the d3 launch distance gate 16 -> 10 (the sisters' own law and the blast rule; the slit/corridor/effective-corridor/sight/lane/forecast gates all stay) - MEASURED (run-bleed5-2): rocket 1 launched at fight t4907 and LANDED 100.7, but the death stayed t34720 - the cannon riddled the anchor (46 hits for 52.0, the -2.0 rows) and the SECOND launch never opened (the lane/sight gates bind now: the machine's circuit dist 20-42 with its lintel-clear low passes rare). The north-strip anchor variant ([112.3, -177.6], off the doorway's cannon lane) was TAKEN and measured WORSE: the cannon stopped but the machine's missiles chase the strip (-5.94/-13.16/-15.00/-15.00 blast rows) - death t31593 [L run-bleed5-3]; NOT shipped, the anchor stays (112.5, -179.4). walkreal_07000008_live whole: 5 passed 1 failed (the d1/d2 sisters and the ally tests byte-exact); interactables_07000008_live 15/0. NEXT LEVER: the cannon class - the rounds come down through the west doorway (x 103 -> 111, y 16 -> 14 [L the round log]) and the doorway's z band (-178.25..-180.6) covers the anchor; bias the d3 dodge to step OUT of the doorway band on a cannon zap (the anchor walk stays for drift) while the anchor remains the firing spot, and measure whether the machine's cannon cadence pauses while its missiles fly. Live check: pin in PCSX2 the cannon rounds' impact band inside the cabin at the anchor (the z rows the -2.0s land in) and whether the gun pauses during missile volleys. Update 3: crouched for the briefcase stretch too - death t29598 -> t34720 in the Hind fight (one rocket, 100.7). Update 2: the station hall is crossed crouched - death t26671 -> t29598 (still one rocket). Update 1: the Hind fight is fought CROUCHED from the carriage anchor (112.5, -179.4) - the Hind gun (rounds down through the west doorway, not through the walls [L the round log]) stops landing; death t20428 -> t26671, rocket 1 LANDED 100.7 (the Hind has 598). Bond dies to the Hind missile blasts (-7.13 at 25838, -10.58 at 26552). Next: more rockets - the launch line opens rarely from the deeper anchor (one launch in ~6500 ticks). Earlier: 00 Agent (11-14, bleed-4): the FUSEBOX PIT lever is TAKEN and measured — the hurting pick (the guard who actually LANDED THE LAST HIT inside the wide ring — the walker's hurt bookkeeping, player_hits, names him — falls back to the in-ring guard whose muzzle is live on Bond before his first round lands) + the OPENING-VOLLEY POLL (the pre-burn stands ran BEFORE the pit pair ever fired: #16's first volley lands during the burn itself (t3414) and a SECOND pit shooter #15 (skin 0x500002e, (151.7, 39.2, −111.5)) opened 275 ticks after the burn ended — both call sites were silent no-ops on the first lever run [L run-bleed4-1/2]) + the PIT EXCURSION (the pick is NOT visible from the burn spot and sits 4.4-7.1 u BELOW, so the fight walks the route's OWN descent legs — landing east, through the door, ramp south, ramp mid, ramp turn — with a sight check after every leg; the stand fires the moment the line opens, the return walks the legs back to the burn spot). The y band is ±8.0, not the ledger's ±6.0: the pit pair MOVES — #16 fired from (144.4, 37.2, −111.1) mid-descent and the poll at the burn spot (y 44.3) read dy 7.1 — outside ±6 [L run-bleed4-2]. MEASURED (run-bleed4-3): the poll caught #16's round at t3414, the excursion walked, the RETURN FIRE from the ramp mid killed BOTH pit shooters (#16 t4091, #15 t4205) for 16.0 total, the pit stand confirmed #16 down; the bolt burns ran clean, objective 1 folded, and the walk advanced from the bleed-3 death t6554 to the boarding legs (the burst rifle #20 (skin 0x500002f) closed to 3.3 u and burst for the last 24.0 — death t15465 at (108.70, 28.37, −118.08)). The SECURE-ROOM ARMOUR lever then taken (the d3 walk joins the d1/d2 real-damage sisters; a player at 24 health puts on the armour lying in his room): MEASURED (run-bleed4-4) the boarding cleared, the ride and the cinematic ran, and the walk reached THE HIND FIGHT — death t20440 at (113.04, 13.51, −178.54), 61 hits for 100.0, 17 return-fire fights, the machine 0.0/598. The Hind fight's shape on that roll: every end pane shot out (both 30 u bearings CLEAR), rockets owned clip 4 carried 4, the machine state 2 route flight at dist 17.6-28.9 — NO launch ever opened (the d3 slit/corridor/forecast gates starved through the whole fight) and the dodge strafes DRIFTED Bond 2 u east of the ride-end spot into a HURT VOLUME that drained −2.0 every 6 ticks for the last 12.0 (frames 20344-20441 at (113.0, 13.5, −180.6), no blast rows — the volume law). The anchor+zap variant (walk back to the ride-end anchor (111.09, −179.72) on a world-hit zap, overriding the dodge) was TRIED and MEASURED WORSE: the machine's burst cadence kept dodge_hold > 0 through the drain, the zap walk pinned Bond at (111.14, 13.52, −180.95) — the volume reaches the SOUTH band too — and the death came EARLIER (t20415 [L run-bleed4-5/6]); NOT shipped. The dodge-bias + zap-walk variant (the dodge side picks the anchor-ward component; a world-hit zap walks Bond back to the ride-end spot against the dodge) was then TAKEN and measured (run-bleed4-7): Bond held the anchor (death at (111.19, 13.52, −179.81), 0.15 u from it) — and the volume hit HIM THERE TOO, the same 33 world hits for 24.0 — the −2.0/6-tick law covers the WHOLE terminal floor (the anchor (111.09, −179.72), the east band (113.0, −180.6), the south (111.14, −180.95)). NEXT LEVERS: (1) the drain class: at health ≈ 25 entering the fight the −2.0/6-tick drain (0.33/tick) kills in ~75 ticks wherever Bond stands — the fight must be won inside that window or the pool entering the fight must grow (the ride's rocket-ammo pickups — the (1, 4) boxes at (111.99, 18.04, −179.42) [D 0x0600004C streams 37-39, collected standing in the car] — went UNTAKEN on the measured roll, carried stayed 4 — check the ride's passive collection); (2) the launch starvation — the machine's low passes vs the slit: the d1/d2 gates fire from inside the cabin on l >= 10 with no corridor gates (the guided round threads the openings [M Bullet_update 0x12e7b0:177-244]); the d3 gates (16 u + slit + corridor + forecast) never opened on this roll — measure one gate's relaxation (the machine's own rounds through the launch-time forecast law still stand); (3) the volume's source: name the hurt volume at the terminal (the placement census / the volumes table) and check whether a spot 2-3 u west (x ≈ 110.3-110.5, the slit) reads clear in the real game. The steering/arming/speed/launch all match the game [M Bullet_update 0x12e7b0; Bullet_init 0x12c5a0; the 0x2C record bytes]"]
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
