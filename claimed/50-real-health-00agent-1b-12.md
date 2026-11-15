@@ -21,3 +21,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 **Branch:** `s/real-health-00agent-1b-12`.
 
 Main 11-15 (on fa191d448, NF_DMG_TRACE): after the console run (19.5 health at frame ~10026) the leftover astronauts chip 5.0 a hit (#15 at (14.4, 0.3, -0.6) d 10.4, #18 at (9.8, 4.7, 3.4) d 8.2) and Drake (#19, skin 0x50000ba, weapon 0x30, 113 hp, at (4.7, 2.3, 0.5) d 8.8) lands one 9.52 that ends it at t13331 - the assert "Bond survives Drake's fight". Bill totals: #10 30.0 (6 hits), the laser 14.7 (5, the dodge on), #9 10.0. The astronaut tail before Drake is the budget.
+
+---
+claimed-by: sandbox7 at 2026-11-15T09:35Z
