@@ -32,3 +32,19 @@
   strip-mouth #10 kill also landed, #10 never fired). Death t5132 (the crouched baseline
   t5532 on this dice): the bill this roll is #27 x3 48.0 (her south spawn) + #29 16.0
   (pre-death) + #28 16.0. The ground-answer shape is proven safe; #27 is ground-unreachable.
+- (02:08) Run 2 (+ the trench-f #28 attempt, cap 300): the trench-a act missed again (the
+  identical deterministic shots), the ladder-top FIRST pass caught its guard at +222, #16's
+  deck fire landed 32.0, the phase's later acts never ran — death t4336 WORSE. The walk-6
+  act-fire dice law: every added pre-climb act re-rolls the stream lethal-earlier (5532 ->
+  5132 -> 4336). THE VERDICT: the d-60 far-target MISS law (the aim gate's ray reads CLEAR,
+  the bullets do not land — the walk-7 base-act law, the run-4379 graze law, the walk-8 #10
+  audit family) — the ground lever family cannot kill the trio. THE LEGS ARE REMOVED (the
+  #18-leg precedent); the route is the walk-9 shape again. The round-10 ledger + the next
+  lever (the trench-a bullet audit with NF_0D_AUDIT=1 -> the port-side capsule refine, its
+  own task) are in the ignore message; the walk stays ignored/red.
+- (02:08) Final tree verified: walkreal_0700000d_live whole = 2 passed (the plain replay +
+  the d2 agent twin, byte-identical) + 1 ignored (the ledger); interactables_0700000d_live
+  = 11 passed 0 failed. The full four-crate suite did not fit the window (the sandbox lost
+  cargo/7z to a reset and the build alone exceeded the remaining time); this branch touches
+  only two nf-view test files (walkreal_0700000d_live.rs + the new probe_0d_ground_wake.rs)
+  — no src/, no shared-helper changes.
