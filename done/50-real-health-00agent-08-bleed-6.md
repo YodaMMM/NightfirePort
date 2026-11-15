@@ -138,3 +138,5 @@ Main 11-14 (on c65f36857): the fight bill is now rocket 2 own blast -25.05 at t2
 Main 11-14 (on c65f36857): no launch with the Hind within 8 u horizontally (the overhead pass that made rocket 2 burst on the ceiling): the same re-roll as the 20-u minimum - three rockets, t32801. Rocket 2 stays; its 25 is the price of the five-rocket stream.
 
 Main 11-14 (on c65f36857): crouching for the gondola ride keeps the 12.3 armour (fight entry 52.0 + 50.0, was 37.7) but re-rolls the fight: three quick rockets (317.2) then an own-rocket blast (-49.64, the overhead pass at 16 u) at t28408; with the overhead refusal (dxz < 8) too: the NW launches at (87.4, -160.4) and (67.6, -159.9) miss/self-blast, t28608. Both worse than t33393. The launch-outcome law needs the Hind circuit position, not static lanes: the held-health map is the tool (env probe: hold health at the fight loop top).
+
+Main 11-14 (on c65f36857): no launch with the Hind west of x 100 at all: two rockets (188.1), t29593 - worse; the NW rocket 3 is needed.
