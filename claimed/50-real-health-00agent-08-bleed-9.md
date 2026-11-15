@@ -21,3 +21,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox7 at 2026-11-15T11:18Z
+
+Main 11-15 (on fc005fd7b): measured dead, do not repeat - (1) re-roll sweeps: 112 values (pre-boarding waits 1-1100, idles injected at t2250-27100 and inside the fight) - none beat five rockets / t33393, most die before the fight; idles inside the fight are byte-neutral (the fight is on rails while Bond stands at the anchor); (2) the gap after rocket 3 (t1353-5223): eye_sees is the binding gate (the anchor cannot see the machine), cabin spots 0.5-2 u away can; stepping to them after rocket 3 (radius 0.75-3.0) dies sooner (t30273-32021) with no extra launch; (3) carried guns: 0x0a dmg 2.0 (32 rounds), 0x02 3.5 (2), the 0x14 launcher lands only its 2.5 contact on the Hind (5.0 over a whole fight, no blast damage) - no gun closes the ~108 gap. Untested: the Hind missile fuse vs the game (bleed-8 live check list).
