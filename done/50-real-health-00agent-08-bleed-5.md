@@ -51,3 +51,7 @@ Main 11-14: no live armour pickup within 150 u of the Hind fight anchor (Bond en
 Main 11-14: the raised surfaces by the anchor read floors 15.1-16.7 at x 110.5-111 (the terminal); a standing jump+forward from (111.1, -179.5) does not get Bond up (13.54 after). Dead.
 
 Main 11-14: the fight-time world hits are NOT the fusebox (fusebox_hurts 0 through the fight, 44 world hits by t7000) - they are the owner-less Hind rounds. (Player_Hurt 0x196060 has no position gate, so a flat fusebox hurt would match the game anyway.)
+
+---
+## Report (done, 2026-11-15T02:02Z)
+
