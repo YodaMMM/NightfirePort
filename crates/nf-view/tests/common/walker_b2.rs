@@ -102,6 +102,8 @@ pub struct Walker {
     /// Top Bond's health up every tick (the "enemies disabled for the walk" allowance; the pain
     /// pipeline still runs — flash, dir bits — so the walk is not a no-op).
     pub top_up_health: bool,
+    /// OPT-IN: step away from incoming 0x14 rounds (see tick_inner). False by default.
+    pub round_dodge: bool,
     /// Real-damage bookkeeping (damage_log.rs): live whenever the top-up is off.
     pub dmg: DamageLog,
     /// Called after every stepped tick with the scene and the tick count (an observer, as in
@@ -212,7 +214,7 @@ impl Walker {
         nf_view::attach_headless_sound(&mut scene);
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
-            scene, top_up_health: true, dmg: DamageLog::new(), on_step: None, stop_on_exit: true,
+            scene, top_up_health: true, round_dodge: false, dmg: DamageLog::new(), on_step: None, stop_on_exit: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
@@ -328,6 +330,30 @@ impl Walker {
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
+        // OPT-IN round_dodge (the 07000014 00 Agent walk): a live 0x14 round (the explosive
+        // grenade-launcher class that killed the walk) whose line passes within 3 u of Bond's chest,
+        // 1.5-20 u out, makes Bond step perpendicular to its flight - unless a hostile is within
+        // 5 u (the fight keeps its inputs). Movement axes only; view and fire untouched.
+        let input = if self.round_dodge {
+            let sim = self.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let chest = [bp[0], bp[1] + 0.6, bp[2]];
+            let dz = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+            let close = sim.drones.list.iter().any(|d| d.team == 1 && d.enabled && !d.corpse && d.health > 0.0 && dz(d.pos, bp) < 5.0);
+            let threat = if close { None } else { sim.drones.bullets.iter().filter(|bu| bu.state != 2 && bu.weapon == 0x14).find_map(|bu| {
+                let rel = [chest[0] - bu.pos[0], chest[1] - bu.pos[1], chest[2] - bu.pos[2]];
+                let d = (rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]).sqrt();
+                if !(1.5..20.0).contains(&d) { return None; }
+                let vm = (bu.dir[0] * bu.dir[0] + bu.dir[1] * bu.dir[1] + bu.dir[2] * bu.dir[2]).sqrt().max(1e-6);
+                let along = (rel[0] * bu.dir[0] + rel[1] * bu.dir[1] + rel[2] * bu.dir[2]) / (d * vm);
+                if along > 0.0 && d * (1.0 - along * along).max(0.0).sqrt() < 3.0 { Some([bu.dir[0] / vm, bu.dir[2] / vm]) } else { None }
+            }) };
+            if let Some(dv) = threat {
+                let perp = [-dv[1], dv[0]];
+                let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+                Input { forward: (perp[0] * fy + perp[1] * cy).clamp(-1.0, 1.0), strafe: (perp[0] * cy - perp[1] * fy).clamp(-1.0, 1.0), ..input }
+            } else { input }
+        } else { input };
         let y_before = self.scene.sim.as_ref().unwrap().bond.pos[1];
         self.step_recorded(input, fire, reload, use_key);
         let sim = self.scene.sim.as_ref().unwrap();
