@@ -133,3 +133,5 @@ Token, context-window and cost figures for this session: **not visible to me** â
 environment exposes no token counter, context gauge or cost readout. Nothing estimated.
 
 Main 11-14 (on d1491c571): the Agent-only pre-wake west-roof head acts (#461/#463 boxes) on the Operative walk: no present guard at either box at that point - byte-identical t19289. The yard landing: Bond touches down at ~9.6 with six awake SMG guards at 5.8-31 u (~25 x 0.6 in 300 ticks); the 16.4 slot fall is the game rule - more health must arrive at the drop.
+
+Main 11-14 (merged 92ee90c01): the yard sweep in 200-tick passes, a survivor not re-picked - three kills, death t19957 -> t20383 at (135.9, 5.0, -306.7) on the plate leg.
