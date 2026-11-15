@@ -24,3 +24,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 claimed-by: sandbox3 at 2026-11-15T09:20Z
 
 Main 11-15 (on fcd3ca397): the escape-room armour (-27.3, 0.9, 31.0) right after the touch (now reached at 26.6): death at the room door t40134 - worse than t41509.
+
+Main 11-15 (on c39691b2d, idle re-roll sweeps, ~80 runs): an idle injected late (36400-38200, 60-200 ticks) re-rolls the last legs - the best rolls reach the Rook doors (23.5-27.4, -22.3) and die there to #50/#46 (0x500008c, 0x1a) at 1.5-3.8 u on 5-9 health (#50 stands behind the slide door, unseen until it opens). Waits at the load (< 150 ticks) change nothing. Measured DEAD on those rolls: the escape-room armour (-27.3, 31.0) and the west armour (-41.3, 36.5) detours (deaths at their room doors), a pre-door visible-guard clear (nobody visible before the door), and a delta-approach stop at (-18.0, -22.6) with a visible-guard clear (radius 15/22; #40/#51 outgun the stop). The walk needs ~10-15 more health into the door fight.
