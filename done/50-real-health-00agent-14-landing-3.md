@@ -144,3 +144,5 @@ Token/credit/context figures: `not visible to me` — this environment exposes n
 context-window readout to the worker. What was visible: the task message's clock (sandbox
 expiry ~06:11 UTC; this report written ~05:05 UTC), `git` hashes, test outputs and process exit
 codes. No input/output token counters, no credit balance, no dollar cost.
+
+Main 11-14: not merged - measurement round (t29197 unchanged); the middle-lane closure by #29 sightline is kept as a finding.

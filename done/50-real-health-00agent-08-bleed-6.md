@@ -126,3 +126,5 @@ untracked, never committed.
 
 Not visible to me: this session exposes no token, credit or context-window figures to the
 worker (no usage metadata is available in the sandbox).
+
+Main 11-14: not merged - master 3e1563c55 lands three rockets (287.7) to t32039; this branch best is one rocket to t32706. Its cannon-spread finding (rows at -180.95/-179.4/-178.1/-177.61) is kept.

@@ -131,3 +131,5 @@ re-weight, the round-6 lever 3).
 
 Context window/cost figures are not visible to me (no token, credit or cost readout is
 exposed in this environment; the session ran from ~04:55 to ~05:35 UTC on 2026-11-15).
+
+Main 11-14: not merged - death unchanged (t11002) on master.
