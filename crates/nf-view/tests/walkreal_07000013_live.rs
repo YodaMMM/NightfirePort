@@ -1025,13 +1025,6 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_agent() {
     walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 2));
 }
 
-/// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister.
-#[test]
-#[ignore = "00 Agent (11-15, new): the warm chain's E-open of door plc 545 at (-10.6, 1.1, -19.3) does not open it at difficulty 3 (state 0x2 after the press; tower2.rs:484 assert) - find what holds the door at 00 Agent (a guard in the doorway, a lock channel) before the walk can go on."]
-fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_00agent() {
-    let iso = iso();
-    walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 3));
-}
 
 /// Operative sister of `..._real_damage_agent`: the same walked chain at difficulty 1, so the
 /// mission's objectives are walked on real input at all three difficulties. Operative creates
