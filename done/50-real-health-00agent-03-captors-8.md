@@ -125,3 +125,5 @@ message (runs 57-61 + the next levers).
 
 not visible to me — this sandbox exposes no token, cost or context-window meter; no figures
 were readable anywhere in the environment.
+
+Main 11-15 (merged ed10b4459): on master the walk dies at t172244 at (11.84, 6.37, -36.87) to #16 near the exit moat gate (was t151214); both rescues pass.
