@@ -36,3 +36,5 @@ Main 11-14 (on d1491c571): the ladder-top band sweep at 3 x 600 / 3 x 900 (was 2
 Main 11-14 (on d1491c571): the climb-side bill is #10 14.0 (t10459, deck), #17 16.0 x2 (t12022/12388, catwalk, from (157.6, 1.0, -226.0) at 48-55 u) and #28 16.0 (t13479, roof east b). Crouching for the catwalk keeps both #17 hits and drops #28s, but the crouched legs end elsewhere and the annex push-off fall pin (timer 76) fails even after standing again. Not shipped.
 
 Main 11-14 (on d1491c571): a rifle act on #17 from the walk-off strip before the catwalk (kill_guard_at_present (157.6, -226.0) +/- (5, 6), 600): #17 down at +500 but Bond is at 38.0 after it (the act window draws the same fire) and dies earlier in the yard, t18367 vs t19289. Not shipped.
+
+Main 11-14 (on d1491c571): sniping the yard from the gantry park before the hop - the yard guards (#2/#3/#5, 0x500006d/0x500007e) are already AWAKE (states 0x68-0x96) at the apex, the box acts land nothing (rifle 5+13 unfired), and the gantry carries Bond back east while he waits (x 140 -> 179); death on the gantry t20441. Dead lever: the hop must happen at the apex.
