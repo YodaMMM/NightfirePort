@@ -138,3 +138,5 @@ Context window/cost figures are not visible to me (no token or cost readout is e
 this environment; the session ran from ~00:29 to ~02:07 UTC on 2026-11-15).
 
 Main 11-14: the level holds NO live pickups at the walk start (no armour, no ammo) - the 100 health is the whole budget.
+
+Main 11-14 (on 2051dc6ef): the dead-window kite tap gate at clip > 10: t10626; > 60: t9463 - both worse than the merged > 36 (t11002).
