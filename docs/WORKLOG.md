@@ -38,3 +38,11 @@
   chunks (background jobs die between tool calls here; the build was not Finished by the stop),
   twice pruned stale per-unit hash dirs under target/release/build (nf-view grew to 3.8 G /
   1263 dirs on the 9.9 G disk). The suite's run phase never started.
+
+## real-health-00agent-03-captors-6 (2026-11-15)
+
+- (03:52) Branch created from origin/master 298f2f96c-line and merged origin/s/real-health-00agent-03-captors-5
+  (its lever commit bbde5ed94 carries the ledger; the walk stays ignored). Setup: work-slim + the onfoot ISO
+  extracted, rust stable 1.100.0, ALSA headers in a user prefix (no root). Baseline runs next: the levers are
+  the trio wake race (the arm must precede the plate) and the lane-mouth health margin (run the mouth colder /
+  from the far side), per the captors-5 ledger.
