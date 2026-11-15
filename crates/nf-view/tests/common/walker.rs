@@ -241,6 +241,9 @@ pub struct Walker {
     /// the flank for across guards; this holds the same line inside `shoot`/`shoot_bounded` for
     /// every caller (the return-fire stands included). Bond holds instead.
     pub flank_hold_z: Option<f32>,
+    /// OPT-IN (the 0700001b 00 Agent walk): steer the zero-g float away from a charging space
+    /// laser's locked target when no hostile is within 10 u (see tick_inner). False by default.
+    pub laser_dodge: bool,
     /// The walked path: a coarse breadcrumb of ground Bond actually covered (pushed in
     /// tick_inner, ~2 u resolution, 512 points). The resupply rule draws its corridor from it —
     /// see `resupply` for why the harness must not take off-path ammo detours.
@@ -384,6 +387,7 @@ impl Walker {
             grenade_downgrade_logged: false,
             flank_hold_x: None,
             flank_hold_z: None,
+            laser_dodge: false,
             record_inputs: None,
             record_states: None,
         }
@@ -597,6 +601,19 @@ impl Walker {
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
+        let input = if self.laser_dodge {
+            let sim = self.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let d3 = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+            let close = sim.drones.list.iter().any(|d| d.team == 1 && d.enabled && !d.corpse && d.health > 0.0 && d3(d.pos, bp) < 10.0);
+            let tgt = if close { None } else { sim.drones.space_lasers.iter().filter(|l| l.state == 1 && !l.deleted).map(|l| l.target).find(|t| d3(*t, bp) < 15.0) };
+            if let Some(t) = tgt {
+                let away = [bp[0] - t[0], bp[1] - t[1], bp[2] - t[2]];
+                let n = (away[0] * away[0] + away[1] * away[1] + away[2] * away[2]).sqrt().max(1e-3);
+                let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+                Input { forward: ((away[0] * fy + away[2] * cy) / n).clamp(-1.0, 1.0), strafe: ((away[0] * cy - away[2] * fy) / n).clamp(-1.0, 1.0), lift: (away[1] / n).clamp(-1.0, 1.0), ..input }
+            } else { input }
+        } else { input };
         for k in 0..self.keep_alive.len() {
             let i = self.keep_alive[k];
             if let Some(dr) = self.scene.sim.as_mut().unwrap().drones.list.get_mut(i) {
