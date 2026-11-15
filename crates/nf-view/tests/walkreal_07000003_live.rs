@@ -835,6 +835,16 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             // leg's reactive window had passed); the plain clear stays as the backstop.
             clear_exposed_nearest_03(&mut w, name, 12.0, 4, 0, false);
             clear_near(&mut w, 9.0, name);
+            // real-health-00agent-03-captors-5 (the -4 ledger item 1, arming the walk to the
+            // saddle): the clears' kills leave their guns at the guards' feet — run 21 reached
+            // the saddle DRY (clip 0 spare 0, the wheel cycled to the fists) and #7's hip taps
+            // finished Bond there [L d3run21]; the si-1 saddle walk's own pickup scan found
+            // every weapon/ammo pickup within 45 u of the saddle already gone, so the rounds
+            // for the endgame must come from the route's own drops [L the captors-5 pickup
+            // scan, queue 11-14]. The servants'-ground loop already runs the same cycle.
+            w.lenient = true;
+            loot_the_drops_03(&mut w, &format!("{name} drops"));
+            w.lenient = false;
         }
         w.walk_nav_to(at, name, 1.6);
     }
@@ -910,7 +920,15 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         // at tick 52087 with weapon 0x12 clip 0 spare 0 (nav 6 was "cycling weapons (0)") —
         // so the arm extends to the Agent pick (difficulty 2 keeps difficulty 1's two green
         // walks byte-identical).
-        let _ = w.resupply("before the servants' rescue (agent)");
+        // real-health-00agent-03-captors-5 (the -4 ledger item 1, the d3 half): the resupply's
+        // attempt-0 target (-10.9,-38.0) walked Bond 25.7 u WEST through the moat for nothing
+        // — `resupply done (false) clip 3 spare 13` [L d3run20] — and its return puts the si-1
+        // saddle nav's A* on the wedging lane-doors route (run 22's 22 stuck stops at
+        // (11.88,6.46,-20.90) all start from the resupply's end). d3 drops this walk (its own
+        // loot cycle above is the arm); d2 keeps it byte-identically under == 2.
+        if difficulty == 2 {
+            let _ = w.resupply("before the servants' rescue (agent)");
+        }
     }
     for (plate, want_ch) in [(None, 0x4fu8), (Some(plate0x25), 0x50u8)] {
         let (si, at, rescue_ch) = *servants.iter().find(|(_, _, ch)| *ch == want_ch)
@@ -1020,12 +1038,103 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             // mouth nav's own crossing then rode the saddle zone at (25.30,7.37,8.79) with the
             // 0x23 plate firing mid-climb — #5's charge reached d 2.5 and the 8-pellet volleys
             // finished Bond at 80288 [L d3run20]. Stand at the saddle BEFORE the mouth nav.
+            // real-health-00agent-03-captors-5, run 22 MEASURED (ledger item 2, the anchorless
+            // saddle route): dropping the anchor nav REGRESSED the phase back to run 20's shape
+            // byte-identically — the saddle nav from the si-1 resupply end wedged on the lane
+            // doors (22 stuck stops at (11.88,6.46,-20.90)), the climb never engaged, and the
+            // walk died at 80288 at (25.30,7.37,8.79) mid-mouth-crossing, run 20's exact tick
+            // and spot [L d3run22]. The anchor nav's own wedged-bridge ladder is what moves
+            // Bond onto the route the saddle nav can climb from (run 21: the anchor capped
+            // 20x3000, the saddle nav then worked and arrived (23.18,5.50,7.20)). The anchor
+            // stays; the DRY arrival (run 21's real killer) is the arming lever below.
+            // real-health-00agent-03-captors-5, run 23 MEASURED: the armed-gate stand from
+            // (20,3) landed NOTHING — the diagnostic trace shows the aim CONVERGED (err
+            // 0.0000, perr 0.0000, aim on #7's boxes, still 1502, aiming true) but the gun was
+            // the FISTS (clip 1 spare 0) from tap-gate t0: the return-fire fights on the
+            // (20,3) approach walk drained the 16 rounds before the stand [L d3run23/run24
+            // trace]. Lever: the si-1 approach runs COLD (the crossing-legs doctrine — run 13
+            // kept 3+13 cold) so the rounds reach the stand, and the ammo is re-checked at the
+            // stand itself (a gate checked before a walk is not the gun at the stand's t0).
+            w.dmg.return_fire = false;
             w.walk_nav_to([22.1, 5.5, -2.0], "the mouth path east anchor (si-1)", 1.2);
+            // real-health-00agent-03-captors-5, lever 2 (the -4 ledger item 3): #7 is the
+            // endgame drain — 43-51 hip hits for 27.4-41.2 across runs 20/21, alive at hp 4-10
+            // at both deaths [L d3run20/21]. A player with rounds takes the aimed stand from
+            // the lawn band the saddle approach crosses BEFORE the climb: #7's boxes are clear
+            // from (20,2..4) and (18..24,8) while the saddle itself (23.2,7.2) is not
+            // [L the captors-5 bullet-line scan, queue 11-14]. Gated on the rounds at the
+            // stand (>= 5: a 12-hp guard at the P2K's 3.5 a hit needs 4) and the walker's own
+            // eye-ray exposure (the shared rule) — an unseen or dry walk skips the stand and
+            // climbs as before.
+            {
+                let seven = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    sim.drones.list.iter().enumerate().find(|(_, d)| {
+                        d.team == 1 && d.skin & 0xffff == 0x39
+                            && !d.corpse && d.health > 0.0 && d.present
+                    }).map(|(i, _)| i)
+                };
+                let armed = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let g = &sim.gun;
+                    (2..=0x47).contains(&g.weapon) && g.weapon != 0x34 && g.weapon != 0x37
+                        && g.clip + g.spare >= 5
+                };
+                if let (Some(di), true) = (seven, armed) {
+                    w.walk_nav_to([20.0, 5.9, 3.0], "the #7 line spot (si-1 saddle approach)", 1.5);
+                    let armed = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let g = &sim.gun;
+                        (2..=0x47).contains(&g.weapon) && g.weapon != 0x34 && g.weapon != 0x37
+                            && g.clip + g.spare >= 5
+                    };
+                    if armed && w.exposed_aim(di).is_some() {
+                        aimed_stand_03(&mut w, di, "the #7 aimed stand (si-1 saddle approach)", 1800, false);
+                    }
+                }
+            }
+            w.dmg.return_fire = true;
             w.walk_nav_to([23.5, 6.3, 8.4], "the east lawn saddle (00agent, si-1 before the mouth)", 1.5);
             clear_exposed_nearest_03(&mut w, "the east lawn saddle wake (00agent, si-1)", 40.0, 4, 600, true);
             w.lenient = true;
             loot_the_drops_03(&mut w, "the east lawn saddle (00agent, si-1)");
             w.lenient = false;
+            // real-health-00agent-03-captors-5, run 25 MEASURED (the -4 ledger item 4): with
+            // #7 answered the run reached PAST the saddle and died at (23.61,6.37,10.57) — the
+            // mouth nav's own door crossing fired the 0x23 plate mid-leg and the waking trio
+            // point-blanked a DRY Bond before any stand could react (#5 charged to d 3.3 for
+            // 16.8, #4 12.6 in 7, #3 11.8 in 2 — the wake sweep at the saddle had found nobody:
+            // the trio is DISABLED until the plate fires [L d3run25, the no-op sweep]). The
+            // player's shape is the door-8 cluster block's own: step ONTO the plate, let the
+            // trio pop, and fight the wake from the saddle side with the kill-loot cycle
+            // instead of walking into it mid-nav — #5's drop (his own 0x1c) re-arms the endgame
+            // the pickup scan says is otherwise dry [L the captors-5 pickup scan, queue 11-14].
+            {
+                let plate0x23 = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    sim.drones.triggers.iter()
+                        .find(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x23)
+                        .map(|t| t.centre())
+                };
+                if let Some(pc) = plate0x23 {
+                    // 12.0: the trio's LOAD spots sit 8-10.5 u from the plate centre ((29.36,16.36)
+                    // #5, (28.8,16.3) #3, (26.3,16.4) #4 [L d3run27's census]) — they only WALK to
+                    // the plate's doorway once it fires.
+                    let trio_alive = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        sim.drones.list.iter().any(|d| d.team == 1 && !d.corpse && d.health > 0.0
+                            && walker::dxz(d.pos, pc) < 12.0)
+                    };
+                    if trio_alive {
+                        w.walk_nav_to([pc[0], pc[1], pc[2]], "onto the 0x23 plate (si-1, the trio wake)", 1.6);
+                        w.wait(30);
+                        clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1)", 40.0, 4, 600, true);
+                        w.lenient = true;
+                        loot_the_drops_03(&mut w, "the 0x23 trio wake (si-1)");
+                        w.lenient = false;
+                    }
+                }
+            }
         }
 
         // gas-rng-draws: the door-8 cluster (#18/#19/#2 behind the leaves at (38.7, 0.2)) can
@@ -1608,7 +1717,7 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 /// placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the load path is the
 /// only difference.
 #[test]
-#[ignore = "00 Agent (real-health-00agent-03-captors-4 ledger, on the merged tree (branch base master 385ebb66d merged with captors-3 a283cb626)): the lane-north kill-loot cycle (stands -> loot_the_drops_03 -> re-stand) and the si-1 saddle-wake block took the walk 15555 -> 80288 [L d3run18-21]. Best this round, run 20 (80288): the lane crossed at 41.2 (the re-armed clear engaged #6 and no 40-class round landed after the lane), the servants' phase reached, and the end was the 0x23 plate's trio wake MID-mouth-crossing — the si-1 saddle nav (from the post-resupply spot) detoured WEST through the whole moat band and wedged 7x3000 on the lane doors, so the mouth nav rode the saddle zone at (25.30,7.37,8.79) with the plate firing mid-climb and trio shotgun #5 (skin 0x500003a weapon 0x1c) charged to d 2.5 for 13.8 in 8; #7 (skin 0x5000039 weapon 0x12, (11.4,10.1,-16.1), hp 10) chipped 27.4 in 43 [L d3run20]. THIS round's experiments, all measured: (a) the resupply-sprint lever 1 (resupply + switch_to_armed + re-take the node, fights on) REGRESSED to 10463 — the sprint walked Bond INTO the uncleared lane cluster and #10's 18-hit point-blank drain ended it [L d3run18]; (b) the same sprint COLD (return_fire off, the crossing-legs doctrine) survived the walk but the corridor's only pickup (14.2,-28.0) is an EMPTY gun (no ammo gain; run 13's `cycling weapons (0) (weapon 0x1c clip 0 spare 0)` is the same box) and attempt 1's target (14.5,-29.0) sits behind the (14.0,-30.3) door — the walk ate 25 hits and died 10764 [L d3run19]; the kill-loot cycle replaced it (run 20's shape, kept). (c) the saddle via the mouth-path anchor (22.1,-2.0) REGRESSED the phase — the anchor nav itself wedged 20x3000 (60k ticks wasted), the saddle nav then worked and arrived (23.18,5.50,7.20), but Bond arrived DRY (clip 0 spare 0, the wheel cycled to the fists) and the sweep stood no chance; #7 landed 41.2 in 51 hip taps; died 74135 at the saddle doorstep [L d3run21]. Wired this round (d>=3 only, the d<3 streams untouched): the lane-north kill-loot cycle, the si-1 saddle-wake block (walk the saddle before the cluster block; the aimed sweep, sniper-first, wait 600). NEXT levers, in order: (1) ARM THE WALK TO THE SADDLE — run 21 died DRY at the saddle: loot_the_drops_03 after each lane/moat leg's d3 clears (the kills leave drops at the guards' feet; the servants'-ground loop already runs the same cycle) and gate the west-dragging `before the servants' rescue (agent)` resupply to difficulty == 2 only (its attempt-0 target (-10.9,-38.0) walked Bond 25.7 u WEST through the moat for nothing — `resupply done (false) clip 3 spare 13` [L d3run20]; d2's byte-identity holds under == 2). (2) THE SADDLE ROUTE WITHOUT THE ANCHOR — the (22.1,-2.0) anchor wedges from the servants' ground (run 21); the saddle nav from the east-lane legs' end works (run 21's legs crossed the doors and climbed: (11.42,-20.71)->(14.3,-18.57)->(19.31,-7.5)->(23.16,7.16)); keep ONLY the saddle nav, drop the anchor nav. (3) #7 IS THE ENDGAME DRAIN — 43-51 hip hits for 27.4-41.2 across runs 20/21, alive at hp 4-10 at both deaths; the saddle's aimed stand (once armed) is the first shot at him (d ~26 from (23.5,6.3,8.4), exposure unverified — a live check: whether #7's window opens from the saddle or from the mouth (35.6,6.4,3.4)). (4) the trio wake's first volley: the sweep's settle+raise (~330 ticks) may lose the race to #5's charge from (22.8,9.8) — if the next run still eats a point-blank volley mid-approach, sweep from the climb's midpoint before the last hop. (5) the older levers stand: an approach north of door 8 ((36.2,5.7) through the open doorway), the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, the exit-lawn #16 post-kill volley; follow-up real-health-00agent-02-03-3"]
+#[ignore = "00 Agent (real-health-00agent-03-captors-5 ledger, branch base master afec3f768): the -4 ledger's runs 18-21 stand (15555 -> 80288; run 20's 80288 was the best). THIS round, all measured on real runs: (22) the anchorless saddle route (the -4 item 2 AS WRITTEN, the anchor line deleted) REGRESSED byte-identically to run 20's shape — the saddle nav from the si-1 resupply end wedged 22 stuck stops on the lane doors at (11.88,6.46,-20.90), the climb never engaged, death 80288 at (25.30,7.37,8.79) = run 20's exact tick and spot [L d3run22]; the anchor nav's own wedged-bridge ladder is what moves Bond onto the route the saddle nav can climb from — the (22.1,-2.0) anchor STAYS. (23) the arming loot on the lane/moat legs' d3 clears found NO visible drop on ANY leg (the kills' guns land in the moat ditch, outside the loot helper's +-1.5 y floor band — the cycle never walked once) and the west-dragging resupply is now gated to difficulty == 2 (d1/d2 byte-identical, d3 drops the 25.7 u west walk that returned `resupply done (false) clip 3 spare 13`) [L d3run23]; the (20,3) aimed stand on #7 ENGAGED (the exposure gate passed from the lawn band) but landed NOTHING — the tap-gate trace shows the aim CONVERGED (err 0.0000, perr 0.0000, aim on #7's boxes, still 1502, aiming true) with the gun already the FISTS (clip 1 spare 0) from t0: the return-fire fights on the (20,3) approach walk drained the 16 rounds before the stand; death 75056 at the saddle doorstep (22.96,5.55,7.28), #7 still hp 12, #7's 41.2 in 51 taps the whole margin [L d3run23 + the run-24 trace]. (25) the si-1 approach runs COLD (return_fire off across the anchor nav + the (20,3) walk, restored after the stand — the crossing-legs doctrine keeps the rounds) and the ammo is re-checked AT the stand (>= 5): the #7 aimed stand KILLED #7 — he is absent from the death list for the first time in the ledger's history, the walk took 35 hits (was 59), and the run died at 73614 at (23.61,6.37,10.57) PAST the saddle: the mouth nav's own door crossing fired the 0x23 plate mid-leg and the waking trio (#5 0x1c, #4 0x12, #3 0xe — all at FULL hp) point-blanked the dry Bond (#5 d 3.3 for 16.8, #4 12.6 in 7, #3 11.8 in 2) [L d3run25]. (26/27) stepping onto the 0x23 plate BEFORE the mouth nav (the door-8 cluster block's own shape) was a byte-identical no-op until the trio gate widened to 12 u — the trio LOADS at (26.3-29.4, 16.3-16.4), 8-10.5 u from the plate centre (22.9,6.1,9.8) [kind 1 TOUCH_ONCE, L d3run27's census: three 0x23 plates at (22.9,9.8)/(38.9,11.1)/(25.7,9.4,8.3); the trio walks to the doorway only after the plate fires]. (28) with the plate stand live, #5's charge STILL won the race: he reached d 1.2 at hp 12 and blasted Bond at the plate itself (death 73318, 39.4 in 16 hits), the wake sweep's switch+raise (~330 ticks) never fired a stand — the -4 item 4 race is real and the plate-side stand does not beat it [L d3run28]. WIRED this round (d>=3 + the si-1 leg only; the d<3 streams byte-identical): the lane/moat legs' loot attempt (found nothing — the ditch band), the resupply == 2 gate, the cold si-1 approach + the #7 aimed stand (KILLS #7 — the first run without his 41.2 drain), the 0x23 plate-wake block + the trio wake sweep + loot. NEXT levers, in order: (1) THE TRIO WAKE RACE — #5 closes from load (29.4,16.4) to the plate in ~200-300 ticks and the sweep's switch+raise (~330) loses it (run 28). The rounds for the answer: the door-8 cluster's guns (0x1c/0xe) sit BEHIND the trio (the route crosses the wake zone to reach them); #7's own 0x12 drop lands at (11.5,10.1,-16.1) on the UPPER FLOOR, outside the loot's floor band — an upper-floor climb to scoop it after the stand is the only measured-adjacent source [S] unverified. A player meets a charge with his return fire (no still gate, no convergence) — but the stand's leftovers were 0-9 rounds and #5 ended hp 12 untouched in run 28: the arm must precede the plate. (2) THE HEALTH MARGIN — the run-25 crossing itself cost only ~41 from the trio while Bond entered at ~35: the wake is survivable with health in hand, and the lane-mouth fight (36.0 in 3 hits from #11 at the pre-crossing stand) is where the margin went — answer the lane mouth colder (the run-6 cold-legs doctrine) or from the far side of the doors. (3) the #7 stand's lessons stand: the exposure gate passed from BOTH the lawn band and the saddle approach, the P2K's zero-spread tap kills a 12-hp guard at d 26 in ~150 ticks once the rounds are in hand — keep the cold-approach shape for any future stand. (4) the older levers stand: an approach north of door 8 ((36.2,5.7) through the open doorway), the 87000-tick (35.6,8.7) door stall on the post-rescue west-lawn leg, the exit-lawn #16 post-kill volley; follow-up real-health-00agent-02-03-3"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }
