@@ -1,0 +1,2 @@
+
+Main 11-14 (merged 3e1563c55): the 3-u launch slit kept with the loose gates (a launch had detonated on the car ceiling above Bond, -25.06, owner -1 kind 0x2c) - the same three rockets, death t30165 -> t32039. A 9-u path check and 16/20-u minimum ranges added nothing; the remaining own-rocket blasts come from a rocket meeting the Hind on a low pass close to the car. The late killers are kind 98 blasts (radius 4, damage 15, owner -2).
