@@ -133,3 +133,5 @@ Context window/cost figures are not visible to me (no token, credit or cost read
 exposed in this environment; the session ran from ~04:55 to ~05:35 UTC on 2026-11-15).
 
 Main 11-14: not merged - death unchanged (t11002) on master.
+
+Main 11-15 (on 854334126): the 1b bill by 1000 ticks: t4000 17.3 (laser 12.3 + #3), t6000 30.0 (#11 15, #9 10, #8 5), t7000 16.6 (laser), t10000 25.0 (#16 15, #18 10). The space laser is 28.9 of the 100 and its blast is Explode_Propagate linear falloff over radius 20 (12.3 at 3.9 u; ~5 at 15 u). Lever: while a space laser is in state 1 (target locked at charge start) and its target is within ~15 u, steer the float away from the target - needs a shared input hook across the console/kite/fight loops (the walker on_step sees the scene only).
