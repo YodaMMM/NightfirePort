@@ -54,6 +54,7 @@ fn loot_the_drops_03(w: &mut Walker, label: &str) {
             // servant legs after it never recovered.
             .filter(|t| sim.world.segment([bp[0], bp[1] + 0.9, bp[2]], [t[0], t[1] + 0.3, t[2]]).is_none());
         let Some(t) = t else { break };
+        drop(sim);
         w.walk_nav_to(t, &format!("{label} loot"), 0.6);
     }
     for _ in 0..12 {
@@ -131,6 +132,47 @@ fn direct_sidestep_03(w: &mut Walker, side: f32, label: &str) -> bool {
         if walker::dxz(cur, start) >= 1.0 { return true; }
     }
     walker::dxz(cur, start) >= 1.0
+}
+
+/// The wake drops' scoop (real-health-00agent-03-captors-6, the 0x23 trio wake block only):
+/// the shared loot helper's nav arrives up to ~1.3 u short of a drop (run 35: its nav 2 ended
+/// at (24.28,13.19), 1.29 u from drop #13 at (24.84,14.35)) and the walk-over take's radius
+/// never reached it — the post-sweep wheel carried NO 0x1c/0x12 entries while both kind-0
+/// drops sat unclaimed inside the loot band [L d3run35]. A player walks ONTO the drop: the
+/// nav gets Bond through the doorway, then a short DIRECT leg lands on the spot so the
+/// walk-over take [M Pickup_Handler 0x18e650] fires.
+fn scoop_drops_03(w: &mut Walker, label: &str, r: f32) {
+    let mut skip: Vec<[f32; 3]> = Vec::new();
+    for _ in 0..4 {
+        let t = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            sim.drones.pickups.iter().filter(|p| !p.gone)
+                .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.5)
+                .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                .filter(|t| !skip.iter().any(|s| walker::dxz(*s, *t) < 0.6))
+                .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
+                .filter(|t| walker::dxz(*t, bp) < r)
+        };
+        let Some(t) = t else { break };
+        w.lenient = true;
+        w.walk_nav_to(t, &format!("{label} scoop"), 0.35);
+        // The direct finisher only when the nav already brought Bond close: walk_to's own
+        // 6000-tick cap panics unconditionally [walker.rs:1381], and an unreachable void-edge
+        // drop (run 40/42's west ditch, grounded=false at d 4.6) must never walk it.
+        let near = { let sim = w.scene.sim.as_ref().unwrap(); walker::dxz(sim.bond.pos, t) < 2.0 };
+        if near { w.walk_to(Wp { at: t, act: Act::None, arrive: 0.3 }, &format!("{label} scoop (direct)")); }
+        w.lenient = false;
+        // The walk-over take [M Pickup_Handler 0x18e650] clears the pickup on success; a drop
+        // the nav cannot reach (the west ditch's void edge — run 40's grounded=false wedge)
+        // is skipped for the rest of this scoop so the loop cannot cycle it.
+        let still_there = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.pickups.iter().any(|p| !p.gone
+                && walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], t) < 0.5)
+        };
+        if still_there { skip.push(t); }
+    }
 }
 
 fn mission_row() -> (usize, usize, usize, usize) {
@@ -859,6 +901,16 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             w.lenient = true;
             loot_the_drops_03(&mut w, &format!("{name} drops"));
             w.lenient = false;
+            // real-health-00agent-03-captors-6 (run 38's loot diag): the lane kills' guns sit
+            // in the moat ditch BELOW the lane's east edge — #11's at (14.50,5.35,-29.03)
+            // dxz 4.2, (14.19,5.34,-28.02) dxz 3.6, (9.66,5.52,-33.13) dxz 4.5 from the leg
+            // spots — every one in the loot's 8-u/±1.5-y band but DECLINED by the helper's
+            // sight filter (the ditch lip blocks the eye ray from the lane floor). The loot
+            // declined on EVERY leg [L d3run38's diag], so the route's own machine-gun clips
+            // (~30 a 0xe) were never claimed and the walk fought the whole mid-game on the
+            // starting 23 rounds. The ditch scoop drops the sight filter (the nav finds its
+            // own path down; the walk-over take needs no sight) and walks onto each drop.
+            scoop_drops_03(&mut w, &format!("{name} ditch scoop"), 8.0);
         }
         w.walk_nav_to(at, name, 1.6);
     }
@@ -1196,19 +1248,36 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                                 }
                             }
                         }
-                        // The standoff: south of the door line, out of the shotgun's under-3.0
-                        // every-round-hits band [M DroneWeap_DoBulletAccuracy 0x179740:113-115]
-                        // while the funnel pours through.
-                        w.walk_to(Wp { at: [22.6, 5.9, 8.0], act: Act::None, arrive: 0.8 }, "the trio wake standoff (south of the door)");
-                        clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1)", 40.0, 4, 600, true);
+                        // The duel line: run 32 MEASURED the trio does NOT pour through — they
+                        // halt NORTH of the open door and duel through the opening (#4 held
+                        // (26.5,16.7) d 8.4 for 13 hits, #5 (24.7,14.9) d 6.1 for 16, both
+                        // alive at the death): from the (22.6,8.0) standoff Bond's eye ray to
+                        // their boxes crosses the wall plane EAST of the doorway band (the ray
+                        // to (26.5,16.7) exits at x 23.47) — the plain fight on #4 ran 436
+                        // ticks killed-false with every tap unseen-gated off [L d3run32]. The
+                        // player steps ONTO the doorway line (the door-8 mouth fights' own
+                        // shape — fought from (36.2,5.7) THROUGH the open doorway), where the
+                        // ray passes the opening; the trio's halt keeps them out of the
+                        // under-3.0 point-blank band [M DroneWeap_DoBulletAccuracy
+                        // 0x179740:113-115] at d 4.7-5.9.
+                        w.walk_to(Wp { at: [22.3, 5.9, 9.6], act: Act::None, arrive: 0.6 }, "the trio wake duel line (the doorway sight line)");
+                        // THE KILL-LOOT CYCLE (runs 33-39): with the ditch rounds in the wheel
+                        // (the leg scoops above) the serial sweep kills ALL THREE through the
+                        // stands — the single-sweep shape runs 37/38 measured (engage #5 → #4
+                        // → the captain back-to-back, keep_aim serial, ZERO damage taken: the
+                        // interleave's post-stand gap in run 39 instead let #4/#3 pour 41.2
+                        // through the doorway while Bond levelled the aim). The loot + the
+                        // scoop after the sweep re-arm from the trio's own drops.
+                        clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1)", 40.0, 4, 900, true);
                         w.lenient = true;
                         loot_the_drops_03(&mut w, "the 0x23 trio wake (si-1)");
+                        scoop_drops_03(&mut w, "the 0x23 trio wake drops", 8.0);
+                        loot_the_drops_03(&mut w, "the 0x23 trio wake (armed cycle)");
                         w.lenient = false;
-                        // The funnel's second round: the loot's walk may have stepped Bond back
-                        // toward the doorway mid-fight — re-stand, re-loot (the servants'
-                        // ground cycle's shape).
-                        w.walk_to(Wp { at: [22.6, 5.9, 8.0], act: Act::None, arrive: 0.8 }, "the trio wake standoff (again)");
-                        clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1, again)", 40.0, 4, 600, true);
+                        // The funnel's second round: re-take the duel line, re-sweep, re-loot
+                        // (the servants' ground cycle's shape).
+                        w.walk_to(Wp { at: [22.3, 5.9, 9.6], act: Act::None, arrive: 0.6 }, "the trio wake duel line (again)");
+                        clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1, again)", 40.0, 4, 900, true);
                         w.lenient = true;
                         loot_the_drops_03(&mut w, "the 0x23 trio wake (si-1, again)");
                         w.lenient = false;
@@ -1216,6 +1285,20 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                             let sim = w.scene.sim.as_ref().unwrap();
                             eprintln!("[03-ammo] after the wake: gun {:#x} clip {} spare {} hp {:.1}",
                                 sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+                            let inv = &sim.drones.inventory;
+                            let clips: Vec<String> = inv.clip.iter().enumerate()
+                                .filter(|(_, c)| **c != 0)
+                                .map(|(w, c)| format!("{w:#x}:{c}")).collect();
+                            let carried: Vec<String> = inv.carried.iter().enumerate()
+                                .filter(|(_, c)| **c != 0)
+                                .map(|(t, c)| format!("{t}:{c}")).collect();
+                            eprintln!("[03-ammo] wheel clips [{}] carried [{}]", clips.join(" "), carried.join(" "));
+                            for (i, p) in sim.drones.pickups.iter().enumerate() {
+                                if !p.gone && walker::dxz([p.m[3][0], p.m[3][1], p.m[3][2]], sim.bond.pos) < 20.0 {
+                                    eprintln!("[03-ammo] pickup #{i} kind {} at ({:.2},{:.2},{:.2}) ch {:#x}",
+                                        p.kind, p.m[3][0], p.m[3][1], p.m[3][2], p.switch_channel);
+                                }
+                            }
                             for (i, d) in sim.drones.list.iter().enumerate() {
                                 if d.team == 1 && walker::dxz(d.pos, pc) < 14.0 && d.skin & 0xffff != 0x2b {
                                     eprintln!("[03-ammo] post-wake #{i} skin {:#x} hp {:.1} corpse {} at ({:.1},{:.1},{:.1})",
@@ -1258,6 +1341,20 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                 })
             };
             if cluster_alive {
+                // real-health-00agent-03-captors-6, runs 43-48: the mouth walk's A* route
+                // detours NORTH-EAST through (38.69,10.96)/(39.73,14.82) — over the door-8
+                // area's own wake (the (39.0,12.9) door's open channel and/or the (38.9,11.1)
+                // 0x23 plate [L d3run43/45]) — and that wake pops #14 (skin 0x5000039, weapon
+                // 0xe, load disabled (30.7,6.2,4.1) [L d3run35's census], enabled false
+                // through the whole trio fight): he closed to d 2.5 and his machine-gun
+                // bursts (41.2 in 3 hits, one 24.0 a round) finished Bond mid-walk at
+                // (35.96,4.27) with the plain return fire killed-false on him [L d3run43].
+                // The tried player shapes (the si==0 south legs z 5.7-6.8 [runs 45-47: the
+                // garden wall corner wedges the direct legs and the A* rides the north lawn
+                // into the plate anyway] and the leg-0 aimed sweep [run 46: #14 unexposed
+                // behind the building's west face]) did not beat it — the d3 sweep below
+                // (after the settle loop) is this round's answer and the approach problem is
+                // the ledger's open item.
                 w.walk_nav_to([35.6f32, 6.4f32, 3.4f32], "the door-8 mouth (the cluster holds)", 1.0);
                 // The mouth stand opens door #8 the way the mid-nav approach did [L the d2
                 // ledger — the door opened under the servant nav]; the popped members then
@@ -1275,6 +1372,22 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                     };
                     clear_near(&mut w, 9.0, "the door-8 mouth");
                     if at_pocket == 0 && round >= 1 { break; }
+                }
+                // real-health-00agent-03-captors-6 (run 43): the mouth walk's own route crosses
+                // the door-8 area's second 0x23 plate (census (38.9,11.1) [L d3run27]) and that
+                // wake pops #14 (skin 0x5000039, weapon 0xe, load disabled (30.7,6.2,4.1) [L
+                // d3run35's census]) — he closed to d 2.5 and his machine-gun bursts (41.2 in
+                // 3 hits, one 24.0) finished Bond at (35.96,4.27) with the walk's plain return
+                // fire killed-false on him (the 0x12's 7 light rounds) [L d3run43]. A player at
+                // a door that just hissed open squares up and AIMED-stands what popped: the
+                // aim-bit zero-spread taps kill his 12 hp in 2-4 taps where the plain exchange
+                // ate the whole health. d>=3 only — the d<3 streams keep their settle loop.
+                if difficulty >= 3 {
+                    clear_exposed_nearest_03(&mut w, "the door-8 mouth (d3 wake sweep)", 40.0, 4, 900, true);
+                    w.lenient = true;
+                    loot_the_drops_03(&mut w, "the door-8 mouth (d3 wake drops)");
+                    scoop_drops_03(&mut w, "the door-8 mouth (d3 wake scoop)", 8.0);
+                    w.lenient = false;
                 }
                 // los-mask-repins-03 (Agent): the cluster's guns (#18 0x1c, #2/#19 0xe [L the
                 // gas-rng-draws-6 probe]) are the route's own ammo from here on — the exit legs
