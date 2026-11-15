@@ -47,3 +47,5 @@ Main 11-14 (cb29af974): over the ~14500-tick fight the Hind is in sight (eye_see
 Main 11-14: stand-when-the-Hind-is-in-sight / crouch-otherwise in the fight loop - 0 launches, death t29954 (worse). Not shipped.
 
 Main 11-14: no live armour pickup within 150 u of the Hind fight anchor (Bond enters at 52.0/37.7, t27252).
+
+Main 11-14: the raised surfaces by the anchor read floors 15.1-16.7 at x 110.5-111 (the terminal); a standing jump+forward from (111.1, -179.5) does not get Bond up (13.54 after). Dead.
