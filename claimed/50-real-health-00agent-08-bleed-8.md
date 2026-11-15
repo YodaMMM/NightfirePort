@@ -19,3 +19,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
   run it once more on your final tree (merged with `origin/master`). Report the total line.
 
 **Branch:** `s/real-health-00agent-08-bleed-8`.
+
+---
+claimed-by: sandbox1 at 2026-11-15T09:17Z
