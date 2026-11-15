@@ -30,3 +30,5 @@ Main 11-15 (on 9f5b13b6e): round_dodge variants - hostile gate 3 u: t29261; miss
 
 ---
 claimed-by: sandbox7 at 2026-11-15T08:13Z
+
+Main 11-15 (on 9f5b13b6e): Kiko hold 300 / 450 with the dodge: t31374 / t31649 - worse than 600 (t35208).
