@@ -181,3 +181,5 @@ Main 11-14: the armour right after the Kiko hold (27.9): the nav runs south then
 Main 11-14: kiko_hold also stepping away from live 0x14 rounds whose line passes within 3 u of the chest (1-20 u out): t26711 inside the Kiko hold - worse.
 
 Main 11-14: the node-42 corner fight with or without the second hold: both die at t26516 in the Kiko corridor (the dead #28s blast) before either hold - the corner fight re-rolls the corridor into that blast.
+
+Main 11-14: the Kiko hold at 450 ticks t29157 (noise vs t29197), at 750 t26998 (worse). The 600 stays.
