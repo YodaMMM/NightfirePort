@@ -1870,6 +1870,13 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         let dodge_now = if (difficulty >= 2 || !w.tops_up()) && rocket.is_none() {
             let b = sim.bond.pos;
             let chest = [b[0], b[1] + 0.6, b[2]];
+            // real-health-00agent-08-bleed-7 (d3 tail): the threat window opens at 40 u - the
+            // sustained standing sprint needs the longest possible closing run against the
+            // chase's per-tick steer clamp [M Bullet_update 0x12e7b0:177-244]; 30 u gave the
+            // sprint ~60 ticks and the homing still landed the killing -8.95 at the same frame
+            // on both dodge sides [L run-bleed7-6/7]. Tail-only (rockets >= 5): the sisters and
+            // the pre-rocket-5 rolls keep the 30 u window byte-exact.
+            let dodge_max = if difficulty >= 3 && rockets >= 5 { 40.0f32 } else { 30.0f32 };
             sim.drones.bullets.iter().any(|bu| {
                 if bu.state == 2 { return false; }
                 // 00 Agent: the Hind CANNON's rounds (0x61) do not start a dodge - they pass within
@@ -1878,7 +1885,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 if difficulty >= 3 && bu.weapon == 0x61 { return false; }
                 let rel = [chest[0] - bu.pos[0], chest[1] - bu.pos[1], chest[2] - bu.pos[2]];
                 let d = (rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]).sqrt();
-                if !(2.0..30.0).contains(&d) { return false; }
+                if !(2.0..dodge_max).contains(&d) { return false; }
                 let vm = (bu.dir[0] * bu.dir[0] + bu.dir[1] * bu.dir[1] + bu.dir[2] * bu.dir[2]).sqrt().max(1e-6);
                 let along = (rel[0] * bu.dir[0] + rel[1] * bu.dir[1] + rel[2] * bu.dir[2]) / (d * vm);
                 if along <= 0.0 { return false; }
