@@ -46,3 +46,18 @@
   extracted, rust stable 1.100.0, ALSA headers in a user prefix (no root). Baseline runs next: the levers are
   the trio wake race (the arm must precede the plate) and the lane-mouth health margin (run the mouth colder /
   from the far side), per the captors-5 ledger.
+- (03:44-05:25) real-health-00agent-03-captors-6: 21 real-input d3 runs (29-49). The trio wake race
+  FELL: the wake sweep found nobody because the east-lawn door (22.3,10.9) stands CLOSED and the trio
+  bunches behind the leaf — the door funnel (own-door E-open + the duel line (22.3,9.6) + the serial
+  sweep) exposes all three; the arm FELL: run 38's loot diag shows the lane kills' guns sit in the
+  moat ditch below the lane's east edge and the loot's sight filter declined them on every leg — the
+  d3 ditch scoop takes them (the wheel at the wake went 11 rounds on one gun to 0x12:7 + 0x2:4 +
+  pools); run 43: #3/#4/#5 ALL corpse true at zero wake damage. The cold mouth REFUTED (run 31:
+  death 10009 — the crossing needs the pre-crossing stands). NEW BLOCKER: the mouth walk's A*
+  detours over the door-8 area's own wake ((39,12.9) door open channel / the (38.9,11.1) plate) and
+  #14 (0x5000039, 0xe, load disabled (30.7,4.1)) pops and bursts 41.2 in 3 hits — death 67488
+  (runs 43/49). The south-legs and leg-0-sweep shapes tried and measured (runs 45-48). The walk
+  stays ignored; the refreshed ledger is in the ignore message (follow-up captors-7).
+- walkreal_07000003_live WHOLE on the final tree: 6 passed / 0 failed / 2 ignored (222.58 s);
+  interactables_07000003_live WHOLE: 9 passed / 0 failed (30.35 s). The full suite did not fit
+  the window (the build phase alone exceeds the remaining minutes after the runs above).
