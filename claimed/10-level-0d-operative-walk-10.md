@@ -20,3 +20,5 @@ Main 11-14 (667be11e3, crouched ladder top merged, death t5532): a dedicated pas
 Main 11-14 (667be11e3, crouched): a second west-roof pass before the bay duo does not land (pass false, 38.0) and the walk dies sooner, t5245 vs t5532. Not shipped.
 
 Main 11-14: a ground scan before the climb finds the snipers in clear line from most of the yard (186..216, -240..-222): #27 63 spots, #28 71, #29 66, #16 59, #10 49, #18 30 (#17 none). West-roof passes from the ground at (210,-237)/(204,-237) kill one then die on the open ground (t3261/t3198) - the whole yard is in the snipers lines; the crouched ladder top (t5532) stays the best stand.
+
+Main 11-14 (merged 272ec32c8): the yard armour (kind 3 at (205.4, 0.1, -205.3)) from the blind strip before the climb (Operative real damage only) - 50 taken, 34 back at the strip; death t5532 -> t10148 on the deck at (202.0, 16.0, -255.1): #14 (0x5000087, 0x1e) from (166.3, 21.2, -271.4) 16.0 x4 at 39.6 u, then the bay pair #18/#10 from (206-208, 12.1, -288.5) at 34 u. Other live armour: (192.8, 10.8, -272.0) 42 u, (147.0, 21.8, -252.8) on the west roof, (107.7, 6.8, -275.2).
