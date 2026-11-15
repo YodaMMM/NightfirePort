@@ -74,9 +74,14 @@ steer clamp [M Bullet_update 0x12e7b0:177-244] and dodge with a sustained standi
 perpendicular to the missile's line while it is 2-30 u out). Live checks for the main agent:
 the missile's turn rate at 10-20 u, and the west-doorway sight window's y band from the anchor.
 
-The fast suite (`tools/test/suite.py`) was started detached on the final tree; the per-binary
-results above are the tests that exercise the changed file (only
-`walkreal_07000008_live.rs` changed — no shared helpers, no game code).
+The fast suite (`tools/test/suite.py`) could not run in this sandbox: every detached process
+(nohup, setsid) is killed between tool calls — three starts all died mid-build with nothing
+written (`suite.out` size 0), and the foreground Bash window is 10 minutes while the full
+suite's run phase alone is longer. The complete affected-test evidence is above: the diff
+touches ONLY `walkreal_07000008_live.rs` (no shared helpers under `tests/common/`, no game
+code, no other crate), so the tests that can be affected by it are exactly the two binaries
+run green on the final tree. The next session should run `tools/test/suite.py` once on the
+merged tree as usual.
 
 Scratch logs (run-bleed6-*.log, whole08-bleed6*.log, interact08-bleed6.log, suite.out) are
 untracked, never committed.
