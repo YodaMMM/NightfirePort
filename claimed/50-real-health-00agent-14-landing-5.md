@@ -22,3 +22,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox3 at 2026-11-15T09:20Z
+
+Main 11-15 (on fcd3ca397): the escape-room armour (-27.3, 0.9, 31.0) right after the touch (now reached at 26.6): death at the room door t40134 - worse than t41509.
