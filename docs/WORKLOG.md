@@ -68,3 +68,16 @@
   origin-centred two-sphere capsule [M NDrone2_Collision 0x140e90:91-121]). Next lever per
   the walk-10 report + the merged ignore message: the trench-a bullet audit (probe-style,
   NF_0D_AUDIT=1, read-only), then the capsule fix if confirmed.
+- (04:53) The trench-a bullet audit ANSWERED (NF_0D_AUDIT=1 + the posed-box dump, the
+  NF_0D_AUDIT_CHEST probe leg): the bullets PASS THROUGH the guard (the world stop BEYOND her,
+  no early stop) — the START-CEL re-feed is NOT the cause; the two-sphere capsule is NOT the
+  hit volume [M Collide_Jointy 0x1ec180:104-158 = the same AnimGetCollData boxes the port
+  parses; the spheres only in Drone_CollisionHandler 0x140968]. THE POSE LAW: the settled
+  sniper state 0x93 poses the torso at origin −0.76 (head −0.60) — the chest aim (origin +0.3)
+  flies over the body; state 0x94 stands and still misses — the shot lands +0.010-0.013 rad
+  (~0.7 u) HIGH on EVERY trench shot across five runs, aim-systematic, independent of the
+  measure origin. PRIME SUSPECT the free_aim aim_offset residual [M scene.rs:4554-4560]. The
+  box-act lever wired (TORSO_FIRST/SETTLE_TAPS opt-ins, torso-first, settled, the box-fit
+  tolerances) and measured dead on its own runs. walkreal whole: 2 passed 0 failed 1 ignored;
+  interactables: 11 passed 0 failed. The round-11 ledger + the aim-offset next lever are in
+  the ignore message. Report: docs/reports/level-0d-operative-walk-11.md.
