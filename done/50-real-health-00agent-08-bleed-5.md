@@ -157,3 +157,5 @@ not visible to me — this session's environment shows no token, credit, cost or
 figures (no such display exists in the sandbox), so there are no numbers to copy.
 
 Main 11-14 (on 6a9463509): on a cannon zap, walk to a spot OUT of the doorway band instead of the anchor: south (112.8, -181.4) t33275 (1 launch); north (112.5, -177.9) t32271 (2 launches, the first landing 101.0, the second 0) - both worse than t34720. Not shipped.
+
+Main 11-14 (on f3c20899a): the sisters launch gates on the 00 Agent fight (slit / corridor / effective-corridor / forecast relaxed, the sight and lane gates kept): rocket 1 at fight t1174 never lands (0.0) and the death comes at t28440 - worse than t34720. Not shipped.
