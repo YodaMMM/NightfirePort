@@ -14,3 +14,5 @@ Main 11-14 (on d3d5ef639, none shipped): the west-hall armour (-14.36, 6.51, 16.
 Main 11-14 (merged 4e4e4b87a): the ch-0xF ambush crouched with 300-tick bounded shots re-picked each round (16 rounds, no hold waits) - #17 dies, death t18846 -> t19729 to the SMG #4 (0x500003a) from (-30.5, 13.3). Crouch alone t19320, bounded alone t18823, nearest-first order no change.
 
 Main 11-14 (on 4e4e4b87a, not shipped): the west-hall armour right after the ambush pop (return fire and keep_off off, via the gap (-15.31, 15.78), then (-15.89, 16.36)): Bond ends ON the armour box (y 7.17-7.18, 0.3 u off the pickup) and the take never fires; #4/#17 hit him there from 12-15 u, death t19446/t19933. The earlier successful takes were mid-nav at floor height - the pickup is not taken from on top of its box.
+
+Main 11-14 (on 4e4e4b87a, not shipped): Bond enters the ambush at 15.6 with the gun 9+0 (the 38 spare is picked up mid-fight); a full reload before the slab dies earlier (t18507); shooting only exposed guards (60-tick waits otherwise) t19876 vs t19729 - noise-level. Round 0 spends its first 300 ticks on the walled #2 while #17 lands 3 x 1.8.
