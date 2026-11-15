@@ -165,3 +165,5 @@ Main 11-14 (on f3c20899a) - CORRECTION to the pool-cap note: the car carries thr
 Main 11-14 (merged 4f3802517): per-gate tally over the fight: dodge_hold > 0 on 5519 of ~7000 ticks (the cannon rounds), corridor 6186, eff-corridor 6084, eye 5619, lane 6754, fore 6102, slit 3443 fail counts. The cannon no longer starts a dodge (missiles still do) and the d3-only slit/corridor/effective-corridor/forecast gates are off: three rockets land, the Hind 100.7 -> 287.7 of 598, death t30165 to the Hind missile blasts (25.1/10.9/13.1) with one rocket in the clip. A reload after each launch (the car boxes refill) did not add a fourth launch (t29203). Next: survive the missiles longer.
 
 Main 11-14 (on 4f3802517): the fight standing (no crouch press) with the new dodge/gates: no rocket lands, t27690 - the crouch stays.
+
+Main 11-14 (on 4f3802517): a wider missile dodge (miss < 3.0, hold 36): one rocket, t28214; no dodge at all at d3: no rocket lands, t31416 - both worse than the merged three-rocket stream.
