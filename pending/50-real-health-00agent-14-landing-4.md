@@ -25,3 +25,5 @@ Main 11-15 (merged ad2d99954 - master now carries the named idea): walker_b2 rou
 Main 11-15 (merged 9f5b13b6e): with the round dodge the second hold is dropped - death t31711 -> t35208 at (-13.09, 1.12, -23.10) past the escape touch on the Rook wake legs. Rebase on master.
 
 Main 11-15 (on 9f5b13b6e): the bill after the Kiko hold (52.5): 50.0 on the 1039-tick walk east to the escape touch (t31000-32000, #20 and #30 15.0 each), then Bond limps at 2.5 to the Rook wake legs and #39 (0x500008c, 0x1a) ends it at t35208. Crouching that leg: t32315 - worse.
+
+Main 11-15 (on 9f5b13b6e): round_dodge variants - hostile gate 3 u: t29261; miss band 4.5 u: t27333 - both worse; the merged 5 u / 3 u stays.
