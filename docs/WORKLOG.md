@@ -48,3 +48,10 @@
   cargo/7z to a reset and the build alone exceeded the remaining time); this branch touches
   only two nf-view test files (walkreal_0700000d_live.rs + the new probe_0d_ground_wake.rs)
   — no src/, no shared-helper changes.
+- (02:11) Audit run (the reverted baseline + NF_0D_AUDIT=1, read-only): death t5532 EXACT
+  (the walk-9 baseline restored deterministically — the revert verified), and the audit
+  confirmed the ladder-top torso bullets LAND on the trio (the g29 crossing kill part
+  Some(4,0.836)→hit, trv 52.2, world stop BEYOND her) — the far-target miss is specific to
+  the GROUND up-hill lines (eye ~1.8 → y 23.0 at d 59-63); prime suspect the flight's
+  START-CEL re-feed [M 0x12f0cc-0x12f0d8] on the steep multi-cel ray. The ignore message's
+  next lever refined accordingly (the audit rides a probe-style leg, never a shipped leg).
