@@ -32,3 +32,5 @@ Main 11-14 (merged d1491c571): the rifle (switched back from the Q-Claw) aims an
 Main 11-14 (on d1491c571, not shipped): the yard landing arrives at ~10 (26.2 on the ride minus the 16.4 slot fall) and dies in ~200 ticks to the SMG trickle. The armour at (192.8, 10.8, -272.0) is NOT reachable from bay enter (194, 10.6, -282): a wall at z -276.4 stops the nav 4.4 u short (12k ticks lost, death on the ride t31750). Health for the landing must come from the climb hits (#17 32.0 at 71 u, #28 16.0, #10 14.0).
 
 Main 11-14 (on d1491c571): the ladder-top band sweep at 3 x 600 / 3 x 900 (was 200) never lands on #17 at (163.3, 1.0, -214.0), 53.7 u, and dies earlier (t15093 in the bay) - the 200 cap stays.
+
+Main 11-14 (on d1491c571): the climb-side bill is #10 14.0 (t10459, deck), #17 16.0 x2 (t12022/12388, catwalk, from (157.6, 1.0, -226.0) at 48-55 u) and #28 16.0 (t13479, roof east b). Crouching for the catwalk keeps both #17 hits and drops #28s, but the crouched legs end elsewhere and the annex push-off fall pin (timer 76) fails even after standing again. Not shipped.
