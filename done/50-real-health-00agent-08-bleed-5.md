@@ -167,3 +167,5 @@ Main 11-14 (merged 4f3802517): per-gate tally over the fight: dodge_hold > 0 on 
 Main 11-14 (on 4f3802517): the fight standing (no crouch press) with the new dodge/gates: no rocket lands, t27690 - the crouch stays.
 
 Main 11-14 (on 4f3802517): a wider missile dodge (miss < 3.0, hold 36): one rocket, t28214; no dodge at all at d3: no rocket lands, t31416 - both worse than the merged three-rocket stream.
+
+Main 11-14 (on 4f3802517): the pre-fight bill is 44.0 in t0-2000, nearly all at the east deck head (t684-1114, 40.0 to #3/#14/#11/#2, 0xa, 4-10 u) - Bond arrives there with the gun at 1+0 (weapon 0x1, resupply false) and the return-fire stands carry the fight. Crouching from the east deck head leg reroutes the deck-line walk through the hall door (140.7, -96.8) and wedges (6000-tick cap). Not shipped. Lead: arrive at the east deck armed (the start loadout reads dry there).
