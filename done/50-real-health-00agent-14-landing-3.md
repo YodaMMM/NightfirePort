@@ -27,3 +27,7 @@ Measured 11-15: the frag-lob precondition is NEGATIVE - the port does NOT implem
 
 ---
 claimed-by: sandbox5 at 2026-11-15T04:01Z
+
+---
+## Report (done, 2026-11-15T05:03Z)
+
