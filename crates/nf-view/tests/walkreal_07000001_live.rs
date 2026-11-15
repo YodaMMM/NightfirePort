@@ -2466,6 +2466,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 }).collect()
             };
             for g2 in route_order(&w, &near) {
+                // 01-hall-7g (d3): the same shooter-model skip the ambush loop runs — a guard
+                // whose boxes never open from this stand (the upper-ledge #2, aim None from
+                // every corridor stand the walk holds) only feeds the blocked sidestep
+                // ladder, whose strafes walked Bond off the follow stand into the west SMG's
+                // lane (the r7_f4 death at 19750 with #4 already 10.2 dealt by the very same
+                // clear). The hit-able guards get the window; the shadowed ones wait for a
+                // stand where their boxes open.
+                if difficulty >= 3 && w.exposed_aim(g2).is_none() { continue; }
                 let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
                 let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
                 // The pocket rule (the ambush block): a guard parked west of x -27 is shot
@@ -2496,6 +2504,9 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 }).collect()
             };
             for g2 in route_order(&w, &near_c) {
+                // 01-hall-7g (d3): the shooter-model skip (see the own-radius clear above) — a
+                // window on a box-shadowed guard is silent and only drives the blocked ladder.
+                if difficulty >= 3 && w.exposed_aim(g2).is_none() { continue; }
                 let gpos = w.scene.sim.as_ref().unwrap().drones.list[g2].pos;
                 let bpos = w.scene.sim.as_ref().unwrap().bond.pos;
                 // The pocket rule (the ambush block): a guard parked west of x -27 is shot
@@ -4100,7 +4111,21 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// machinery (d3_aperture_fight + the lane grid + the diag counters) is on the branch, d3-
 /// gated; d1/d2 byte-identical.
 #[test]
-#[ignore = "00 Agent (11-14, main, 01-hall-7e): the ch-0xF ambush fought crouched with 300-tick bounded shots re-picked each round - #17 dies, death t18846 -> t19729 at (-26.0, 14.7) to the SMG #4 (0x500003a) from (-30.5, 13.3) at 4.8 u. Before that (7d): covered doorway rounds on EVERY live hall guard, nearest first (#5 to 3.7 then dead to return fire, #14 killed at 12.5 u) - the walk crosses the hall and dies at t18846 at (-25.7, 13.9) in the west corridor to the SMG #17 (0x5000039, 0x12) at 4.9 u. Before that (7c): one bounded round on the hall captain #5 from the doorway before the route pre-clear (24 -> 3.7) then behind the door wall - death t15977 -> t17127 to the pistol pair #14/#15 (12.0 hits at 7-15 u) on the pre-clear legs. Before that (7b): after the AND Bond fetches the east armour (17.4, -3.2) through the side door and retraces back to the hold (50 taken, 23 left after the east pair) - death t14138 -> t15977, one #5 volley at 13.2 u from (-5.8, 17.4) on the route pre-clear legs inside the hall. Before that: after the press kill Bond stands, walks behind the door wall (7.0, 12.0) with return fire off and back to the hold line - death t13141 -> t14138: the doorway leg walks into the captain #5 (0x5000038, 16-24 hp) roaming the hall interior at 19.0 health (a hold-line lure of #5 never drew him: 78k ticks of flanks, then a volley down the open door lane). Next: #5 before the doorway step. Earlier: THE HALL AND FIRES - the last-guard press (Bond to (6.5, 12.4) just inside the door plane, one 300-tick shot with a 10.0 wound abort, staying put on the kill) kills g11 at 19.0 health and ch 153 rises at t13027 for the first time. The walk now dies at t13141 at (7.96, 6.00, 16.49) on the next legs to the captain #5 (skin 0x5000038, 0x1c, 24 hp) from (-12.3, 6.3, 17.2) at ~19.9 u (7.2 a pellet hit, three in one frame). Next: #5 before the doorway leg (a line from the hold side, or the escort waits him out). Earlier: 00 Agent (hall-6, measured on the MERGED tree — master 9182c25b4 + hall-5): THE VOLLEY RACE IS WON. The hall-6 levers landed in the named order and each was judged on its own real run [L /tmp/h6_run1-13 all through the real input path]. (a) the SMG PRE-ARM during the entry's quiet waits — the meet SMG 0x12 armed before the crouched press via the new d3_switch_to_smg (the deepest non-pistol pool; noise-free, door-closed — the 91-tick reaction clock has not started); run17's in-window draw is gone. (c) the VOLLEY-RACE sort — among the 0x1c guards the DEEPER one is first (the live positions at fight time), so the FIRST tap targets the deep captain #7 (0x5000038, 24 hp) and not the mouth #6. (b) the aim law, measured run by run: the landings sit ON the aim point +-0.36 (the run4/5 hits rode the exposed part's own point — the lane heights never ran while a part was exposed); the dy-1.4 aim flew over everything (run6: 60 rounds, ZERO hits, #7 full 24.0); the dy-0.6 aim bought ONE 12.0 part-5 head hit then #7 sidestepped and 18 rounds found nothing (run7); the dy-0.3 aim degraded to 11 hits for 12.6 (run8); the WINNER is the torso-center lane aim — for a NON-pistol held gun the lane aim OVERRIDES the exposed body part (dy 0.05 first, so the taps keep firing when the part unexposes) with the gates tightened to 0.035/0.04 — the SMG's own 6-tick refire then grinds him down (the run9 ledger: 20 hits, 17x1.2 + 3x0.9) and the FINAL round lands the part-5 x8 record: #7 DEAD AT 3366, 24.0->-8.4, bond 55.0 FULL — the first full volley never landed. The mouth #6 (0x5000036) then died at 3525 to the detour walk's own return fire (the #7 fight's overflow taps had him at 2.4 [L the run10 health trace: d#6 12.0->2.4 stepwise, 2.4->-0.4 at 3525]) — TWO of the three AND inputs fired. THE RESUPPLY WALL (the run10 death at 10270): the on-trail rule walked Bond DEEP into the hall — the on-trail stock took (7.1,5.3,14.3) then (6.3,16.8) — and a west 0x1c volley killed him at (6.76,14.88); the hall-4 detour-only lever is now real: the shared resupply grew the opt-in no_fetch (spot list) + no_fetch_z_above (the zone form — the (7.1,14.3) box spawns after entry, the run12 ledger) and the d3 walk bans everything across the z 11.2 door plane plus each dead guard's drop spot; run13 shows no interior attempt. THE REMAINING WALL: g11 (the third named guard, 12 hp pistol) — with the wedging west cells dropped from the lane-stand pick (hall-3's own wedge ledger: the x 4-5 band stops 1.6-1.7 u short), NO reachable stand reads a clear lane to him, the fight idles its 2400 ticks (run13: dead false, g11 hp 12, bond 26.2, at 12212), the third AND channel never fires and the walk's asserts fail. The detour's return leg wedged once (back-to-hold nav 4, d 1.77, segment None — non-fatal, the walk continued). NEXT LEVERS, concrete: (i) g11's kill — hall-4's LAST-GUARD PRESS shape wired into the named loop's tail for the last across-alive named guard: the shallow press to (6.5,13.2) (just inside the door plane) draws the rusher's charge, ONE wound-aborted shoot attempt finishes him at close range (his parts expose inside the hall — the hall-4 run3 pass killed him from z 19.4), the crouched retreat home between legs; (ii) the detour return leg's wedge — the hold-line return runs at arrive 1.2 and a wedged leg falls back to the deep line (6.5,7.6). The d1/d2 streams are byte-identical through every opt-in [L the battery: 7 passed 0 failed 1 ignored, 70.5 s; interactables 10/10]."]
+/// GREEN (01-hall-7f/g, 11-15, measured on this tree, all real input from the level load
+/// [L /tmp/r7_base.log, r7_trace.log NF_KILL_TRACE, r7_f1-f4.log, r7_g1.log]): the ch-0xF
+/// ambush order now partitions by the shooter's own box-entry model (exposed_aim — the
+/// game's ray_box-before-world rule [M Collide_Jointy 0x1ec180 / 0x1ea398:216-229]) instead
+/// of the point-segment DamageLog::visible; windows on box-shadowed guards are skipped (no
+/// silent burn, no blocked-ladder drift); the contact is held IN-WAY ahead of Bond between
+/// windows (east of the slab, clamped into the walkable band) so his lead stops walking him
+/// into the fire line (r7_f2: the contact stood 0.4 u from the west SMG #4, every tap
+/// cone-blocked); a boxed fight (4 no-fire rounds) exits to the escort machinery; and the
+/// escort's own-radius and contact-radius clears run the same skip (r7_f4: the clear's
+/// blocked window on the upper-ledge #2 drifted Bond into #4's lane with #4 already 10.2
+/// dealt). r7_g1: the escort clear kills #4 (exposed, 8.2 u) and the walk reaches the
+/// plate — level_exit to 07000002 at tick 24955, Bond 4.8 health, 36 hits for 95.2, 11
+/// return-fire fights, no top-ups. The d1/d2 paths are untouched: every change is inside
+/// difficulty >= 3 branches in this file (no shared-helper change this round).
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }
