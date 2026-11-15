@@ -128,3 +128,5 @@ Not visible to me: this session exposes no token, credit or context-window figur
 worker (no usage metadata is available in the sandbox).
 
 Main 11-14: not merged - master 3e1563c55 lands three rockets (287.7) to t32039; this branch best is one rocket to t32706. Its cannon-spread finding (rows at -180.95/-179.4/-178.1/-177.61) is kept.
+
+Main 11-14 (merged c65f36857): a held-health analysis of the whole fight (ten launches, the Hind killed at fight t10131 with 688 dealt) showed every self-blast launch with the machine SOUTH-WEST of the car ((83.4, -190.0), (91.2, -210.2), (85.2, -188.9)); one more failed at (102.6, -152.5) NW. No launch at x < 105 && z < -165: five rockets land, the Hind 489.6 of 598 (ONE rocket short), death t33393 with 8.95 left. Next: ~20 more health into the fight (the east deck head fight costs 40) or one more launch before the late missiles.
