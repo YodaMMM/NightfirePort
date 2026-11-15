@@ -62,9 +62,16 @@ ignored), measure it on its own real run, and write the ledger back.
   (151.97 s) — includes the d1 and d2 real-health walks and replays, byte-identical paths
   (the shipped diff touches the ignore message only).
 - `interactables_0700001b_live` WHOLE: **9 passed / 0 failed** (29.09 s).
-- The four-crate suite runner (`tools/test/suite.py`) was started in the background on the
-  final tree (cold target in this sandbox; the total line is reported in the WORKLOG if it
-  finished inside the window).
+- The four-crate suite runner (`tools/test/suite.py`) on the final tree: the build phase hit
+  this sandbox's disk wall (656 MB free; nf-view's ~25 test binaries need ~4.7 GB of unit
+  products — this workspace keeps the rlib tree under `target/release/build`, there is no
+  `target/release/deps` to prune) and died with BUILD FAILED on qworm_fire_mode_live /
+  probe_facial_ops / fix_06_fire_live / fix_door_react_path_live; the run phase never started
+  [L suite.out]. The three crates whose test binaries the build had already produced ran
+  green from those artifacts: **nf-game 1233 passed / 0 failed / 7 ignored**; **nf-audio +
+  nf-formats 144 passed / 3 failed** — the 3 failures are exactly the allowed slim-ISO
+  `disc_golden` trio; nf-view's required binaries green as listed above. Same fit failure as
+  rounds 9 and captors-6.
 
 ## What's left
 

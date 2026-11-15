@@ -88,3 +88,12 @@
   every mid fight additionally on the pending console's held targets being LIVE) are in the
   ignore message. walkreal_0700001b_live WHOLE: 18 passed / 0 failed / 1 ignored (151.97 s);
   interactables_0700001b_live WHOLE: 9 passed / 0 failed (29.09 s).
+- (06:03) Suite coverage on the final tree (master 4f3802517 + the ignore-message ledger only — zero
+  code change): nf-game 1233 passed / 0 failed / 7 ignored; nf-audio + nf-formats 144 passed / 3 failed
+  (the 3 slim-ISO disc_golden failures, the allowed trio); nf-view's whole walkreal_0700001b_live
+  (18 passed / 1 ignored) and interactables_0700001b_live (9 passed) green. The four-crate suite runner
+  could NOT fit: the build phase hit the disk wall (656 MB free of 9.9 GB; nf-view's ~25 test binaries
+  need ~4.7 GB of per-binary unit products — no target/release/deps in this workspace, the rlib tree
+  lives under target/release/build) and died with BUILD FAILED on qworm_fire_mode_live /
+  probe_facial_ops / fix_06_fire_live / fix_door_react_path_live; the run phase never started. The
+  three green crates above ran from the suite's own completed artifacts.
