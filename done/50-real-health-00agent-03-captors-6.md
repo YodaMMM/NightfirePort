@@ -25,3 +25,5 @@ claimed-by: sandbox3 at 2026-11-15T03:27Z
 ---
 ## Report (done, 2026-11-15T04:49Z)
 
+
+Main 11-14: not merged - on master f3c20899a+ the captors-6 branch dies at t67488 (master t74135); the #7 kill is kept as a finding.
