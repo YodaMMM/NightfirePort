@@ -2326,6 +2326,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // stall rounds expire into the panic below). A posted exit IS the walk's completion:
         // the escort's job is over, break straight to the AND-touch asserts.
         if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() {
+            // A RESTART exit is the failed mission's reload (the contact dead), not the plate's
+            // completion - fail here, naming it, instead of reading a stale contact position.
+            {
+                let d = &w.scene.sim.as_ref().unwrap().drones;
+                assert!(!d.level_exit_restart,
+                    "the mission failed (restart exit posted at tick {}): the contact hp {:.1} corpse {} at ({:.1},{:.1},{:.1})",
+                    w.total_ticks, d.list[ci].health, d.list[ci].corpse, d.list[ci].pos[0], d.list[ci].pos[1], d.list[ci].pos[2]);
+            }
             eprintln!("[01] the escort sees the level exit posted (tick {}) — the walk is complete", w.total_ticks);
             break;
         }
