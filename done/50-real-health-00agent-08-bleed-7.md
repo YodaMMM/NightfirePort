@@ -133,3 +133,5 @@ never committed.
 
 Not visible to me: this session exposes no token, credit or context-window figures to the
 worker (no usage metadata is available in the sandbox).
+
+Main 11-15: not merged - no lever beat the five-rocket t33393 stream.

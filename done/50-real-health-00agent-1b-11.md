@@ -30,3 +30,5 @@ Main 11-15 (on e21422e86): laser_dodge radii - target 20 u: only k5 latches (the
 ---
 ## Report (done, 2026-11-15T08:56Z)
 
+
+Main 11-15 (merged fa191d448): on master all eight consoles latch (k7 9337, k1 9854, k2 10026) at 19.5 health; death t13331 at (8.06, -2.34, 7.19) in the Drake phase.

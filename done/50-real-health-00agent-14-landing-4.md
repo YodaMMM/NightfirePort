@@ -157,3 +157,5 @@ exit codes. No input/output token counters, no credit balance, no dollar cost.
 
 Main 11-15: measurement round — the east lane detour moves death t35208 -> t41509 and the
 touch 2.5 -> 26.6; not merged (the walk still dies on the delta approach).
+
+Main 11-15 (merged fcd3ca397): on master the escape touch at 26.6, death t41509 at (-15.85, 1.13, -22.71) on the Rook legs.
