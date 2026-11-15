@@ -39,3 +39,7 @@ Main 11-14: pickup scan before the si-1 saddle walk (Bond (11.9, 6.5, -20.9), P2
 Main 11-14: inventory at the si-1 saddle walk (t71943): owned 0x1, 0x2 (P2K, clip 3 + carried 13), 0xe and 0x1c (shotgun) both at 0 rounds, gadgets 0x4a/0x4e/0x5b; the records give the laser 0x4e/0x4f and stunner 0x4a damage 0 and range 4-8 - no long answer to #7 there. The only rounds left are the P2K 16 (3.5 a hit, range 50). Where the 0xe/0x1c rounds went upstream is the lead.
 
 Main 11-14: the saddle-side armour (21.5, 9.2, 11.6) stands on a y 9.09 floor behind the door (22.3, 5.3, 10.9); the nav to it dies opening the door at t73685 - worse.
+
+---
+## Report (done, 2026-11-15T03:07Z)
+
