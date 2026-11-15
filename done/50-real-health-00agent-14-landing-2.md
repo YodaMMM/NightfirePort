@@ -179,3 +179,5 @@ Main 11-14: the armour (-41.3, 1.5, 36.5) from the second hold: Bond leaves the 
 Main 11-14: the armour right after the Kiko hold (27.9): the nav runs south then through the door (-42.7, 1.2, 29.9); return fire kills #29/#20/#23/#61/#22/#28 on the way but Bond reaches the door at 5.4 and dies at t27658. Every route to the (-41.3, 36.5) armour crosses the squad. Not shipped.
 
 Main 11-14: kiko_hold also stepping away from live 0x14 rounds whose line passes within 3 u of the chest (1-20 u out): t26711 inside the Kiko hold - worse.
+
+Main 11-14: the node-42 corner fight with or without the second hold: both die at t26516 in the Kiko corridor (the dead #28s blast) before either hold - the corner fight re-rolls the corridor into that blast.
