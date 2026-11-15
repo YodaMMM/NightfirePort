@@ -31,3 +31,7 @@ Main 11-14: a crouch press at the console phase start (hard) - Bond does not die
 Main 11-14: crouch-between-shots inside the console screen loop (stand on fire, crouch after 90 quiet ticks) - byte-identical t9134 (the damage lands in the defense fights, not the screen loop). The crouch-at-start run survived only because it never latched console 1 (the walk ran out of console work, not the wave).
 
 Main 11-14: the two world blasts (kind 107, owner -2: t4658 -12.34 at d 3.9, t7541 -13.94 at d 7.3) are the space laser [space_laser.rs state 0->1 locks target = the player position, fires record 107 at it when the script ends; the whine starts at half the script]. Radius 20 - a zero-g float cannot leave it in the charge window; 26 of the 100. The astronauts 5.0 rounds are the bulk.
+
+---
+## Report (done, 2026-11-15T01:10Z)
+
