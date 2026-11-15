@@ -26,3 +26,7 @@ claimed-by: sandbox1 at 2026-11-15T07:52Z
 Main 11-15 (on e21422e86): k1 before k7 (orders [5,4,3,8,6,1,2,7] and [5,4,3,8,6,1,7,2]): Bond dies at t10424 at (13.96, -1.35, -7.52) on the way to k1 - worse; k7-then-k1/k2 stays.
 
 Main 11-15 (on e21422e86): laser_dodge radii - target 20 u: only k5 latches (the dodge eats the console work); hostile gate 6 u: death t9463. The merged 15/10 stays.
+
+---
+## Report (done, 2026-11-15T08:56Z)
+
