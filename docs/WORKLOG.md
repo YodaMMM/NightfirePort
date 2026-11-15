@@ -55,3 +55,16 @@
   the GROUND up-hill lines (eye ~1.8 → y 23.0 at d 59-63); prime suspect the flight's
   START-CEL re-feed [M 0x12f0cc-0x12f0d8] on the steep multi-cel ray. The ignore message's
   next lever refined accordingly (the audit rides a probe-style leg, never a shipped leg).
+
+## level-0d-operative-walk-11 (started 2026-11-15 ~03:22 UTC, branch s/level-0d-operative-walk-11)
+
+- Claimed. Base: origin/master 92ee90c01; merged origin/s/level-0d-operative-walk-10
+  (672082d57, not on master) — one conflict, the walk_arrival_to_the_c5_door_real_damage
+  ignore message, resolved as a union: master's ledger (rounds to update 7, death t20383
+  on the plate leg) + walk-10's round-10 findings appended verbatim (the d-60 far-target
+  MISS law, the NF_0D_AUDIT addendum — the ladder-top torso bullets LAND, the miss is
+  specific to the GROUND up-hill lines; suspects the flight's per-tick START-CEL re-feed
+  [M Bullet_update 0x12f0cc-0x12f0d8] vs the port's boxes-only refine missing the
+  origin-centred two-sphere capsule [M NDrone2_Collision 0x140e90:91-121]). Next lever per
+  the walk-10 report + the merged ignore message: the trench-a bullet audit (probe-style,
+  NF_0D_AUDIT=1, read-only), then the capsule fix if confirmed.
