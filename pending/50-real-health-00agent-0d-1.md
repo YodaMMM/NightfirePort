@@ -16,3 +16,5 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 **Branch:** `s/real-health-00agent-0d-1`.
 
 Main 11-15: the test ignore text (master d73cf126a) carries the measured ledger. Short form: the Operative deck crouch at difficulty 3 reaches the gantry ride; nearest clear-line ride fire (20-60 u) gets Bond off it on ~20 health; the 10 m slot drop then costs 30 at 00 Agent (Plr_DMod 1.2, the fall skips armour) and kills him. Probe patch: audits-side, NF_0DOP/NF_0DRIDE/NF_0DPAUSE env switches. Next: more health into the slot drop.
+
+Main 11-15 (2): 48+48 random combinations of the Operative levers (yard armour, roof act, deck crouch, ride fire) + nearest clear-line ride fire (20-60 u) + a tick pause: best death t20142 just after the ride (the slot drop). A bounded clear before boarding from the pulley arm (radius 30-60) kills #0 but costs the gantry park (the claw then misses the pulley #370); from the E-plate spot it kills #1 (#0 survives) and later legs wedge (the stick turn to yaw -1.5708 assert). The yard is a 0x1e gallery at 00 Agent (#32 west roof (151.4, 22.7, -238.3), #20 (196.9, 14.0, -264.1), -46 a round at 50-68 u).
