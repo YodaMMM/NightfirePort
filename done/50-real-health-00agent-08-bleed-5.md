@@ -55,3 +55,103 @@ Main 11-14: the fight-time world hits are NOT the fusebox (fusebox_hurts 0 throu
 ---
 ## Report (done, 2026-11-15T02:02Z)
 
+
+---
+## Report from the worker (done, 2026-11-15T02:02Z)
+
+# real-health-00agent-08-bleed-5 — the 00 Agent whole-mission walk: the ride pickups, the drain class, one gate's relaxation
+
+Branch `s/real-health-00agent-08-bleed-5` from origin/master cb29af974 (the bleed-4 branch is
+not on the remote; its walk code IS master — the worker reports were dropped in 88051e74f, so
+the ignore message on `walk_the_whole_mission_on_real_input_real_damage_00agent` was the
+ledger). The walk stays RED: death t34720 in the Hind fight, unchanged from update 3. What
+this session shipped is the measurement that closes two of the three ledger levers and one
+d3-only gate change that cannot regress the sisters.
+
+## Done
+
+1. **The ride's rocket-ammo pickups: measured, and the pool-growth lever is closed by the
+   game's own data.** A full NF_PICKUPLOG run of the walk (run-bleed5-1) traced every take
+   test of the ride's three pickups (the kind-0 launcher and two kind-1 boxes parented to the
+   carriage, 0x0600004C streams 37-39 [D]):
+   - the passive-collection path WORKS in the port: the pickups follow the carriage (the
+     `script_pickup_follow` link), the touch test passes with los true in the ride's final
+     ticks (dist 1.42-1.48 vs r 1.53), and Bond took the mouth box the moment his carry had
+     room — tick 24599, `Some(Ammo { 44, 4 })`, carry 0 → 4 at the gondola mouth.
+   - every take after that refuses at the **ammo cap**: `ammo_data` type 0xe (the rocket
+     pool) caps carried at **4** and the launcher's clip at clip_size 4 [D ammo_data +0x02
+     and weapon_data record 0x2c, both from the ACTION.ELF static initialiser; probed by a
+     temporary test this session]. The remaining box and the ride's launcher print
+     `[take] → None` every tick from 24600 to the death.
+   - so the pool entering the Hind fight is **hard-capped at 8 rockets** (clip 4 + carried
+     4) — the same 8 the bleed-4 roll carried. "The pool must grow" is not reachable without
+     breaking the game's own inventory rules, which the task forbids. The ledger lever (1)'s
+     pickup half is exhausted; this is now recorded in the ignore message.
+
+2. **The "hurt volume" at the terminal does not exist.** The −2.0/−1.69 world rows the
+   ledger's lever (1)/(3) chased are the **Hind's cannon rounds**: their owner index sits
+   past the drone list (the copter is not in `drones.list`), which the walker's zap class
+   reports as "world". The level's only 0xE4 hurt placements are the kill-floor quads #42-44
+   (type 6, 1000, who 0x18 [D — the placement probe run-bleed5-1, matching
+   docs/systems/hurt-volumes.md]). This re-dates the whole "volume law" reading in the
+   bleed-4 ledger: the −2.0/6-tick rows on the anchor, the east band and the south band were
+   cannon rounds reaching through the west doorway's z band (−178.25..−180.6), not a volume.
+
+3. **The ledger's lever (2), "one gate's relaxation": TAKEN — the d3 launch distance gate
+   16 → 10.** `walkreal_07000008_live.rs`'s `ready` condition now fires the rocket at the
+   sisters' own l ≥ 10 (the blast rule: radius 8 ≈100, falloff past k=8 [L ee_start_05.bin
+   @0x2bf150 + 0x2C·0x10C; M Explode_Propagate 0x17c518 case 0]) with every other d3
+   self-blast gate kept (the 3 u slit, both 12 u corridors, the eye sight, the machine lane,
+   the flight-time forecast). The sisters' expression is unchanged — the old code returned
+   10.0 below difficulty 3 — so their timelines stay byte-exact.
+   MEASURED (run-bleed5-2, full real run from the load): rocket 1 launched at fight t4907 and
+   LANDED 100.7 (the Hind 598). The death stayed t34720: the cannon riddled the anchor (46
+   hits for 52.0) and the second launch never opened — with distance no longer binding, the
+   lane/sight gates bind (the machine's circuit dist 20-42, its lintel-clear low passes rare).
+   No regression: the death tick, position and hit ledger match the master roll (t34720).
+
+4. **The north-strip anchor variant: TAKEN, measured WORSE, NOT shipped.** The ledger's
+   lever (3) asked for a spot off the doorway's lane: anchor [112.3, −177.6] (the strip
+   between the wall band z −176.6 and the doorway edge −178.25). MEASURED (run-bleed5-3):
+   the cannon stopped (no −2.0 rows) but the machine's missiles chase the strip —
+   −5.94/−13.16/−15.00/−15.00 blast rows — death **t31593**, earlier than the anchor's
+   t34720. Reverted; the measured rationale stays as a comment on the ANCHOR line.
+
+## How it was verified
+
+- **walkreal_07000008_live whole (all 6 tests, --test-threads=1 --include-ignored): 5 passed,
+  1 failed** — `walk_the_whole_mission_on_real_input` (d1), `..._real_damage` (d1 real-damage),
+  `..._real_damage_agent` (d2), `the_ally_fights_only_the_guards_through_the_noise_path`,
+  `the_ally_never_shoots_bond_on_the_walk` all green (the d3-only changes are byte-exact for
+  them by construction and by run); only the task's target
+  `walk_the_whole_mission_on_real_input_real_damage_00agent` is red at its known t34720 death.
+- **interactables_07000008_live: 15 passed, 0 failed.**
+- No code under `crates/*/src/` changed this session (test file only), so no other walk or
+  replay binary can shift; the full suite did not fit this sandbox's 9.9 GB disk (1111
+  nf-view test binaries; the build filled the disk at ~60% and was restarted clean twice —
+  see "What's left"). The two binaries the task names were run whole.
+- Full suite (`tools/test/suite.py`): **NOT RUN** — the sandbox background-executes nothing
+  (detached processes die between tool calls) and the 4-crate release build with all test
+  binaries exceeded the disk. The per-binary runs above are the recorded evidence; the next
+  session should run the fast suite on the merged tree before its push.
+
+## What's left (the next lever, also in the ignore message)
+
+The cannon class: the rounds come down through the west doorway (x 103 → 111, y 16 → 14 [L
+the round log]) and the doorway's z band covers the anchor. The dodge already holds fire
+while strafing; the next lever biases the d3 dodge to step OUT of the doorway band on a
+cannon zap (the anchor walk stays for drift) while the anchor remains the firing spot, and
+measures whether the machine's cannon cadence pauses while its missiles fly.
+
+**Live checks for the main agent** (PCSX2, fresh boot of 07000008, 00 Agent):
+1. Pin the cannon rounds' impact band inside the cabin at the anchor: trace the machine's
+   gun rounds' hit positions while Bond stands at (112.5, 13.5, −179.4) crouched — expect
+   the −2.0 rows to land inside the doorway's z band (−178.25..−180.6) east of the doorway.
+2. Whether the machine's cannon cadence pauses while a missile volley flies (the port's
+   burst cadence kept the dodge held through the bleed-4 drain; the game may interleave
+   differently).
+
+## Usage
+
+not visible to me — this session's environment shows no token, credit, cost or context-window
+figures (no such display exists in the sandbox), so there are no numbers to copy.
