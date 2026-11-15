@@ -1124,7 +1124,7 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// wrap + this un-ignore are one-liners; (2) a d2/d3-gated fight-quiet approach so the
 /// displacement never reaches the pocket; (3) the stairwell AIM-pair stands.
 #[test]
-#[ignore = "00 Agent (11-15, landing-4): the east lane detour — a d3+round_dodge-only lenient walk_to (-44.5, 0.9, 34.0) plus an aimed pass on the lane's sighted guard — cuts the east-walk bill 50.0 -> ~26: the escape touch is reached at 26.6 (was 2.5) and death moves t35208 -> t41509 at (-15.85, 1.13, -22.71) past door #121 on the delta approach (the wake legs' fights stay clean; #40 (0x50000b2, 0x1a) -7.00 at d 9.1 then #41 (0x500008c, 0x1a) -2.06 on 2.1 end it). The lane is measured: two-leg d >= 4.5 from the pocket (death t32831, the z 35 stand at x -49 chewed by #29/#62 0x5000093 at d 5.8-7.7) and the z 33.5 endpoint (death t37624, #29's explosive -10.0 at d 2.6, #22's -25.0 last) are both WORSE — closed. A position-keyed posted-guard scan on the wake legs measured DEAD: the 0x1a guards converge off their posts (#24 (-28.8, 16.4) -> (-29.9, 21.9) between runs), the pass engaged the wrong guard (#36, 300 ticks for -2), and a fight displacement pushed Bond into the route's live wire (-13.28/-9.79 world damage, death t40215). NEXT LEVER: the delta approach's 0x1a posts (#40 (-6.8, -23.3), #41 (-5.2, -23.3), ~9-11 u past door #121 [L t41426/41509]) answered by a VISIBILITY-keyed scan from (-15.5, 0.9, -22.6) (the landing-4 stop B — never measured: its south-bend sibling died first) with the fights capped, then the Rook fight and the exit legs at the resulting health. Update 2: with the round dodge the second hold is dropped - death t31711 -> t35208 at (-13.09, 1.12, -23.10) past the escape touch on the Rook's-wake legs. Update 1: incoming 0x14 rounds dodged when no hostile is within 5 u (walker_b2 round_dodge) - the Kiko hold ends at 52.5 (was 27.9), death t29197 -> t31711 at (-45.68, 1.07, 26.88) by the second hold. Earlier: 00 Agent (11-15 round, this branch): the shipped stream re-verified byte-identical on master 272ec32c8 - death t29197 at (-30.20,1.16,24.28) to #30 (0x5000087, 0x14) with 2.9 health, the touch reached at 2.9 (Kiko hold end 27.9, #20 15.0 in 3 x5.0 at node 1 d 2.4, #23 2.5, #22 2.5, #31 5.0 in 2 at d 4.6). NEW EVIDENCE this round [L NF_DMG_TRACE runs]: (a) the 0x5000093 skin carries the explosive 0x14 - from the north lane (z 36.25) #29's single round landed -27.91 at d 6.1 on the whole 27.9 (frame 26998, shooter (-49.1,30.2)): the z 36-37 band is #29's kill line and #29 is the Kiko-side threat to answer, not #20; (b) the north crossing (z 36.2/34.8) DID avoid #20's 15.0 point-blank entirely (0 #20 hits) - the node-1 pass is beatable outside the 3.0 u auto-hit band [M DroneWeap_DoBulletAccuracy 0x179740:113-115] but only at the cost of #29's line; (c) the west-face 10.0 (#32 0x5000093, frames 25307/25311 at (-56.5,40.1) d 7.8) lands DURING the cascade/door wait - nobody is visible at the cascade break (t24886), and a door-wait stand (even switch_to_gun) is a killing field (t25329/t25344 deaths at the band); (d) the 093-first hold stands reproduce the 11-14 t26493 death inside the hold; (e) the second-hold stands (3 x 300, radius 15) re-roll the pocket badly (t28200, #62/#29 converge on the touch). Next lever: the geometry lines are MEASURED DEAD - the north lane (z 36.2) dies to #29's kill line and the middle band (z 34.4, run6) dies too: #20 TRACKS east (he moved to (-50.5,32.2) on the re-roll) and hit 3/3 rounds at 3.6 u (Agent accuracy at 3.6 u is effectively point-blank), and #29's explosive connected IN FLIGHT (t26998) even after Bond's return fire killed him at 26891 — the corridor cannot be crossed by line choice alone. What remains: the frag lob (the 0x34 frag is radius 8 / damage 100 [M 0x12cd98/0x12c5a0 records], #20 hp 10 sits 5.3-5.5 u from the hold spot, the fuse is 210 ticks and the thrower must EXIT the 8 u band - the shipped route east passes 2.4 u from the pocket inside the fuse window, so the lob needs a west/doorway retreat; FIRST check the port implements the player's grenade throw at all - only the drone throw path was confirmed in the grep) and the west-face 10.0 (#32's frames 25307/25311 land inside the door-wait window where every stand placement died - a cover answer, not a stand). 11-13 update: the switch band is passed - from node 626 Bond answers the band guards before stepping in (37.9 health left), the door opens and then the Kiko corridor squad is answered (exposed-only, nearest first) and the corridor end is held 600 ticks (short stands + a grenade side-step); the legs kill six of the squad and a second 300-tick hold at node 4 (-44.2, 27.6) takes the squad's tail; the escape touch is reached and the walk dies at t29197 at (-30.20, 1.16, 24.28) on the Rook's-wake legs to #30 (skin 0x5000087, 0x14) with 2.9 health. Earlier: 00 Agent (11-13 update 3): the fusebox burns now cut ONLY the group-0 cable (the t21466 death was the walk's own wrong cut: the centre aim drifted onto the adjacent group-1 cable, whose channel 0x71 smashes generator #388 - a 500/r10 blast 2.4 u from the stance); both fuseboxes cut clean, the E-use switch band reached; dies at t23511 at (-59.69, 0.73, 38.98) on the corridor east to the door - #32 (skin 0x5000093) 32.9 in 4 at d 7.6, 9 fights. Update 2: the hostile clear picks NEAREST first at d3 real health (the list-order pick spent 900 ticks on #3 at 18.2 u while #9 shot Bond from 1.2 u) - the corridor, leg 2 and the generator room now pass; the walk dies at t21466 at the fusebox #383 stance (-88.35, -1.10, 31.38): the fusebox burn's blast lands 37.91 in one hit on the remaining health (34 hits, 7 fights before it). Update 1: the landing west drop is PASSED - a d3-only guard (#6, 28 hp, 0x14) slept in the drop band at (32.2, 1.8, 33.2) and turned the drop aim into the overhang (wedge at (33.70, 1.19, 35.21)); the pistol comes out (Bond held the vent-lid item) and #6 dies from the landing with no hits, the drop then aims z 33.4 past his body. The walk now dies at t7051 in the corridor lane north (node 57, the door (27.8, 1.2, 30.0)) to the corridor crowd (47 hits, 0 return-fire fights: #9 65.0 in 13 at d 1.2, #8 17.5, #7 12.5 at d 9.9, #10 5.0; all 0x14). Earlier ledger: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
+#[ignore = "00 Agent (11-15, landing-5): the delta approach's node-21 visibility scan (gun-ray keyed [M the lane_fights STRICT gun-ray aim law], road-blocker-first — the guard's perpendicular distance from the remaining route line — bounded 300 a fight) walked the shipped stream BYTE-EXACT to node 21 (the #39 fight clean at t41384, every node position identical [L the run-13 trace vs the shipped run]) and saved the posts' first rounds for the first time (#40's -7.00 t41426 and #41's -2.06 t41509 both suppressed — death moved t41509 -> t41619 to the strays' convergence fire inside the fight window: #51 -3.50 at t41527, #55 -3.50/-2.06 at t41615/19). Measured closed this round [L seven NF_DMG_TRACE runs on 8999eb99a]: (a) the pre-node-21 scans are NET NEGATIVE — the fights' noise re-rolls the later guards' convergence (the every-node variant redistributed the same bill: #39, clean on the shipped stream, converged east to d 2.0 for -16.06, death t41864; the node-2 scan's #36 fight lost to his cover — killed false at hp 10, ZERO rounds in 300 ticks at 5.6 u — and his convergence ended the walk at t40715; the drop-scoop + best-gun switch pulled Bond 13 u west to a stale east-walk drop, death (-42.29, 29.33) t42079, and the one-round 0x1 switch dried the fights one tap later); (b) the LOOSE aim gate lands zero rounds past ~5 u (the 0.3-wide torso box — run 5's -23.06 death inside a zero-damage fight); (c) Drone.velocity is physics-only (0.000 for converged movers — no mover signal); (d) the walk enters the wake legs holding the grenade launcher 0x14 (contact 2.5, a launcher's slow cycle — the measured 300-tick fight windows) with the P2K dry (c0+0) and the 60-dmg crossbow empty [L the run-9 loadout dump]. THE WALL: node 21 is crossed at 9.1 health and ANY 200+ tick stand in the delta approach costs >= -9 (the converged cluster's DPS — the strays #51/#55 fire inside every fight window, the posts' rounds suppressed but their cluster-mates' land), so the wake touch stays unreachable on this health; the end leg and the Rook fight at real health remain unexplored. NEXT LEVERS: (1) ~16 more health before node 21 WITHOUT the noise re-roll — the east-walk lanes and the armours are measured closed (landing-4), so this is the hard one; (2) the player's grenade throw (unimplemented — landing-3's negative precondition; the 0x34 frag c1+7 sits in the loadout): implement the throw the game's own way (the anim-state 0x49 release feeding DroneWeap_ThrowGrenade 0x179558 [M drone.rs's drone path]) and lob the delta approach's cluster from outside the fight windows (radius 8 / damage 100 [M 0x12cd98/0x12c5a0 records]); (3) the node-21 scan's cluster answer: a FIRST-STRIKE order on the strays #51/#55 (gun-visible at 6.2/11.5 u, hp 10 each) empties the window's shooters before the posts' fight runs — run 13 fought #41 first (his round saved) but the strays kept the window live. landing-4: the east lane detour — a d3+round_dodge-only lenient walk_to (-44.5, 0.9, 34.0) plus an aimed pass on the lane's sighted guard — cuts the east-walk bill 50.0 -> ~26: the escape touch is reached at 26.6 (was 2.5) and death moves t35208 -> t41509 at (-15.85, 1.13, -22.71) past door #121 on the delta approach (the wake legs' fights stay clean; #40 (0x50000b2, 0x1a) -7.00 at d 9.1 then #41 (0x500008c, 0x1a) -2.06 on 2.1 end it). The lane is measured: two-leg d >= 4.5 from the pocket (death t32831, the z 35 stand at x -49 chewed by #29/#62 0x5000093 at d 5.8-7.7) and the z 33.5 endpoint (death t37624, #29's explosive -10.0 at d 2.6, #22's -25.0 last) are both WORSE — closed. A position-keyed posted-guard scan on the wake legs measured DEAD: the 0x1a guards converge off their posts (#24 (-28.8, 16.4) -> (-29.9, 21.9) between runs), the pass engaged the wrong guard (#36, 300 ticks for -2), and a fight displacement pushed Bond into the route's live wire (-13.28/-9.79 world damage, death t40215). NEXT LEVER: the delta approach's 0x1a posts (#40 (-6.8, -23.3), #41 (-5.2, -23.3), ~9-11 u past door #121 [L t41426/41509]) answered by a VISIBILITY-keyed scan from (-15.5, 0.9, -22.6) (the landing-4 stop B — never measured: its south-bend sibling died first) with the fights capped, then the Rook fight and the exit legs at the resulting health. Update 2: with the round dodge the second hold is dropped - death t31711 -> t35208 at (-13.09, 1.12, -23.10) past the escape touch on the Rook's-wake legs. Update 1: incoming 0x14 rounds dodged when no hostile is within 5 u (walker_b2 round_dodge) - the Kiko hold ends at 52.5 (was 27.9), death t29197 -> t31711 at (-45.68, 1.07, 26.88) by the second hold. Earlier: 00 Agent (11-15 round, this branch): the shipped stream re-verified byte-identical on master 272ec32c8 - death t29197 at (-30.20,1.16,24.28) to #30 (0x5000087, 0x14) with 2.9 health, the touch reached at 2.9 (Kiko hold end 27.9, #20 15.0 in 3 x5.0 at node 1 d 2.4, #23 2.5, #22 2.5, #31 5.0 in 2 at d 4.6). NEW EVIDENCE this round [L NF_DMG_TRACE runs]: (a) the 0x5000093 skin carries the explosive 0x14 - from the north lane (z 36.25) #29's single round landed -27.91 at d 6.1 on the whole 27.9 (frame 26998, shooter (-49.1,30.2)): the z 36-37 band is #29's kill line and #29 is the Kiko-side threat to answer, not #20; (b) the north crossing (z 36.2/34.8) DID avoid #20's 15.0 point-blank entirely (0 #20 hits) - the node-1 pass is beatable outside the 3.0 u auto-hit band [M DroneWeap_DoBulletAccuracy 0x179740:113-115] but only at the cost of #29's line; (c) the west-face 10.0 (#32 0x5000093, frames 25307/25311 at (-56.5,40.1) d 7.8) lands DURING the cascade/door wait - nobody is visible at the cascade break (t24886), and a door-wait stand (even switch_to_gun) is a killing field (t25329/t25344 deaths at the band); (d) the 093-first hold stands reproduce the 11-14 t26493 death inside the hold; (e) the second-hold stands (3 x 300, radius 15) re-roll the pocket badly (t28200, #62/#29 converge on the touch). Next lever: the geometry lines are MEASURED DEAD - the north lane (z 36.2) dies to #29's kill line and the middle band (z 34.4, run6) dies too: #20 TRACKS east (he moved to (-50.5,32.2) on the re-roll) and hit 3/3 rounds at 3.6 u (Agent accuracy at 3.6 u is effectively point-blank), and #29's explosive connected IN FLIGHT (t26998) even after Bond's return fire killed him at 26891 — the corridor cannot be crossed by line choice alone. What remains: the frag lob (the 0x34 frag is radius 8 / damage 100 [M 0x12cd98/0x12c5a0 records], #20 hp 10 sits 5.3-5.5 u from the hold spot, the fuse is 210 ticks and the thrower must EXIT the 8 u band - the shipped route east passes 2.4 u from the pocket inside the fuse window, so the lob needs a west/doorway retreat; FIRST check the port implements the player's grenade throw at all - only the drone throw path was confirmed in the grep) and the west-face 10.0 (#32's frames 25307/25311 land inside the door-wait window where every stand placement died - a cover answer, not a stand). 11-13 update: the switch band is passed - from node 626 Bond answers the band guards before stepping in (37.9 health left), the door opens and then the Kiko corridor squad is answered (exposed-only, nearest first) and the corridor end is held 600 ticks (short stands + a grenade side-step); the legs kill six of the squad and a second 300-tick hold at node 4 (-44.2, 27.6) takes the squad's tail; the escape touch is reached and the walk dies at t29197 at (-30.20, 1.16, 24.28) on the Rook's-wake legs to #30 (skin 0x5000087, 0x14) with 2.9 health. Earlier: 00 Agent (11-13 update 3): the fusebox burns now cut ONLY the group-0 cable (the t21466 death was the walk's own wrong cut: the centre aim drifted onto the adjacent group-1 cable, whose channel 0x71 smashes generator #388 - a 500/r10 blast 2.4 u from the stance); both fuseboxes cut clean, the E-use switch band reached; dies at t23511 at (-59.69, 0.73, 38.98) on the corridor east to the door - #32 (skin 0x5000093) 32.9 in 4 at d 7.6, 9 fights. Update 2: the hostile clear picks NEAREST first at d3 real health (the list-order pick spent 900 ticks on #3 at 18.2 u while #9 shot Bond from 1.2 u) - the corridor, leg 2 and the generator room now pass; the walk dies at t21466 at the fusebox #383 stance (-88.35, -1.10, 31.38): the fusebox burn's blast lands 37.91 in one hit on the remaining health (34 hits, 7 fights before it). Update 1: the landing west drop is PASSED - a d3-only guard (#6, 28 hp, 0x14) slept in the drop band at (32.2, 1.8, 33.2) and turned the drop aim into the overhang (wedge at (33.70, 1.19, 35.21)); the pistol comes out (Bond held the vent-lid item) and #6 dies from the landing with no hits, the drop then aims z 33.4 past his body. The walk now dies at t7051 in the corridor lane north (node 57, the door (27.8, 1.2, 30.0)) to the corridor crowd (47 hits, 0 return-fire fights: #9 65.0 in 13 at d 1.2, #8 17.5, #7 12.5 at d 9.9, #10 5.0; all 0x14). Earlier ledger: the walk wedges (not a death) — the '1.72 landing' resupply leg floats Bond 0.41 over the floor at (33.84, 0.82, 30.95) at tick 26340 (40 fights, 22 hits for 50.0 by then) and the leg cap panics; levers: a d3-gated re-ground before the landing resupply, a direct walk_to the drop's cell, the stairwell AIM-pair stands"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
@@ -1310,7 +1310,83 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     }
 
     // Leg 5: east to Rook's wake touch #476 — walked; SEQ_AND #475 wakes him.
-    w.follow_nav_route([20.3, 0.9, -23.5], "east to Rook's wake touch #476");
+    //
+    // 00 Agent real health (real-health-00agent-14-landing-5): the SAME shipped route walked
+    // node-by-node — ONE nav_route read from `cur_pos()` (follow_nav_route's own computation)
+    // and the same walk_to r(1.3) per node — with the delta approach's VISIBILITY-keyed scans
+    // inserted after nodes 1, 2 and 21. The shipped stream's fights only start AFTER the hit
+    // (the return fire), and the measured wake-legs tax is exactly those first rounds [L the
+    // NF_DMG_TRACE run on master 8999eb99a]: #43 -3.50 at d 13.3 (t39481, fired during node 2's
+    // leg — answered before the round only from node 1), #24 -14.0 with the -7.00 at d 1.0 ON
+    // the path (t40127-277; the walker's own node-2 fight took him 10 -> 4 but the node arrival
+    // cut it — the scan finishes him before his first round), #40 -7.00 at d 9.1 (t41426) and
+    // #41 -2.06 at d 10.6 (t41509 — the death, 83 ticks after node 21's door E-open, before any
+    // fight could start). The scans are CAPPED (300 ticks a fight): no 900-tick repositioning
+    // strafe ever fires inside the cap and no hostile stands within the 4.0 back_off band at
+    // the scan spots, so the fights cannot shove Bond off the route (the landing-4 scan death
+    // — the live wire at (-32.2, 14.6) — came from an UNCAPPED fight's repositioning). Other
+    // difficulties keep the shipped follow_nav_route byte-exact.
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() && w.round_dodge {
+        // One-run diagnostic (landing-5): what Bond carries into the wake legs.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let owned: Vec<String> = (0..0x50usize)
+                .filter(|&w| sim.drones.inventory.owned.get(w).copied().unwrap_or(false))
+                .map(|w| {
+                    let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, w);
+                    let clip = sim.drones.inventory.clip.get(slot).copied().unwrap_or(0);
+                    let ammo = sim.weapons.ammo_type(w);
+                    let spare = sim.drones.inventory.carried.get(ammo).copied().unwrap_or(0);
+                    format!("{w:#x}(c{clip}+{spare} dmg{:.1})", sim.weapons.bullet_contact_damage(w as u16))
+                })
+                .collect();
+            eprintln!("[014] wake-legs loadout: in-hand {:#x} clip {} spare {} dmg {:.1}; owned {:?}",
+                sim.gun.weapon, sim.gun.clip, sim.gun.spare,
+                sim.weapons.bullet_contact_damage(sim.gun.weapon as u16), owned);
+        }
+        let wake_pts = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            nav_route(sim, w.cur_pos(), [20.3, 0.9, -23.5])
+        };
+        match wake_pts {
+            Some(pts) => {
+                for (k, p) in pts.iter().enumerate() {
+                    let _ = w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3),
+                        &format!("east to Rook's wake touch #476 node {k}"));
+                    // Two stops, the measured killers' answer points: node 2 (#24's post is ON
+                    // the route — the shipped first round -7.00 lands at d 1.0 (t40127) with the
+                    // walk past node 4; answered from node 2 at 4.2 u BEFORE the round) and
+                    // node 21 (the delta approach's posts #40/#41 — their first rounds land 36 /
+                    // 119 ticks after node 21's door E-open (t41426/t41509 — the shipped death),
+                    // before any return-fire fight could start). The earlier nodes stay
+                    // untouched: the every-node scan variant measured the SAME -26.56 bill
+                    // redistributed (#39, clean on the shipped stream, converged east off his
+                    // post and killed the walk) — the fights' windows draw the convergence.
+                    // node 21 only: the delta approach's posts. The pre-node-21 scans measured
+                    // NET NEGATIVE (runs 4-11: the fights' noise re-rolls the later guards'
+                    // convergence — #39, clean on the shipped stream, converged east and killed
+                    // the walk; the node-2 scan's #36 fight lost to his cover and drew his
+                    // convergence kill; the scoop/switch pulled Bond 13 u off-route) — the
+                    // shipped stream's own fights carry the early legs and stay byte-exact.
+                    if k == 21 { delta_approach_scan(&mut w, k); }
+                }
+            }
+            None => {
+                // follow_nav_route's own no-route fallback (the direct chain), scan stops kept
+                // out of it — the fallback never fired on the measured runs.
+                let sim = w.scene.sim.as_ref().unwrap();
+                let mut v = walker::leg(sim, w.cur_pos(), [20.3, 0.9, -23.5]);
+                v.pop();
+                for (k, p) in v.iter().enumerate() {
+                    let _ = w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3),
+                        &format!("east to Rook's wake touch #476 node {k}"));
+                }
+            }
+        }
+        w.walk_to(Wp::new(20.3, 0.9, -23.5).r(1.3), "east to Rook's wake touch #476 end");
+    } else {
+        w.follow_nav_route([20.3, 0.9, -23.5], "east to Rook's wake touch #476");
+    }
     for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
     let rook_i = w.scene.sim.as_ref().unwrap().drones.list.iter()
         .position(|d| d.skin == 0x0500_0066).expect("Rook (skin 0x05000066) exists [D]");
@@ -2415,6 +2491,79 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
         // level's destructible props pre-register 0x0600_0052 SP players at load, so the list
         // always contains one — the deletion observables above are the 0x12cd98 rule here.)
         assert!(sim.drones.tripbomb_beams.is_empty(), "the beam deleted with it (BU+0x38, +0x70 & 0x80000) [M]");
+    }
+}
+
+/// The delta approach's visibility-keyed scan (real-health-00agent-14-landing-5): answer the
+/// wake route's 0x1a posts BEFORE their first round — the shipped stream's fights only start on
+/// the hit (the return fire), and the measured tax IS the first rounds (#43 -3.50, #24 -14.0,
+/// #40 -7.00, #41 -2.06 — every one a 0x1a carrier [L the NF_DMG_TRACE run]). The pick is the
+/// nearest VISIBLE alive team-1 guard within 20 u (|dy| < 2.0), 0x1a carriers FIRST (the
+/// measured killers — a nearer non-0x1a guard must not burn the fights' clock while a post
+/// stands armed), each fight `shoot_bounded`-capped at 300 ticks: the cap keeps every
+/// repositioning strafe (900 ticks without damage) out of the fight, so the scan cannot shove
+/// Bond off the route; a guard the fights cannot see is left to the route's own fights (the
+/// shipped stream's kills after each guard's first round ran clean). Up to four fights.
+fn delta_approach_scan(w: &mut Walker, node: usize) {
+    let label = format!("the delta approach scan (node {node})");
+    let candidates = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        (0..sim.drones.list.len()).filter_map(|i| { let d = &sim.drones.list[i];
+            if d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 {
+                let dd = walker::dxz(d.pos, bp);
+                if dd < 20.0 && (d.pos[1] - bp[1]).abs() < 2.0 {
+                    return Some((i, d.skin, d.weapon, dd,
+                        walker::DamageLog::visible(sim, i), walker::DamageLog::visible_gun_rays(sim, i)));
+                }
+            }
+            None })
+            .collect::<Vec<_>>()
+    };
+    if !candidates.is_empty() {
+        eprintln!("[014] {label}: candidates {:?}",
+            candidates.iter().map(|(i, s, w, d, vis, gun)| format!("#{i} {s:#x} 0x{w:x} d{d:.1} eye{vis} gun{gun}")).collect::<Vec<_>>());
+    }
+    for _ in 0..4 {
+        let pick = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 20.0 && (d.pos[1] - bp[1]).abs() < 2.0 })
+                // GUN-RAY visibility (the fights' own law [M the lane_fights STRICT gun-ray
+                // aim — the 07000013 chain's passing rule]): the eye-ray sees guards whose
+                // muzzle line is blocked, and a fight on such a guard lands ZERO rounds while
+                // burning the 300-tick window (runs 5-7: #36 eye-visible gun-blocked at 5.6 u,
+                // killed false, health 10 unchanged, his convergence killed the walk after).
+                .filter(|&di| walker::DamageLog::visible_gun_rays(sim, di))
+                .min_by_key(|&di| {
+                    let d = &sim.drones.list[di];
+                    // 0x1a carriers first (the measured killers); then the ROAD-BLOCKER rank —
+                    // the guard's perpendicular distance from the REMAINING route line to the
+                    // wake touch: a player answers whoever stands on the ground he must cross
+                    // before the strays off the line (run 12: the hp-10-first order spent the
+                    // scan's clock on the silent strays #51/#55 while the posts #40/#41 shot
+                    // the walk apart: -7.00 at t41426, the death -2.06 at t41533); then the
+                    // weaker post dies inside one capped fight; then the nearer.
+                    let (ax, az) = (20.3f32 - bp[0], -23.5f32 - bp[2]);
+                    let len2 = ax * ax + az * az;
+                    let t = ((d.pos[0] - bp[0]) * ax + (d.pos[2] - bp[2]) * az) / len2.max(1e-6);
+                    let px = bp[0] + t * ax - d.pos[0];
+                    let pz = bp[2] + t * az - d.pos[2];
+                    (if d.weapon == 0x1a { 0u8 } else { 1u8 },
+                        (px * px + pz * pz).to_bits(),
+                        d.health.to_bits(),
+                        walker::dxz(d.pos, bp).to_bits())
+                })
+        };
+        let Some(di) = pick else { break };
+        // The LOOSE aim gate measured DEAD here (landing-5 run 5: the 5.6 u loose fight landed
+        // ZERO rounds — the gate sprays past the 0.3-wide torso box at that range — and the
+        // guard converged into the 3.0 auto-hit band during the failed fight: -23.06). The
+        // bounded tight gate killed every scan fight it won (run 4: #36 at 4.0, #43 at 16.8).
+        let killed = w.shoot_bounded(di, &label, 300);
+        eprintln!("[014] {label}: drone {di} fight over (killed {killed}, health {:.0})",
+            w.scene.sim.as_ref().unwrap().drones.list[di].health);
     }
 }
 

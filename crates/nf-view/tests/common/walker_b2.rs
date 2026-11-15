@@ -234,6 +234,14 @@ impl Walker {
         }
     }
 
+    /// Read the walker's own sampled position — the exact value `follow_nav_route` computes its
+    /// route from (walk_to's last sample, NOT the live bond.pos, which the in-place cut-scene
+    /// waits may have drifted). A caller that walks a shipped route node-by-node with scan stops
+    /// between the nodes must route from THIS, or the recomputed route diverges from the shipped
+    /// one (the landing-4 route-split divergence). Read-only; no behaviour change for any
+    /// existing caller.
+    pub fn cur_pos(&self) -> V3 { self.pos }
+
     /// replay-parity: start recording every stepped tick's input and per-tick state. The
     /// recording rides the ONE step site (`step_recorded`, reached through `tick_inner`), so
     /// every walker-stepped tick — nav legs, fights (the shared damage_log's reload branch
