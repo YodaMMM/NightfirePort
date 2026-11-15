@@ -137,3 +137,5 @@ Token/credit/context figures: `not visible to me` — this environment exposes n
 cost or context-window readout to the worker. What was visible: the task message's clock
 (sandbox expiry ~04:01 UTC; this report written ~03:25 UTC), `git` hashes, test outputs
 and process exit codes. No input/output token counters, no credit balance, no dollar cost.
+
+Main 11-14 (merged 837b0a82b, master): the walk completes on master by the west-hall armour lever (armour 50 in 380 ticks via (-15.89, 16.36), return fire off, bounded push); walkreal_07000001_live 8 passed 0 ignored. The s/real-health-00agent-01-hall-7 branch reached green separately and is superseded (not merged).
