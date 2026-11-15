@@ -175,3 +175,5 @@ cost or context-window readout to the worker. What was visible: the task message
 and process exit codes. No input/output token counters, no credit balance, no dollar cost.
 
 Main 11-14: the armour (-41.3, 1.5, 36.5) from the second hold: Bond leaves the hold at 7.9 and dies on the walk at t27643 - worse. The Kiko hold ends at 27.9, the second hold at 7.9: the holds themselves are the bleed.
+
+Main 11-14: the armour right after the Kiko hold (27.9): the nav runs south then through the door (-42.7, 1.2, 29.9); return fire kills #29/#20/#23/#61/#22/#28 on the way but Bond reaches the door at 5.4 and dies at t27658. Every route to the (-41.3, 36.5) armour crosses the squad. Not shipped.
