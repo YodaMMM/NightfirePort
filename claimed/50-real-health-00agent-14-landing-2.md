@@ -27,3 +27,5 @@ Main 11-14: crouched from the node-618 corridor leg - dies at the door at t25407
 
 ---
 claimed-by: sandbox5 at 2026-11-15T00:06Z
+
+Main 11-14: armour pickups (kind 3) live at the Kiko hold (t26154, Bond 27.9/0 at (-51.3, 37.9)): (-41.3, 1.5, 36.5) at 10.1 u and (-27.3, 0.9, 31.0) at 25 u. A walk_nav to the near one routes SOUTH through the squad (via (-46.6, 28.4)): return fire kills #31/#29/#20/#23/#22 on the way but #61 (0x5000093, 0x14) ends it at t26950 at (-45.0, 28.0) - worse than t29197. Not shipped. The stock room at x -32.2 (z 31-36) holds weapon 0x1a/0x34/0x3a and ammo 0x15/0x1a/0x1b.
