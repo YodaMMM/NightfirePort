@@ -1472,7 +1472,10 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // damage sites), so the window's hit delta is guard fire alone — subtract it.
         let guard_dmg: f32 = sim.drones.player_hits[hits_before_drop..].iter().map(|&(_, _, d)| d).sum();
         let raw = max_fall as f32 - 60.0;
-        let fall_dmg = if raw < 10.0 { 0.0 } else { raw * if difficulty == 1 { 0.4 } else { 0.7 } };
+        // The factor is the level's Plr_DMod (0C-0D 0.4/0.7/1.2 [M ReadTuningVars 0x1d3a80 group
+        // 0x1d40f4]; nf_game::bullet::damage_factor) - the old literal pinned 0.7 for every
+        // difficulty above Operative, wrong at 00 Agent (1.2).
+        let fall_dmg = if raw < 10.0 { 0.0 } else { raw * nf_game::bullet::damage_factor(0x0700_000d, difficulty) };
         let raw_expected = pre_drop_health - fall_dmg - guard_dmg;
         let expected = if raw_expected < 1.0 { 0.0 } else { raw_expected };
         assert!((sim.drones.health.health - expected).abs() < 0.05,
@@ -1724,7 +1727,7 @@ fn walk_arrival_to_the_c5_door_real_damage_agent() {
 
 /// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister.
 #[test]
-#[ignore = "00 Agent (11-15, new): dies at t15731 at (197.95, 10.56, -278.88) - two 0x1e sniper rounds carry the bill: #22 (0x5000090) -46.0 at d 55.2 (t2609) and #36 (0x5000090) -48.0 at d 55.5 (t13857). Next: crouch on the open legs within the snipers' lines, counter-snipe #22/#36 first."]
+#[ignore = "00 Agent (11-15): dies at t15731 at (197.95, 10.56, -278.88) - the 0x1e sniper rounds #22 (0x5000090) -46.0 at d 55.2 (t2609) and #36 -48.0 at d 55.5 (t13857). Measured: the Operative deck crouch (the deck_crouch gate at difficulty 3) takes the walk to the gantry ride (31.2 health in, death on the ride t19456); there the burst-rifle pair #1 (0x500007e, (151, -292)) and #0 (0x500006d, (159, -278)) chip -1.8 a round, and answering the nearest clear-line shooter within 20-60 u from the ride gets Bond off it on ~20 health - the 10 m slot drop then costs 25 x 1.2 = 30 (the fall skips armour [M 0x1902c8:84-104]; the 00 Agent Plr_DMod is 1.2 [M 0x1d3a80 group 0x1d40f4]) and kills him (t20142). The yard armour (Operative) detour dies at t3282; the deck armour (192.8, 10.8, -272.0) is not taken from the E-plate spot and the detour costs a gantry cycle. Next: more health into the slot drop (the ride fight from the boarding, or a lower way into the yard)."]
 fn walk_arrival_to_the_c5_door_real_damage_00agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(3, true));
 }
