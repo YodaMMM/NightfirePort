@@ -633,6 +633,25 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
                 s.drones.scripts.players.iter().position(|p| p.gate as u32 == 30 + kc && p.hit_points > 0.0)
                     .map_or(false, |pi| s.drones.scripts.held_hit_targets(&data_of(s)).iter().any(|x| x.0 == pi))
             };
+            // real-health-00agent-1b-11 (the named lever, measured [L /tmp/base_r11.log on
+            // master e21422e86]): the shelter MUST also exit on the pending console's own
+            // channel. The round-10 baseline: k7's chain RAN GREEN inside the tail work —
+            // holds answered 9246/9290/9335, the channel write landed ~9400 — but the shelter
+            // re-entered at 9335 (the UI between holds) and then ran its FULL 2600-tick cap
+            // (9335..11935) because tail_target_live(7) can NEVER return true once the chain
+            // is done: a completed UI player's hit points are spent (3 holds x 20 damage on a
+            // 20-hp player) and both filters skip it (hit_points > 0.0 here; held_hit_targets
+            // skips deleted/0-hp players [M nis.rs Scripts::held_hit_targets :2159]). The
+            // console channel is the game's own completion signal — the UI script writes it
+            // when its holds are done ([D stream 4 ev0x0d] — the write the walk's latch print
+            // records). The 2535 wasted ticks are the whole tail bill: m1/m2's p0 (started
+            // ~8075 = ch19 1775 + seed 105x60 [D P0_GATE]) read its console branch at
+            // 8075+3300-1 = 11374 with k1/k2 UNLATCHED (the launches sealed mid-shelter,
+            // deploy[0..1] = 3 at the f11935 leg line) and the mission flipped to 2 at ~12376
+            // (the STUCK guard). With the exit, the walk reaches k1 at ~9400 and the k1/k2
+            // chains (~500 each, re-acquisition 256 + holds) fit the 1974 ticks to 11374.
+            // [L /tmp/base_r11.log: k7 holds 9246/9290/9335; the k6 margin print 1309 is the
+            // same shelter lag (its holds answered 6827/7186/7294, write ~7310 — on time).]
             if hard && (k == 1 || k == 2 || k == 7) && !tail_target_live(sim, k) {
                 let f0 = sim.drones.frame;
                 let hp0 = sim.drones.health.health;
@@ -643,7 +662,11 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
                 let mut last_kill_tap = 0u32;
                 while t_shelter < 2600 {
                     let s = w.scene.sim.as_ref().unwrap();
-                    if stuck(s) || tail_target_live(s, k) { break; }
+                    // The channel exit (the 1b-11 lever): the write lands ~10-600 ticks after
+                    // hold#3 (k5 3063->3079, k4 4619->4621 [L base_r11]) — inside this shelter
+                    // when it re-entered between holds, so the exit must be checked HERE, not
+                    // only at the loop head.
+                    if stuck(s) || tail_target_live(s, k) || s.drones.channels.on(k) { break; }
                     let eye_off = s.bond.head()[1] - s.bond.pos[1];
                     let near = live_astronauts(s).iter().copied()
                         .min_by(|&a, &b| dist3(s.drones.list[a].pos, s.bond.pos).total_cmp(&dist3(s.drones.list[b].pos, s.bond.pos)));
@@ -662,13 +685,23 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
                         let ff0 = s.drones.frame;
                         TAIL_DEBUG.store(true, Ordering::Relaxed);
                         fight_opts_y(w, [lx, here[1], lz], Some(i), true,
-                            |s2| stuck(s2) || tail_target_live(s2, k)
+                            |s2| stuck(s2) || tail_target_live(s2, k) || s2.drones.channels.on(k)
                                 || live_astronauts(s2).len() + 2 <= n0, 600, 7.0, true);
                         TAIL_DEBUG.store(false, Ordering::Relaxed);
                         t_shelter += w.scene.sim.as_ref().unwrap().drones.frame - ff0;
                         last_defense = w.scene.sim.as_ref().unwrap().drones.frame + 300;
                         continue;
                     }
+                    // real-health-00agent-1b-11 (lever 2, MEASURED RED, reverted [L
+                    // /tmp/lever2_r11.log]): the dead-window FIGHTS (the round-8 tail shape,
+                    // the chain fence + the 300 cooldown + the read reserve 900) cost DOUBLE
+                    // the kite's hp (72.2 -> 29.8 over the same 7296..9083 window vs the
+                    // kite's 72.2 -> 49.2) and thinned NOTHING net (astro 10 -> 13: the
+                    // ~8075 tail spawn wave landed mid-fight and replaced the kills; death
+                    // 10156 mid-chain vs the lever-1 run's all-8-latched) — the climb to the
+                    // aim heights parks Bond in the wave's sight for fights the spawns
+                    // cancel. The kite stays the dead-window shape (the round-9 law); the
+                    // thinning problem is taken by the waits' kite (kite_wait, lever 3).
                     if t_shelter % 30 == 0 {
                         let p = s.bond.pos;
                         // real-health-00agent-1b-9 (lever 4; levers 2-3 measured RED [L
@@ -1288,6 +1321,28 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
             // The crossing rides the gap between the two panel rows (z ±1.1 [D the panels' glist
             // at z ±4.62]): the panels are solid and whole, so a float that drifts under a row
             // stalls against its underside.
+            // real-health-00agent-1b-11 (lever 4, the tail kill taps): between the screen
+            // windows the tail work is IDLE exposure — the measured k1 approach+chain bled
+            // ~25 hp at the 14-strong wave for ~6 taps of screen work [L lever1_r11:
+            // 49.2 -> 19.5 over 9337..10026]. Every idle tick that connects a LEVEL astronaut
+            // is a kill (weapon 0x33 hits 20.0 = the astronauts' 20 hp [D]) or a stray onto
+            // the screens behind the wave (the measured stray latch: k2's holds resumed by
+            // fight strays at ~1/227 ticks [L round-9 lever5]) — and each kill cuts the
+            // waits' grind ~7%. Gates: hard + the tail consoles only (the mid route stays
+            // byte-identical), the screen window owns the tick (only when `fire` is false AND
+            // either no held target is offered (between holds / the approach) or the console
+            // is latched (the hard stop)), the burst gate 48 keeps the chains' 3x12 reserve
+            // (the measured 36-gate regression [L the burst-gate note above]), the shared
+            // 12-tap cadence, and the connect pair ray_on + view_level (the level-only view).
+            // real-health-00agent-1b-11 (lever 4, MEASURED RED, reverted [L /tmp/lever4c_r11.log,
+            // /tmp/lever4b_r11.log]): the between-holds KILL TAPS (two drafts: the per-tick
+            // re-probe and the persistent 36-tick window) — the first never fired (ray_on reads
+            // the current look, the turn applies after the gate, the aim flipped back to the
+            // screen every non-gate tick: byte-identical to lever3); the persistent window
+            // STEALS the chain's aim — the k7 taps starved, the 14-strong wave ground Bond
+            // down at the exposed station and the walk died 10635 mid-chain (vs the all-8
+            // latched 10026 without it). The chain keeps its aim; the thinning rides the
+            // waits' kite kill arm (lever 3: astro 14 -> 13 in the missile-wait).
             let crossing = station[2].abs() < 0.5 && (station[0] - sim.bond.pos[0]).abs() > 2.0 && sim.bond.pos[2].abs() > 0.4;
             let mut inp = float_to(sim, if crossing { [station[0], station[1], -8.0 * sim.bond.pos[2].signum()] } else { station });
             match aim {
@@ -1693,6 +1748,122 @@ fn hide_and_snipe_opts(w: &mut Walker, rad: f32, done: impl Fn(&nf_view::scene::
     cover.map(|c| c.0)
 }
 
+/// Wait out a phase on the dead-window shelter's KITE (the 00 Agent waits): the same
+/// unconditional 30-tick re-picks with the wave-repulsion term, the 3.5 u melee fights, and the
+/// kill arm (the gated climb + the muzzle-compensated taps) as the tail shelter. Measured
+/// motivation [L /tmp/lever1_r11.log on master e21422e86]: the hide_and_snipe hold bled
+/// 19.5 hp in 338 ticks at the 14-strong wave (0 kills) — its score has no repulsion term and
+/// its `hs <= s + 1.0` hysteresis holds the spot while the chasers converge and ring it (the
+/// round-9 lever-3 static-shelter law); the kite's measured grind is 0.0129 hp/tick at the
+/// same 10-14 shooters (72.2 -> 49.2 over 1787 ticks [L base_r11]) — ~4.5x slower. The
+/// post-console waits are ~1350 (missile reads to 11374) + ~1700 (Drake's gate) ticks — only
+/// the kite rate closes them on the tail's remaining health.
+fn kite_wait(w: &mut Walker, done: impl Fn(&nf_view::scene::Sim) -> bool + Copy, cap: u32) -> Option<[f32; 3]> {
+    let mut spot = w.scene.sim.as_ref().unwrap().bond.pos;
+    let mut kill_cal = ShotCal::default();
+    let mut last_kill_tap = 0u32;
+    let mut last_defense = 0u32;
+    let mut t = 0u32;
+    let f0 = w.scene.sim.as_ref().unwrap().drones.frame;
+    let hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
+    let a0 = live_astronauts(w.scene.sim.as_ref().unwrap()).len();
+    while t < cap {
+        let s = w.scene.sim.as_ref().unwrap();
+        if done(s) { break; }
+        let eye_off = s.bond.head()[1] - s.bond.pos[1];
+        let near = live_astronauts(s).iter().copied()
+            .min_by(|&a, &b| dist3(s.drones.list[a].pos, s.bond.pos).total_cmp(&dist3(s.drones.list[b].pos, s.bond.pos)));
+        if near.map_or(false, |i| dist3(s.drones.list[i].pos, s.bond.pos) < 3.5) {
+            // The melee emergency: the shelter's own shape — the pinned lane, the nearest
+            // prio, aim_close; the close one dies first.
+            let i = near.unwrap();
+            let sp = s.drones.list[i].pos;
+            let here = s.bond.pos;
+            let lx = (here[0] + 0.4 * (sp[0] - here[0])).clamp(here[0] - 5.0, here[0] + 5.0);
+            let mut lz = (here[2] + 0.4 * (sp[2] - here[2])).clamp(here[2] - 5.0, here[2] + 5.0);
+            lz = if lz >= 0.0 { lz.max(1.6) } else { lz.min(-1.6) };
+            let n0 = live_astronauts(s).len();
+            let ff0 = s.drones.frame;
+            TAIL_DEBUG.store(true, Ordering::Relaxed);
+            fight_opts_y(w, [lx, here[1], lz], Some(i), true,
+                |s2| done(s2) || live_astronauts(s2).len() + 2 <= n0, 600, 7.0, true);
+            TAIL_DEBUG.store(false, Ordering::Relaxed);
+            t += w.scene.sim.as_ref().unwrap().drones.frame - ff0;
+            last_defense = w.scene.sim.as_ref().unwrap().drones.frame + 300;
+            continue;
+        }
+        if t % 30 == 0 {
+            let p = s.bond.pos;
+            let mut repulse = 0.0f32;
+            for &ai in live_astronauts(s).iter() {
+                let d = dist3(s.drones.list[ai].pos, p);
+                if d < 40.0 { repulse += (40.0 - d).max(0.0); }
+            }
+            let score = |c: [f32; 3]| {
+                let (sn, cl) = exposure(s, [c[0], c[1] + eye_off, c[2]]);
+                sn as f32 + 4.0 * cl as f32 + 0.05 * repulse
+                    + if !hurt_free(s, c) { 1000.0 } else { 0.0 }
+            };
+            if let Some((c, _)) = best_float_point(s, p, 15.0,
+                &(0..=6).map(|kk| p[1] - 6.0 + kk as f32 * 1.5).collect::<Vec<f32>>(),
+                |c2| Some(score(c2))) {
+                spot = c;
+            }
+        }
+        // The kill arm (the shelter's shape, the chains' pool gate dropped — the chains are
+        // done here): the lowest shooter whose stance fits max_y 7.0 within 25 u, the gated
+        // climb, the muzzle-compensated tap. Each tap is one kill or a stray onto the screens
+        // behind the wave.
+        let mut kill_target: Option<(usize, [f32; 3])> = None;
+        if s.gun.clip > 12 && t.saturating_sub(last_kill_tap) >= 12 {
+            let e = s.bond.head();
+            let mut probe: Option<(f32, usize, [f32; 3])> = None;
+            for &ai in live_astronauts(s).iter() {
+                let d = &s.drones.list[ai];
+                let r = dist3(d.pos, e);
+                if r > 25.0 { continue; }
+                let mz = d.pos[1] + 0.6;
+                if mz - eye_off > 7.5 { continue; }
+                let sk = (mz - e[1]).abs() + r * 0.1;
+                if probe.map_or(true, |b| sk < b.0) { probe = Some((sk, ai, [d.pos[0], mz, d.pos[2]])); }
+            }
+            if let Some((_, ai, a)) = probe { kill_target = Some((ai, a)); }
+        }
+        let mut fly = spot;
+        if let Some((_, a)) = kill_target {
+            let want = (a[1] - eye_off).min(7.0);
+            let cur = exposure(s, [spot[0], spot[1] + eye_off, spot[2]]).0;
+            let lifted = exposure(s, [spot[0], want + eye_off, spot[2]]).0;
+            if lifted <= cur + 1 { fly[1] = want; }
+        }
+        let mut inp = float_to(s, fly);
+        let mut fire = false;
+        if let Some((ai, a)) = kill_target {
+            level_turn(s, &mut inp, kill_cal.eye_target(s, a), 0.08);
+            fire = ray_on(s, ai) && view_level(s) && s.gun.clip >= 12;
+        }
+        if fire {
+            let nb = s.drones.player_bullets.len();
+            w.tick_fire(inp);
+            kill_cal.learn(w.scene.sim.as_ref().unwrap(), nb);
+            last_kill_tap = t;
+        } else { w.tick(inp, false); }
+        t += 1;
+    }
+    {
+        let s = w.scene.sim.as_ref().unwrap();
+        eprintln!("[1b] kite_wait: frames {f0}..{} hp {hp0:.1} -> {:.1} astro {a0} -> {}",
+            s.drones.frame, s.drones.health.health, live_astronauts(s).len());
+    }
+    // The last kite spot doubles as the Drake-fight hold (the waves_first contract: the Drake
+    // fight runs FROM the shelter the wait just proved — the measured waves-wait held hp
+    // 9.5 CONSTANT for 1260 ticks at the west spot (6.1,-10.9,7.7) [L lever4b_r11], while the
+    // None fallback sent the fight to the open hub [32,-1.7,0] — the measured 43-hits-for-100
+    // death spot — and Bond (9.5 hp) died 279 ticks into the fight at 12913).
+    let s = w.scene.sim.as_ref().unwrap();
+    if s.drones.health.health > 0.0 { Some(spot) } else { None }
+}
+
 /// The mission route both full walks play (no position, substate or channel write after the
 /// load): the first wave fought from the hub float → the launch order; the eight screens; the
 /// later waves waited out in cover until the fight gate spawns Drake; Drake fought; the defeat
@@ -1724,7 +1895,16 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
     // The gate-and-cover wait is a no-op at the tree's fast countdown and becomes the pacing
     // fix when the constant moves to REC_FRAME_RATE 0x30d0dc (seed·60 gated ticks — the
     // measured run in docs/reports/sp-panes-new-drawing.md).
-    hide_and_snipe_opts(w, 12.0, |s| { walk_log::leg("missile-wait", s); s.drones.missile_deploy.iter().all(|&d| d == 2) || !alive(s) }, 12000, hard, waves_first && !hard);
+    // real-health-00agent-1b-11 (lever 3): the 00 Agent wait is the KITE (kite_wait) — the
+    // hide_and_snipe hold bled 19.5 hp in 338 ticks at the 14-strong wave (0 kills, the
+    // hysteresis held the spot while the wave ringed it [L /tmp/lever1_r11.log]); the kite's
+    // measured grind at the same wave is ~4.5x slower [L base_r11, the dead window]. The
+    // d1/d2 walks keep the hold (byte-identical routes).
+    if hard {
+        kite_wait(w, |s| { walk_log::leg("missile-wait", s); s.drones.missile_deploy.iter().all(|&d| d == 2) || !alive(s) }, 12000);
+    } else {
+        hide_and_snipe_opts(w, 12.0, |s| { walk_log::leg("missile-wait", s); s.drones.missile_deploy.iter().all(|&d| d == 2) || !alive(s) }, 12000, hard, waves_first && !hard);
+    }
 
     // 3. The disarm branch, the fly-by chain, Drake — the later waves waited out in cover.
     // The Agent tactics (waves_first): Drake is fought FROM the shelter the wave-wait just
@@ -1732,7 +1912,19 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
     // measured Agent deaths: 43/41/39 hits for 100.0 at the hub hold, the wave ring grinding
     // the stand down while Drake was the only target). The prio-aware cover pick in fight_opts
     // keeps a hold that can answer him.
-    let drake_hold = if waves_first { hide_and_snipe(w, 12.0, |s| { walk_log::leg("waves-wait", s); drake_of(s).is_some() || !alive(s) }, 6000, hard) } else { hide_and_snipe(w, 12.0, |s| { walk_log::leg("waves-wait", s); drake_of(s).is_some() || !alive(s) }, 6000, hard); None };
+    // real-health-00agent-1b-11 (lever 3): the hard waves-wait rides kite_wait too — the same
+    // measured hold bleed applies (the wait runs ~1700 ticks to Drake's gate ch 10).
+    let drake_hold = if waves_first {
+        hide_and_snipe(w, 12.0, |s| { walk_log::leg("waves-wait", s); drake_of(s).is_some() || !alive(s) }, 6000, hard)
+    } else if hard {
+        // real-health-00agent-1b-11 (lever 3+5): the hard waves-wait rides kite_wait and its
+        // zero-loss shelter spot IS the Drake-fight hold (the waves_first contract, see
+        // kite_wait's tail note).
+        kite_wait(w, |s| { walk_log::leg("waves-wait", s); drake_of(s).is_some() || !alive(s) }, 6000)
+    } else {
+        hide_and_snipe(w, 12.0, |s| { walk_log::leg("waves-wait", s); drake_of(s).is_some() || !alive(s) }, 6000, hard);
+        None
+    };
     let drake = {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(alive(sim), "Bond survives the later waves to the fly-by (health {:.1})", sim.drones.health.health);
@@ -1765,7 +1957,28 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
 
     // 4. Drake, then the defeat NIS plays out (no skip, so its channel writes land).
     w.skip_cutscenes = false;
-    fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000);
+    // real-health-00agent-1b-11 (lever 6): the hard Drake fight taps with the muzzle-offset
+    // compensation (fight_opts_y, aim_close = true). Measured [L /tmp/lever5_r11.log]: the
+    // waves-wait's west shelter held Bond ZERO-HIT for 1752 ticks (11161..12913 — the wave's
+    // lines are cut there) and the fight died to DRAKE'S FIRST SHOT (-9.52, weapon 0x30,
+    // d 10.5) at hp 9.5 — Drake's own 120 hp had taken a ~2 graze because fight_opts' taps
+    // are UNCALIBRATED (aim_close false) and the round-8 law pins the uncalibrated tap's miss
+    // band at 6-15 u (the measured fight 1: 3 taps, 1 kill — the same graze shape [L
+    // lever3_r8]). The compensated fight moved death 12913 -> 13331 (+418). THE REMAINING
+    // BINDER (the diagnostic [L /tmp/diag_drake_r11.log, the per-60-tick [tfd] dump]): the
+    // fight PICKS Drake (target Some(19)) and the aim arm lifts the eye to his height
+    // (bond y -10.9 -> -2.5 by t180), but ZERO taps fire through the whole fight (clip holds
+    // 100 at every sample): the tap's ray_on gate never passes — the exposed_aim points sit
+    // up to 9 u off the level ray (astro#17's aim y 7.51 vs the eye -1.5), so the level view's
+    // ray never rests on a hit box (the round-8 zero-tap shape, now at the Drake fight). The
+    // aim/line onto Drake's box (or a shoot-and-scoot out of the west shelter's cover, whose
+    // sight-cut also cuts Bond's own line to Drake) is the next lever; the hp budget for
+    // Drake's ~-9.52 weapon rides the upstream chain savings.
+    if hard {
+        fight_opts_y(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000, f32::MAX, true);
+    } else {
+        fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000);
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(alive(sim), "Bond survives Drake's fight (health {:.1})", sim.drones.health.health);
