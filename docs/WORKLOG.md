@@ -70,3 +70,21 @@
   pick on the lowest in-cap shooter while kiting; (b) thin the wave at the mid phase (gate the streak
   window on the wave count across the spawn). Each lever measured on its own real run; the walk test
   is the judge.
+- (05:02-05:21) real-health-00agent-1b-10: the round-9 named lever (the MID-PHASE spawn-window
+  gate: the streak window opens only when the live wave is back at/below its pre-spawn level,
+  spawns detected by the wave count growing across an observation) implemented and MEASURED
+  ANTI-LEVER on its own real run [L /tmp/lever1_r10.log]: the gate blocked the 6114 window as
+  designed (the pre-spawn level was 1 — the 4930 observation, before the 5100 spawn waves;
+  unreachable mid-phase), the freed ticks went to the fight loop (6114..6273 7->5, 6414..6635
+  5->3 — the thinning WORKS at -5.0 hp), but the 6414 fight (answered[pi8] == 0, the fence
+  passed) COVERED k8's hold windows #1/#2 (the baseline's 6452/6560/6668) — the 3-hold resume
+  chain died, ZERO k8 holds answered 6635..7774, the walk stood unprotected (hp 69.9 -> 24.9),
+  dead ~8100 with k8/k6/k1/k2/k7 unlatched — WORSE than the baseline. The gate REVERTED; the
+  code is exactly master's. Re-pin [L /tmp/baseline_r10.log]: the current tree (the round-9
+  kill arm + gated climb are already master's) reproduces LEVER 7's run — death 11002 (the
+  10816 headline was lever 5's kite), k8 -1104 / k6 +1309, the dead window 7120..9083
+  hp 47.7 -> 31.0 astro 6 -> 10, the post-window fights thin 10 -> 6 by death. The refreshed
+  ledger + the next lever (the CHAIN-WINDOW-FENCED THINNING: keep the streak window, fence
+  every mid fight additionally on the pending console's held targets being LIVE) are in the
+  ignore message. walkreal_0700001b_live WHOLE: 18 passed / 0 failed / 1 ignored (151.97 s);
+  interactables_0700001b_live WHOLE: 9 passed / 0 failed (29.09 s).
