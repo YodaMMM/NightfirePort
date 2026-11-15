@@ -33,3 +33,5 @@ Main 11-14: crouched at the saddle (one press before the sweep) - t74068, no gai
 Main 11-14: an aimed_stand_03 on #7 (900, torso) from the saddle before the sweep dies inside it at t74105 - no line on #7 from the saddle either. #7 at (11.4,10.1,-16.1) needs a different spot entirely.
 
 Main 11-14: a bullet-line scan at the saddle finds #7 (11.39,10.09,-16.13) clear from (14,-4) d12.4, (14..20,0) d16-18, (20,2..4), (18..24,8) - the saddle itself (23.2,7.2) is not clear. An aimed_stand_03 from (20,0) (900/1800, torso or head) leaves #7 at hp 4.3 - NO hit lands, the stand has nothing to fire (the P2K 3+13 arrives nearly dry) - death t78288/t78447 (later than t74135 only because of the walk); (16,0) t74384, (18,0) t74710. 03 at this point is AMMO-bound: rounds for the saddle are the lever.
+
+Main 11-14: pickup scan before the si-1 saddle walk (Bond (11.9, 6.5, -20.9), P2K 3+13): every weapon/ammo pickup within 45 u of the saddle is already gone (0x12/0x1c/0x1e/0x35/0xe drops); live are only the armours (21.5, 9.2, 11.6) and (22.1, 10.2, -17.7), both on upper floors. Rounds for the saddle must come from earlier in the route.
