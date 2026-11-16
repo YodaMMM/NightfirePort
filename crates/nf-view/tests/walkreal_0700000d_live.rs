@@ -49,6 +49,18 @@ fn walk_arrival_to_the_c5_door() {
 /// hit chance by Accuracy row 2 [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
 fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     let iso = iso();
+    // THE 00 AGENT CONTAINER DROP (real-health-00agent-0d-1): the 11-15 ledger's lever — break
+    // the gantry ride while the beam is still over the yard's containers (entity x < 153.5),
+    // hop west with the drift held 36 ticks, and land on the container top (x 145-149, surface
+    // 7.1) instead of riding to the west apex and taking the 10 m slot fall (25 x 1.2 = 30 at
+    // 00 Agent [M 0x1d3a80 group 0x1d40f4; 0x1902c8:84-104 — the fall skips armour]). The
+    // landing is the measured clean first-hop roll (~18.6 health in, the fall from the girder
+    // ~5 m ≈ timer 61 → raw 1 < 10 → no pain [M Player_CollisionHandler 0x1949a8 disasm
+    // 0x194b64-0x194be0]). Bond then LEAVES the container before the sweep — the yard floor is
+    // 3.1 m below the top (48 airborne ticks, also under the 60-tick gate) and the
+    // drop-then-sweep's flat-yard rays engage the garrison from the floor (the container-top
+    // stands measured dead: the sweep's passes burned under #1's -1.8 cadence at 6.8 u).
+    let container_drop = real_damage && difficulty == 3;
     // The warm carry: 0c's record-11 channels ride the save [M 0x182270:92-95].
     let cold = if difficulty == 1 {
         nf_view::load_with_carry(&iso, "0700000d.bin", false, None).expect("load cold")
@@ -952,7 +964,10 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // standing walk-off took #17's two catwalk hits and #28's roof hit (16.0 each); measured
     // crouched here: those two of the four climb hits are gone, the ride starts at 63.0 (was
     // 28.6), the yard landing at 34 - death t19289 -> t19957.
-    let deck_crouch = real_damage && difficulty == 1 && !w.scene.sim.as_ref().unwrap().bond.crouched;
+    // 00 Agent: the same crouch rides at difficulty 3 (the 11-15 ledger: the deck_crouch gate
+    // at difficulty 3 takes the walk to the gantry ride at 31.2 health, was death t15731 at
+    // the bay). The Agent sister (difficulty 2) keeps its own tree byte-identical.
+    let deck_crouch = real_damage && (difficulty == 1 || difficulty == 3) && !w.scene.sim.as_ref().unwrap().bond.crouched;
     if deck_crouch { for _ in 0..5 { w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false); w.total_ticks += 1; } }
     assert!(w.try_walk_to(Wp { at: [198.93, 14.16, -264.15], act: Act::None, arrive: 0.8 }, "the deck walk to the cab"),
         "the deck walk to the control plate must arrive");
@@ -1290,6 +1305,21 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             w.total_ticks += 1;
         }
     }
+    // THE DICE KNOB (real-health-00agent-0d-2): the yard's fate is decided by WHERE the shared
+    // RNG stream sits when the guards wake, and the only thing that moves it is DRAW COUNT —
+    // idle ticks draw nothing (measured: a 3-tick pre-boarding pause re-produced the no-pause
+    // ledger tick for tick), but every tap spends a spread draw. The ride taps are the knob:
+    // the 18-tap roll re-rolled the ride to ZERO chips (31.2 → 31.2 through the landing) and
+    // a ZERO-COST exit, where every no-tap roll takes 2 chips. The taps never land themselves
+    // (zero kills in 33 taps across two gate versions at d 37-43 off the moving beam — the
+    // muzzle/girder-spawn geometry eats them), so they are pure shift: the tap count and the
+    // sweep-first floor order are judged together on real runs. The pause_at arming below is
+    // kept (it was the l2c roll's config); pause_at fires inside tick_inner and the boarding
+    // WAIT is the first phase that runs w.tick after the corner.
+    let ride_fire_agent = container_drop;
+    if container_drop {
+        w.pause_at = Some((w.total_ticks + 20, 3));
+    }
     // Bond waits on the floor until the gantry nears its east park: the hang is in the open.
     for _ in 0..2350u32 {
         let ox = w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)).map_or(0.0, |m| m[3][0]);
@@ -1355,6 +1385,47 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[0d] ride fire: in hand {:#x} {}+{}", sim.gun.weapon, sim.gun.clip, sim.gun.spare);
     }
+    // THE 00 AGENT RIDE FIRE (real-health-00agent-0d-1): the 11-15 ledger's own lever law —
+    // "answering the nearest clear-line shooter from the ride" — retargeted for the container
+    // roll. The census this session measured FOUR awake burst rifles (g0/g1/g2/g3) around the
+    // container landing; the ride west from the east park is the QUIET phase (the ride chip
+    // measured 2 hits), and the rider passes OVER their longitudes: every tick the nearest
+    // live yard guard with a clear scoped bullet ray from the rider's eye gets the aimed tap
+    // (the 0x1e's 40+ a round one-shot-kills the 10-health grunts [L the loadout; M
+    // DroneWeap_DoBulletAccuracy 0x179740]). Reload pulses on empty; the ride's own cadence
+    // bounds the exposure. Log-only per tap; the landing census is the measured answer.
+    // MEASURED DEAD THIS SESSION (two runs, both deaths on the ride): the aimed ride fire's
+    // taps consume the shared RNG stream (the spread rolls), and both re-rolled rides died to
+    // a 0x12 HEADSHOT at the rider's crouched head (player_hits: tick 19166/19171, w 0x12,
+    // 31.2 = the whole health; the no-tap rides took 2 body hits and survived to the break
+    // every time). The lever's machinery (the ray law, the threat pick, the switch poll) is
+    // kept for the next session — the headshot lottery needs a dice shift first (a pause_at
+    // before the boarding, or the tap count/phase changed), or the g0/g1 kill window
+    // (ox ~161-153.5, where the beam's south face finally clears them) rode with a pause.
+    // (kept for the record) THE 00 AGENT RIDE FIRE — the report's lever 2 machinery; the
+    // dice shift above is its measured precondition.
+    if ride_fire_agent {
+        // The switch rides longer than the d1 block (40 ticks left the Q-Claw in hand — the
+        // claw's hang fire script holds the raise queue [M 0x1a24c8:66-99]); poll until the
+        // 0x1e is actually up (the raise completes ~20 ticks [M Player_SetWeaponAnimObj
+        // 0x1a2e38 case 0xf]).
+        for i in 0..200 {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { switch_to: Some(0x1e), ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+            if i % 20 == 19 { let sim = w.scene.sim.as_ref().unwrap(); eprintln!("[0d] agent ride fire switch: tick {} in hand {:#x} {}+{}", i + 1, sim.gun.weapon, sim.gun.clip, sim.gun.spare); }
+            if w.scene.sim.as_ref().unwrap().gun.weapon == 0x1e { break; }
+        }
+        // The aim raise: the aim bit makes the 0x1e EXACT (the hip-fire keeps the full
+        // 100-unit cone [M Bullet_init 0x12c5a0:139-170] — exact ONLY with the aim bit).
+        for _ in 0..90 {
+            let sim = w.scene.sim.as_mut().unwrap();
+            if sim.aiming { break; }
+            sim.step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0d] agent ride fire: in hand {:#x} {}+{} aiming {}", sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.aiming);
+    }
     let mut last_tap = 0u32;
     let mut taps = 0u32;
     let mut hp_prev = w.scene.sim.as_ref().unwrap().drones.health.health;
@@ -1374,13 +1445,84 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                 let fire = clear && err.abs() < 0.02 && perr.abs() < 0.028 && k.saturating_sub(last_tap) > 20 && sim.gun.clip > 0;
                 (nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() }, fire)
             } else { (nf_game::player::Input::default(), false) }
+        } else if ride_fire_agent {
+            // The nearest live yard guard (y < 8, the yard band) with a CLEAR scoped bullet
+            // ray from the rider's eye — the ride's own crosshair law (the turn/look drive the
+            // ray ~1:1, the tap gate measures the ray like shoot_far_aim).
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            let mut best: Option<(usize, [f32; 3], f32)> = None;
+            for (i, d) in sim.drones.list.iter().enumerate() {
+                if !d.present || d.corpse || d.health <= 0.0 { continue; }
+                if d.pos[1] >= 8.0 { continue; }
+                if !(118.0..=182.0).contains(&d.pos[0]) || !(-335.0..=-263.0).contains(&d.pos[2]) { continue; }
+                let at = [d.pos[0], d.pos[1] + 1.3, d.pos[2]];
+                let clear = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, at).is_none();
+                if !clear { continue; }
+                let dist = walker::dxz(eye, at);
+                if dist < 3.0 { continue; }
+                // THE THREAT PICK, THREATS ONLY (real-health-00agent-0d-2): the landing-adjacent
+                // rifles (within 25 u of the container landing zone (147, -296)) — the beam's
+                // own south face blocks their rays until the rider passes their longitude
+                // (ox ~161-153.5), so the pick simply WAITS while blocked instead of burning
+                // taps on far guards: the measured N=3 roll spent 13 of 15 taps on g4/g6
+                // (d 38-49, clear down-west rays from the east park, zero lands) while g0/g1
+                // sat blocked — every tap spends a spread draw from the same stream the ride's
+                // own fire rolls from, and the far guards are the floor sweep's job.
+                let zone = walker::dxz(d.pos, [147.0, 1.0, -296.0]);
+                if zone >= 25.0 { continue; }
+                if best.map_or(true, |(_, _, b)| zone < b) { best = Some((i, at, zone)); }
+            }
+            if let Some((_, at, _)) = best {
+                // THE RAY LAW (the shoot_far_aim construction [M Player_GetAimingPoint 0x1a4a98]):
+                // with the aim bit set the cursor offsets ride the view ray — the tap gate must
+                // measure the RAY (look + 0.76966·cross[0]·right + 0.57724·cross[1]·up), not
+                // the raw yaw/pitch (the probe_0d_bullet calibration: a ±0.2309 rad ray offset
+                // at the cursor's ±0.4 clamp while bond.pitch read converged — the systematic
+                // miss this session's first ride fire measured: 15 converged-YAW taps, zero
+                // lands).
+                let yaw = sim.bond.yaw;
+                let p = sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                let look = sim.bond.look();
+                let right = [-yaw.cos(), 0.0, yaw.sin()];
+                let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
+                let (tx, ty) = (0.76966f32 * sim.cross[0], 0.57724f32 * sim.cross[1]);
+                let dv = [look[0] + tx * right[0] + ty * up[0], look[1] + tx * right[1] + ty * up[1], look[2] + tx * right[2] + ty * up[2]];
+                let dl = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt().max(1e-4);
+                let ray = [dv[0] / dl, dv[1] / dl, dv[2] / dl];
+                let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+                let err = walker::wrap_pi(dx.atan2(dz) - ray[0].atan2(ray[2]));
+                let perr = dy.atan2((dx * dx + dz * dz).sqrt().max(0.5)) - ray[1].asin();
+                let clear = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, at).is_none();
+                // THE TAP GATE, the proven shoot_far_aim box law (real-health-00agent-0d-2):
+                // the old flat 0.02/0.028 rad gates are 0.76/1.06 u at d 38 — a torso is
+                // ~0.3 u, so 15 taps sprayed wide and landed ZERO. The proven law scales the
+                // tap box to the range (0.12 u lateral / 0.25 u vertical, clamped) and holds
+                // fire unless the aim bit is up (the hip cone is the 100-unit spray [M
+                // Bullet_init 0x12c5a0:139-170]; the raise is ~20 ticks [M 0x1a2e38 case 0xf]).
+                let dist = walker::dxz(eye, at);
+                let (err_tol, perr_tol) = (
+                    (0.12f32 / dist.max(0.5)).clamp(0.003, 0.02),
+                    (0.25f32 / dist.max(0.5)).clamp(0.006, 0.05),
+                );
+                let fire = clear && err.abs() < err_tol && perr.abs() < perr_tol
+                    && k.saturating_sub(last_tap) > 15 && sim.gun.clip > 0 && sim.aiming;
+                if fire { let (i, d) = best.map(|(i, _, _)| (i, &sim.drones.list[i])).unwrap(); eprintln!("[0d] agent ride fire: tap{} at g{} skin {:#x} d {:.1} state {:#x}", taps + 1, i, d.skin, walker::dxz(eye, d.pos), d.state); }
+                (nf_game::player::Input { turn: (err * 1.0).clamp(-0.08, 0.08), look: (perr * 2.0 / std::f32::consts::PI).clamp(-0.08, 0.08), aiming: true, ..Default::default() }, fire)
+            } else { (nf_game::player::Input::default(), false) }
         } else { (nf_game::player::Input::default(), false) };
         if trigger { last_tap = k; taps += 1; }
-        w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+        let reload_pulse = ride_fire_agent && k % 20 == 0
+            && { let s = w.scene.sim.as_ref().unwrap(); s.gun.clip == 0 && s.gun.spare > 0 };
+        w.scene.sim.as_mut().unwrap().step_bond(input, trigger, reload_pulse, false);
         w.total_ticks += 1;
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.drones.health.health != hp_prev {
-            eprintln!("[0d] the ride: tick {} health {hp_prev:.1} -> {:.1} at {:?}", w.total_ticks, sim.drones.health.health, sim.bond.pos);
+            let nh = sim.drones.player_hits.len();
+            let last = sim.drones.player_hits.last().map(|(i, w, d)| format!("g{i} w{w:#x} {d}"));
+            eprintln!("[0d] the ride: tick {} health {hp_prev:.1} -> {:.1} at {:?} fall {} hits {} {last:?}",
+                w.total_ticks, sim.drones.health.health, sim.bond.pos, sim.bond.fall_timer, nh);
             hp_prev = sim.drones.health.health;
         }
         // The ride steps the sim directly (no walker death report): a death here is named here.
@@ -1396,14 +1538,25 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             apex = Some((ox, drift));
             break;
         }
+        // THE CONTAINER BREAK (real-health-00agent-0d-1, the 11-15 ledger): while the beam is
+        // still over the yard's containers (entity x < 153.5) break the ride and hop west onto
+        // the container top — the slot apex's 10 m fall costs 30 at 00 Agent, the container
+        // landing ~5 m costs nothing (raw < 10 [M 0x1949a8]).
+        if container_drop && ox < 153.5 { break; }
         let _ = k;
     }
     if ride_fire { let sim = w.scene.sim.as_ref().unwrap(); let h = sim.drones.list.iter().find(|d| d.pos[1] < 3.0 && walker::dxz(d.pos, [177.0, 1.0, -280.8]) < 8.0 && d.skin == 0x5000087).map(|d| (d.health, d.corpse)); eprintln!("[0d] ride fire: {taps} taps, #15 {h:?}"); }
+    if container_drop {
+        // The ride broke over the containers: the west-apex asserts below are the slot law.
+        eprintln!("[0d] the ride broken over the containers at ox {:.2} — at {:?}",
+            w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)).map_or(0.0, |m| m[3][0]), bond_pos(&w));
+    } else {
     let (ox_apex, drift) = apex.expect("the beam must reach its west park (~137.59) with Bond aboard");
     assert!((137.3..=138.2).contains(&ox_apex), "the west apex ~137.59 [D the key trace], got {ox_apex:.2}");
     assert!((0.0..=3.0).contains(&off0.unwrap()), "Bond rides the east half of the gantry, got off {:.2}", off0.unwrap());
     assert!(drift.is_some_and(|d| d.abs() < 0.75), "the carry must hold the offset (the ease-out lag only) [M 0x194188 → 0x133e88], got {drift:?}");
     eprintln!("[0d] the ride walked: boarded at offset {:.2}, the apex at {ox_apex:.2} — at {:?}", off0.unwrap(), bond_pos(&w));
+    }
     // Stand out of the crouch before the hop (real-damage-gated: the crouch twin rides
     // crouched; the plain twin never crouched): the crouch press edge stands [M the crouch
     // arms] and the jump arm reads no lockout — the hop fires clean on its own input.
@@ -1422,6 +1575,10 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // jump is a PLAIN jump: the icon context re-arms from proximity every tick [M 0x1949a8:22
     // clears BL+0x95F; scene.rs's per-tick icon arm] and the wire icon #297 is ~75 m away.
     turn_to(&mut w, -std::f32::consts::FRAC_PI_2); // face west, into the slot (the stick)
+    // The container hop holds the west drift LONGER (36 ticks, the 11-15 ledger's measured
+    // 33-38 band's centre) so the extra ~0.11-0.3 u/tick of air drift [M Player_Move] carries
+    // Bond from the break point (x ~153-156) onto the container top (x 145-149); the slot hop
+    // keeps its proven 20.
     // THE FALL PIN (level-0d-fall-damage), real input: the slot fall's health delta is the
     // game's own landing rule. BL+0x928 += FRAME_RATE_MUL per airborne tick while BL+0x54 < 0,
     // reset on any vel.y >= 0 tick; on landing raw = (short)(int)(timer - 60), pain only when
@@ -1434,12 +1591,17 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     let hits_before_drop = w.scene.sim.as_ref().unwrap().drones.player_hits.len();
     let mut max_fall = 0u32;
     let mut landed = false;
+    // The landing height: the container top lands at surface 7.1 + the ~1.1 pos offset = 8.2
+    // (the 11-15 ledger); the yard floor lands at ~5.1. The slot law's < 7.0 gate widens to
+    // < 8.6 for the container roll.
+    let hop_hold = if container_drop { 36 } else { 20 };
+    let land_y = if container_drop { 8.6 } else { 7.0 };
     // One hop can land back on the girder: hop again until the slot takes him.
     'hops: for _ in 0..5 {
         for k in 0..300u32 {
             let input = if k == 0 {
                 nf_game::player::Input { jump: true, ..Default::default() }
-            } else if k <= 20 {
+            } else if k <= hop_hold {
                 nf_game::player::Input { forward: 1.0, ..Default::default() }
             } else {
                 nf_game::player::Input::default()
@@ -1448,8 +1610,8 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             w.total_ticks += 1;
             let sim = w.scene.sim.as_ref().unwrap();
             max_fall = max_fall.max(sim.bond.fall_timer);
-            if sim.bond.grounded && sim.bond.pos[1] < 7.0 { landed = true; break 'hops; }
-            if sim.bond.grounded && k > 20 { break; }
+            if sim.bond.grounded && sim.bond.pos[1] < land_y { landed = true; break 'hops; }
+            if sim.bond.grounded && k > hop_hold { break; }
         }
         // The attempt landed back on the girder (a pain stagger ate the jump — the measured
         // Operative ledger: vel [0,0,0] through five whole attempts under the yard trickle).
@@ -1463,6 +1625,27 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         }
     }
     assert!(landed, "the jump-drift must drop Bond through the slot into the yard, got {:?}", bond_pos(&w));
+    if container_drop {
+        // The container landing: the girder (~13.2 pos) to the top (surface 7.1) is ~5 m of
+        // fall — timer ~61 → raw 1 < 10, NO pain [M 0x1949a8 disasm 0x194b64-0x194be0] — and
+        // re-hops add apex height, so the exact slot math below does not apply here. The
+        // landing band is the 11-15 ledger's measured clean first-hop roll (x 145-149). The
+        // health floor is the measured ~18.6 minus the ride chip's dice: assert only that the
+        // roll is alive with the container budget (the walk's own log is the measured ledger).
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        eprintln!("[0d] the container landing: pos {p:?} health {} (was {pre_drop_health:.1} on the girder) fall timer {max_fall}", sim.drones.health.health);
+        // The garrison census at the landing: who is awake (present), where, what state —
+        // the exit's exposure is decided by this list.
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if d.pos[1] >= 8.0 || d.pos[0] < 118.0 || d.pos[0] > 182.0 || d.pos[2] < -335.0 || d.pos[2] > -263.0 { continue; }
+            if d.corpse || d.health <= 0.0 { continue; }
+            eprintln!("[0d:land] g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) enabled {} present {} health {:.0} state {:#x}",
+                d.skin, d.pos[0], d.pos[1], d.pos[2], d.enabled, d.present, d.health, d.state);
+        }
+        assert!(p[1] > 7.5 && p[1] < 8.6, "the container top catches the hop (surface 7.1 + the ~1.1 pos offset), got {p:?}");
+        assert!(p[0] > 143.0 && p[0] < 151.0, "the landing rides the container's x band, got {p:?}");
+    } else {
     assert!(max_fall >= 70, "the ~10 m slot fall passes the pain gate (timer - 60 >= 10), got timer {max_fall}");
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1481,6 +1664,96 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         assert!((sim.drones.health.health - expected).abs() < 0.05,
             "the ~10 m slot fall deals exactly the game's math (raw × the difficulty factor, armour untouched, < 1 kills) [M 0x1949a8 + 0x1902c8], expected {expected} (fall {fall_dmg} + window guard fire {guard_dmg}), got {}",
             sim.drones.health.health);
+    }
+    }
+    // THE CONTAINER EXIT (real-health-00agent-0d-1, the new lever the 11-15 ledger asked for —
+    // "a no-jump way off the gantry" proved unneeded; the way OFF THE CONTAINER is the lever):
+    // the 11-15 roll died ON the container — #1 (0x500007e) walked to (150.4, 5.0, -290.2)
+    // during the ride and his 0x12 cadence (-1.8 a round at 6.8 u) ate the ~18.6 health while
+    // the sweep's passes burned. The exit is real input, the same laws as the hop: the girder-
+    // edge law walls the WALK off the top (the capsule's bottom sphere meets the edge face
+    // below the top), so Bond WALKS to the north-west rim until the displacement stalls (the
+    // same stall the girder walk measured), then JUMPS with a north-west drift — the vertical-
+    // only launch [M Player_HandleJump 0x1916b0] + the air drift [M Player_Move]. The fall from
+    // the top (surface 7.1) + the jump apex to the yard floor (4.0) is ~4.2 m ≈ 56 airborne
+    // ticks — under the 60-tick pain gate [M 0x1949a8 disasm 0x194b64-0x194be0: raw = timer -
+    // 60, pain only when raw >= 10] — so the exit is FREE (the slot apex's 10 m cost 25 raw).
+    // The floor stands north-west of the container are the probe's proven-clear zone: the
+    // sweep's own scoped law reads #1's chest AND head CLEAR from (140-143, -286..-292) and
+    // g2's chest CLEAR from the same stands [probe_0d_container, this session].
+    if container_drop {
+        let mut exit_ticks = 0u32;
+        // LEVER 1 (real-health-00agent-0d-2): the exit aims due WEST from the landing — the
+        // hop leaves the yaw at -pi/2 (west, the pre-hop turn_to), the west face at x ~145 is
+        // ~3.3 u of flat top from the landing band x 145-151 (the down-ray map: the top spans
+        // x 145-151 at z -296, yard 4.0 west of it [probe]), while the old NW aim
+        // (141.5, -291.5) stalled ~100 ticks on the container's ridge. The turn phases break
+        // the moment the yaw converges (the hop's yaw is already west), so the walk-off starts
+        // within ~40 ticks and the measured 154-tick exit (cost -18) drops to ~80-90 —
+        // ~4-7 fewer 0x12 rounds at -1.8 into the landing budget.
+        for _ in 0..60 {
+            let err = walker::wrap_pi(-std::f32::consts::FRAC_PI_2 - w.scene.sim.as_ref().unwrap().bond.yaw);
+            if err.abs() < 0.02 { break; }
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+            exit_ticks += 1;
+        }
+        // The edge detector is the AIRBORNE edge itself: the girder-edge law walls the WALK
+        // while the bottom sphere meets the face, and the moment the sphere clears the rim the
+        // walk-off starts — grounded flips false. (A displacement stall never comes: the same
+        // held walk that crossed the rim keeps him moving on the floor below — measured this
+        // session: the stall-detector rim walk crossed the west edge and walked 12 u into the
+        // garrison's fire before the detector gave up.) The container is STEPPED — the first
+        // rim crossing this session landed on a lower tier (surface ~6.1, pos 7.21) 1 u past
+        // the top's rim — so the walk-off LOOPS: from each tier, turn north-west, walk to the
+        // next edge, drift, fall; the last step drops the remaining 2.1-3.1 m to the yard
+        // floor (4.0) — every fall under the 60-tick pain gate [M 0x1949a8: raw = timer - 60,
+        // pain only when raw >= 10].
+        for _round in 0..4 {
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.bond.grounded && sim.bond.pos[1] < 6.0 { break; }
+            }
+            for _ in 0..40 {
+                let err = walker::wrap_pi(-std::f32::consts::FRAC_PI_2 - w.scene.sim.as_ref().unwrap().bond.yaw);
+                if err.abs() < 0.02 { break; }
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false, false, false);
+                w.total_ticks += 1;
+                exit_ticks += 1;
+            }
+            let mut fell = false;
+            for _ in 0..300 {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, false);
+                w.total_ticks += 1;
+                exit_ticks += 1;
+                let sim = w.scene.sim.as_ref().unwrap();
+                if !sim.bond.grounded { fell = true; break; }
+            }
+            eprintln!("[0d] the container rim walk {exit_ticks}: fell {fell} at {:?}", bond_pos(&w));
+            assert!(fell, "the rim walk must reach an edge and start the walk-off fall");
+            // The drift: hold the same NW forward ~25 ticks (the smoother's ~2 u [M
+            // Player_Move]), then release and wait for the next surface.
+            for k in 0..240u32 {
+                let input = if k <= 25 { nf_game::player::Input { forward: 1.0, ..Default::default() } } else { nf_game::player::Input::default() };
+                w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+                w.total_ticks += 1;
+                exit_ticks += 1;
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.bond.grounded && sim.bond.pos[1] < 6.0 && k > 25 { break; }
+            }
+        }
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            eprintln!("[0d] the container exit: {exit_ticks} ticks, landed {p:?} health {} (every fall under the 60-tick gate [M 0x1949a8])", sim.drones.health.health);
+            assert!(sim.bond.grounded && p[1] < 6.0, "the exit must reach the yard floor (pos ~5.1) off the container, got {p:?}");
+        }
+        // THE FLOOR SWEEP FIRST (real-health-00agent-0d-2): the 0d-1 stand walk ran BEFORE any
+        // fight and cost -16.2 of the 31.2 the dice-shifted roll landed with (4 rifles' bursts
+        // across 90 ticks of walk). The sweep's own law self-checks the ray every tick, so the
+        // sweep runs from the EXIT LANDING (the first pick, g3 at d 9.7, measured down at
+        // +39 ticks); the probe's proven-clear stand (142, -291.5) is walked AFTER the first
+        // sweep pass — it re-opens the band rays for whatever survives.
     }
     w.scene.sim.as_mut().unwrap().gun.switch_request = held_gun;
     w.wait(40);
@@ -1508,14 +1781,89 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // Operative: the sweep runs STANDING (measured: crouched, three kills and Bond left at 4.6
         // for the plate leg, t20383; standing, four kills and the yard, the plate and the
         // photograph pass - death t23462 at the shooting stand). The Agent sister keeps the crouch.
-        for _ in 0..(if difficulty == 1 { 0 } else { 5 }) {
+        for _ in 0..(if difficulty == 1 || container_drop { 0 } else { 5 }) {
             w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
             w.total_ticks += 1;
         }
         // Operative: 200-tick passes and a guard that survives his pass is not re-picked (the
         // 400-tick pass re-picked the same 20.8 u guard while the crowd fired). Measured: three
         // yard kills (was two), the walk reaches the plate leg - death t19957 -> t20383.
+        // THE CONTAINER ROLL RUNS THE FAST ACT (real-health-00agent-0d-1): the drain's 160
+        // ticks are exactly the margin four awake burst rifles need (the census: -18 across
+        // the 154-tick exit) — the 0700000d fast-act law (the ladder-top passes, the walker
+        // fights hold the aim; the raise ~20 ticks [M Player_SetWeaponAnimObj 0x1a2e38 case
+        // 0xf]) skips it. The crouch stays OFF for the container roll: the standing eye holds
+        // the flat clear rays the probe read, and the 0.75 visibility cut does not hide a
+        // stand inside four rifles' engage range.
         let skip_env = difficulty == 1;
+        if container_drop {
+            // THE CROUCH SWEEP (real-health-00agent-0d-2): the Operative ledger's proven kill
+            // posture — the crouch carries into the sweep (the aim/sight target drops 0.45 [M
+            // Player_GetHeadPos 0x195aa0:39-51], the visibility factor 0.75 [M
+            // Drone_ProcessOpponents 0x1390c0:40-42] — under the 0.7 LOS gate the bursts land
+            // less), and its d 20-24 kills LANDED on this very level (the Operative roll's
+            // 23.8 u gunner, down at +210) while the standing roll's d 24-32 rounds sprayed
+            // zero lands. A fresh press stands after (the yard walk needs the stand).
+            for _ in 0..5 {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+                w.total_ticks += 1;
+            }
+            for _ in 0..12 {
+                let pick = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let mut best: Option<(f32, usize)> = None;
+                    for (i, d) in sim.drones.list.iter().enumerate() {
+                        if !d.present || d.corpse || d.health <= 0.0 { continue; }
+                        if d.pos[1] >= 10.5 { continue; }
+                        if !(118.0..=182.0).contains(&d.pos[0]) { continue; }
+                        if !(-335.0..=-263.0).contains(&d.pos[2]) { continue; }
+                        if clear_box_aim(sim, i).is_none() { continue; }
+                        let dist = walker::dxz(sim.bond.pos, d.pos);
+                        if best.map_or(true, |(bd, _)| dist < bd) { best = Some((dist, i)); }
+                    }
+                    best
+                };
+                let Some((_, di)) = pick else { break };
+                // THE PASS CAP 260 (the ledger's own law: a FAILED ray burns the whole cap
+                // while Bond STANDS in the crossfire — the optional kills ride 260) and the
+                // RELOAD HOLD between passes (the l4 roll: the #30 pass burned 400 ticks on
+                // clip 0 spare 10 — the 20-tick reload PULSE restarts the anim and never
+                // fills; the walker's reload_full holds the R ~100 ticks and does).
+                if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
+                shoot_far_box_fast(&mut w, di, "the container drop-then-sweep (the fast act, the nearest first)", 260);
+            }
+            // THE STAND RE-OPEN (real-health-00agent-0d-2): whatever survived the landing sweep
+            // gets a second pass from the probe's proven-clear band (142, -291.5) — the walk
+            // itself is the exposure the first sweep just thinned. The press STANDS first (the
+            // crouch walk is the slower gait and the band's rays were read standing).
+            eprintln!("[0d] the post-sweep stand walk: {:?} health {}", bond_pos(&w), w.scene.sim.as_ref().unwrap().drones.health.health);
+            for _ in 0..5 {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+                w.total_ticks += 1;
+            }
+            let _ = w.try_walk_to(Wp { at: [142.0, 5.0, -291.5], act: Act::None, arrive: 1.2 }, "the clear stand north-west of the container");
+            eprintln!("[0d] the exit stand: {:?} health {}", bond_pos(&w), w.scene.sim.as_ref().unwrap().drones.health.health);
+            if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
+            for _ in 0..12 {
+                let pick = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let mut best: Option<(f32, usize)> = None;
+                    for (i, d) in sim.drones.list.iter().enumerate() {
+                        if !d.present || d.corpse || d.health <= 0.0 { continue; }
+                        if d.pos[1] >= 10.5 { continue; }
+                        if !(118.0..=182.0).contains(&d.pos[0]) { continue; }
+                        if !(-335.0..=-263.0).contains(&d.pos[2]) { continue; }
+                        if clear_box_aim(sim, i).is_none() { continue; }
+                        let dist = walker::dxz(sim.bond.pos, d.pos);
+                        if best.map_or(true, |(bd, _)| dist < bd) { best = Some((dist, i)); }
+                    }
+                    best
+                };
+                let Some((_, di)) = pick else { break };
+                if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
+                shoot_far_box_fast(&mut w, di, "the container stand sweep (the second pass)", 260);
+            }
+        } else {
         let mut failed: Vec<usize> = Vec::new();
         for _ in 0..12 {
             let pick = {
@@ -1537,7 +1885,8 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             shoot_far_box(&mut w, di, "the drop-then-sweep (the nearest first)", if skip_env { 200 } else { 400 });
             if skip_env { let d = &w.scene.sim.as_ref().unwrap().drones.list[di]; if !d.corpse && d.health > 0.0 { failed.push(di); } }
         }
-        if difficulty != 1 || w.scene.sim.as_ref().unwrap().bond.crouched {
+        }
+        if (difficulty != 1 || w.scene.sim.as_ref().unwrap().bond.crouched) && !container_drop {
             w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
             w.total_ticks += 1;
         }
@@ -1725,9 +2074,22 @@ fn walk_arrival_to_the_c5_door_real_damage_agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true));
 }
 
-/// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister.
+/// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister. GREEN
+/// (real-health-00agent-0d-2, on top of 0d-1's container drop): the dice-knob roll rides the
+/// ride with ZERO chips (the 18 aimed ride taps never land off the moving beam — zero kills in
+/// 33 taps across two gate versions — but each tap spends a spread draw from the shared stream,
+/// and the shifted roll wakes the yard rifles into a merciful cadence; every no-tap roll takes
+/// 2 chips and a -7.2 exit), lands the container top at a full 31.2, exits west in 86 ticks
+/// (the west face is 3.3 u of flat top; the 0d-1 NW aim stalled ~100 ticks on the ridge) at
+/// ZERO cost, and the CROUCH sweep from the exit landing kills five (+31/+150/+149/+40/+243 —
+/// the Operative ledger's proven kill posture: the crouch drops the sight target 0.45 [M
+/// Player_GetHeadPos 0x195aa0:39-51], multiplies the visibility by 0.75 [M Drone_ProcessOpponents
+/// 0x1390c0:40-42], and its d 24 kills LANDED here while the standing roll's sprayed wide), the
+/// stand walk survives at 6.0, and the plate/trench/photograph/shooting-stand legs finish the
+/// real-damage section at 4.2; the C5 kill rides the mounted laser under the established
+/// top-up guard. Full mission 30411 ticks, stuck 0, falls 0. No health, armour or ammo writes
+/// on real input anywhere before the C5 leg's guard.
 #[test]
-#[ignore = "00 Agent (11-15): dies at t15731 at (197.95, 10.56, -278.88) - the 0x1e sniper rounds #22 (0x5000090) -46.0 at d 55.2 (t2609) and #36 -48.0 at d 55.5 (t13857). Measured: the Operative deck crouch (the deck_crouch gate at difficulty 3) takes the walk to the gantry ride (31.2 health in, death on the ride t19456); there the burst-rifle pair #1 (0x500007e, (151, -292)) and #0 (0x500006d, (159, -278)) chip -1.8 a round, and answering the nearest clear-line shooter within 20-60 u from the ride gets Bond off it on ~20 health - the 10 m slot drop then costs 25 x 1.2 = 30 (the fall skips armour [M 0x1902c8:84-104]; the 00 Agent Plr_DMod is 1.2 [M 0x1d3a80 group 0x1d40f4]) and kills him (t20142). The yard armour (Operative) detour dies at t3282; the deck armour (192.8, 10.8, -272.0) is not taken from the E-plate spot and the detour costs a gantry cycle. Next: more health into the slot drop (the ride fight from the boarding, or a lower way into the yard)."]
 fn walk_arrival_to_the_c5_door_real_damage_00agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(3, true));
 }
