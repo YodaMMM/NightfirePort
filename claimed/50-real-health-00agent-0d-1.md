@@ -37,3 +37,6 @@ Main 11-15 (11): armour #2 (192.8, 10.8, -272.0) is NOT taken from the annex flo
 Correction to (11): armour #2 sits BEHIND A WALL from the annex floor - the nav leg wedges at (193.1, 10.58, -276.4), segment_to_target 0.14, 4.4 u short; the nav web has no route to it from there (not a pickup bug: state 1, not hidden). The walk already takes an armour at t961 ([take] Some(Armour), NF_PICKUPLOG).
 Main 11-15 (12): ride fire with #1's skin (0x500007e) first: no pass (t19151-20510) on the container setups.
 Main 11-15 (13): 96 more random combinations over the full lever set (probe patch audits-side walk-0d-probes-1115e.patch): no pass, best death t20282.
+
+---
+claimed-by: sandbox1 at 2026-11-16T00:02Z
