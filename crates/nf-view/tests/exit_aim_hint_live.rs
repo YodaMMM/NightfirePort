@@ -84,7 +84,21 @@ fn aiming_at_a_load_level_exit_raises_the_hint_once_and_arms_the_cooldown() {
     assert!(!sim.drones.triggers[ti].locked(&sim.drones.channels),
         "fixture premise: the exit's key gate is off (unlocked)");
     sim.bond.pos = feet;
-    face(sim, sim.drones.triggers[ti].centre());
+    // Aim at the exit's own MESH: the game's ray is `Intersect_RayGeom`, one-sided over the
+    // trigger's collision triangles [M 0x10a8c8:168] — the box centre can fall between the
+    // triangles of a sparse mesh (07000005's zip-wire exit: 322 small tris in a 0.26-thick box).
+    // The target is the centroid of the largest triangle that faces the head.
+    let head = sim.bond.head();
+    let target = sim.drones.triggers[ti].tris.iter().filter_map(|t| {
+        let e1 = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]];
+        let e2 = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]];
+        let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+        let to_head = [head[0] - t[0][0], head[1] - t[0][1], head[2] - t[0][2]];
+        let facing = n[0] * to_head[0] + n[1] * to_head[1] + n[2] * to_head[2];
+        let area2 = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        (facing > 0.0).then(|| (area2, [(t[0][0] + t[1][0] + t[2][0]) / 3.0, (t[0][1] + t[1][1] + t[2][1]) / 3.0, (t[0][2] + t[1][2] + t[2][2]) / 3.0]))
+    }).max_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, c)| c).expect("the exit has a triangle facing the vantage");
+    face(sim, target);
     let mut hits = Vec::new();
     for k in 0..30 {
         sim.step_bond(Input::default(), false, false, false);

@@ -4141,29 +4141,39 @@ impl Sim {
         let mut best: Option<(f32, usize)> = None;
         for (i, t) in self.drones.triggers.iter().enumerate() {
             if t.gone || t.tris.is_empty() { continue; } // gone = the type←99 latch [M 0x1b2318:113]; no tris = no collision (01's #18 [D])
-            // Ray-vs-AABB slab test [S stand-in shape; the box itself is [M] the placement box
-            // `Trigger::from_params` stores from the level data].
-            let (mut t0, mut t1) = (0.0f32, wall_t * 50.0);
-            let mut hit = true;
-            for a in 0..3 {
-                let (lo, hi) = (t.lo[a], t.hi[a]);
-                let o = eye[a]; let dd = d[a];
-                if (lo - hi).abs() < 1e-6 {
-                    if (o - lo).abs() > 1e-4 && dd.abs() < 1e-9 { hit = false; break; }
-                    continue;
-                }
-                if dd.abs() < 1e-9 {
-                    if o < lo || o > hi { hit = false; break; }
-                    continue;
-                }
-                let (mut ta, mut tb) = ((lo - o) / dd, (hi - o) / dd);
-                if ta > tb { std::mem::swap(&mut ta, &mut tb); }
-                t0 = t0.max(ta); t1 = t1.min(tb);
-                if t0 > t1 { hit = false; break; }
+            // The game's ray is a mesh ray (`Collide_RayIntersect` 0x1ec690 → `Intersect_RayGeom`
+            // 0x10a8c8, the hitlist the door arm also reads [M 0x1a7810:193-208]): one-sided — a
+            // triangle whose plane faces along the ray (`n·dir >= 0`) is skipped [M 0x10a8c8:168] —
+            // fraction in [0, 1] of the 50-unit Check_Target ray [M 0x1a7810:114-116]. The trigger's
+            // collision triangles are world-space already (`Trigger::tris`). Was an AABB slab test of
+            // the placement box [S stand-in, removed].
+            let seg = [d[0] * 50.0, d[1] * 50.0, d[2] * 50.0];
+            let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+            let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+            let mut hit_t: Option<f32> = None;
+            for tri in &t.tris {
+                let (e1, e2) = (sub(tri[1], tri[0]), sub(tri[2], tri[0]));
+                if dot(cross(e1, e2), seg) >= 0.0 { continue; }
+                let p = cross(seg, e2);
+                let det = dot(e1, p);
+                if det.abs() < 1e-12 { continue; }
+                let inv_det = 1.0 / det;
+                let s0 = sub(eye, tri[0]);
+                let u = dot(s0, p) * inv_det;
+                if !(0.0..=1.0).contains(&u) { continue; }
+                let q = cross(s0, e1);
+                let v = dot(seg, q) * inv_det;
+                if v < 0.0 || u + v > 1.0 { continue; }
+                let tt = dot(e2, q) * inv_det;
+                if (0.0..=1.0).contains(&tt) && hit_t.is_none_or(|h| tt < h) { hit_t = Some(tt); }
             }
-            if !hit || t1 < 0.0 { continue; }
-            let entry = t0.max(0.0) / 50.0; // the ray is the 50-unit Check_Target ray [M 0x1a7810:114-116]
-            if entry >= wall_t { continue; }
+            let Some(entry) = hit_t else { continue };
+            // The solid LoadLevel parts are ALSO static world geometry [L 2026-11-12], so the wall
+            // segment can stop on the exit's own surface: a hit at the wall fraction (within 5 mm of
+            // the 50-unit ray) is the exit itself, not something in front of it — the game's single
+            // hitlist reports the trigger object there.
+            if entry > wall_t + 1e-4 { continue; }
             if best.is_none_or(|(bt, _)| entry < bt) { best = Some((entry, i)); }
         }
         best.map(|(tf, i)| (i, tf))
