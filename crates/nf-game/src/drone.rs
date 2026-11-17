@@ -3475,7 +3475,7 @@ impl Drone {
         let record = if kick { 99usize } else { match kind { 1 => 0x65, 2 => 0x66, _ => 100 } };
         let range = if kick { 2.0f32 } else { 1.75 };
         if self.dist > range { return None; }
-        if !kick && angle_difference(self.yaw, self.yaw_to_opp).abs() > 1.047_197_6 { return None; }
+        if !kick && self.opp_angle_diff().abs() > 1.047_197_6 { return None; }
         let w = d.weapons.records.get(record)?;
         let f32_at = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
         let (s, c) = (crate::trig::sinf(self.yaw), crate::trig::cosf(self.yaw));
@@ -4781,12 +4781,10 @@ impl Drone {
     /// and are what the port must keep bit-exact) and the `+0xCD8`/`+0xCDC` bookkeeping.
     fn bond_talk(&mut self, d: &Data, rng: &mut Rng, frame: u32) {
         if !self.drawn { return; }
-        let dx = self.player_pos[0] - self.pos[0];
-        let dz = self.player_pos[2] - self.pos[2];
-        let dist = (dx * dx + dz * dz).sqrt();
-        if dist > 3.0 { return; } // `3.0 < +0x1A0` [M 0x1446b0:12]
-        let to_bond = atan2_approx(dx, dz);
-        if angle_difference(self.yaw, to_bond).abs() > std::f32::consts::FRAC_PI_2 { return; } // |+0x1D4| [M 0x1446b0:14]
+        // `+0x1A0` is `Drone_GetOpponentInfo`'s 3-D `Vec_Magnitude(opp − obj)` (height included)
+        // [M 0x138f68:66-68] — the port's `dist`, refreshed at the game's place in the walk.
+        if self.dist > 3.0 { return; } // `3.0 < +0x1A0` [M 0x1446b0:12]
+        if self.opp_angle_diff().abs() > std::f32::consts::FRAC_PI_2 { return; } // |+0x1D4| [M 0x1446b0:14]
         if self.obj_armed() { return; } // `NDrone2_ObjectIsArmed` [M 0x1446b0:16]
         if d.level != 0x0700_0007 { return; }
         // `glb_players` (0 when nobody) [M 0x1446b0:24-30] — the SP sim always has Bond.
@@ -12449,6 +12447,13 @@ impl Drone {
         self.dist = (dx * dx + dy * dy + dz * dz).sqrt();
         self.yaw_to_opp = atan2_approx(dx, dz);
         self.opp_target = p.target;
+    }
+
+    /// `Drone+0x1D4`: `Vec_AngleDifference(yaw', +0x1C4)` where yaw' is obj+0x54 turned by the
+    /// anim-info word's strafe bits (+0x570 & 8 → +π/2, & 0x10 → +π, & 0x20 → −π/2) — the port's
+    /// `yaw_offset` [M Drone_GetOpponentInfo 0x138f68:79-90].
+    pub fn opp_angle_diff(&self) -> f32 {
+        angle_difference(self.yaw + self.yaw_offset, self.yaw_to_opp)
     }
 
     fn opponent_info(&mut self, p: &Player) {
