@@ -6340,8 +6340,15 @@ impl App {
                 };
                 let view = frame.texture.create_view(&Default::default());
                 let aspect = proj_aspect;
-                let (_, vp_rot) = draw_cam.view_proj(aspect);
-                let vp = vp0;
+                // The explosion camera shake (`Camera_Update` 0x1bb6d8:35-43): the tick's jitter
+                // moves the EYE after the gun was posed (the game positions the gun in the player
+                // update, before `Camera_UpdateAll`), so the view model above keeps the unshaken
+                // camera and only the view/projection and the eye take the offset. Held for the
+                // whole tick — the PS2 changes it once per 60 Hz frame.
+                let shake = self.scene.sim.as_ref().map_or([0.0; 3], |s| s.drones.shake_offset);
+                let draw_cam = Camera { pos: draw_cam.pos + Vec3::from_array(shake), ..draw_cam };
+                let (vp_shaken, vp_rot) = draw_cam.view_proj(aspect);
+                let vp = if shake == [0.0; 3] { vp0 } else { vp_shaken };
                 let snow = snow_for(&self.scene, &draw_cam);
                 // fix-menus: a menu page up → the menu overlay replaces the HUD. fix-menu-movies2:
                 // the ONE movie plane (gpu.rs) serves every movie — the state-6 briefing/outro

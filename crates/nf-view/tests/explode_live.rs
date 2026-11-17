@@ -110,7 +110,7 @@ fn frag_blast_kills_the_guard_next_to_it_and_the_stun_touches_nobody() {
 /// The stun grenade (0x35) stuns: every live guard within 20 u of the blast enters
 /// `StunGrenadeImpact` 0x4D with health UNTOUCHED (the game's path has no `HitDamage` [M 0x12d890]),
 /// and a shot on a stunned guard kills into 0x44 [M 0x172bb0 case 8/9]. Sister: Bond's whiteout is
-/// set (flashbang > 0) and the camera shake is the branch's fixed 2.0 [M 0x12df6c].
+/// set (flashbang > 0) and the flash's Camera_Shake(2.0) follows the distance rule [M 0x12df6c].
 #[test]
 fn stun_grenade_stuns_without_damage_and_a_shot_kills_the_stunned() {
     use nf_game::player::{Bond, Input};
@@ -144,8 +144,11 @@ fn stun_grenade_stuns_without_damage_and_a_shot_kills_the_stunned() {
     assert!(stunned, "the guard entered the stun family (0x4D/0x4E), got {:#x}", sim.drones.list[gi].state);
     assert_eq!(sim.drones.list[gi].health, hp0, "the stun grenade dealt no damage [M Bullet_DoTrails 0x12d890]");
     assert!(sim.drones.health.flashbang > 0.0, "Bond's whiteout is set [M Player_SetFlashBang 0x12e0b8]");
-    // Set to 2.0 this tick, decayed once by the tick tail (×0.9 − 0.05): 1.75 left — the flash registered.
-    assert!(sim.drones.shake > 0.0, "the flash's Camera_Shake(2.0) [M 0x12df6c]");
+    // Camera_Shake(pos, 2.0) [M 0x12d890:291 → 0x1bc430] scales by the camera's distance to the
+    // flash: R = 4, nothing past it. Bond stands where he stood; the guard is elsewhere.
+    let d = { let h = sim.bond.head(); ((h[0] - gp[0]).powi(2) + (h[1] - gp[1] - 0.5).powi(2) + (h[2] - gp[2]).powi(2)).sqrt() };
+    if d > 4.0 { assert_eq!(sim.drones.shake, 0.0, "past R = 4 the flash sets no shake [M 0x1bc430], d {d}"); }
+    else { assert!(sim.drones.shake > 0.0, "inside R = 4 the flash shakes the camera [M 0x12df6c], d {d}"); }
     // A shot on the stunned guard: msg 8 → Death_Anim 0x44 (the stunned guard dies like the game's).
     // The Data borrows the Sim's parts through the scene (the sim tick's own construction, inlined).
     let data = nf_game::drone::Data {

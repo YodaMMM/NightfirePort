@@ -342,11 +342,15 @@ fn the_laser_kill_spawns_the_smash_blasts() {
     // bigdoor02's scale is the leaf's parsed sphere × 3 [M 0x12bcdc; D #96 sphere 3.144].
     let big = sps.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
     assert!((big - 3.144_156 * 3.0).abs() < 0.01, "bigdoor02's blast scale is sphere·3 (0x8c·mult [M 0x12bb60]), got {big}");
-    // The Camera_Shake byte [M 0x17cbd0:40-44 — Camera_Shake only from a blast ≥ 0.5]: the
-    // drain sets it to the blast radius (the scale·1 trace: 9.432468) and the tick decay
-    // [S the port's 0.9/tick shape] runs after it, so the snapshot (1–2 ticks past the drain)
-    // still carries most of the 9.43 set.
-    assert!(shake > 7.0, "the blast shakes the camera (the decayed Camera_Shake byte), got {shake}");
+    // The Camera_Shake byte [M 0x17cbd0:40-44 — Camera_Shake only from a blast ≥ 0.5]. Camera_Shake
+    // 0x1bc430 scales by the camera's distance: R = 2·radius, shake = min(R·(1−(d/R)²), 10), and
+    // nothing past R. The mounted turret sits ~56 u from bigdoor02 — past R = 18.86 for the 9.43
+    // blast — so the game leaves the camera still here; the amount itself is pinned in
+    // drone.rs `the_shake_amount_follows_camera_shake`.
+    let bond = scene.sim.as_ref().unwrap().bond.pos;
+    let d = ((bond[0] - door_pos[0]).powi(2) + (bond[1] - door_pos[1]).powi(2) + (bond[2] - door_pos[2]).powi(2)).sqrt();
+    assert!(d > 2.0 * 9.432_468 + 5.0, "fixture premise: the mount is outside the blast's shake range, d {d}");
+    assert_eq!(shake, 0.0, "past 2·radius Camera_Shake sets nothing [M 0x1bc430], got {shake}");
     // The fireball art resolves: the script's entity hashes are session models (the draw has
     // meshes to show — the render check confirms the picture).
     let sim = scene.sim.as_ref().unwrap();
