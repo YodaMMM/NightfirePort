@@ -9141,6 +9141,26 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                         }
                     }
                 }
+                // The Phoenix Samurai's glow pieces (`Player_WeaponFiring` 0x1a5460:203-217 [M]):
+                // every frame the held record's base (+2) is 0x33, the game sets entity 0x020008e9
+                // on the view model's datums 0x1e..=0x25 and 0x020008e8 on datums 5..=0x18. Both
+                // records 0x32/0x33 share the fp skin 0x0500007f, and nothing ever clears these
+                // datums for this skin, so they ride the model like the bolts above. Effect layer: the
+                // additive glow must draw AFTER the rifle body it sits on (the game draws the datum
+                // entities after the object's own mesh); as Character it shared the body's ordinals and
+                // sorted ahead of it by texture map, and the opaque body painted over it.
+                let base_id = u16::from_le_bytes([r[2], r[3]]);
+                if base_id == 0x33 {
+                    for (mesh, ids) in [(0x0200_08e9u32, 0x1eu32..=0x25), (0x0200_08e8, 5..=0x18)] {
+                        let Some(&(gmap, gobject)) = level.by_hash.get(&mesh) else { continue };
+                        for id in ids {
+                            let Some(dt) = skin.datums.iter().find(|d| d.id == id && d.bone >= 0) else { continue };
+                            let ginst = Instance { map: gmap, object: gobject, matrix: ident, placement: placement.clone() };
+                            add_instance(level, &ginst, Layer::Effect, Some((ci, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, VIEW_MODEL_NODE);
+                            attachments.push(Attachment { character: ci, bone: dt.bone as usize, local: anim::quat_trans_to_mat(dt.q, dt.t), flash: None, tracer: None, dropped: false, aims_light: None, projectile: None, script: None, gas: None, effect: None, silencer: false, quiver_bolt: None, swap_piece: false, watch_hand: None, pda_digit: None });
+                        }
+                    }
+                }
                 char_placements.push(None);
                 characters.push(Character { matrix: ident, skin: skin.clone(), skeleton: skeleton.clone(), slot_bones: level.maps[map].objects[object].gfx.slot_bones.clone(), start: None, role: drone::SpawnRole::Placed, floor: None, script: None , morph_targets: None });
                 view_models.insert(wid, ci as usize);

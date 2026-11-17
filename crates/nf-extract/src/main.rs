@@ -977,7 +977,7 @@ fn weapons(iso: &IsoImage, live: Option<&str>) -> Result<()> {
     let wd = WeaponData::from_action_elf(&elf)?;
     println!("{} records built in {:?}; SHA-1 {}", wd.records.len(), t.elapsed(), nf_formats::sha1::hex(&nf_formats::sha1::sha1(&wd.bytes())));
     for (w, _) in wd.records.iter().enumerate() {
-        if let Some((mesh, datum)) = wd.third_person(w as u8) { println!("weapon {w:#04x}\tthird-person {mesh:08x}\tdatum {datum}"); }
+        if let Some((mesh, datum)) = wd.third_person(w as u8) { println!("weapon {w:#04x}\tthird-person {mesh:08x}\tdatum {datum}\tfirst-person {:08x}", wd.first_person(w)); }
     }
     if let Some(path) = live {
         let live = std::fs::read(path)?;
