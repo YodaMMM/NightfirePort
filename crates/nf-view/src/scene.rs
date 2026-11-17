@@ -898,6 +898,10 @@ pub struct Sim {
     /// shear runs [M 0x1bba38:49], 0 otherwise (the port's only writer is this trigger). The
     /// draw side reads it for the underwater blur.
     pub global_blur: u8,
+    /// `ScreenBlur`'s source for the frame: the GlobalBlur value `Game_Draw` 0x1e6f50:65 hands
+    /// `psiSetScreenBlur` 0x11ca98 before its decay. The renderer's feedback pass reads it
+    /// (`gpu::Renderer::blur_keep`).
+    pub screen_blur: u8,
     /// unported-front-end-menus-3: `Camera_ApplySwing`'s phase (viewer+0x204) [M 0x1bbf40:10]
     /// — advances 2π/(FRAME_RATE·4) per swaying frame (the 4-second cycle).
     pub swing_phase: f32,
@@ -2413,6 +2417,8 @@ impl Sim {
         if self.drones.exit_hold.is_some() {
             self.drones.tick_mission_during_hold(self.level);
             self.drones.tick_exit_hold();
+            // `Game_Draw` still runs every frame of the hold — its blur decay with it.
+            self.screen_blur_tick();
             return;
         }
         // 0700001b's zero-g needs no entry here: the level's p3 == 2 start already enters substate
@@ -3646,10 +3652,10 @@ impl Sim {
             // equivalent comparison is `Bond::underwater`, `Player_MonitorAir` 0x191a70's
             // cel+0x90 head test) each frame runs `Camera_Shear` 0x1bba38; the blur byte
             // drops when the eye leaves (the port's only GlobalBlur writer).
+            // Not zeroed out of the water: the game's only other GlobalBlur change is
+            // `Game_Draw`'s −0x10/frame decay [M 0x1e6f50:65-71] (`screen_blur_tick` below).
             if self.bond.underwater {
                 let _ = self.camera_shear();
-            } else {
-                self.global_blur = 0;
             }
             // unported-front-end-menus-3: `Player_Update` 0x193600:439-441's per-tick sway [M]
             // — the current weapon's swing amount (weapon_data+0x8c, `swing_amount`) × the
@@ -3809,9 +3815,23 @@ impl Sim {
                 axis = -1.0;
             }
         }
+        let zoom_before = self.zoom;
         if let Some(saved) = nf_game::gun::zoom_tick(&mut self.zoom, &mut self.zoom_target, max_zoom, axis) {
             if let Some(z) = self.zoom_saved.get_mut(base) { *z = saved; }
         }
+        // `Player_Zoom` 0x1a1a70:88-90: in single player, any tick the magnification (BL+0x8d0)
+        // moved sets GlobalBlur = 0x7f [M].
+        if self.mp.is_none() && self.zoom != zoom_before { self.global_blur = 0x7f; }
+        // `Player_Update` 0x193600:329-352: while the flash's timer (BL+0x918) runs — down to and
+        // including the half-point tick that clears it — single player copies BL+0x963 (the
+        // flash's byte) into GlobalBlur every tick [M].
+        {
+            let h = &self.drones.health;
+            if self.mp.is_none() && h.flash_total > 0.0 && h.flashbang > 0.0 && h.flashbang + 1.0 > h.flash_total * 0.5 {
+                self.global_blur = (h.flash_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        self.screen_blur_tick();
         // Wire / creep: the music event moved up with the substate effects (fix-wire) — the substate is
         // now the only source (the old proximity hack is gone).
         let _ = &self.wires;
@@ -11014,6 +11034,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 // blur byte.
                 shear_phase: 0.0,
                 global_blur: 0,
+                screen_blur: 0,
                 swing_phase: 0.0,
                 headless_sound: None,
                 // void-recovery-2: the walks' recovery-fire counter (its own line, lesson 4).
@@ -15970,6 +15991,13 @@ impl Sim {
     /// `GlobalBlur = 0x91` [M :49]. The game builds the identity+skew matrix (scale 1+xs,
     /// 1+ys, 1+xs) and concats it into the view matrix — the draw side's job (the port's Camera has
     /// no roll/shear slot yet).
+    /// `Game_Draw` 0x1e6f50:65-71, once per game frame after the update's writers: the frame's
+    /// blur is the current GlobalBlur, then GlobalBlur drops by 0x10 (to 0 below 0x10) [M].
+    pub fn screen_blur_tick(&mut self) {
+        self.screen_blur = self.global_blur;
+        self.global_blur = screen_blur_decay(self.global_blur);
+    }
+
     pub fn camera_shear(&mut self) -> (f32, f32) {
         let (xs, ys) = camera_shear_step(&mut self.shear_phase);
         self.global_blur = 0x91; // [M 0x1bba38:49]
@@ -16022,6 +16050,15 @@ impl Sim {
 /// 2π), still ≥ π → ±2π by sign]. The game builds the identity+skew matrix (scale 1+xs,
 /// 1+ys, 1+xs) and concats it into the view matrix, then sets GlobalBlur = 0x91 [M :36-49]
 /// — the matrix is the draw side's job; the blur byte is the Sim method's.
+/// `Game_Draw`'s GlobalBlur decay: below 0x10 → 0, else −0x10 [M 0x1e6f50:66-71].
+pub fn screen_blur_decay(b: u8) -> u8 { if b < 0x10 { 0 } else { b - 0x10 } }
+
+/// The share of the previous displayed frame one game frame keeps: `psiSetScreenBlur` 0x11ca98
+/// makes FIX = 0x80 − (blur >> 2), and `CreateSqueezeFrame` 0x11b140 copies the new frame over
+/// the displayed one with ALPHA 0x64 = (Cs − Cd)·FIX/128 + Cd [M packet words 0x25-0x27], so
+/// (blur >> 2)/128 of the old picture stays.
+pub fn screen_blur_keep(blur: u8) -> f32 { (blur >> 2) as f32 / 128.0 }
+
 pub fn camera_shear_step(phase: &mut f32) -> (f32, f32) {
     let xs = 0.025 * nf_game::trig::sinf(*phase + std::f32::consts::FRAC_PI_2);
     let ys = 0.025 * nf_game::trig::sinf(*phase);

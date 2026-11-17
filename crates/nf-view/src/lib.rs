@@ -6453,6 +6453,7 @@ impl App {
                 let fp_enc = std::time::Instant::now();
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 g.renderer.set_particles(&g.queue, &particles_for(&self.scene, &draw_cam));
+                g.renderer.blur_keep = if movie_frame.is_some() { 0.0 } else { self.scene.sim.as_ref().map_or(0.0, |s| scene::screen_blur_keep(s.screen_blur)) };
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
                 if let Some(path) = self.capture_req.take() {
                     let (w, h) = (g.config.width.max(1), g.config.height.max(1));
@@ -6966,6 +6967,11 @@ impl ApplicationHandler for App {
         config.format = config.format.remove_srgb_suffix();
         // Vsync at the display rate by default (a 120/144 Hz display gets 120/144 fps); `--fps N` turns it off and caps.
         config.present_mode = if self.fps_cap.is_some() { wgpu::PresentMode::AutoNoVsync } else { wgpu::PresentMode::AutoVsync };
+        // The screen blur keeps a copy of each presented frame (gpu::Renderer::screen_blur_pass);
+        // without COPY_SRC support the pass stays off.
+        if surface.get_capabilities(&adapter).usages.contains(wgpu::TextureUsages::COPY_SRC) {
+            config.usage |= wgpu::TextureUsages::COPY_SRC;
+        }
         surface.configure(&device, &config);
         let depth = gpu::depth_view(&device, config.width, config.height);
         let renderer = gpu::Renderer::new(&device, &queue, config.format, &self.scene, self.notex, self.nofog);

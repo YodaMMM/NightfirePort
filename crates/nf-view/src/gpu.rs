@@ -252,6 +252,14 @@ struct HO { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @locati
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct HudVertex { pub p: [f32; 2], pub uv: [f32; 2], pub c: [f32; 4] }
 
+/// The screen blur's per-display-frame keep: the game blends once per 60 Hz frame keeping
+/// `keep60` of the old picture, so a frame of `dt` seconds keeps keep60^(dt·60) — the same
+/// fade per second at any frame rate.
+pub fn blur_keep_for_frame(keep60: f32, dt: f32) -> f32 {
+    if keep60 <= 0.0 { return 0.0; }
+    keep60.clamp(0.0, 1.0).powf((dt * 60.0).max(0.0))
+}
+
 /// One frame's overlay: vertices and the runs drawn in order — (texture index into `Scene::hud_textures` + 1, 0 =
 /// none; blend mode; first vertex; count). Blend: 0 = normal, 1 = additive, 2 = subtractive.
 #[derive(Clone, Default)]
@@ -452,6 +460,17 @@ pub struct Renderer {
     /// and the intro draw through the same plane.
     hud_tbgl: wgpu::BindGroupLayout,
     hud_sampler: wgpu::Sampler,
+    blur_pipeline: wgpu::RenderPipeline,
+    blur_vbuf: wgpu::Buffer,
+    /// The last presented frame (texture, its bind group, size, format) and whether it holds a
+    /// frame the next blurred frame may blend (cleared on any unblurred frame).
+    blur_prev: Option<(wgpu::Texture, wgpu::BindGroup, (u32, u32), wgpu::TextureFormat)>,
+    blur_valid: bool,
+    /// The share of the previous frame ONE 60 Hz game frame keeps (`scene::screen_blur_keep`;
+    /// 0 = no blur). The pass converts it to the real frame time (keep^(dt·60)) so the trail
+    /// lasts as long at 240 Hz as on the PS2.
+    pub blur_keep: f32,
+    blur_clock: Option<std::time::Instant>,
     pipelines: Vec<(Draw, wgpu::RenderPipeline)>,
     /// Snow: the particle pipeline (additive, depth test, no write), a per-frame vertex buffer and the flake texture.
     snow_pipeline: wgpu::RenderPipeline,
@@ -799,6 +818,20 @@ impl Renderer {
             color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::ReverseSubtract },
             alpha: hud_alpha,
         }, "fs_ps2");
+        // The screen blur's feedback copy (`CreateSqueezeFrame` 0x11b140, ALPHA 0x64 with FIX =
+        // `ScreenBlur`): out = new·(1 − keep) + previous·keep, the previous frame drawn as the
+        // source with the blend constant = keep.
+        let blur_pipeline = make_hud(wgpu::BlendState {
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Constant, dst_factor: wgpu::BlendFactor::OneMinusConstant, operation: wgpu::BlendOperation::Add },
+            alpha: hud_alpha,
+        }, "fs");
+        let blur_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("nf-view blur"), size: 6 * std::mem::size_of::<HudVertex>() as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        {
+            // `fs` scales by the GS 1.1328125 gain; the colour undoes it so the copy is exact.
+            let c = [1.0 / 1.1328125, 1.0 / 1.1328125, 1.0 / 1.1328125, 1.0];
+            let v = |x: f32, y: f32| HudVertex { p: [x, y], uv: [(x + 1.0) * 0.5, (1.0 - y) * 0.5], c };
+            queue.write_buffer(&blur_vbuf, 0, bytemuck::cast_slice(&[v(-1.0, -1.0), v(1.0, -1.0), v(1.0, 1.0), v(-1.0, -1.0), v(1.0, 1.0), v(-1.0, 1.0)]));
+        }
         let hud_vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (HUD_MAX * std::mem::size_of::<HudVertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut pipelines: Vec<(Draw, wgpu::RenderPipeline)> = Vec::new();
         for m in &scene.materials { if !pipelines.iter().any(|(d, _)| *d == m.draw) { pipelines.push((m.draw, make_pipeline(m.draw))); } }
@@ -998,7 +1031,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), particle_alpha_pipeline, particle_add_pipeline, particle_vbuf, particle_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, pass_timestamps: None, probe_skip: Vec::new() }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), particle_alpha_pipeline, particle_add_pipeline, particle_vbuf, particle_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, blur_pipeline, blur_vbuf, blur_prev: None, blur_valid: false, blur_keep: 0.0, blur_clock: None, sky_flash_mask: 0, pass_timestamps: None, probe_skip: Vec::new() }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -1769,7 +1802,62 @@ impl Renderer {
                 }
             }
         }
+        self.screen_blur_pass(device, &mut enc, target, depth);
         enc
+    }
+
+    /// The screen blur (`CreateSqueezeFrame` 0x11b140 under `psiSetScreenBlur` 0x11ca98): blend
+    /// the previous presented frame back over this one at `blur_keep`, then keep this frame for
+    /// the next. Off (and the history dropped) whenever `blur_keep` is 0, or when the target
+    /// cannot be copied from.
+    fn screen_blur_pass(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView) {
+        let tex = target.texture();
+        let now = std::time::Instant::now();
+        let dt = self.blur_clock.replace(now).map_or(1.0 / 60.0, |t| (now - t).as_secs_f32().clamp(0.0, 0.1));
+        if self.blur_keep <= 0.0 || !tex.usage().contains(wgpu::TextureUsages::COPY_SRC) {
+            self.blur_valid = false;
+            return;
+        }
+        let size = (tex.width(), tex.height());
+        let fmt = tex.format();
+        if self.blur_prev.as_ref().is_none_or(|p| p.2 != size || p.3 != fmt) {
+            let t = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("nf-view blur prev"), size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+                dimension: wgpu::TextureDimension::D2, format: fmt, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[],
+            });
+            let view = t.create_view(&Default::default());
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &self.hud_tbgl,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.hud_sampler) }],
+            });
+            self.blur_prev = Some((t, bg, size, fmt));
+            self.blur_valid = false;
+        }
+        let Some((prev, bg, _, _)) = self.blur_prev.as_ref() else { return };
+        if self.blur_valid {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("nf-view blur"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target, depth_slice: None, resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }), stencil_ops: None,
+                }),
+                timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+            });
+            let k = blur_keep_for_frame(self.blur_keep, dt) as f64;
+            pass.set_blend_constant(wgpu::Color { r: k, g: k, b: k, a: k });
+            pass.set_pipeline(&self.blur_pipeline);
+            pass.set_bind_group(0, bg, &[]);
+            pass.set_vertex_buffer(0, self.blur_vbuf.slice(..));
+            pass.draw(0..6, 0..1);
+        }
+        enc.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo { texture: prev, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 });
+        self.blur_valid = true;
     }
 }
 /// Row `r` (0 = right, 1 = up) of the camera's world-space basis, from a rotation-only
