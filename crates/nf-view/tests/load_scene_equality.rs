@@ -114,7 +114,10 @@ const BASELINE: &[(&str, &str)] = &[
     // param-0 script 0x06000A1B, +20 script-entity slots (the cabinet and wire art) [M FuseBox_Create].
     // 07000014 places two kind-6 rows as well: −836 verts / −752 indices / −2 material slots,
     // pickups 32 → 30 (same gate).
-    ("07000014.bin", "cc33d36dfb9ede0b 7201469 14964117 6841 7039682 99 14960 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
+    // samurai-glow re-pin: the Phoenix Samurai's vent glow — Dynamo_GLOW on datums 0x1e-0x25 and
+    // Pulse_GLOW on 5-0x18 (28 glow meshes) on each of the two first-person models
+    // [M Player_WeaponFiring 0x1a5460:203-217] — +56 attachments, +5600 vertices, +2 materials.
+    ("07000014.bin", "f4b46bc4f0a78d89 7207069 14976597 6843 7045282 99 15016 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
     ("07000001.bin", "ebe4f5f0413f0809 4439467 9308115 3536 4366285 77 11265 101 11 20 4"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
 ];
 
