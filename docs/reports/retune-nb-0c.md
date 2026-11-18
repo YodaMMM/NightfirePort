@@ -71,3 +71,12 @@ cite it).
 ## Usage
 
 not visible to me (no token, cost or context-window figures are exposed to this session).
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox:
+
+1. curl: `curl: (28) Connection timed out after 20001 milliseconds`
+2. python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: timed out after 60 s (killed; no output)
+
