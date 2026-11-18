@@ -90,6 +90,20 @@ the task; the measured ledger and the next lever are in the ignore message on th
    suspicion)? If the spawn ray is eatable by a stance change (stand vs crouch eye height),
    the ride kill window reopens.
 
+## ntfy failed
+
+All three fallbacks failed in this sandbox:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...'), timeout=25)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → the connect to
+   ntfy.sh (159.203.148.75:443) hangs; killed by timeout at 75 s (`exit=124`, last line
+   `Connecting to ntfy.sh|159.203.148.75|:443...`). An earlier `-q` run returned exit 0
+   with no output within 40 s — ambiguous, so the message was re-sent twice; neither the
+   verbose run nor the quiet ones show a delivered response.
+
 ## Usage
 
 not visible to me — this session's environment shows no token, context-window or cost
