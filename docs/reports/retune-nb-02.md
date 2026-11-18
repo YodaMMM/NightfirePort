@@ -116,3 +116,12 @@ siege behaviour as game-true rather than a port artefact.
 
 Environment figures for this session: input/output token and context-window figures are
 not visible to me; cost is not visible to me.
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-18 ~17:18 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. python urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → timed out after
+   60 s (killed), no output.
