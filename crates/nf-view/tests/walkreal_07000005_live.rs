@@ -324,6 +324,32 @@ pub fn walk_to_the_slab_east_end(w: &mut Walker) {
         ("the lane, tower north", [29.5, 33.7, 75.0]),
     ] {
         w.walk_nav_to(at, name, 1.5);
+        // retune-nb-05 (00 Agent): the lane-approach rifleman pre-emptive. The d3 run's measured
+        // health ledger puts 44.0 of the pre-strip cost on #3 (a 20-hp lane guard [L the
+        // 2026-11-18 state census: (29.86, 35.23, 71.12) hp 20.0 weapon 0x16]) —
+        // 4 hits of 11.0 (the 0x16's headshot tier: the Hit.damage 2.75 × the head multiplier),
+        // 2 of them BEFORE the return-fire fight opened at t2853 and 2 in it [L the 2026-11-18
+        // run: health 100 → 78 → 56]. A player engages the man up the lane BEFORE crossing his
+        // field: from the strip west leg (42, 28, 94.5) the stand is 27 u out, inside the P99's
+        // 50 range [L ee_start_05.bin record 2: range 50]. The d1/d2 sisters skip it (the sim's
+        // own difficulty gate — [M GameState+0x28 0x2a3790 → Drones::difficulty]); the reload
+        // keeps the later fights off a drained clip (the a05g rule).
+        if name == "the strip west" && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+            // The pick is #3's HEALTH, not his spot: he is the level's only 20-hp guard [L the
+            // 2026-11-18 state census — every other team-1 guard hp 10.0], health
+            // never rises, and by the strip west leg the ditch/wall stands' gunfire has already
+            // moved him off his (29.9, 35.2, 71.1) post [L the first lever run: the radius-5
+            // spot pick found nothing, the fight ran unchanged and the 44.0 landed anyway].
+            let t3 = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
+                d.team == 1 && d.present && !d.corpse && d.health > 10.0
+            });
+            if let Some(di) = t3 {
+                let killed = w.shoot(di, "the lane approach rifleman");
+                eprintln!("[05a] the lane approach rifleman stand: killed {killed} at tick {} health {:.1}",
+                    w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+                w.reload_full();
+            }
+        }
         probe_vis(w, name);
     }
     w.walk_nav_to([30.0, 36.0, 60.0], "the tower top", 1.5);
@@ -1441,8 +1467,9 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
 /// between the staircase pocket (x 38-40) and the open slab (x ≤ 36) [D map F, the y-50.2 wall
 /// sections]. Ends standing at the terrace spot (22.0, −68.0).
 /// The walkway pair's answer: up to 5 bounded stands on the nearest VISIBLE live guard within
-/// 8 u (real input, the walker's own shot path).
-fn answer_the_strip_pair(w: &mut Walker, label: &str) {
+/// 8 u (real input, the walker's own shot path). `slow` (00 Agent only) arms through a slower
+/// weapon cycle — see `cycle_armed_slow` — preferring `prefer` (0 = any armed gun).
+fn answer_the_strip_pair_prefer(w: &mut Walker, label: &str, slow: bool, prefer: u8) {
     for _ in 0..5 {
         let g = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -1459,9 +1486,50 @@ fn answer_the_strip_pair(w: &mut Walker, label: &str) {
         // emptied a 6-round clip with no spare on #13) — cycle to one with rounds and go on.
         // Every carried gun dry ends the answer: a resupply walk from the strip leaves the
         // narrow band (measured on the 00 Agent stream: it stepped off to y 40 and fell).
-        if !w.switch_to_armed(label) { break; }
+        let armed = if slow { cycle_armed_slow(w, label, prefer) } else { w.switch_to_armed(label) };
+        if !armed { break; }
         let _ = w.shoot_bounded(g, &format!("{label}: the walkway pair #{g}"), 300);
     }
+}
+
+/// The 00 Agent strip answers' armed cycle (level-local — the shared `Walker::switch_to_armed`
+/// keeps the master behaviour for every other walk). The master cycle presses `weapon_cycle`
+/// and waits 60 ticks for the draw; the 0x24's draw is longer, so a press 61 ticks in still
+/// reads the old gun in hand and the next press re-queues the cycle from it — the measured
+/// livelock (the 2026-11-18 00 Agent run: 12 cycle prints all `weapon 0x16 clip 0 spare 0`,
+/// the picked-up 0x24 `clip 5` [L the 2026-11-18 state census] never reached, and the
+/// 732 ticks of wedged standing ate #13's volley). The slow cycle presses ONCE and waits up to
+/// 400 ticks for the in-hand id to change before the next press (the game's own draw run;
+/// the armed predicate is the master cycle's: weapon 2..=0x47 with clip + spare > 0).
+/// `prefer`: keep pressing while an armed gun holds but a `prefer` gun with rounds exists in
+/// the wheel — the strip answers lead with the 0x24 (30.0 damage [L ee_start_05.bin
+/// weapon_data 0x2bf150 + 0x24·0x10C]: one round drops a 10-hp guard, where the 0x16's grazes
+/// measured 1.6-1.7 a round and #13 survived six of them at 0.1 [L the 2026-11-18 run]).
+fn cycle_armed_slow(w: &mut Walker, label: &str, prefer: u8) -> bool {
+    for k in 0..12 {
+        let (wpn, c, s) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
+        };
+        let armed = wpn >= 2 && wpn <= 0x47 && c + s > 0;
+        if armed && (prefer == 0 || wpn == prefer) { return true; }
+        eprintln!("[walk] {label}: the slow armed cycle ({k}) (weapon {wpn:#x} clip {c} spare {s} prefer {prefer:#x})");
+        w.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
+        let mut settled = false;
+        for _ in 0..400u32 {
+            w.tick(Input::default(), false);
+            if w.scene.sim.as_ref().unwrap().gun.weapon != wpn { settled = true; break; }
+        }
+        if !settled {
+            eprintln!("[walk] {label}: the draw never left {wpn:#x} in 400 ticks — give up");
+            break;
+        }
+    }
+    let (wpn, c, s) = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
+    };
+    wpn >= 2 && wpn <= 0x47 && c + s > 0
 }
 
 fn walk_the_stairs_top_to_the_terrace_spot(w: &mut Walker, difficulty: u32) {
@@ -1481,17 +1549,29 @@ fn walk_the_stairs_top_to_the_terrace_spot(w: &mut Walker, difficulty: u32) {
     // on his path: before the strip and again at its middle, every VISIBLE live guard within
     // 8 u is shot (bounded stands, nearest first). walk_legs steers on its own (no walker
     // return fire), so the answers are explicit.
-    answer_the_strip_pair(w, "the strip's west corner");
+    // retune-nb-05 (00 Agent): the d3 answer arms through `cycle_armed_slow` — the master 60-tick
+    // cycle livelocks on the dry 0x16 and never reaches the picked-up 0x24 (30.0 damage [L
+    // ee_start_05.bin weapon_data 0x2bf150 + 0x24·0x10C] — one round drops a 10-hp guard), the
+    // 732 wedged ticks stood Bond in #13's volley and the answer ended dry with both guards
+    // alive. `slow` is `difficulty >= 3`: the Operative/Agent sisters keep the master cycle and
+    // their proven rolls byte-identical. The d3 walkway answer (after the walkway south 1 leg)
+    // answers the door guards #271/#272 [D placements (41.5/46.4, 46, −69.7)] — the legs pass
+    // within 1.2-1.6 u of #271 and the d3 fight must not run point-blank unopposed; the sisters
+    // never run it (their 38.5 answer already cleared the walkway).
+    answer_the_strip_pair_prefer(w, "the strip's west corner", difficulty >= 3, 0x24);
     walk_legs(w, &[
         ([38.5, 44.0, -72.7], "the south strip 38.5"),
     ], 40.0, 900);
-    answer_the_strip_pair(w, "the south strip 38.5");
+    answer_the_strip_pair_prefer(w, "the south strip 38.5", difficulty >= 3, 0x24);
     walk_legs(w, &[
         ([41.0, 44.1, -72.7], "the south strip 41"),
         ([43.4, 44.1, -72.6], "the south strip 43.4"),
         ([43.5, 44.2, -71.7], "the walkway tip"),
         ([43.3, 44.2, -70.9], "the tip's north end"),
         ([42.6, 44.4, -70.2], "the walkway south 1"),
+    ], 40.0, 900);
+    if difficulty >= 3 { answer_the_strip_pair_prefer(w, "the walkway south 1", true, 0x24); }
+    walk_legs(w, &[
         ([41.8, 44.7, -69.2], "the walkway south 2"),
         ([42.5, 45.0, -67.5], "the walkway 45 1"),
         ([43.5, 45.0, -65.5], "the walkway 45 2"),
@@ -1869,8 +1949,24 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88; tuning.rs 05-08 group ← ReadTuningVars 0x1d3a80];
 /// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the
 /// load path is the only difference.
+///
+/// retune-nb-05 (un-ignored): the nb-scan-all ledger's death ("every gun dry at the walkway
+/// pair", t10830 at (43.01, 45.19, −73.11) [L the 2026-11-18 run]) had two measured causes,
+/// both fixed with levers the sisters never run (`difficulty >= 3` gates only):
+/// 1. The master 60-tick weapon cycle LIVELocks on the dry 0x16 — 12 presses never left it
+///    (the 0x24's draw outlasts the 61-tick wait, each press re-queues from the old gun) — so
+///    the picked-up 0x24 (`clip 5` [L probe run]) never armed and the answer burned 732 ticks
+///    dry in #13's volley. `cycle_armed_slow` presses once and waits up to 400 ticks for the
+///    draw; the answers prefer the 0x24 (30.0 damage [L ee_start_05.bin weapon_data
+///    0x2bf150 + 0x24·0x10C] — one round drops a 10-hp guard, where the 0x16's grazes measured
+///    1.6-1.7 and #13 survived six of them at 0.1).
+/// 2. 44.0 of the pre-strip cost was #3 (the level's only 20-hp guard [L probe run], 4 hits of
+///    11.0 — the 0x16's headshot tier — 2 before the return-fire fight opened): the lane
+///    approach pre-emptive (`walk_to_the_slab_east_end`, the health-signature pick) kills him
+///    from the strip west leg before his field crosses Bond. The passing run: 6 hits for 24.8
+///    the whole walk, end health 75.2, the pair one-shot each (the west corner #12, the walkway
+///    south 1 #13 at 1.3 u), ch 0x1E + exit 0x07000006 at t11844 [L the 2026-11-18 pass].
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t10830 at (43.01,45.19,-73.11): every gun dry at the walkway pair [L 2026-11-18 run]; re-tune and un-ignore"]
 fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
     // The fights HEAD-HUNT (see the Agent sister): at 00 Agent the guards' accuracy is 1.3 and
     // Bond's pain is unscaled, so every tick a fight stands is a tick of bursts — the head pick
@@ -2024,3 +2120,4 @@ fn the_guards_never_take_the_hurt_walked() {
     }
     eprintln!("[05-hurt] the lure pin: contact observed = {saw_contact} (the reach map: no guard walked into a plane this run)" );
 }
+
