@@ -1013,6 +1013,14 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             // starting 23 rounds. The ditch scoop drops the sight filter (the nav finds its
             // own path down; the walk-over take needs no sight) and walks onto each drop.
             scoop_drops_03(&mut w, &format!("{name} ditch scoop"), 8.0);
+            // nb-scan-all retune (this branch, the t30603 ledger): the spacing scan walks the
+            // ditch machine gun #12 west along the moat (the green -9 route knew him at his
+            // (4.2,-26.7) post) and every stand on him from the LANE floor failed killed-false
+            // — the ditch lip blocks the eye ray [L d3run38]. From the ditch floor — where the
+            // scoop just put Bond — the line is open: an aimed stand right after each scoop
+            // answers him (and anything else the ditch exposes) before the next leg walks the
+            // moat west end under his muzzle.
+            clear_exposed_nearest_03(&mut w, &format!("{name} ditch stand"), 40.0, 4, 0, false);
         }
         w.walk_nav_to(at, name, 1.6);
     }
@@ -2431,7 +2439,7 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 /// the -8 ledger's live check (a) answered from the trace). The d<3 streams stay byte-identical
 /// (every -9 arm is d>=3-gated).
 #[test]
-#[ignore = "nb-scan-all retune, frontier moved t8396 -> t30603 (this branch): the d3 door-shut (1 press, both lane leaves CLOSED) got the mid-courtyard crossing through at 98.2, and escalating_cooldowns stopped the ditch re-fights; Bond now dies t30603 at (7.04,6.37,-38.19) on the moat-west legs: drone #12 (skin 0x500003a, the ditch machine gun 0xe) ADVANCED under the spacing scan to d 1.0 — 37.6 in 4 hits, every stand on him failed killed-false (the ditch lip blocks the eye ray from the lane floor [L d3run38]); the mouth-line stands' trades cost ~59 (the green -9 ledger's own 48.0 class for #11/#17 plus #8's 10.8). Next lever: answer #12 from the ditch floor (the scoop walks Bond down — an aimed stand after each scoop, where he IS exposed), and arm the door-shut press before the first follower crosses (the 9388-run press lost the race, #10 crossed north, the fights paid 45.0). [L the 2026-11-18 retune-nb-03 runs]"]
+#[ignore = "nb-scan-all retune, frontier t8396 -> t30603 -> t71946 (this branch): the d3 door-shut (1 press, both lane leaves CLOSED) got the mid-courtyard crossing through at 98.2, escalating_cooldowns stopped the ditch re-fights, and the ditch-floor aimed stands after each scoop killed the advanced ditch machine gun #12 (his 24.0 landed before he fell); Bond now dies t71946 at (37.85,6.38,-0.24) on the door-8 mouth approach: drone #18 (skin 0x5000036, 0x1c) landed 13.6 across 19 chip hits at 9.4 u and stood at hp 12 — the fights' attrition vs the door-8 pocket cluster (the green -9 ledger's si-0 saddle approach kept #14 asleep through the trio fight; #18's pocket is the same shape). Next lever: the aimed stands from the saddle mouth line before the pocket nav (the -9 'north-door standoff + funnel' shape), and the mouth door's own shut arm while the stands run. [L the 2026-11-18 retune-nb-03 runs]"]
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }

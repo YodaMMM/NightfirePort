@@ -25,3 +25,7 @@
   (CARGO_PROFILE_RELEASE_STRIP=debuginfo kept the touched binaries buildable; nf-view test
   executables land in build/<pkg>/<hash>/out/). The full suite did not fit the window; the
   touched binaries were run whole instead.
+- Second d3 round (the ditch-floor aimed stands after each scoop): #12 killed (his 24.0
+  landed before he fell) and the frontier moved again t30603 -> t71946 — the new death is
+  the door-8 mouth approach (#18's 19 chip hits, 13.6, hp 12 alive). The ignore message
+  carries the updated ledger and the next lever (the saddle mouth line's aimed stands).
