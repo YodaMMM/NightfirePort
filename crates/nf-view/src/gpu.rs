@@ -494,6 +494,10 @@ pub struct Renderer {
     /// (`Material::sky_slot`) renders only when its variant matches the slot's bit; 0 = every slot
     /// draws its normal variant (the loading screen, the pre-sim frames).
     pub sky_flash_mask: u32,
+    /// The 0x0700001B rotating sky: the spin angle about X (`Sky::spin`). Both 1b sky slots follow the
+    /// camera with a zero placement rotation, so the game's `spin · slot · camera` [M 0x1e5ad0:182-196]
+    /// is the camera-rotation sky matrix with `RotMatrix([spin, 0, 0])` applied first.
+    pub sky_spin: f32,
     /// The swap's WRECK draws, per frame: the baked wreck instances' material centres (f32
     /// bits) whose Destroy leaf is dead — the only wreck draws that render ([M Destroy_Smash
     /// 0x12bb60's `Control_SetGList(obj, tag[0])` swap: the dead object rides the destroyed
@@ -998,7 +1002,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), particle_alpha_pipeline, particle_add_pipeline, particle_vbuf, particle_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, pass_timestamps: None, probe_skip: Vec::new() }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), particle_alpha_pipeline, particle_add_pipeline, particle_vbuf, particle_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, sky_spin: 0.0, pass_timestamps: None, probe_skip: Vec::new() }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -1502,7 +1506,15 @@ impl Renderer {
                     let (fb, nf, rate) = self.tex_frames[tf];
                     staged[HEAD + (self.order.len() + 1 + g) * SLOT + 17] = (fb + ((ticks / rate) % nf) as usize) as f32;
                 }
-                for c in 0..4 { staged[c * 4..c * 4 + 4].copy_from_slice(&view_proj[c]); staged[16 + c * 4..20 + c * 4].copy_from_slice(&view_proj_rot[c]); }
+                // The rotating sky: view_proj_rot · Rx(spin) (column-major), the sky draws' matrix only.
+                let sky_vp = if self.sky_spin != 0.0 {
+                    let (sn, cs) = self.sky_spin.sin_cos();
+                    let m = view_proj_rot;
+                    let mut o = m;
+                    for r in 0..4 { o[1][r] = m[1][r] * cs + m[2][r] * sn; o[2][r] = -m[1][r] * sn + m[2][r] * cs; }
+                    o
+                } else { view_proj_rot };
+                for c in 0..4 { staged[c * 4..c * 4 + 4].copy_from_slice(&view_proj[c]); staged[16 + c * 4..20 + c * 4].copy_from_slice(&sky_vp[c]); }
                 staged[32..40].copy_from_slice(&extra);
                 // viewmodel-light: the env-map rows (us[10] / us[11]) — the camera's right and up
                 // axes in world space, read back from the rotation-only view-projection (its rows 0

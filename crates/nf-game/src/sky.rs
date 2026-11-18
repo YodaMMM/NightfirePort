@@ -412,6 +412,11 @@ impl Sky {
         out
     }
 
+    /// The spin angle the frame's sky draws carry (`count × 0.00069444446` rad about X, [M 0x1e5ad0:189-196]);
+    /// 0.0 on every level but 0x0700001B (the counter only advances there). The two 1b slots read counts
+    /// one apart (StarField, then Earth); the draw uses the frame's final count for both (1/1440 rad).
+    pub fn spin(&self) -> f32 { mul(self.rotating.count as f32, ROTATOSKY_ANGLE) }
+
     /// Convenience wrapper returning just the slot ticks.
     pub fn tick_group_slots(&mut self, group: u8, level: u32, paused: bool, rng: &mut Rng) -> Vec<(usize, SlotTick)> {
         self.tick_group(group, level, paused, rng).0

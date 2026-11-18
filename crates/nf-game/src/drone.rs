@@ -19626,11 +19626,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.hold_active = false;
             // Dev-only: a script's event 5 during a held tick is not kept (the hold already freezes them).
             self.npc_enabled = true;
-            self.sky_frame();
+            self.sky_frame(d.level);
             return;
         }
         self.tick_impl(d, player, cel_graph);
-        self.sky_frame();
+        self.sky_frame(d.level);
     }
 
     /// The unit-test entry (hand-built `Player`s carry no viewer cel): the drawn gate keeps the
@@ -19643,12 +19643,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// a 2-D `Sound_Play(100, 0x5d)` (0x5e after a reflicker roll) when one leaves 1
     /// [M 0x1e5ad0:100-109]. Only slots with a flash variant run the timers (0700000a/0700000b's
     /// slot 3 on the disc [D]).
-    fn sky_frame(&mut self) {
+    fn sky_frame(&mut self, level: u32) {
         // One set of lightning globals (`LightningType`/`Reflicker`/`SuperHappyLightningFlag`
         // [L 0x30d0b8/0x30d0b9]): `Lightning_Update` 0x18cf68 (the 0x2c bolts, ticked in `fx`) consumes
         // `Reflicker` [M :23-24] before the frame's `View_DrawSky` calls read and rewrite all three.
         self.sky.globals = self.fx.lightning;
-        for th in self.sky.frame_thunder(0, false, &mut self.sky_rng) {
+        // The level id gates `rotatosky.168` [M 0x1e5ad0:186-198]: only 0x0700001B spins its sky (the
+        // lightning timers ignore it). It was passed 0, so the 1b counter never advanced.
+        for th in self.sky.frame_thunder(level, false, &mut self.sky_rng) {
             self.audio.play(th.id());
         }
         self.fx.lightning = self.sky.globals;
