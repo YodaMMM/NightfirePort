@@ -896,6 +896,23 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         // d3 only; the d1/d2 RNG is untouched.
         w.walk_nav_to([-30.8, 6.4, 13.5], "the geisha-1 give-ground", 1.0);
         status(&w, "the geisha-1 give-ground");
+        // nb-scan-all re-tune (3412a89a3): the retreat now SIEGES instead of funneling. Under the
+        // spacing scan the captains no longer close into the stand-off ring — d#5 held his
+        // step-aim camp at the plate's west side (7-10 u) and d#6 held the west end (15-17 u),
+        // both cycling 0x5f/0x73/0x74/0x5c and volleying the give-ground stand for 87.0 → 39.0
+        // [L the 2026-11-18 repro, the d#5/#6 watch trace]. A player re-takes the door he came
+        // in by: the pre-plate vantage (-35.2, 6.5, 9.7 — the walk's own "north of the ch-0x17
+        // plate" leg's spot) stands 4-5 u off the camp line and holds the hall's north-south
+        // lane, and the return path (z >= 9, north of the plate gap) never crosses the 0.8-u
+        // plate mouth where the repro walk-back died at t10472 [L the same repro]. The silenced
+        // P99 goes back in hand first (the give-ground fight's quiet fallback armed the dropped
+        // 0x1c — its shots are loud [D 0x1de outer well past 40]; the P99 still carries ~20
+        // rounds [L the fight#7 trace: clip 7 spare 13 after the #7 kill]).
+        arm_weapon(&mut w, 0x02, "the vantage re-arm");
+        w.lenient = true;
+        w.walk_to(Wp::new(-35.2, 6.5, 9.7).r(1.0), "the plate vantage");
+        w.lenient = false;
+        status(&w, "the plate vantage");
     }
     //    00 Agent round-0 (real-health-00agent-02-03-2): the approach met the shotgun captor at
     //    1.3 u and his first 8-pellet volley landed 57.6 at 2.7 u — dead at t6398 [L the
@@ -946,7 +963,20 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
                     .map(|(i, _)| i)
             };
             let Some(di) = di else { break };
-            if !hold_for_sight(&mut w, di, 300) { break; }
+            // nb-scan-all re-tune (3412a89a3): from the vantage the step-aiming captains expose
+            // down the hall; when the first hold fails, lean one leg south (the pre-plate route's
+            // own spot, [L the walk's "north of the ch-0x17 plate" leg]) and hold again — a
+            // player opens the doorway line with a step, not a wait. The repro's blind 300-tick
+            // hold on an unseen captain was the free-fire window that bled 87.0 → 39.0 while the
+            // step-aim states (0x73/0x74, the scan's own strafe options) volleyed from 7-10 u
+            // [L the 2026-11-18 repro: d#5 cycling 0x5f/0x73/0x74/0x5c at (-36.8..-38.9, 3.6..7.2)
+            // for 3100 ticks, no fire state ever entered].
+            if !hold_for_sight(&mut w, di, 240) {
+                w.lenient = true;
+                w.walk_to(Wp::new(-35.2, 6.5, 8.2).r(0.9), "the plate vantage lean");
+                w.lenient = false;
+                if !hold_for_sight(&mut w, di, 240) { break; }
+            }
             // hear-fold re-tune: settle the view before the first tap (the repro stands opened
             // at err 2.19 and burned 1-2 rounds per kill on the convergence [L the rf-trace]).
             settle_aim(&mut w, di, 120, 0.06);
@@ -1919,7 +1949,7 @@ fn walk_the_castle_all_objectives_real_health_agent() {
 /// no-dwell lane crossing with the sniper suppressed (`dmg.cooldown` until the door leg), and
 /// the ≤12-u band stand at the bunker door (10.3 u from the post) + the corridor rearm.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t10472 at (-34.68,6.47,3.70) [L 2026-11-18 run]; re-tune and un-ignore"]
+#[ignore = "nb-scan-all re-tune in progress (the vantage lever landed): geisha-1 green (the plate vantage + the lean-hold duel, the 2026-11-18 lever-1 run); the walk now dies t27653 at the lane crossing (-36.09,5.92,-0.46) with 7.8 health — the sniper's -48.0 body round; the pool spent 87->33 on the geisha-1 fights (the post-loop pursuer sweep, 3 stand_and_fire fights) and 33->7.8 on the west-wing armour detour; next lever: cheapen the crossing pool (skip/trim the post-loop sweep fights or the detour timing) so Bond crosses at 48+ [L 2026-11-18 run]"]
 fn walk_the_castle_all_objectives_real_health_00agent() {
     walk_the_castle_all_objectives_real_health_at(3);
 }
