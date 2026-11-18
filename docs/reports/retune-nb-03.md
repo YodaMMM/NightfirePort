@@ -73,3 +73,15 @@ test stays ignored with the measured ledger and the next lever in its message):
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (github.com and the copyparty host both work, so
+the block is specific to ntfy.sh):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-03: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(...)"` (20 s timeout)
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "retune-nb-03: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → hung past 60 s, killed by the tool timeout (no output).
