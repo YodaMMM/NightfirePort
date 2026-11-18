@@ -83,3 +83,11 @@ gives the drop's own rounds; the walk's strip fight depends on it.)
 
 Not visible to me: this session shows no token, credit or context-window figures in its
 environment; nothing to copy.
+
+## ntfy failed
+
+All three fallbacks failed; the exact errors:
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: timed out after 60 s (no output, killed).
