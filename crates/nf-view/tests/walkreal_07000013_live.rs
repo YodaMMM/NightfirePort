@@ -536,6 +536,42 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // pocket the segment to (2.5, 30.5) runs north-east, clear of the furniture corner, and
     // the west-mid line from there rides the old path.
     w.walk_to(Wp::new(2.5, -368.4, 30.5).r(1.5), "13: the lobby mid re-anchor");
+    if real_damage && difficulty == 3 {
+        // retune-nb-13 (the mezzanine pre-emptive): the nb-scan-all ledger's death is the
+        // mezzanine pistol guard #5 (skin 0x5000004, weapon 0x19, hp 12) sniping the re-anchor
+        // end from d 25.7 — OUTSIDE the sweep's 24 radius below (he patrolled farther west than
+        // the guard-repin-master ledger's (−14.8, −368.4, 45.6) post: the 2026-11-18 repro run
+        // measured him at (−17.7, −362.4, 45.2), d 25.7 from the re-anchor spot, and his two
+        // −3.5/−3.0 pistol taps killed the 6.5-health walk at t3774 [L the retune-nb-13 repro
+        // run]). His box IS exposed from the re-anchor spot (the death fight's own gun-ray pick
+        // returned an aim point at t0 [L the same run, fight#5 aim Some]) and he had NOT opened
+        // fire while Bond stood there — he fired only once the west-mid leg started moving
+        // (~57 ticks in), the sight law the statue periods measured (the east-lane drain's
+        // ~2160 silent quiet-wait ticks drew no fire either [L the same run]). A player who has
+        // spotted the mezzanine shooter takes him from the re-anchor end BEFORE walking into his
+        // cone: the nearest live team-1 guard more than 2.0 above Bond's floor (the mezzanine
+        // band — the lobby floor guards and the floor spawner's wave all read Δy ≈ 0) within
+        // 32 u, up to three aimed stands through the ordinary fight machinery (the file's own
+        // aimed_stand — the strict aim-bit zero-spread act [M Bullet_init 0x12c5a0:139-170] is
+        // what lands at 25.7 u; the hip cone's ~3.4 u of scatter there is not). The balcony
+        // rifle post (16.2, −362.4, 41.7 [L the door-drain comment], d 16.3) may sit nearer and
+        // is taken first — he sniped the door wait in the margin-2 ledgers, so his early death
+        // only helps. Never lower damage or health; the sisters (d2/d1) skip the block.
+        for _ in 0..3 {
+            let g = { let sim = w.scene.sim.as_ref().unwrap(); let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, bp) < 32.0 && d.pos[1] - bp[1] > 2.0 })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp))) };
+            let Some(g) = g else { break };
+            let _ = w.switch_to_armed("13: the mezzanine pre-emptive");
+            let k = aimed_stand(&mut w, g, "13: the mezzanine pre-emptive", 700);
+            w.dmg.aimed_fights = false;
+            eprintln!("[013] 13: the mezzanine pre-emptive stand on drone #{g} killed {k}, health {:.1}",
+                w.scene.sim.as_ref().unwrap().drones.health.health);
+            if !k { break; }
+        }
+    }
     // civ-unignore-2's law at the re-anchor end (guard-repin-master): the same ray-gated sweep
     // runs one leg EARLIER — the west-mid route's fights used to be answered mid-leg from the
     // lane, but the guards' per-goal arrival radii [M 0x152548:174-181] close the pursuit to
