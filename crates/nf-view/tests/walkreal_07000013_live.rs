@@ -736,6 +736,50 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             clear_the_visible(&mut w, "13: the lobby west mid", 24.0, false, false);
         }
     }
+    if real_damage && difficulty == 3 {
+        // retune-nb-13 (the west-mid answer): the lever-6 ledger — with the pool filled (clip 7
+        // spare 15) the west-mid leg crossed FLAT (54.5 held) and #5 died to the re-anchor's
+        // own fight (t3959, zero cost) — but the north-west leg's melt opened on #4 (skin
+        // 0x5000006, weapon 0x18, hp 24, the mezzanine EAST end at (16.1, −362.4, 43.3), d
+        // 28.5 from the north-west spot) whose fight returned killed false (the strict fight
+        // gate at 28.5 u outlived the 900 cap) and on #11 (skin 0x5000004, 0x19, hp 12, a wave
+        // guard at (6.7, −368.4, 31.2), d 20.4 behind Bond): 54.5 -> 0 across the failed-fight
+        // + resupply statues, death t4693 at (−11.58, −368.39, 40.38) [L the lever-6 run].
+        // From the west-mid end #4 is d 21.4 (7 u closer — the far stand's 0.02/0.028 band
+        // converges there) and #11 d 14.0. A player who has just crossed the lobby answers the
+        // mezzanine rifle FIRST (the dy > 2 exposed pick, the re-anchor pre-emptive's own
+        // machinery) and then the nearest floor guard, both through bounded stands — kill or
+        // move on (the lingering law above still caps this at three 700-tick stands, not the
+        // old open-ended ones). d3 only; the sisters keep the byte-identical legs.
+        for _ in 0..3 {
+            let g = { let sim = w.scene.sim.as_ref().unwrap(); let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, bp) < 32.0 && d.pos[1] - bp[1] > 2.0
+                    && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some() })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp))) };
+            let Some(g) = g else { break };
+            let _ = w.switch_to_armed("13: the west-mid mezzanine answer");
+            let k = mezz_far_stand(&mut w, g, "13: the west-mid mezzanine answer", 700);
+            w.dmg.aimed_fights = false;
+            eprintln!("[013] 13: the west-mid mezzanine answer on drone #{g} killed {k}, health {:.1}",
+                w.scene.sim.as_ref().unwrap().drones.health.health);
+            if !k { break; }
+        }
+        for _ in 0..3 {
+            let g = { let sim = w.scene.sim.as_ref().unwrap(); let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, bp) < 26.0 })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp))) };
+            let Some(g) = g else { break };
+            let _ = w.switch_to_armed("13: the west-mid nearest answer");
+            let k = w.shoot_bounded(g, "13: the west-mid nearest answer", 700);
+            eprintln!("[013] 13: the west-mid nearest answer on drone #{g} killed {k}, health {:.1}",
+                w.scene.sim.as_ref().unwrap().drones.health.health);
+            if !k { break; }
+        }
+    }
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
     // warm-chain-margin-6 (measured dead, NOT repeated): a deliberate resupply at this leg end
     // took the spawn-pocket drop (clip 4 spare 28 — the right rounds) but stood Bond in the
@@ -1169,7 +1213,7 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// pre-clear at 14-16 u, no bridge_and_retry, no in-place creep or longer stands — each
 /// measured dead in the margin-4 report). Never lowered damage or health; no top-ups.
 #[test]
-#[ignore = "nb-scan-all ledger (2026-11-18, retune-nb-13 runs): Bond dies t3774 at (3.26,-368.39,31.72) at 6.5 hp — the mezzanine pistol guard #5 (skin 0x5000004, weapon 0x19, hp 12, static at (-17.7,-362.4,45.2), d 25.7 — OUTSIDE the re-anchor sweep's 24) opened fire ~67 ticks after the re-anchor arrival armed his cone: two -3.5/-3.0 taps [L the repro]. Bond enters 13 at 20 hp because 12 now delivers 19.5 (was 79 in the margin-5 green run): the flank's first fight on #6 returned killed false and the melt poured 49.0 around it (65.0 -> 30.0), #2/#12's earlier trades the rest [L the repro's 12 ledger]. TRIED: (1) the mezzanine pre-emptive (this tree's mezz_far_stand on the nearest EXPOSED dy>2 guard < 32 u from the re-anchor end, before the sweep) — the stand ran, #5 measured exposed TRUE from the re-anchor spot, but the raise (~39 ticks) + convergence (~31) missed the ~62-tick grace: #5 still hp 12.0 at both his hits, death t3774 unchanged [L lever-2/3 runs]; (2) the pocket reposition + deliberate resupply to dodge the mid-leg fetch — WORSE, death t993 (the reposition's own ticks fired the low-ammo fetch first, the north drop (4.9,-369.4,22.2) won the pick, the nav walked Bond into #3's pocket kill zone: 19.5 in 10 hits) [L lever-4]; (3) finish_fights (the determined pass after failed fights) — 12 died EARLIER, t13833 inside the flank melt zone [L lever-5]. NEXT LEVERS: (a) 12-side — the flank melt around a failed first fight (a flag-gated re-stand from the flank band, or the fight's own cap window — NOT finish_fights, measured dead); (b) with a 40+ hp entry the pre-emptive race survives (5 shots of slack vs the ~10-tick overshoot); (c) the east-lane/room legs are clean once the lobby is crossed [L the run]"]
+#[ignore = "nb-scan-all ledger (2026-11-18, retune-nb-13 levers 1-7): PROGRESS this tree — 12 now delivers 54 hp + armour 50 (was 20): the flank fires ONE LEG EARLIER (tower2, FLANK_LOBBY_EAST-gated) so the north-lobby melt never opens (the baseline: the first fight on #6 killed false at t11941 and 49.0 poured around it) [L lever-6]; 13's east-lane #3 fight then cost ZERO, the re-anchor's own fight killed the mezzanine #5 (t3959, zero cost — the pool filled: clip 7 spare 15), and the west-mid mezzanine answer (this tree's mezz_far_stand) killed the mezzanine-east rifle #4 (t~4100, zero cost) [L lever-7]. DEATH REMAINS at the north-west leg: t4849 at (-13.41,-368.30,39.52) — the pool ran DRY mid-lobby (clip 0 spare 0, the fetches came back empty) and the group-1 respawner stream (max 4 alive, 32000 waves [D §4]) — #6new (rifle, (-7.2,-368.4,26.8) d 10.5 behind) + #11 (0x19, chasing d 17.6) — poured 49.5 into a dry Bond, the fights unable to answer [L lever-7]. NEXT LEVERS: (a) the POOL — carry spare out of 12 (the shaft boxes give clip only [L the margin-6 note]; a flag-gated 12-side fetch) or a safe-fetch lane on 13 (the lane-side drop at (5.0,-369.4,34.7) fed spare 15 at the re-anchor [L lever-6]); (b) when the pool has rounds the fights win EVERY measured exchange this run (#3, #5, #4, #6, #7 all killed true zero-cost) — the wave stream is answerable, the dry gun is not; (c) the north-west leg's fetch band (12 u) missed all drops (resupply done (false)) — widen the band or fetch at the glass band"]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
     let iso = iso();
     walker::with_real_damage_head_hunting(|| walk_the_warm_chain(&iso, true, 3));

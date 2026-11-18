@@ -500,11 +500,21 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         // walk rejoins at "the lift doors" — the remaining lane legs (2/3/east) are behind him
         // (the posts are the lane's east guards; with them dead the lane is walked out).
         // Every other caller runs master's plain walk_to byte-identical.
-        if label == "the north lobby 2" && FLANK_LOBBY_EAST.load(std::sync::atomic::Ordering::Relaxed) {
+        // retune-nb-13 (the flank fires ONE LEG EARLIER, same flag — the nb-scan-all ledger's
+        // 12 melt opened at "the north lobby" leg's own fights: the first return-fire fight on
+        // #6 returned killed false at t11941 and the melt poured 49.0 around it (65.0 -> 30.0
+        // across the failed-fight + line-walk windows) BEFORE the flank ever ran at the next
+        // leg [L the repro run's 12 ledger]. From "the north lobby west end" the flank's first
+        // hop (−10.0, 15.4) rides the SAME under-sight south band (the sight grid: unseen to
+        // x −7.5 [L the margin-5 probes]), so the whole crossing happens before #6's cone
+        // opens, the line-stand kills him from (−8.25, 19.0) d 8.7 as before, and the melt's
+        // windows never exist. The replaced leg's own pre-clear skip is covered by the flank's
+        // fights; "the north lobby 2" joins the skip list.
+        if label == "the north lobby" && FLANK_LOBBY_EAST.load(std::sync::atomic::Ordering::Relaxed) {
             flank_lobby_east(w);
             continue;
         }
-        if matches!(label, "the north lobby 3" | "the north lobby east")
+        if matches!(label, "the north lobby 2" | "the north lobby 3" | "the north lobby east")
             && FLANK_LOBBY_EAST.load(std::sync::atomic::Ordering::Relaxed) {
             continue;
         }
