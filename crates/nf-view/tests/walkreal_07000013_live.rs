@@ -263,6 +263,115 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
     killed
 }
 
+/// retune-nb-13: the far pre-emptive stand (the mezzanine sniper from the re-anchor end). The
+/// file's `aimed_stand` is shared by every sweep INCLUDING the d2 sister's (her byte-identical
+/// law), so this copy carries the one change the far race needs: the tap fires at the fight
+/// machinery's own proven on-target band (err < 0.02, perr < 0.028 — `shoot_bounded`'s gate,
+/// the band every measured return-fire kill landed through) instead of the sweep stand's strict
+/// 0.01/0.01, because the mezzanine race is measured at ~62 ticks of grace: the death run's #5
+/// (hp 12, static at (−17.7, −362.4, 45.2)) opened fire 3767, ~67 ticks after the re-anchor
+/// arrival armed his cone, and the strict gate's convergence (the 1.24-rad cursor drive at
+/// ±0.08/tick) plus the raise left the first tap past his first two shots [L the lever-1 runs:
+/// two stands, death unchanged at t3774, #5 hp 12.0 at both his hits]. Same still gate idea
+/// (the root-motion check, 12 ticks), the same dry/absent give-ups, the exposure re-pick every
+/// 10 ticks, cap 700. Trace prints every 30 ticks (the stall measurement the lever needs).
+/// Only the d3 pre-emptive calls this; the sisters never run it.
+fn mezz_far_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.switch_state == 0 && !sim.gun.fire_state { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    let prev = w.dmg.aimed_fights;
+    w.dmg.aimed_fights = true;
+    let killed = {
+        let mut unseen = 0u32;
+        let mut last_tap = 0u32;
+        let mut aim: Option<[f32; 3]> = None;
+        let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let mut last_hit = 0u32;
+        let mut still = 0u32;
+        let mut last_pos = [0.0f32; 3];
+        let mut have_pos = false;
+        for t in 0..cap {
+            let (input, fire, reload) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                if d.corpse || d.health <= 0.0 || !d.present { return true; }
+                if sim.disabled { return false; }
+                if sim.gun.clip == 0 && sim.gun.spare == 0 { return false; }
+                let moved = have_pos && ((d.pos[0] - last_pos[0]).powi(2)
+                    + (d.pos[1] - last_pos[1]).powi(2) + (d.pos[2] - last_pos[2]).powi(2)).sqrt() > 0.03;
+                have_pos = true;
+                last_pos = d.pos;
+                still = if moved { 0 } else { still.saturating_add(1) };
+                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                if t - last_hit > 1500 { return false; }
+                if t % 10 == 0 { aim = walker::DamageLog::exposed_part_gun_rays(&sim, di); }
+                if aim.is_none() { unseen += 1; if unseen > 60 { return false; } } else { unseen = 0; }
+                let b = sim.bond.pos;
+                let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+                let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+                let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+                let h = (dx * dx + dz * dz).sqrt().max(0.5);
+                let desired_yaw = dx.atan2(dz);
+                let desired_pitch = (dy / h).atan();
+                let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                let cx_want_raw = -yaw_err / 0.76966;
+                let cy_want_raw = pitch_err / 0.57724;
+                let cur = sim.cursor;
+                let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                let aoff = sim.drones.aim_offset;
+                let err = { let mut a = yaw_err - aoff[0];
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let perr = pitch_err - aoff[1];
+                let reload = sim.gun.clip == 0;
+                let fire = sim.aiming && !reload && unseen == 0 && err.abs() < 0.02 && perr.abs() < 0.028
+                    && still >= 12 && t.saturating_sub(last_tap) >= 8;
+                if t % 30 == 0 {
+                    eprintln!("[013] far-stand trace t{t}: aiming {} err {err:+.4} perr {perr:+.4} still {still} unseen {unseen} clip {} spare {} tgt hp {:.1}",
+                        sim.aiming, sim.gun.clip, sim.gun.spare, sim.drones.list[di].health);
+                }
+                (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
+            };
+            if reload {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+                w.total_ticks += 1;
+                w.after_step();
+                for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+            } else if fire {
+                last_tap = t;
+                w.tick_fire(input);
+            } else {
+                w.tick(input, false);
+            }
+        }
+        w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
+    };
+    w.dmg.aimed_fights = prev;
+    for _ in 0..90 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if p.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[013] the far stand ({label}): drone #{di} killed {killed}, health {:.1}",
+        sim.drones.health.health);
+    killed
+}
+
 /// The whole warm chain (12 → 4A → 13 → out) on real input. `real_damage` = the armour detour
 /// (see the real-damage test below); the wrapper turns the top-up off for every walker the walk
 /// makes. `difficulty` = the menu pick the chain runs at (the front-end's launch path [M
@@ -328,6 +437,10 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // cycle, the 02/03 00-Agent lever); `escalating_cooldowns` — a player who could not
             // answer a shooter from a spot does not re-take the same spot 240 ticks later (the
             // 0c Agent lever; the wait doubles per further failure on the same drone).
+            // retune-nb-13 (measured DEAD, not repeated): `finish_fights` (the determined pass
+            // after every failed fight) — the 12 run died EARLIER, t13833 at (−16.32, 1.13,
+            // 19.38) inside the flank's own melt zone, the determined 1800-tick passes'
+            // strafe/flank windows walking Bond into the posts' lines [L the lever-5 run].
             w.dmg.switch_dry = true;
             w.dmg.escalating_cooldowns = true;
             w.resupply_home = true;
@@ -481,6 +594,12 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // green); the d2 sister runs the sight batch's byte-identical 2400-cap sweep.
         clear_the_visible(&mut w, "13: the spawn pocket", 24.0, difficulty == 3, false);
     }
+    // retune-nb-13 (measured DEAD, not repeated): a pocket reposition + deliberate resupply to
+    // dodge the mid-leg fetch — the reposition leg's own ticks fired the low-ammo fetch first
+    // (the wave shooter existed), the north drop (4.9, −369.4, 22.2) won the pick from the
+    // sweep's end spot anyway (d 2.1 vs 2.9), and the fetch nav walked Bond into the pocket's
+    // north-west corner where the north-lobby rifleman #3 (then (5.2, −368.4, 43.3)) landed
+    // 19.5 in 10 hits — death t993, WORSE than the baseline [L the lever-4 run].
 
     // THE SECURITY GATE: the "Shutters2" SimpleScript #149 (out ch 0x23 [D param 3]) is the
     // entrance mouth's panel (the SS cel's glist spans x −8.54..−4.97 at z 65.02 [D the object
@@ -535,6 +654,9 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // pulls the route back up to the east lane's proven line before the west leg: from the
     // pocket the segment to (2.5, 30.5) runs north-east, clear of the furniture corner, and
     // the west-mid line from there rides the old path.
+    // retune-nb-13: the aim-walk flag on the leg is RETIRED (measured null — the walk_to
+    // steering builds its own Input, so the flag never reached the leg's ticks; the lever-3 run
+    // reproduced the t0 err 1.5865 byte-identical [L]).
     w.walk_to(Wp::new(2.5, -368.4, 30.5).r(1.5), "13: the lobby mid re-anchor");
     if real_damage && difficulty == 3 {
         // retune-nb-13 (the mezzanine pre-emptive): the nb-scan-all ledger's death is the
@@ -561,16 +683,20 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             let g = { let sim = w.scene.sim.as_ref().unwrap(); let bp = sim.bond.pos;
                 (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
                     d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
-                    && walker::dxz(d.pos, bp) < 32.0 && d.pos[1] - bp[1] > 2.0 })
+                    && walker::dxz(d.pos, bp) < 32.0 && d.pos[1] - bp[1] > 2.0
+                    && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some() })
                     .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp))) };
             let Some(g) = g else { break };
             let _ = w.switch_to_armed("13: the mezzanine pre-emptive");
-            let k = aimed_stand(&mut w, g, "13: the mezzanine pre-emptive", 700);
+            let k = mezz_far_stand(&mut w, g, "13: the mezzanine pre-emptive", 700);
             w.dmg.aimed_fights = false;
             eprintln!("[013] 13: the mezzanine pre-emptive stand on drone #{g} killed {k}, health {:.1}",
                 w.scene.sim.as_ref().unwrap().drones.health.health);
             if !k { break; }
         }
+        // The aim-walk flag is the leg's own: restore the walk's default (the sweeps set and
+        // restore it around their stands; a leaked true would re-shape the west-mid legs).
+        w.dmg.aimed_fights = false;
     }
     // civ-unignore-2's law at the re-anchor end (guard-repin-master): the same ray-gated sweep
     // runs one leg EARLIER — the west-mid route's fights used to be answered mid-leg from the
@@ -1043,7 +1169,7 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// pre-clear at 14-16 u, no bridge_and_retry, no in-place creep or longer stands — each
 /// measured dead in the margin-4 report). Never lowered damage or health; no top-ups.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t3774 at (3.26,-368.39,31.72): Bond enters 13 with 20 health from the 12 chain [L 2026-11-18 run]; re-tune and un-ignore"]
+#[ignore = "nb-scan-all ledger (2026-11-18, retune-nb-13 runs): Bond dies t3774 at (3.26,-368.39,31.72) at 6.5 hp — the mezzanine pistol guard #5 (skin 0x5000004, weapon 0x19, hp 12, static at (-17.7,-362.4,45.2), d 25.7 — OUTSIDE the re-anchor sweep's 24) opened fire ~67 ticks after the re-anchor arrival armed his cone: two -3.5/-3.0 taps [L the repro]. Bond enters 13 at 20 hp because 12 now delivers 19.5 (was 79 in the margin-5 green run): the flank's first fight on #6 returned killed false and the melt poured 49.0 around it (65.0 -> 30.0), #2/#12's earlier trades the rest [L the repro's 12 ledger]. TRIED: (1) the mezzanine pre-emptive (this tree's mezz_far_stand on the nearest EXPOSED dy>2 guard < 32 u from the re-anchor end, before the sweep) — the stand ran, #5 measured exposed TRUE from the re-anchor spot, but the raise (~39 ticks) + convergence (~31) missed the ~62-tick grace: #5 still hp 12.0 at both his hits, death t3774 unchanged [L lever-2/3 runs]; (2) the pocket reposition + deliberate resupply to dodge the mid-leg fetch — WORSE, death t993 (the reposition's own ticks fired the low-ammo fetch first, the north drop (4.9,-369.4,22.2) won the pick, the nav walked Bond into #3's pocket kill zone: 19.5 in 10 hits) [L lever-4]; (3) finish_fights (the determined pass after failed fights) — 12 died EARLIER, t13833 inside the flank melt zone [L lever-5]. NEXT LEVERS: (a) 12-side — the flank melt around a failed first fight (a flag-gated re-stand from the flank band, or the fight's own cap window — NOT finish_fights, measured dead); (b) with a 40+ hp entry the pre-emptive race survives (5 shots of slack vs the ~10-tick overshoot); (c) the east-lane/room legs are clean once the lobby is crossed [L the run]"]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
     let iso = iso();
     walker::with_real_damage_head_hunting(|| walk_the_warm_chain(&iso, true, 3));
