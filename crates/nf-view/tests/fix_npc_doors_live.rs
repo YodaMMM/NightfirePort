@@ -92,7 +92,6 @@ fn doors_dump(w: &Walker, ci: usize) -> String {
 // moved the route (the harness branch's run on 26543436 saw door #2 at +30962 and the escort past
 // the doors at +36031 — the new route takes ~2× the ticks) but all three can-fail asserts hold.
 // The 120k-tick follow cap still catches a re-deadlock as a failure, not a hang.
-#[ignore = "nb-scan-all: the contact parks in LEAD_MISSION_WAIT 0x21 at (3.0,6.3,7.3) in the corridor and his standing body holds Bond 1.5 u short of the corridor plate (6.79,8.91) that arms the ambush whose deaths raise ch 0x99 [L 2026-11-18]; open: does a WAIT_SWITCH drone keep a standing body in the game (ControlSTANDARD returns before NDrone2_Collision when +0x4F8 & 0x100 is clear)"]
 fn the_escort_opens_the_interior_doors_on_his_route() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
@@ -270,7 +269,24 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
             // 0x0e → the guards; their deaths → AND mux → 0x99 releases the hold) [D the
             // placements + the lib dump] — the plate is on the escort route, walk it.
             if !w.scene.sim.as_ref().unwrap().drones.channels.on(0x33) {
+                // nb-scan-all: the contact now parks his 0x21 hold at (3.0, 6.3, 7.3), west of
+                // the hall, and Bond trailing him stands in the west corridor with the hall's
+                // west wall between him and the plate (the nav walk ran into it: STUCK at
+                // (3.4, 6.45, 8.7), segment_to_target 0.16 [L 2026-11-18]). A player walks round
+                // through the hall's north opening (nav nodes 23 → 7, the walled-lane walk below).
+                let walled = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    sim.bond.pos[0] < 5.0 && sim.world.segment(sim.bond.pos, [6.79, sim.bond.pos[1], 8.91]).is_some()
+                };
+                if walled {
+                    w.walk_nav_to([3.39, 6.4, 14.69], "the hall's north opening (nav node 23)", 1.4);
+                    w.walk_nav_to([6.88, 6.4, 14.62], "inside the hall (nav node 7)", 1.4);
+                }
                 w.walk_nav_to([6.79, 0.0, 8.91], "onto the corridor plate", 0.4);
+                let sim = w.scene.sim.as_ref().unwrap();
+                let (bp, cp) = (sim.bond.pos, sim.drones.list[ci].pos);
+                eprintln!("[01] plate walk ended: bond ({:.2},{:.2},{:.2}) contact ({:.2},{:.2},{:.2}) state {:#x} ch33 {}",
+                    bp[0], bp[1], bp[2], cp[0], cp[1], cp[2], sim.drones.list[ci].state, sim.drones.channels.on(0x33));
             }
             // The west wall + the closed door before the blind close (the broken-object-bark
             // stream's park: the lead waits south of the auto-closed door #1 (7.9, 5.3, 11.1)

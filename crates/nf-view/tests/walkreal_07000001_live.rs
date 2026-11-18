@@ -446,7 +446,10 @@ fn d3_corridor_fight(w: &mut Walker, g: usize, stance: [f32; 2], label: &str) ->
                 let ce = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
                 let lane = sim.world.segment_flight_scoped(sim.world.find_cel(ce), ce, [d.pos[0], d.pos[1] + 0.3, d.pos[2]], false).is_none();
                 (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), crouch: true, ..Default::default() },
-                    (aim.is_some() || lane) && err.abs() < 0.02 && perr.abs() < 0.028, false, sim.gun.clip == 0 && sim.gun.spare > 0)
+                    // The trigger PULSES: the semi-autos fire once per press [M the fire script
+                    // gates Player_WeaponFiring] — a held trigger fired one round and stood the
+                    // rest of the #8 fight dry-aimed (clip 6 for 1000 ticks [L 2026-11-18 probe]).
+                    (aim.is_some() || lane) && err.abs() < 0.02 && perr.abs() < 0.028 && t % 4 < 2, false, sim.gun.clip == 0 && sim.gun.spare > 0)
             }
         };
         if done { break; }
@@ -925,6 +928,18 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // three enabled by the intro's ch 0xB] — deterministic like route_order's [L the d2 logs];
     // a guard the stream moved out of the within-14 set just drops out of the chain.
     if difficulty >= 3 {
+        // nb-scan-all: guard #0 now closes and throws the 0x3D punch inside 1.5 u [M CanAltAttack
+        // → AltAttack 0x72; record 0x65, 12.0 at 00 Agent] — on the return-fire-off stance leg
+        // he landed two (76.0 at the stance, 3 for 36.0 by his death [L 2026-11-18 run]). A player
+        // drops the guard walking at him before turning his back: shoot #0 from where Bond stands.
+        if guards.contains(&0) {
+            let near = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[0];
+                !d.corpse && d.health > 0.0 && walker::dxz(d.pos, sim.bond.pos) < 7.0
+            };
+            if near { w.shoot(0, "west pre-clear guard 0 (closing)"); }
+        }
         w.dmg.return_fire = false;
         w.walk_nav_to([-10.5, 6.4, -9.0], "the west pre-clear stance (the bullet-lane band)", 0.4);
         w.dmg.return_fire = true;
@@ -943,7 +958,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // the spawn-area fight is 1-v-1 behind the wall.
         for (g, stance) in [(0usize, [-10.5f32, -9.0f32]), (13usize, [-10.5f32, -9.0f32]), (8usize, [-7.5f32, -11.5f32])] {
             if !guards.contains(&g) { continue; }
+            // nb-scan-all: the legs between the stances walk with return fire OFF like the first
+            // stance leg — the #8 leg's return-fire hold stopped Bond in #8's lane at
+            // (-8.35, -10.52) for 73.6 → 30.4 [L 2026-11-18 run]; the fight itself runs from the stance.
+            w.dmg.return_fire = false;
             d3_corridor_fight(&mut w, g, stance, "west pre-clear");
+            w.dmg.return_fire = true;
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
         }
         w.dmg.finish_fights = finish0;
@@ -4044,7 +4064,7 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// machinery (d3_aperture_fight + the lane grid + the diag counters) is on the branch, d3-
 /// gated; d1/d2 byte-identical.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t1258 at (-10.18,6.37,-9.54) [L 2026-11-18 run]; re-tune and un-ignore"]
+#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): start room fixed (pulsed pre-clear, #0 shot closing); Bond now dies t2324 at the hall lane stand (7.04,6.19,9.67): #7's shotgun volleys 62.8 -> 5.2 in ~14 ticks on arrival [L 2026-11-18 run]; re-tune and un-ignore"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }
