@@ -23,6 +23,22 @@ pub struct Font { pub first: u16, pub last: u16, pub gap: f32, pub space: f32, p
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placed { pub glyph: usize, pub x: f32, pub y: f32 }
 
+impl Glyph {
+    /// `Font_GetKernAdjust(next, this)` 0x1ee298 over this glyph's pair list [M decomp]: the next
+    /// character is a signed `char`, so a code >= 0x80 fails the font's range test and kerns 0; the
+    /// pairs are walked in order and the walk gives up (0) at the first pair whose character is BELOW
+    /// the next one — with the disc's ascending lists only a pair at or before the first larger code
+    /// can match. A match returns that pair's signed adjustment.
+    pub fn kern_adjust(&self, next: u32) -> f32 {
+        if next >= 0x80 { return 0.0; }
+        for &(c, adj) in &self.kerns {
+            if (c as u32) < next { return 0.0; }
+            if c as u32 == next { return adj as f32; }
+        }
+        0.0
+    }
+}
+
 impl Font {
     fn glyph(&self, c: u16) -> Option<usize> { self.glyphs.iter().position(|g| g.code == c) }
 
@@ -50,7 +66,7 @@ impl Font {
             let Some(gi) = self.glyph(ci as u16) else { continue };
             let g = &self.glyphs[gi];
             if let Some(p) = prev {
-                pen += self.glyphs[p].kerns.iter().find(|k| k.0 == ci as u16).map_or(0.0, |k| k.1 as f32);
+                pen += self.glyphs[p].kern_adjust(ci);
                 pen += g.pre as f32;
             }
             out.push(Placed { glyph: gi, x: pen, y: y + g.yoff as f32 - top });
