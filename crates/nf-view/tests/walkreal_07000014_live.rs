@@ -1022,6 +1022,12 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     // team-1 guard inside 15 u from node 626 (measured: death t23511 -> t26213, past the band
     // and the door, at the escape touch legs).
     if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        // retune-nb-14: the fusebox cuts leave the Laser (0x4e) IN HAND — a tool whose rounds
+        // never drew blood [L the run's own trace: the stands shot #20 (hp 10, d 13.1) and #32
+        // (hp 20, d 11.0) for 600 ticks each at "clip 500 spare 0" and both still read their
+        // start health]. The Rook-kill law puts the hand weapon back up first; the stands get
+        // the same treatment (real switch input, no ammo writes).
+        let _ = w.switch_to_armed("the switch band's guards");
         for _ in 0..3 {
             let pick = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -1167,6 +1173,24 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         // Opt-in per difficulty: the difficulty-1 call sites keep master behaviour.
         w.dmg.back_off = Some(4.0);
         w.dmg.lane_fights = true;
+    } else if !w.tops_up() {
+        // retune-nb-14 (the d1 real-damage walk under nb-scan-all): the south-loop GL ambush
+        // (drone #12 skin 0x5000087 post (-23.1,1.0,-14.5), #13 skin 0x5000090 post
+        // (-24.5,1.0,-10.7), both 0x14) killed the shipped-fight walk at t18133 — Bond stood
+        // d 0.9-3.0 from them for 340 ticks taking 2.0/hit rounds plus their blasts (the
+        // ledger: 51.0 in 4 world hits, the 29.0 blast finished him) while the plain fight
+        // fired one window on #12 (killed false) and the next one stalled "cycling to a gun
+        // (0)". The d3 walk crossed the SAME leg green with this fight law, so the d1
+        // real-damage run takes it too (tops-up runs stay byte-identical). Real input only;
+        // the walker's own fight stands, not new draws.
+        // v2: lane_fights stays OFF for d1 — the v1 run survived the ambush (59.0 left, was
+        // death at t18133) but a dry fight at the descent's node-57 leg ran the lane
+        // resupply's fetch walks ("the corridor lane north (node 57) resupply 0 nav 1..4")
+        // and the displacement parked Bond at (32.47,0.55,29.10) d 4.47 short of (28.31,
+        // 0.65,30.74) for the leg's 6000-tick cap — the plain aim answered the ambush fine
+        // (it wounded #12 in the v0 fight), only the point-blank band was the killer.
+        w.dmg.back_off = Some(4.0);
+        w.dmg.finish_fights = true;
     }
     walk_infiltration_to_handback(&mut w);
     walk_the_west_route_to_the_switch_band(&mut w);
@@ -1402,6 +1426,39 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
             None => {
                 // follow_nav_route's own no-route fallback (the direct chain), scan stops kept
                 // out of it — the fallback never fired on the measured runs.
+                let sim = w.scene.sim.as_ref().unwrap();
+                let mut v = walker::leg(sim, w.cur_pos(), [20.3, 0.9, -23.5]);
+                v.pop();
+                for (k, p) in v.iter().enumerate() {
+                    let _ = w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3),
+                        &format!("east to Rook's wake touch #476 node {k}"));
+                }
+            }
+        }
+        w.walk_to(Wp::new(20.3, 0.9, -23.5).r(1.3), "east to Rook's wake touch #476 end");
+    } else if !w.tops_up() {
+        // retune-nb-14 (the d1 real-damage wake legs): the shipped single follow_nav_route's
+        // fights only start on the hit, and the v2 run died at t36801 at (5.05,1.13,-23.31)
+        // with the wake route's 0x1a posts #28 (post (9.0,1.0,-22.5)) and #29 (post (8.7,1.0,
+        // -21.5)) dealing 65.2 at d 4.0 before the return-fire fights finished them (hp -81/-73)
+        // — the same first-rounds tax the d3 chain's node scans answer. The d1 run walks the
+        // SAME shipped route node-by-node (one nav_route read from cur_pos, the same r(1.3)
+        // legs [L the d3 branch's byte-exact note]) with the delta_approach_scan after node 21;
+        // the d3 chain measured the every-node scans NET NEGATIVE, so node 21 only.
+        w.dmg.finish_fights = true;
+        let wake_pts = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            nav_route(sim, w.cur_pos(), [20.3, 0.9, -23.5])
+        };
+        match wake_pts {
+            Some(pts) => {
+                for (k, p) in pts.iter().enumerate() {
+                    let _ = w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3),
+                        &format!("east to Rook's wake touch #476 node {k}"));
+                    if k == 21 { delta_approach_scan(&mut w, k); }
+                }
+            }
+            None => {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let mut v = walker::leg(sim, w.cur_pos(), [20.3, 0.9, -23.5]);
                 v.pop();
