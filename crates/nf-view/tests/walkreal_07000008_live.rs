@@ -1663,7 +1663,25 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // past the drone list — the volume law, no blast row) means he is standing IN the terminal's
     // hurt volume; the walk-out holds for 40 ticks against the dodge (run-bleed4-4/6).
     let mut zap_hold = 0u32;
-    if difficulty >= 3 { w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false); }
+    // nb-scan-all-08: the fight stands CROUCHED at the DEEPER anchor (112.5, −179.4) on the
+    // nb-scan-all phase, both real-damage sisters. The 11-14 d3 lever's measured answer to the
+    // doorway lane: the Hind's gun rounds come down through the west doorway (x 103 → 111, y 16
+    // → 14 [L the round log]) and stopped landing on the crouched deeper spot; measured with the
+    // crouch there: death t20428 → t26671, rocket 1 launched and landed 100.7. The nb-scan-all
+    // fight starts ~6500 ticks earlier in the machine's circuit [L the 2026-11-18 runs — rockets
+    // 1/2 identical t49/t229/t275/t428, the whole upstream 37505 → ~28900] and its passes line up
+    // WITH the doorway lane: at the slit the rounds fly the gap itself (the d2 lever run bled
+    // −1.40 × 44 at the slit spot (111.10, −179.67) and the killing −49.20 blast landed there —
+    // the dodge strafes perpendicular to a westward view, i.e. inside the gap plane, no escape
+    // [L run 2]) while the deeper crouched spot is OUT of the lane's landing band. D3 MEASURED
+    // on the old phase, reused as the player's stance on the new one; the d1 real-damage sister
+    // (difficulty < 2) never crouches, its timeline byte-exact.
+    // nb-scan-all-08 (d2): the fight OPENS crouched at the slit anchor — the movement inputs
+    // (the dodge episodes and the drift walk) stand Bond back up into the lintel-window launch
+    // geometry (the green run's launches all leave from the standing eye y 14.22 [L the run]);
+    // the opening crouch blunts the first doorway-lane bursts. d3 keeps its original crouch at
+    // (112.5, −179.4) (its fight code is unchanged — the ledger lives in its ignore message).
+    if difficulty >= 2 { w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false); }
     for t in 0..20000u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4b) { ch4b = true; break; }
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1899,7 +1917,24 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // but the machine's missiles chase the strip — −5.94/−13.16/−15.00/−15.00 blast rows,
         // death t31593, EARLIER than the anchor's t34720 [L run-bleed5-3]. NOT shipped: the
         // anchor stays (112.5, −179.4).
-        let ANCHOR: [f32; 2] = if difficulty >= 3 { [112.5, -179.4] } else { [111.09, -179.72] };
+        // nb-scan-all-08: the anchor is the DEEPER crouched spot (112.5, −179.4) for both
+        // real-damage sisters (difficulty >= 2) — the doorway lane's rounds land x 103-111 and
+        // stopped hitting the crouched deeper spot on the 11-14 d3 runs [L the round log]; the
+        // nb-scan-all phase lines the machine up with the doorway lane and the slit spot bleeds
+        // (the d2 lever run: −1.40 × 44 + the killing −49.20 blast at the slit, death t30395
+        // [L run 2]). The bias and the drift walk keep Bond here; the ride-end slit spot
+        // (111.09, −179.72) stays the d<2 const (unused below difficulty 2 — the bias and the
+        // walk-back blocks are difficulty >= 2).
+        // nb-scan-all-08: the D2 anchor moves to the doorway slit (110.98, −179.31) — the spot the
+        // nb-scan-all fight starts at and the spot whose standing eye wins (the d2 lever run:
+        // five rockets, 502.5 of 448.5 hp, end health 79.0 armour 24.1 [L the 2026-11-18 run]).
+        // The d3 anchor STAYS (112.5, −179.4) — its fight is still ignored (the ledger lives in
+        // its ignore message) and its original anchor is the measured baseline the next window
+        // re-tunes from. difficulty < 2 never reads the anchor (the bias and walk-back blocks
+        // below are difficulty >= 2).
+        let ANCHOR: [f32; 2] = if difficulty >= 3 { [112.5, -179.4] }
+            else if difficulty == 2 { [110.98, -179.31] }
+            else { [111.09, -179.72] };
         // The zap detector: the newest player_hit is a world hit (owner past the drone list)
         // whose frame is fresh — the volume law's −2.0 rows (run-bleed4-4: frames 20344-20441,
         // (113.0, 13.5, −180.6), no explosion lines).
@@ -1916,7 +1951,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             dodge_hold -= 1;
         }
         if dodge_hold > 0 {
-            if difficulty >= 3 {
+            if difficulty >= 2 {
             // real-health-00agent-08-bleed-4 (d3): the dodge SIDE is the one that also walks the
             // anchor-ward component. The missile's miss band is symmetric (the dodge gate's own
             // miss < 2 u test — either side steps off the line), so the side choice is free, and
@@ -1928,9 +1963,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // south band too — and died earlier [L run-bleed4-6]. A player side-steps toward
             // the spot he means to keep firing from. The strafe stays perpendicular to the view
             // (the dodge's own law); the component toward the ride-end anchor (111.09, −179.72)
-            // picks its sign. D3-GATED: the d1/d2 sisters keep the alternating-sign timeline
-            // byte-exact (the d1 real-damage walk regressed on the ungated form [L the 11-14
-            // final-binary run]).
+            // picks its sign.
+            // nb-scan-all-08: the gate opens to difficulty >= 2. The nb-scan-all Agent fight
+            // dies of the alternating form's drift: the episodes walked Bond 2.3 u east of the
+            // slit to (112.9-113.0, −177.5), OUT of the band gap (z −178.25..−180.6 [D the tri
+            // dump]) into the pane-hole shooting gallery, and 59 machine drips (−1.20/−1.40) plus
+            // the killing blast drained 79.0 while the launches stalled — 4 rockets landed
+            // (401.8 of 448.5) and Bond died at the 5th launch, tick 31483 [L the 2026-11-18
+            // run]. The d1 real-damage sister keeps the alternating-sign timeline byte-exact
+            // (the regressed ungated form hit it at difficulty 1; the else branch below is its
+            // old code path unchanged).
             let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
             let right = [cy, 0.0, -fy];
             let (ax, az) = (ANCHOR[0] - b[0], ANCHOR[1] - b[2]);
@@ -1948,8 +1990,10 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // 1.2 u between episodes) Bond walks back to the ride-end anchor — a player being zapped
         // steps out of the volume, and the aim re-converges on the spot (the launch gates read
         // the live spot every tick, so nothing fires mid-walk). The walk never runs while a
-        // rocket rides. D3-GATED: the d1/d2 sisters keep their byte-exact timelines.
-        if difficulty >= 3 && rocket.is_none() && (zap_hold > 0 || dodge_hold == 0) {
+        // rocket rides. nb-scan-all-08: the gate opens to difficulty >= 2 — the Agent fight's
+        // drift (above) is the death mechanism the walk-back answers; the d1 real-damage sister
+        // (difficulty < 2) never enters this branch, its timeline byte-exact.
+        if difficulty >= 2 && rocket.is_none() && (zap_hold > 0 || dodge_hold == 0) {
             let (dx, dz) = (ANCHOR[0] - b[0], ANCHOR[1] - b[2]);
             if dx * dx + dz * dz > 1.2 * 1.2 {
                 let want_yaw = dx.atan2(dz);
@@ -2473,7 +2517,20 @@ fn walk_the_whole_mission_on_real_input_real_damage() {
 // on this tree). The boarding ledger's #19 33.6 and the walkway 36.4 stand as measured; the
 // levers tried and retired this window (the pre-leg lip stand, the d2 reload, the hall-mouth
 // stand) are documented in their blocks and docs/reports/los-mask-repins-08-agent.md.
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t31483 at (112.72,13.49,-177.24): 4 rockets land (401.8 of 448.5), Bond dies at the 5th launch [L 2026-11-18 run]; re-tune and un-ignore"]
+// nb-scan-all-08 (2026-11-18): green again on the crouched-slit lever. The ledgered death
+// (tick 31483 at (112.72,13.49,-177.24): 4 rockets land (401.8 of 448.5), Bond dies at the 5th
+// launch [L the run]) came from the alternating dodge's drift walking Bond 2.3 u east of the
+// slit into the pane-hole gallery (59 machine drips, −1.20/−1.40, for 72.6) and from the fight
+// starting ~6500 ticks earlier in the machine's circuit than the 11-10 green run (the whole
+// upstream 37505 → ~28900 [L the runs]) — the nb-scan-all phase lines the machine up with the
+// doorway lane. The fight now crouches at the slit anchor (110.98, −179.31), the dodge bias and
+// the drift walk-back keep Bond there, and the launches run the standing-eye windows the
+// movement uncrouches into (the launch log's from-y 14.22 [L the green run]): five rockets,
+// 502.5 damage vs hp 448.5, end health 79.0 armour 24.1, 14 hits for 21.0, the whole mission
+// walked in 31070 ticks. No damage or health writes, no top-ups; every lever below is gated to
+// difficulty == 2 or difficulty >= 2 with the d<2 else branches unchanged (the d1 real-damage
+// sister's timeline byte-exact by construction; the whole binary re-run green on this tree).
+#[test]
 fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // HEAD-HUNT (the 05/07 00 Agent sisters' tactic on this level group): at Agent the guards'
     // hit chance is DroneFiring_Accuracy_Normal 1.1 (Operative 0.8) and Bond's pain is
@@ -2519,7 +2576,31 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// plus the pin of the round's actual spawn direction (lock-on vs the effective aim) in
 /// PCSX2 (the report's live check).
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t28298 at (112.25,13.09,-179.16): the Hind fight bleeds out [L 2026-11-18 run]; re-tune and un-ignore"]
+#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): the fight starts ~6500 ticks earlier in the machine's circuit (upstream 37505 -> ~25700 [L]) and the machine flies HIGH overhead passes (y 25-29) — from inside the cabin every stance's sight ray stops on the lintel/band 1.1 u out, line_ok FALSE every sample, ZERO-ONE launches in ~2600 fight ticks: Bond bleeds out of the gun chips (the d2 -1.40 drips at d3 pain 1.0 = -2.00 x5, frames 27474-27638) plus the -7.78/-8.22 missile blasts and dies t28298 at (112.25,13.09,-179.16) with ONE rocket away [L the 2026-11-18 runs]. Levers TRIED and DEAD on their own real runs: the crouched slit anchor (t29087, zero launches, clip 4 intact), the standing slit + 0.25 aim gates (t27383). The upstream y-46 hall trio snipes 36.0 of the 78 budget (#14 16.0/4, #11 12.0/3, #2 8.0/2 at d 96-107) plus secure-room #5 12.0/4 [L the ledgers]. NEXT LEVER: (1) a station-hall route/stance/fight-order change that answers the mezzanine snipers early; (2) with that budget back, pin the machine's route period from the flight log and outlast the high phase into the low passes (the d2 phase's y 13-24 passes gave five standing-slit launches in 2100 ticks). Full ledger: the comment block above the test."]
+// nb-scan-all-08 ledger (2026-11-18, still red; the original fight code measures t28298 and
+// every lever this window tried measured WORSE — each on its own real run):
+// 1. the original anchor+crouch fight (112.5, −179.4): death t28298 at (112.25,13.09,−179.16),
+//    59 hits for 100.0 — 32.2 in 38 world hits (the gun chips −2.00 × 5 at frames 27474-27638,
+//    the −7.78/−8.22 missile blasts) + the upstream 48.0, ONE rocket launched (t1269, in flight
+//    at death) [L the run]. The nb-scan-all upstream is ~6500 ticks faster (the old green runs'
+//    fight started ~t35500; this one ~t25700), so the machine's route phase differs and its
+//    nb-scan-all passes fly HIGH OVERHEAD (y 25-29 — copter (113.9,28.8,−185.3), (113.0,29.1,
+//    −182.7) [L the run logs]) — from inside the cabin EVERY stance's sight ray to them stops on
+//    the lintel/west band 1.1 u out (crouched slit eye stop t0.106 at (111.1,15.0,−179.4), gunR
+//    t0.124, gunL t0.115 [L the ray dump]) and line_ok reads FALSE at every 100-tick sample.
+// 2. the crouched slit anchor (110.98, −179.31), the bias/walk-back there: death t29087, ZERO
+//    launches (the crouched eye's sight stops on the lintel; clip 4 intact), the gun chips
+//    (−2.00 × 5 at frames 28046-28207) drained armour 38 → 0 and the −14.00 blast closed [L].
+// 3. the standing slit + the aim gates relaxed to the sisters' 0.25: death t27383 — the pain-1.0
+//    drips (the d2 −1.40 drips at −2.00) with still no launch windows [L].
+// The upstream cost the next window should attack first: the station-hall y-46 trio snipes the
+// whole hall under the spacing scan — #14 (151.2,46.0,−97.8) 16.0/4, #11 (153.7,46.0,−85.9)
+// 12.0/3, #2 (156.4,46.0,−91.0) 8.0/2, plus the secure-room #5 12.0/4 — 48.0 of the 78 budget
+// before the fight [L the ledger]. NEXT LEVER: (1) a hall route/stance/fight-order change that
+// answers the mezzanine snipers early (a hall-mouth stand on the live snipers, the fight-order
+// lever family); (2) the fight outlasts the machine's high phase only with that budget back —
+// the d2 phase's low passes (y 13-24) gave five standing-slit launches in 2100 ticks, so pin
+// the machine's route period from the flight log before re-tuning the stance.
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
