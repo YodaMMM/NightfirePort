@@ -6134,7 +6134,11 @@ impl Drone {
         // GAPS G-055: the old port gate also refused 0x2e-0x49, 0x4c, 0x52, 0x56 and 0x62-0x85, so a
         // guard in AimStandFire 0x68 never fled a grenade. (0x2d is the throw itself — GRENADE_THROW.)
         if matches!(self.state, 0x28 | 0x2d | 0x4a | 0x4b | 0x53..=0x55 | 0x63 | 0x86..=0x88) { return; }
+        // A resume of 0x86/0x87 (already fleeing / hiding) refuses too [M 0x1431c0 decomp: the param_3 0x86-0x87 return].
+        if matches!(resume, 0x86 | 0x87) { return; }
         if self.scared { return; }
+        // A zero resume from the aim states 0x67/0x68 resumes into that state [M 0x1431c0 decomp: lVar11 = the +0x10c state].
+        let resume = if resume == 0 && matches!(self.state, 0x67 | 0x68) { self.state } else { resume };
         if ailog() {
             eprintln!("[ailog] drone {} (placement {}) skin {:#x} state {:#x} flees explosive at {:?} run {run_dist:.1} ret {ret:#x} deadline {deadline}",
                 self.index, self.placement, self.skin, self.state, pos);
