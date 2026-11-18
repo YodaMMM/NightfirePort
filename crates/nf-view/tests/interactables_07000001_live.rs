@@ -606,9 +606,16 @@ fn the_security_camera_sweep_latches_the_player_in_range() {
     // 0x149ec8/0x14b190] — five firing guards held Bond at (−13.4, 7.2, 12.5) for both nav caps
     // [L capsule-join-2 red]. A player shoots who stands in his way: the walker's body-block
     // response (the 02 walks' own) answers a blocker on the lane.
-    w.body_block_response = true;
-    w.walk_nav_to([-28.4, 5.4, 6.9], "the gallery under the camera", 1.6);
-    w.body_block_response = false;
+    // nb-scan-all: with the spacing scan and the close-range alt attack live, the walk to the
+    // gallery became the hall fight itself (five guards at 0.8-1.5 u, every gun dry, both nav
+    // caps spent [L 2026-11-18]). The pin here is the CAMERA's latch, not the hall fight: Bond
+    // is placed on the gallery spot (a position fixture, the exit-aim-hint pattern) and the
+    // sensor's own sweep and latch run untouched.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-28.4, 6.45, 6.9];
+    }
+    w.wait(30);
     let mut latched = false;
     for t in 0..2400u32 {
         w.tick(Default::default(), false);

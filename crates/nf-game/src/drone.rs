@@ -1771,6 +1771,9 @@ pub struct Drone {
     /// `NDrone2_ChooseCombatMove` 0x150c18:58 reads it as `cVar1` — the not-aiming strafe
     /// option gate and the `Rand(0xf) >= 7` early-out [M 0x150c18:58-79].
     pub no_bunching_hit: bool,
+    /// Test hook: side bits stamped after the per-tick NoBunching scan (the scan rewrites
+    /// +0x31C every tick, so a test that pins the bits' consumers sets them here). `None` in play.
+    pub no_bunching_pin: Option<u32>,
     pub alpha: f32,
     /// A switch channel to raise after the drone's update (`SetDeathChannel`).
     pub raise: Option<u8>,
@@ -2336,6 +2339,7 @@ impl Drone {
             // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
             no_bunching_hit: false,
+            no_bunching_pin: None,
             // fix-room-sound: the foley one-shot outbox + the pain-grunt handle.
             foley_reqs: Vec::new(), pain_grunt: None,
             sfx_reqs: Vec::new(),
@@ -3857,7 +3861,7 @@ impl Drone {
     }
 
     /// Msg 0x18 in state `s` — `DroneFunc_HandleImpact` case 0x18 (0x1469b8:250-313): prop 0x1C is
-    /// immune (the game plays the 0x57/0x11/0x19 flinch anims — not modelled); every other drone
+    /// immune (anim set 5 still plays the 0x57/0x11/0x19 flinch — `on_flash`); every other drone
     /// enters StunGrenadeImpact 0x4D — through ITS OWN DSTATE's case 0x18 only (the state gate
     /// below; daily-audit 2026-10-17).
     /// The states whose DSTATE carries a case 0x18 [L NDrone2_StateFuncs 0x29b300 (state →
@@ -7285,8 +7289,8 @@ impl Drone {
     }
 
     /// The stun-grenade receiving family (fix-explosions). `StunGrenadeImpact` 0x172bb0 case 1: the recover
-    /// time (`DroneFunc_RecoverTime` 0x147188 → +0xCE0), the weapon drop + ChangeWeapon(1) when kind ≠ 4
-    /// (the port's guards carry one fixed weapon — not modelled), `AlertStatusSet(2)`
+    /// time (`DroneFunc_RecoverTime` 0x147188 → +0xCE0), the weapon drop + ChangeWeapon(1) when the
+    /// anim set (+0xDA) ≠ 4, `AlertStatusSet(2)`
     /// and the stunned anim (0x2D/0x2E by `Rand_Rand(2)`) with follow-on Loop 0x4E. `StunGrenadeLoop`
     /// 0x1631c0 case 1: the timer arms at frame + recover (+0xCC4) and msg 0xC branches to Recover 0x4F
     /// when nobody is within 8.0 (`DroneFunc_AnyoneNear(0x40000000)`), else re-arms frame + 5·60. Another
@@ -8452,7 +8456,7 @@ impl Drone {
                 if let Some(n) = self.look_for_opponent(d) { self.set_state(n) }
                 true
             }
-            // Idle timeouts (prop 0x46) and wait nodes: look around (`0x4B`, variant Rand 3 — variants not modelled),
+            // Idle timeouts (prop 0x46) and wait nodes: look around (`0x4B`, variant Rand 3),
             // then back to the state, which re-arms the timeout.
             (IDLE | ALERT | PATROL, msg::IDLE_TIMEOUT) => {
                 if self.prop(d, 0x46) {
@@ -8529,7 +8533,7 @@ impl Drone {
             }
             (SNIPER_AIM, msg::UPDATE) => { self.desired_yaw = self.yaw_to_opp; if self.seen { self.set_state(SNIPER_FIRE) } true }
             // SniperFire: aim and fire (`DroneWeap_Fire`; the first shot after a 60-tick timer); empty clip → reload;
-            // out of sight 16 ticks → SniperAim. (Alternative attacks — `CanAltAttack` — are not modelled.)
+            // out of sight 16 ticks → SniperAim; an opponent within 1.5 → AltAttack (`CanAltAttack`).
             (SNIPER_FIRE, msg::ENTER) => {
                 self.stationary = true;
                 self.desired_yaw = self.yaw_to_opp;
@@ -8543,6 +8547,9 @@ impl Drone {
             (SNIPER_FIRE, msg::UPDATE) => {
                 self.attack_talk(d.level, rng);
                 self.desired_yaw = self.yaw_to_opp;
+                // `NDrone2_CanAltAttack(0)` first: an opponent within 1.5 -> AltAttack 0x72
+                // [M 0x15fd88 case 3, call 0x15fe9c].
+                if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
                 if self.clip < 1 { self.set_state(SNIPER_RELOAD); }
                 else if self.unseen_ticks >= 0x10 { self.set_state(SNIPER_AIM); }
                 true
@@ -9130,6 +9137,9 @@ impl Drone {
             }
             (AIM_STAND_FIRE, msg::UPDATE) => {
                 self.turn_to_opponent(0.524);
+                // `NDrone2_CanAltAttack(0)` right after the turn, ahead of the backoff test: an
+                // opponent within 1.5 -> AltAttack 0x72 [M 0x166328 case 3, call 0x16650c].
+                if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
                 if self.dist <= 4.0 && self.can_backoff(d) { self.set_state(AIM_BACKOFF); return true; }
                 if self.unseen_ticks >= 16 { self.set_state(COMBAT_NO_SIGHT); return true; }
                 // `+0x274 < 0x10` and an opponent with the aiming class (`+0x568 == 2`) -> `+0x38 = 1`:
@@ -9213,6 +9223,9 @@ impl Drone {
             // `NDrone2_DSTATE_AimCrouchFire` 0x167060 (state 0x70) UPDATE fires from the crouch
             (AIM_CROUCH_FIRE, msg::UPDATE) => {
                 self.desired_yaw = self.yaw_to_opp;
+                // `NDrone2_CanAltAttack(0)` after the facing, ahead of the backoff test [M 0x167060
+                // case 3, call 0x167150].
+                if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
                 if self.dist <= 4.0 && self.can_backoff(d) { self.set_state(AIM_BACKOFF); return true; }
                 if self.firing && !self.burst_done { return true; }
                 if frame < self.entered + 60 { return true; }
@@ -11568,14 +11581,8 @@ impl Drone {
         // The game's `cVar1` [M 0x150c18:58] is the +0x17 byte the ControlSTANDARD caller stores
         // from `DroneMove_NoBunching`'s return every tick [M 0x1490f0:225-226] — 1 only when the
         // +0x314 neighbor stamped side bits this tick (no neighbor, or the neighbor's movement
-        // lock, reads 0 [M 0x150ad0:21-24,56-62]). The port's `bunched` flag (any enabled peer
-        // within 3.0, 2-D) stands in: swapping it for `no_bunching_hit` was TRIED here and
-        // PULLED — walkreal_07000014_live's `the_e_use_switch...` leg wedged at the corridor
-        // door (6000-tick cap, reproduced on the scan-live tree only; the pre-swap tree passes)
-        // — the strafe-option gate change reshuffles every guard's Rand chain. The return byte
-        // itself (`no_bunching_hit`) is landed and live; its ChooseCombatMove read stays on the
-        // stand-in pending a walk-safe re-pin. [M 0x150c18:58-79]
-        let bunched = self.bunched;
+        // lock, reads 0 [M 0x150ad0:21-24,56-62]). Live with the scan on every level.
+        let bunched = self.no_bunching_hit;
         if rng.rand(15) >= 7 && !aimed && !bunched { return 0; }
         let mut opts = Vec::new();
         if aimed && self.prop(d, 0x13) && self.can_do(d, anim_state::DODGE_LEFT) { opts.push(1) }
@@ -21339,7 +21346,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .map(|(i, x)| (i, x.pos)).collect();
         // NoBunching's candidate snapshot (present, enabled, non-corpse — the game's chain rides
         // +0x4F8 bits the port does not model), indexed by drone index.
-        let bunching_ok: Vec<bool> = self.list.iter().map(|x| x.present && x.enabled && !x.corpse).collect();
+        // A drone still in WAIT_SWITCH is not a candidate: the Steer filter needs +0x4F8 & 0x100
+        // [M 0x14eba8:150-155], and the game's waiting drones carry it CLEAR [L PCSX2 2026-11-18,
+        // 07000005: all 8 state-0x1 drones +0x4F8 0x80000042 / 0xc6000042, all 5 active ones
+        // 0x…1e2 / 0x…1f2 with 0x100 set]. Counting them parked the 01 contact in the drone-ahead
+        // hold (0x21) behind the dormant #10 on his route.
+        let bunching_ok: Vec<bool> = self.list.iter().map(|x| x.present && x.enabled && !x.corpse
+            && x.state != state::WAIT_SWITCH).collect();
         // The movement lock (`+0x4F8 & 0x10`) per drone: NOT part of the Steer candidate filter
         // [M 0x14eba8:150-155 — the filter has no 0x10 term], so a locked drone CAN become the
         // +0x314 neighbor; the NoBunching reader then refuses to stamp on it [M 0x150ad0:22].
@@ -22581,33 +22594,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // while +0x23 == 0 (the port zeroes unconditionally — no +0x23 model); the result byte
             // lands at obj+0x17; `LinkCreep_Handler` 0x15a2c8:90 ORs 0x1e on the advancing follower.
             //
-            // HELD INERT (NB_SCAN_LIVE) — drone-nobunching-side-bits re-verified the blockers with
-            // the scan LIVE on this branch: (a) walkreal_07000001_live passes 5/0 with the flip on
-            // (the old 01 blocker is STALE — measured this session, 165.7 s); (b) the NEW blocker:
-            // walkreal_07000014_live regresses 6/0 → 4/2 with the flip on —
-            // `the_e_use_switch_fires_the_sabotage_cascade...` and `walk_the_infiltration...` both
-            // wedge `walk_to the corridor south to the leg-2 spot` at the 6000-tick cap (bond
-            // (30.33,0.55,35.44), segment_to_target 0.17, reproduced twice; the pre-flip tree
-            // passes the same test — stash-verified). The side bits reshuffle the infiltration
-            // route's guard chain and some earlier-leg displacement wedges the walker. Which
-            // behaviour is game-true for that corridor's guards needs a live check (the report
-            // lists it) before the flip can land; the faithful port below is complete and ready.
-            const NB_SCAN_LIVE: bool = false;
-            // LIVE per level, the door-leaf-slide pattern: 07000012 [L PCSX2 2026-11-12: the start
-            // pair carries +0x31C 0x14 (south, its partner to the right) and 0xC (north) through
-            // the fight; the scan here gives the same bits, and without them the south guard
-            // stepped right into his partner and his standing rounds hit the partner's body].
-            // The scan is the game's on every level [M ControlSTANDARD 0x1490f0:202-226 calls it per
-            // tick for every drone]; it runs where the level's tests walk green with it: 12, and
-            // 04 06 07 09 0a 0d 1b (the 2026-11-12 suite with it on everywhere but 01/14 went red
-            // only on 02 03 08 0b 0c 11 13 15 16). Those levels, 01 and 14 wait on their walks;
-            // 05 stays off because guard_side_gates_live injects the bits there by hand to pin
-            // their consumers (the live scan would overwrite the injection every tick).
-            let nb_scan_live = NB_SCAN_LIVE || matches!(d.level & 0xff,
-                0x04 | 0x06 | 0x07 | 0x09 | 0x0a | 0x0d | 0x12 | 0x1b) && d.level >> 8 == 0x0700_00;
-            // The per-tick zero is the scan's own head (the game's ControlSTANDARD 0x1490f0:202-226
-            // zeroes +0x31C and re-runs NoBunching in the same breath); +0x17 (no_bunching_hit)
-            // goes with it — 1 only when a neighbor actually stamped this tick [M 0x150ad0:56-62].
+            // Live on every level: the game's ControlSTANDARD 0x1490f0:202-226 runs it per tick for
+            // every drone. (It was held per level while walks were re-pinned; 07000012's start pair
+            // carries +0x31C 0x14 / 0xC live [L PCSX2 2026-11-12], the bits this scan gives.)
+            // ControlSTANDARD runs the scan only past its +0x4F8 & 0x100 gate [M 0x1490f0: the
+            // early DoTracking return]; a WAIT_SWITCH drone carries the bit clear [L PCSX2
+            // 2026-11-18, 07000005] — it scans nothing and keeps no side bits.
+            let nb_scan_live = dr.state != state::WAIT_SWITCH;
+            if !nb_scan_live { dr.no_bunching = 0; dr.no_bunching_hit = false; }
             if nb_scan_live {
                 dr.no_bunching = 0;
                 dr.no_bunching_hit = false;
@@ -22641,6 +22635,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     dr.no_bunching_hit = true;
                 }
             }
+            if let Some(b) = dr.no_bunching_pin { dr.no_bunching = b; }
             // `NDrone2_NearArmedDrone`'s scan (fix-actors): the nearest started, alive, hostile peer.
             // (The snapshot list was taken before the mutable borrow; the armed/started filter rides it.)
             // level-01-complete-4: `armed_peer_dist`/`armed_peer_exit_dist`/`peer_latch` are assigned
@@ -25535,6 +25530,7 @@ mod tests {
             // fix-nav-remainder: the kick-node outbox + the ScriptPlayer binding.
             kick_sp: None, kick_node: None, ally_wait_node: None, kick_attempt: false, no_bunching: 0,
             no_bunching_hit: false,
+            no_bunching_pin: None,
             // fix-room-sound: the foley one-shot outbox + the pain-grunt handle.
             foley_reqs: Vec::new(), pain_grunt: None,
             sfx_reqs: Vec::new(),

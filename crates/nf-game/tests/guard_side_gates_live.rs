@@ -157,7 +157,7 @@ fn left_bit_blocks_every_left_move() {
     let injected_at;
     {
         let g = &mut sim.list[gi];
-        g.no_bunching = 8; // an obstacle to the guard's LEFT (the proven side meaning)
+        g.no_bunching_pin = Some(8); // an obstacle to the guard's LEFT (the proven side meaning)
         injected_at = sim.frame;
     }
     let d = l.data();
@@ -195,7 +195,7 @@ fn right_bit_blocks_every_right_move() {
     let injected_at;
     {
         let g = &mut sim.list[gi];
-        g.no_bunching = 0x10; // an obstacle to the guard's RIGHT
+        g.no_bunching_pin = Some(0x10); // an obstacle to the guard's RIGHT
         injected_at = sim.frame;
     }
     let d = l.data();

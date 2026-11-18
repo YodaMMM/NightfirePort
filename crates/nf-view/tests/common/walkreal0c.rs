@@ -1038,6 +1038,18 @@ pub fn walk_spawn_to_the_yard_ladder_base_at(iso: &str, difficulty: u32) -> Walk
     // ground (y 0). West of the x 31.7 boundary wall the ground wraps round to z -122, then the
     // x 46 lane runs south past the warehouse to the yard. Walked here and checked at each end;
     // the secret door's chain is covered by interactables_0700000c_live.
+    // The display-ground guards hold the narrow ledge in their fire states (one stood at
+    // (13.41, 7.27, -124.16) in AimStandFire with the spacing scan live); a player shoots the
+    // guard in his way (Walker::stuck_answers).
+    // The camera (0x54) is still up from the photograph: the pistol (2, the boot loadout) out first.
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.weapon == 2 { break; }
+        let press = sim.gun.switch_request != 2;
+        w.tick(nf_game::player::Input { switch_to: press.then_some(2), ..Default::default() }, false);
+    }
+    let prev_answers = w.stuck_answers;
+    w.stuck_answers = true;
     for (x, y, z, r, label) in [
         (10.5, 7.4, -113.4, 0.9, "the display ground east"),
         (13.2, 7.4, -113.4, 0.8, "back to the ledge"),
@@ -1071,6 +1083,7 @@ pub fn walk_spawn_to_the_yard_ladder_base_at(iso: &str, difficulty: u32) -> Walk
     ] {
         w.walk_to(Wp::new(x, y, z).r(r), label);
     }
+    w.stuck_answers = prev_answers;
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let under = sim.world.segment_hit([sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]],

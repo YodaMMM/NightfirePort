@@ -664,7 +664,22 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     // #193's +Z faces sit at z −4.00 over x 14.00..14.62 [D tris], so Bond walks in at x 14.3 and
     // ends facing −Z with the head near z −2.8 (the old 0.9 arrival left the use point 1.04 out).
     w.walk_to(Wp::new(14.3, 17.0, -2.0).r(0.3), "in front of the Load Point");
+    // Face the use point before the 0.3 arrival: entered at a wide heading, the steer's turn
+    // cap orbits the point at ~0.8 u instead of closing it (the walker's own limit, no game rule).
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = &sim.bond;
+        let err = walker::wrap_pi((14.3f32 - b.pos[0]).atan2(-2.8 - b.pos[2]) - b.yaw);
+        if err.abs() < 0.05 { break; }
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    // The stuck ladder's door pick reads every door within 2.8 u flat, any height: here the
+    // door 15 u overhead at (14.0, 31.1, -4.0) wins, its E press resets the stuck count every
+    // time and the sidestep/jump steps never run. The answering pick keeps the 2.5 u height band.
+    let answers = w.stuck_answers;
+    w.stuck_answers = true;
     w.walk_to(Wp::new(14.3, 17.0, -2.8).r(0.3), "the Load Point");
+    w.stuck_answers = answers;
     // The use plane is MARGINAL at this arrival: the head must sit near z −2.8 for the ray to
     // land inside 1.0 of the #193 use point (the old 0.9 arrival left it 1.04 out), and the
     // r-0.3 arrive samples anywhere in (−3.1, −2.5) — the 2026-11-06 d2 arrival took −2.56 and

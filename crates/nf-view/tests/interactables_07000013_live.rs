@@ -70,6 +70,10 @@ fn the_pickups_take_on_the_walk() {
         assert!(!sim.drones.channels.on(0x56), "sister: the mid-lobby 0x56 touch idles at the spawn [D]");
     }
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    // nb-scan-all MEASURED: the east-lane arrival lands at (4.72, 25.04) and the straight line
+    // to the west mid runs into the desk block (segment hit at 0.05; Bond held at (2.0, 25.6)
+    // for the 6000-tick cap). Through the east lane (x 4.18..6.90, z 26.25..27.50 [D]) first.
+    w.walk_to(Wp::new(5.5, -368.4, 29.0).r(1.0), "13: through the desk's east lane");
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
     w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
@@ -269,6 +273,10 @@ fn the_security_door_walks_open_and_the_stairwell_door_refuses() {
     // The security-room door: the proven walk up to its doorway with NO use key — the door must
     // stay closed (the game's scan never opens a closed door [M 0x1363c8]) — then the E opens it.
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    // nb-scan-all MEASURED: the east-lane arrival lands at (4.72, 25.04) and the straight line
+    // to the west mid runs into the desk block (segment hit at 0.05; Bond held at (2.0, 25.6)
+    // for the 6000-tick cap). Through the east lane (x 4.18..6.90, z 26.25..27.50 [D]) first.
+    w.walk_to(Wp::new(5.5, -368.4, 29.0).r(1.0), "13: through the desk's east lane");
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
     w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
@@ -323,6 +331,10 @@ fn the_tripbombs_arm_and_the_bond_bonus_takes_with_the_medal() {
     // The lobby BOND_BONUS #421 (−16.88, −369.03, 29.30 [D]) sits at the security-room glass
     // band's west end — the proven room route reaches it; the take is the real walk-over.
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    // nb-scan-all MEASURED: the east-lane arrival lands at (4.72, 25.04) and the straight line
+    // to the west mid runs into the desk block (segment hit at 0.05; Bond held at (2.0, 25.6)
+    // for the 6000-tick cap). Through the east lane (x 4.18..6.90, z 26.25..27.50 [D]) first.
+    w.walk_to(Wp::new(5.5, -368.4, 29.0).r(1.0), "13: through the desk's east lane");
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
     w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");
@@ -377,6 +389,10 @@ fn the_securityroom_glass_refuses_the_p2k_word() {
     // The proven walk into the security room; stand south-east of the pane band (its bounds' own
     // x span, a couple of units into the room) and fire the held P2K straight at its face.
     w.walk_to(Wp::new(5.0, -368.4, 26.5).r(1.5), "13: the lobby east lane");
+    // nb-scan-all MEASURED: the east-lane arrival lands at (4.72, 25.04) and the straight line
+    // to the west mid runs into the desk block (segment hit at 0.05; Bond held at (2.0, 25.6)
+    // for the 6000-tick cap). Through the east lane (x 4.18..6.90, z 26.25..27.50 [D]) first.
+    w.walk_to(Wp::new(5.5, -368.4, 29.0).r(1.0), "13: through the desk's east lane");
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
     w.walk_to(Wp::new(-22.0, -368.4, 39.5).r(1.5), "13: past the glass band");

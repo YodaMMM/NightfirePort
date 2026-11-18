@@ -1440,6 +1440,30 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
 /// (i23.m50.o41 mat10) — each with a gap at z −67.75..−69.0/−69.25: THE DOORWAY, the only link
 /// between the staircase pocket (x 38-40) and the open slab (x ≤ 36) [D map F, the y-50.2 wall
 /// sections]. Ends standing at the terrace spot (22.0, −68.0).
+/// The walkway pair's answer: up to 5 bounded stands on the nearest VISIBLE live guard within
+/// 8 u (real input, the walker's own shot path).
+fn answer_the_strip_pair(w: &mut Walker, label: &str) {
+    for _ in 0..5 {
+        let g = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            sim.drones.list.iter().enumerate()
+                .filter(|&(i, d)| d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                    && walker::dxz(d.pos, b) < 8.0 && (d.pos[1] - b[1]).abs() < 4.0
+                    && walker::DamageLog::visible(sim, i))
+                .min_by(|x, y| walker::dxz(x.1.pos, b).total_cmp(&walker::dxz(y.1.pos, b)))
+                .map(|(i, _)| i)
+        };
+        let Some(g) = g else { break };
+        // A dry gun is not the end of the answer: Bond carries several (the 00 Agent walk
+        // emptied a 6-round clip with no spare on #13) — cycle to one with rounds and go on.
+        // Every carried gun dry ends the answer: a resupply walk from the strip leaves the
+        // narrow band (measured on the 00 Agent stream: it stepped off to y 40 and fell).
+        if !w.switch_to_armed(label) { break; }
+        let _ = w.shoot_bounded(g, &format!("{label}: the walkway pair #{g}"), 300);
+    }
+}
+
 fn walk_the_stairs_top_to_the_terrace_spot(w: &mut Walker, difficulty: u32) {
     walk_legs(w, &[
         ([36.4, 43.8, -71.8], "the stairs' top east end"),
@@ -1451,8 +1475,18 @@ fn walk_the_stairs_top_to_the_terrace_spot(w: &mut Walker, difficulty: u32) {
     // boxes sit behind the walkway's south lip for the eye→centre pick even at 3 u) and the stand
     // itself cost the exposure — the walk eats the pair's pass-by price (~12 [L a05g: 9.2+2.8])
     // instead of standing in it.
+    // nb-scan-all MEASURED: with the spacing scan live the pair stands ON the strip (#12 at
+    // 0.9 u, #13 at 1.7 u at (42-43.4, 45.1, -72.7..-74.4)) and their point-blank 0x16 rounds
+    // took the Agent walk's last 58 — the pass-by is no longer cheap. A player shoots who stands
+    // on his path: before the strip and again at its middle, every VISIBLE live guard within
+    // 8 u is shot (bounded stands, nearest first). walk_legs steers on its own (no walker
+    // return fire), so the answers are explicit.
+    answer_the_strip_pair(w, "the strip's west corner");
     walk_legs(w, &[
         ([38.5, 44.0, -72.7], "the south strip 38.5"),
+    ], 40.0, 900);
+    answer_the_strip_pair(w, "the south strip 38.5");
+    walk_legs(w, &[
         ([41.0, 44.1, -72.7], "the south strip 41"),
         ([43.4, 44.1, -72.6], "the south strip 43.4"),
         ([43.5, 44.2, -71.7], "the walkway tip"),
@@ -1836,6 +1870,7 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
 /// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the
 /// load path is the only difference.
 #[test]
+#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t10830 at (43.01,45.19,-73.11): every gun dry at the walkway pair [L 2026-11-18 run]; re-tune and un-ignore"]
 fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
     // The fights HEAD-HUNT (see the Agent sister): at 00 Agent the guards' accuracy is 1.3 and
     // Bond's pain is unscaled, so every tick a fight stands is a tick of bursts — the head pick

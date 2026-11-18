@@ -213,8 +213,11 @@ fn sight_to_first_shot_for_the_three_sighting_paths() {
     let shot_before = sim3.list[gi].shots.len();
     for _ in 0..60 { sim3.tick(&d, &player); }
     let g3 = &sim3.list[gi];
-    // The re-sight tick: the first ATTACK-family state after the away phase.
-    let re_sight = g3.log.iter().rev().find(|(f, s)| *f > WARM + RUN + 160 - 60 && matches!(*s,
+    // The re-sight tick: the FIRST ATTACK-family state after the away phase. (Reading the last
+    // one took a re-entry: at <= 1.5 u the fire state hands to AltAttack 0x72 and comes back
+    // through its follow-on 0x68 [M 0x166328 case 3 -> 0x1549e0; 0x167488], the 0x68 <-> 0x72
+    // cycle the game runs at 1.2 u [L PCSX2 2026-11-18, 05 guard #2: 1304 of 1500 frames in 0x72].)
+    let re_sight = g3.log.iter().find(|(f, s)| *f > WARM + RUN + 160 - 60 && matches!(*s,
         nf_game::drone::state::ATTACK | nf_game::drone::state::AIM_STAND_FIRE | nf_game::drone::state::COMBAT_NEW_SIGHTING | nf_game::drone::state::COMBAT_NO_SIGHT))
         .map(|(f, _)| f - WARM);
     let aim_entry3 = g3.log.iter().filter(|(f, _)| *f > WARM + RUN + 130)
@@ -224,6 +227,7 @@ fn sight_to_first_shot_for_the_three_sighting_paths() {
     // 1-2 ticks; at dist <= 4.0 CanBackoff routes to AimBackoff instead (0x166328:96-102), so this
     // spot's guard re-aims and backs off before any bullet (the search phase walked it to ~2 units).
     let backoff = g3.log.iter().any(|(f, st)| *f > WARM + RUN + 130 && *st == nf_game::drone::state::AIM_BACKOFF);
+    eprintln!("[trace] path3 log after the away phase: {:?}", g3.log.iter().filter(|(f, _)| *f > WARM + RUN + 100).map(|&(f, st)| (f - WARM, st)).collect::<Vec<_>>());
     eprintln!("[table] path3 mid-combat re-sight: was_fighting {was_fighting}, re_sight(ATTACK-family) {re_sight:?}, aim_entry {aim_entry3:?}, backoff {backoff}, next_shot {shot3:?}, pos_after_away {g3_pre_pos:?}");
     if let (Some(r), Some(a)) = (re_sight, aim_entry3) {
         assert!(a >= r && a - r <= 4, "path3 re-sight {r} -> AimStandFire {a}: the entry chain is 1-4 ticks in the game");

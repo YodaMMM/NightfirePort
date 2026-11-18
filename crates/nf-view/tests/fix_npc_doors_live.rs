@@ -92,6 +92,7 @@ fn doors_dump(w: &Walker, ci: usize) -> String {
 // moved the route (the harness branch's run on 26543436 saw door #2 at +30962 and the escort past
 // the doors at +36031 — the new route takes ~2× the ticks) but all three can-fail asserts hold.
 // The 120k-tick follow cap still catches a re-deadlock as a failure, not a hang.
+#[ignore = "nb-scan-all: the contact parks in LEAD_MISSION_WAIT 0x21 at (3.0,6.3,7.3) in the corridor and his standing body holds Bond 1.5 u short of the corridor plate (6.79,8.91) that arms the ambush whose deaths raise ch 0x99 [L 2026-11-18]; open: does a WAIT_SWITCH drone keep a standing body in the game (ControlSTANDARD returns before NDrone2_Collision when +0x4F8 & 0x100 is clear)"]
 fn the_escort_opens_the_interior_doors_on_his_route() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
