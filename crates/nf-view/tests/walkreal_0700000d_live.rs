@@ -254,12 +254,35 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // bay guard out through his own sight line before climbing into it.
     for (at, r, label) in [
         ([188.0f32, 0.5, -228.0], 2.0, "the blind strip east 1"),
-        ([196.0, 0.5, -228.5], 2.0, "the blind strip east 2"),
     ] {
         assert!(w.try_walk_to(Wp { at, act: Act::None, arrive: r }, label), "{label} must walk");
     }
+    // 00 Agent twin of the yard-armour leg: TRIED and DEAD (retune-nb-0d, run3 2026-11-18):
+    // the kind-3 pickup at (205.4, 0.1, -205.3) did NOT arm at 00 Agent — the nav arrived
+    // (205.97, 1.13, -205.17), 0.57 dxz off the placement, and armour stayed 2.0 → 2.0 (at
+    // d1 the same leg measured "armour 50 taken") — and the walk-over cost 1483 ticks during
+    // which #36 (ground band, 0x5000090, (158.1, 1.0, -217.7)) landed 46.0 and #22 48.0
+    // [L the NF_DMG_TRACE run]. The leg stays out; the armour question needs the pickup's
+    // d3 existence confirmed (a live check for the main agent) before any retry.
+    for (at, r, label) in [
+        ([196.0f32, 0.5, -228.5], 2.0, "the blind strip east 2"),
+    ] {
+        assert!(w.try_walk_to(Wp { at, act: Act::None, arrive: r }, label), "{label} must walk");
+    }
+    // THE DECK DUO FROM THE STRIP MOUTH, 00 Agent only: MEASURED DEAD (retune-nb-0d,
+    // 2026-11-18, three real runs): the head act LANDED its kill (the scan's west reposition
+    // put the deck sniper #22 (0x5000090, 0x1e) at (204.21, 12.09, -290.15) where the
+    // [209.0, -289.3] tol [7.0, 3.5] box converged and killed it — "landed true") — but the
+    // roll re-dealt the killer: #20 (deck (197.9, 14.0, -262)) landed 46.0 at t2022 and #32
+    // (west roof (151.4, 22.7, -238.3)) 48.0 at t2354 + 6.0 at t2895, death at the ladder
+    // base vs the un-leged roll's t19197 ride death [L the NF_DMG_TRACE runs]. The scan's
+    // 0x1e roster is WIDE (#11/#20/#22 deck, #32 west roof, #36 ground band — each 46-48 raw
+    // at 00 Agent's accuracy row, bullets eat armour first, the 0.0-health deltas are
+    // armour-eaten hits); single-target pre-ride kills just move the death. The leg stays
+    // out (the walk-7 "the net is NEGATIVE" precedent).
     let bay_killed = kill_guard_at_present(&mut w, [214.2, -289.4], [6.0, 6.0], "the bay guard #10 (from the strip mouth, ray clear d 64 [probe_0d_ray_stands])", 180);
     eprintln!("[0d] the strip-mouth #10 kill: landed {} pool {:.1}", bay_killed, w.scene.sim.as_ref().unwrap().drones.health.health);
+    // (the measured-dead strip-mouth deck-duo lever's ledger sits in the comment above)
     // The spawner #32 (skin 0x5000090, the ground band (157.6..163.3, −213..−229)) is NOT
     // taken here any more — level-0d-real-health-crossfire-4 MEASURED the trade: the landed
     // strip-mouth kill (the world-ray gate + the east band box, down at +528 when #32 crossed
@@ -1470,6 +1493,18 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                 // (d 38-49, clear down-west rays from the east park, zero lands) while g0/g1
                 // sat blocked — every tap spends a spread draw from the same stream the ride's
                 // own fire rolls from, and the far guards are the floor sweep's job.
+                // retune-nb-0d MEASUREMENT (2026-11-18): the ride killer is g18 (skin
+                // 0x5000087, 0x12) at (177.90, 0.98, -283.26), state 0x68, 33.4 u off the
+                // landing zone — OUTSIDE this 25 u pick — and its ONE 25.8 0x12 round at
+                // frame 19197 (ox 164.7, d ~18.4 up-ray from the rider's crouched head) is
+                // the whole death margin [L the instrumented run: player_hits (frame, owner,
+                // damage) [M drone.rs 13525] resolves the owner]. The east-yard threat is
+                // therefore untouchable by the ride taps (the zone-35 + rider-distance
+                // variant re-aimed them at g18, d 13.9-14.4, and STILL landed zero — the
+                // girder-spawn geometry law holds at d 14; the ride died at the same margin,
+                // g3 chip 1.8 at t19027 + g18 kill 24.0 at t19222 [L run6]) and the master
+                // zone-25 zone-priority pick stays. The g18 kill must come from the ground
+                // phases or the dice.
                 let zone = walker::dxz(d.pos, [147.0, 1.0, -296.0]);
                 if zone >= 25.0 { continue; }
                 if best.map_or(true, |(_, _, b)| zone < b) { best = Some((i, at, zone)); }
@@ -1520,7 +1555,14 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.drones.health.health != hp_prev {
             let nh = sim.drones.player_hits.len();
-            let last = sim.drones.player_hits.last().map(|(i, w, d)| format!("g{i} w{w:#x} {d}"));
+            // player_hits is (frame, owner, damage) [M drone.rs 13525]; the owner index
+            // resolves through the live list — log-only, no sim writes.
+            let last = sim.drones.player_hits.last().map(|(f, o, d)| {
+                let dd = sim.drones.list.get(*o).map(|dd|
+                    format!("skin {:#x} at ({:.2},{:.2},{:.2}) state {:#x} enabled {} present {}",
+                        dd.skin, dd.pos[0], dd.pos[1], dd.pos[2], dd.state, dd.enabled, dd.present));
+                format!("frame {f} owner g{o} dmg {d:.1} {:?}", dd.unwrap_or_else(|| "the world".into()))
+            });
             eprintln!("[0d] the ride: tick {} health {hp_prev:.1} -> {:.1} at {:?} fall {} hits {} {last:?}",
                 w.total_ticks, sim.drones.health.health, sim.bond.pos, sim.bond.fall_timer, nh);
             hp_prev = sim.drones.health.health;
@@ -2089,8 +2131,11 @@ fn walk_arrival_to_the_c5_door_real_damage_agent() {
 /// real-damage section at 4.2; the C5 kill rides the mounted laser under the established
 /// top-up guard. Full mission 30411 ticks, stuck 0, falls 0. No health, armour or ammo writes
 /// on real input anywhere before the C5 leg's guard.
+/// RED again under nb-scan-all (retune-nb-0d, 2026-11-18): the 0d-2 levers hold through the
+/// landing, but the RIDE now dies to the east-yard guard g18's ONE 25.8 0x12 round — the
+/// measured ledger and the next lever are in the ignore message.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies on the gantry ride at t19197 at (164.71,14.60,-296.08) [L 2026-11-18 run]; re-tune and un-ignore"]
+#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states), retune-nb-0d measured ledger 2026-11-18, five real runs [L]: (1) the original roll — boarded 25.8 (the deck sniper #22 0x5000090/0x1e landed 46.0 at t2609 on the ladder-base pin d 55.2; corner chips 5 x 1.8 from #3/#1), the ride took ZERO chips ~900 ticks, then g18 (owner 18 [M player_hits (frame, owner, damage) drone.rs 13525], skin 0x5000087, 0x12, (177.90, 0.98, -283.26) state 0x68, 33.4 u off the landing zone, d ~18.4 off the rider's eye) landed ONE 25.8 round = death t19197 at (164.71, 14.60, -296.08); (2) the strip-mouth deck-duo kill leg — LANDED (#22 down, the [209.0,-289.3] tol [7.0,3.5] head box converged) but the roll re-dealt: #20 46.0 t2022 + #32 48.0 t2354 + 6.0 t2895 = death at the ladder base (the leg stays out); (3) the yard-armour twin leg — the kind-3 pickup at (205.4, 0.1, -205.3) did NOT arm at d3 (nav arrived (205.97, 1.13, -205.17), armour 2.0 -> 2.0; at d1 the same leg takes 50) and the walk-over cost 1483 ticks of sniper exposure; (4) the ride threat-pick zone 35 + rider-distance — the taps re-aimed at g18 (d 13.9-14.4) and STILL landed zero (the girder-spawn law holds at d 14), g3 chip 1.8 t19027 + g18 kill 24.0 t19222. FACTS: the scan's 0x1e sniper roster is WIDE (#11/#20/#22 deck, #32 west roof, #36 ground band; 46-48 raw each at 00 Agent's accuracy row; bullets eat armour first — the 0.0-health deltas are armour-eaten hits); the ride taps CANNOT kill anything (33+ taps at d 13.9-43, zero lands); g18 is outside the 25 u tap zone AND the bay-enter scan's wake window (its 8 passes found nothing — the yard wakes at the corner rim). NEXT LEVER: re-roll the g18 headshot with the dice knobs (the pause_at arm timing/n and the tap cadence — each tap is a spread draw and g18's burst accuracy re-rolls with the stream), and/or cross the ground phases with > 26 health so ONE 25.8 round does not kill (kill the corner chippers #3/#1 from the corner-phase stand first — the bay-enter scan idiom; the east-yard g18 cannot be shot from the corner rim (the high stands see nothing into the yard pit) nor from the ride (above) nor from the strip/bay phases (it wakes later) — the live checks below ask the main agent for g18's wake frame)"]
 fn walk_arrival_to_the_c5_door_real_damage_00agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(3, true));
 }
