@@ -106,3 +106,14 @@ across the built live binaries (0 failing binaries)`).
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed (the sandbox has no route to ntfy.sh):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-16: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'retune-nb-16: done', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → no response within the 20 s urlopen timeout; the shell killed the command at 30 s (no output).
+3. `timeout 25 wget -q -O /tmp/ntfy.out --post-data "retune-nb-16: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 124 (wget killed by the 25 s timeout, empty output file).
