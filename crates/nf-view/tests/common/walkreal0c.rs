@@ -498,7 +498,12 @@ fn mezzanine_door_leg(w: &mut Walker) {
     // 0x54 in hand (no round spawns from it), so Bond takes the scooped sniper rifle and answers the
     // visible shooters within 15 u (bounded 300-tick stands) before crossing, then steps back onto
     // the arrival spot the crossing starts from.
-    if hard_0c(w) {
+    // retune-nb-0c: the gate opens to the Agent rows (agent_0c) — the d2 run died ON the deck
+    // (t6159, (53.76,6.01,-158.87)): #19 (skin 0x5000090, d 9.1) landed 2×28.0 = 56.0 and #20
+    // (weapon 0x1e, d 7.9) the last 18.1, 9 return-fire fights having failed to clear the pair
+    // first [L 2026-11-18 run]. A player answers the two shooters he can see from the deck
+    // before walking its south leg; the d3 timeline is untouched (the same block already ran).
+    if agent_0c(w) {
         for _ in 0..120 {
             if w.scene.sim.as_ref().unwrap().gun.weapon == 0x1e { break; }
             w.tick(nf_game::player::Input { switch_to: Some(0x1e), ..Default::default() }, false);
@@ -2059,3 +2064,11 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, _label
 /// 00 Agent real damage (difficulty 3, the top-up off): the 0c walk's own levers below run only here,
 /// so the Operative/Agent sisters and the top-up walk keep their timelines byte-exact.
 fn hard_0c(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() }
+
+/// Agent real damage and up (difficulty 2+, the top-up off, retune-nb-0c): the same law one row
+/// down — the Agent rows land the same guard fire (Plr_DMod_Normal [M Player_HandlePain
+/// 0x1902c8]) and the d3-only levers left the Agent walk unprotected at the mezzanine deck:
+/// DIED tick 6159 (53.76,6.01,-158.87) — the deck-sniper pair #19/#20 (y 9.7, d 7.9-9.1)
+/// took 56.0 + 18.1 while the fights' 9 stands never cleared them first [L 2026-11-18 run,
+/// the ignore ledger]. The deck pre-clear (the d3 lever) answers the same pair at d2.
+fn agent_0c(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 && !w.tops_up() }

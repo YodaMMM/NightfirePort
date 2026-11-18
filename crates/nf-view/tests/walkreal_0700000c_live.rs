@@ -215,6 +215,39 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(difficulty: u32) {
     // eastroute test's closing leg), then east under the band to the gate's ground spot.
     w.walk_to(Wp::new(86.0, 7.4, -208.2).r(1.0), "the east ground west");
     w.walk_to(Wp::new(78.0, 7.4, -208.2).r(1.2), "the east ground at the chasm's east");
+    // retune-nb-0c (nb-scan-all re-tune): the pit-floor shooter (#5, skin 0x500006d, weapon 0x12,
+    // (62.1, 7.2, -207.5) plc60's pit — the game's own placement mid-void) is the 00 Agent
+    // walk's dominant killer: 74.8 in 51 hits of 1.8-2.4 while Bond walks the east ground and
+    // the crate-stack hops (DIED t35413 (94.20,8.92,-232.05) [L the ignore ledger + the
+    // 2026-11-18 rerun]). The return-fire fights fought him FIVE times (the staircase top, the
+    // turb2 flight, the run-up, the gate spot) and never landed one round — his hp 10.0 intact
+    // [L the same run] — the aimed fights' cursor-window law (the fight drives the VIEW and
+    // cannot drive the cursor window [M Player_AutoAim 0x1a7c98:50-59]; the level-11 law)
+    // standing off at d 17-40. From THIS spot the shooter is exposed to the plain gun rays
+    // (exposed_part_gun_rays Some [L the probe on this branch], dxz 17.0, dy -0.1), and the P2K
+    // (weapon 2, the boot loadout) fires zero spread at range 50 [L the strip probe] — a
+    // player clears the shooter he can see across the chasm before walking on. Bounded stands
+    // on every live hostile exposed from here within 20 u (the deck pre-clear's own shape).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        for _ in 0..120 {
+            if w.scene.sim.as_ref().unwrap().gun.weapon == 2 { break; }
+            w.tick(nf_game::player::Input { switch_to: Some(2), ..Default::default() }, false);
+        }
+        for _ in 0..4 {
+            let pick = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                        && ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt() < 20.0 && (d.pos[1] - bp[1]).abs() < 6.0 })
+                    .filter(|&di| walker::walker::DamageLog::visible_gun_rays(sim, di))
+                    .min_by(|&a, &b| { let (da, db) = (&sim.drones.list[a], &sim.drones.list[b]);
+                        ((da.pos[0] - bp[0]).powi(2) + (da.pos[2] - bp[2]).powi(2)).total_cmp(&((db.pos[0] - bp[0]).powi(2) + (db.pos[2] - bp[2]).powi(2))) })
+            };
+            let Some(di) = pick else { break };
+            let _ = w.shoot_bounded(di, "the pit shooter pre-clear", 900);
+        }
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;
@@ -508,8 +541,18 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
 /// pocket (the photograph leg's own spot); the shooter-side read (NF_RF_TRACE + NF_RF_GEOM on
 /// the tick-5903 fight) to see whether the blocker hold or the slab eats the taps. The
 /// Operative baseline this sister must match: 100.0 → 26.2 hp over 19287+838 ticks.
+/// retune-nb-0c (nb-scan-all re-tune, GREEN — un-ignored): the new death was ON the mezzanine
+/// deck — DIED t6159 (53.76,6.01,-158.87): the balcony pair #19 (skin 0x5000090, d 9.1) landed
+/// 2×28.0 = 56.0 and #20 (weapon 0x1e, d 7.9) the last 18.1, 9 return-fire fights never
+/// clearing them first [L the 2026-11-18 run]. The deck pre-clear (the d3 lever — the switch
+/// to the scooped 0x1e, bounded stands on every visible hostile within 15 u/6 dy) was gated
+/// `hard_0c` (difficulty >= 3); the Agent rows die under the same pair, so the gate opens one
+/// row down (`agent_0c`, difficulty >= 2, the top-up off) with the same block. Measured green:
+/// the pre-clear drops #19 at d 11.5 (clip 4 spare 20 [L this branch's run]), the whole
+/// mission walks (0c legs 28944 ticks + 0d 838 ticks) and objective 3 completes at 81.1 hp
+/// [L this branch's run]. The d3/d1 timelines are untouched (the d3 block already ran; d1
+/// never enters).
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t6159 at (53.76,6.01,-158.87) [L 2026-11-18 run]; re-tune and un-ignore"]
 /// UN-IGNORED 2026-11-13: green on master 0fdee8319 - the warehouse-plate crossfire death no
 /// longer reproduces on the current guard rules.
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
@@ -519,8 +562,25 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
 }
 
 /// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister.
+///
+/// retune-nb-0c (nb-scan-all re-tune, GREEN — un-ignored): the new death was the east climb's
+/// crate-stack hops — DIED t35413 (94.20,8.92,-232.05), 92 hits for 137.2 over the run, the
+/// dominant killer the PIT-FLOOR shooter #5 (skin 0x500006d, weapon 0x12, at (62.1,7.2,-207.5),
+/// the game's own mid-void placement [D plc60]): 74.8 in 51 hits of 1.8-2.4 while Bond walked
+/// the east ground and the hops [L the 2026-11-18 rerun's ledger]. The return-fire fights
+/// fought him FIVE times (the staircase top, the turb2 flight, the run-up, the gate spot) and
+/// never landed one round — his hp 10.0 intact [L the same run] — the aimed fights' cursor-
+/// window law (the fight drives the VIEW and cannot drive the cursor window [M Player_AutoAim
+/// 0x1a7c98:50-59]; the level-11 law) standing off at d 17-40. The lever: from the east ground
+/// at the chasm's east (78, 7.4, -208.2) the shooter IS exposed to the plain gun rays
+/// (exposed_part_gun_rays Some at dxz 17.0, dy -0.1 [L the probe on this branch]) and the P2K
+/// (weapon 2, the boot loadout) fires zero spread at range 50 [L the strip probe] — the walk
+/// switches to it through the real input path and runs the deck pre-clear's own bounded stands
+/// on every live hostile exposed from there within 20 u (d3 + the top-up off only). Measured
+/// green: #5 shot at d 17.0 (clip 7 spare 41 [L this branch's run]), the whole mission walks
+/// (0c legs 36586 ticks + 0d 838 ticks) and objective 3 completes at 34.8 hp [L this branch's
+/// run]. The Agent/d1 timelines are untouched (the gate reads difficulty >= 3).
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t35413 at (94.20,8.92,-232.05) [L 2026-11-18 run]; re-tune and un-ignore"]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_00agent() {
     walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(3))
