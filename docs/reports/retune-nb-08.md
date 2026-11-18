@@ -88,3 +88,13 @@ this branch, as every task branch carries its own) and this report.
 ## Usage
 
 not visible to me — this sandbox shows no token, credit or context-window figures.
+
+## ntfy failed
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-08: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`.
+2. `python3 urllib.request` (the second fallback) → no output within 120 s, the command was killed by the sandbox timeout.
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → exit 124 (killed by the 25 s timeout, no output).
+
+The queue entry (done/50-retune-nb-08.md, pushed to origin/queue with this report attached) is
+the notification of record.
