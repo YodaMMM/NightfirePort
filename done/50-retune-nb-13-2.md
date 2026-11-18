@@ -139,3 +139,8 @@ red ⇒ ledger + next lever into the ignore message).
 
 Not visible to me — this session's environment shows no token, credit or context-window
 figures to copy.
+
+---
+## ntfy failed (2026-11-18T21:20Z)
+
+All three fallbacks timed out from this sandbox: curl (28) Connection timed out after 20002 milliseconds; python3 urllib.request (20 s urlopen timeout elapsed, no connection); wget exit 124 (timeout).
