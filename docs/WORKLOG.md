@@ -21,3 +21,7 @@ Task: commit 3412a89a3 made every guard run the game's spacing scan and the clos
   interactables_0700000c_live: 7 passed / 0 failed.
 - Measured and dropped: stuck_answers on the d3 armour/drop navs (the wedges are geometry, not
   body blocks — the wrapper was a no-op, reverted).
+- Whole-binary verification: walkreal_0700000c_live 6/0/0, interactables_0700000c_live 7/0/0,
+  and every other walkreal0c.rs consumer green (comms 1, guard1 2, upward 2, eastroute 1,
+  ventexit 1, barrelrow 1); walkreal_0700000d_live 3 passed / 1 master-ignored. Report at
+  docs/reports/retune-nb-0c.md.
