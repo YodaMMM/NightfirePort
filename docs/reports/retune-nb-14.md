@@ -40,3 +40,13 @@ None requested this round; the measured runs are all walker-side and the address
 ## Usage
 
 Not visible to me — this session exposes no token, cost or context-window figures to the worker; nothing to copy.
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-18 ~19:47 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-14: ..." https://ntfy.sh/nightfire-yoda-8k3x` → `curl: (28) Connection timed out after 20001 milliseconds` (exit 28).
+2. python3 urllib fallback → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>` (socket.connect raise, after `curl` also timed out at connect).
+3. `wget -q -O- --post-data "retune-nb-14: ..." https://ntfy.sh/nightfire-yoda-8k3x` → killed after 30 s with no output (connection never established).
+
+The git pushes (branch + queue) all succeeded; only the ntfy.sh notification endpoint was unreachable from this sandbox.
