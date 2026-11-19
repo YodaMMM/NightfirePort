@@ -100,3 +100,13 @@ render proves that corridor open (the `--bond` spots below).
 
 not visible to me — this session's environment shows no token, context-window or cost figures,
 so there are no numbers to copy.
+
+## ntfy failed
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` ->
+   `curl: (28) Connection timed out after 20002 milliseconds` (the rounds-1-5 signature).
+2. the python urllib fallback (`urlopen(..., timeout=20)`) -> hung past the 20 s socket timeout;
+   the tool killed the command at 40 s with no output (a first ASCII-encoding SyntaxError of my
+   own making was fixed and retried; the retry produced no exception text, just the hang).
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` -> exit 124 (timed out
+   at 25 s, no bytes received).
