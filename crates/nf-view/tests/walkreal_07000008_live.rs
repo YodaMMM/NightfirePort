@@ -2421,7 +2421,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // machine is already low (the eye_sees/machine-lane gates above dominate — a HIGH pass
         // never passes them); the gate makes the outlast explicit and keeps a shifted route
         // phase from burning Bond's scarce rounds on a window the corridor cannot open.
-        // D3-GATED: the sisters' timelines stay byte-exact.
+        // retune-nb-08-6 TRIED and REVERTED: the band tightened to the proven landing band
+        // 14.5 held fire through the whole rim-fight window (ZERO launches — the machine
+        // never dropped below y 14.5 within a launchable bearing in ~800 fight ticks) and the
+        // death was the SAME −15.00/−3.27 world blast at the SAME frame (21775 vs the 25.0
+        // gate's 21774) [L the two lever runs] — the closer is the machine's MISSILE salvo,
+        // not Bond's own round (the 25.0 gate's t585 launch at the y 20.8 pass missed with
+        // damage 0.0 and the blast arrived on the salvo's schedule regardless). The gate
+        // returns to the round-4 measured 25.0; the missile answer is the next window's lever.
         && (difficulty < 3 || cp[1] <= 25.0);
         // 11-15 (00 Agent): the last rocket. Six rockets leave the machine at 590.9 of 598 and
         // its next pass kills Bond on 7.8 health before any gated window opens; a player with the
