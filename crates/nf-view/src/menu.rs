@@ -6177,7 +6177,10 @@ impl FrontEnd {
                 _ => {}
             },
             Page::Codename => match a {
-                Action::Up | Action::Down => { self.cursor = (self.cursor + 1) % self.rows(); return true; }
+                // The wheel steps both ways over New Codename / Play without saving / the saved codenames (Up went
+                // forward too, harmless with two rows, backwards once the card holds codenames).
+                Action::Up => { let n = self.rows(); self.cursor = (self.cursor + n - 1) % n; return self.focus_moved(); }
+                Action::Down => { self.cursor = (self.cursor + 1) % self.rows(); return self.focus_moved(); }
                 Action::Confirm => {
                     // Row 0 "New Codename" opens the game's name-entry page (not ported).
                     // Row 1 "Play without saving" pops the confirm box [M C_SBNFCN 0x20b390:19-21 —
@@ -9510,7 +9513,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             emblem(&mut h, preview, 0x0300_00bf);
             wheel(&mut h, fe, font, lang, |fe, row| fe.row_label(lang, row), if fe.confirming_default_profile { dimmest } else { cream });
             // The row's description under the wheel [M 0x1f89f0's desc binds].
-            let desc = if fe.cursor == 0 { bind(0x100_0004) } else { bind(0x100_0003) };
+            // A saved codename's row binds 0x1000005 ("Select this custom profile ...") like the Codenames page
+            // [M Menu_UpdateCodenameWheel's descriptions: create 0x1000004, default 0x1000003, a codename 0x1000005].
+            let desc = bind([0x100_0004, 0x100_0003, 0x100_0005][fe.cursor.min(2)]);
             desc_block(&mut h, font, &desc, bright);
             // The confirm box: the game pops it for "Play without saving" [M C_SBNFCN 0x20b390:19-21
             // Menu_CreateOptionBox(0x10000bb, 9, 1, 1); the plate 0x100001f2].
