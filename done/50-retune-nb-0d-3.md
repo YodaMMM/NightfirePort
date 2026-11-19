@@ -144,3 +144,8 @@ recorded — filled in below after the finish step runs).
 
 not visible to me — this session's environment shows no token, context-window or cost
 figures, so there are no numbers to copy.
+
+---
+## ntfy failed (worker addendum, 2026-11-19T00:45Z)
+
+curl: (28) Connection timed out after 20002 ms; python urllib hung (exit 124); wget hung on connect to ntfy.sh:443 (exit 124) — the same unreachable-endpoint signature rounds 1-2 recorded.
