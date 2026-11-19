@@ -89,3 +89,13 @@ This killed the aimed-fights lever before it was written.
 
 not visible to me — this environment exposes no token, credit, context-window or cost figures for
 the session; nothing to copy.
+
+## ntfy failed
+
+All three fallbacks failed, in order, at 17:04-17:06 UTC 2026-11-19:
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-14-5: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=msg, headers={'Title':'NightfirePort'}), timeout=20)"`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "retune-nb-14-5: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → hung past 60 s, killed by the sandbox timeout (no output).
