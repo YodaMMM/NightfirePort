@@ -73,8 +73,8 @@ alertness 0 or 1 (property 0x20 → {0, 0, 0.66, 1.0} at 0x2f5cc8, verified); al
   0x2C (20 ticks, then reload anim 0x52 → SniperFire; the clip refills on exit). [L] 07000005's sniper (spawner 266
   picks placement 7 or 267 at random — both mode 2, special-death scripts 0x060003DF / 0x06000A1C): mode 2, alternate
   0, team 1, `+0x5A2` 0x29, `+0x5A4` 0, tag 0, stationary, first block [0x81003C84, 0xAC700785, 0x40280448] — the port
-  matches all of these (`level_start_matches_the_game`). Not modelled: `CanAltAttack` (0x72), `FindElevatorDoor` /
-  `OpenDoor`, the 07000007 property writes in `GetDTYPENEW`.
+  matches all of these (`level_start_matches_the_game`). Since ported: `CanAltAttack` (the fire states' close-range swing), `FindElevatorDoor` (SniperAim and
+  ElevatorJumper ENTERs) and `OpenDoor` (0x81). Not modelled: the 07000007 property writes in `GetDTYPENEW`.
 
 ## Perception [M, L]
 

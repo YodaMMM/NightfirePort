@@ -8527,6 +8527,10 @@ impl Drone {
             (SNIPER_IDLE, msg::FORCED_ATTACK) => { self.set_state(ATTACK); true }
             // SniperAim: anim 0x0A, sight and combat range 1000; Bond in sight (`+0x228 & 4`) → SniperFire.
             (SNIPER_AIM, msg::ENTER) => {
+                // [M NDrone2_DSTATE_SniperAim 0x15fc18 case 1: +0x4F8 |= 0x10000 | 0x10, NDrone2_FindElevatorDoor (the class-0x1c door
+                // within 2.0 → +0xBA8), Drone_AlertStatusSet(1), anim 0x0A, sight/combat 1000, AttackTalk]
+                self.elevator_scan = true;
+                self.alert_status_set(1, frame);
                 self.attack_talk(d.level, rng);
                 self.vision_on = true;
                 self.stationary = true;
