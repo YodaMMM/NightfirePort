@@ -67,20 +67,36 @@ y 13.3-13.5; the lower floor feet 13.086 is zap-free [L run 1's in-place drop y 
 13.0856 at (111.99, −179.52)]): 8-10 zaps drain the arriving 18.0 health mid-fight —
 rockets 1 landed (101.0), 2 launched, death t20993-t21077 [L the runs].
 
-NEXT LEVER (in the ignore message): finish the drop with the fight loop's own raw press —
-after the walk_to arrival, press forward toward the anchor with the walk-back's input shape
-for ≤ 80 ticks or until feet y ≤ 13.2 (the run-1 precedent: the raw walk-back's continuous
-press walked Bond ONTO the hole and gravity dropped him; the walk_to stops AT its target).
-Bond then fights from feet 13.086 — zap-free, standing eye 13.77 (above the ledge, under
-the lintel) — and the proven low-pass windows land the remaining 5 rockets (clip 3 +
-carried 4 = 7 rounds for 5 hits needed).
+The drop was CHASED to its root in runs 8-11 (each on its own real run, [L]):
+
+- Run 8: the raw press toward the anchor slid Bond AROUND the hole ((112.25, 13.52, −179.63),
+  the zaps resumed, death t20879).
+- Run 9: the press aimed AT the hole reached the exact run-1 spot (111.998, 13.52, −179.514)
+  and the STANDING capsule BRIDGED it — run 1's drop happened under the CROUCH (the smaller
+  capsule falls through).
+- Run 10 (SHIPPED): the crouch-drop — walk_to the hole, one crouch press, the fall (bounded,
+  break at y ≤ 13.2) — feet land 13.086-13.106 ON THE LOWER FLOOR, the zaps STOP (3 zaps
+  during the upper-floor walk phases, ZERO in the fight), the best ledger of the window:
+  death t21070, 55 hits (the fewest). But the fight ran CROUCHED on the lower floor (the
+  second crouch press re-crouched him; eye 13.3 — the ledge blindfold again) and the only
+  rays out are the steep rising ones — the t236 launch was the machine's HIGH close pass
+  (y 20.4, dist 26.9) and the round self-blasted (−14.00, the west-band class).
+- Run 11 (TRIED, REVERTED): forcing the stance standing after the drop (the default-tick
+  release, a crouch toggle, an assert) FAILED — the port's crouch latch resists both
+  semantics from the walk's side (crouched true after the release ticks AND the press) — and
+  the extra ~6 upper-floor ticks caught a missile blast (death t20760, worse).
+
+REMAINING (one bug, in the ignore message): the fight must run STANDING on the lower floor
+(eye 13.77 — above the ledge, under the lintel — the proven flat-ray launch windows; the
+standing launches landed 101.0 from the upper floor in runs 3-7) instead of crouched. The
+stance latch needs the main agent's live check (below).
 
 ## What ran (release, --test-threads=1)
 
 | binary | result |
 |---|---|
-| walkreal_07000008_live (whole) | **6 passed / 0 failed / 1 ignored** (the d3 ledger), 146.23 s — the d1 real-damage and d2 Agent walks green on the final tree |
-| the d3 test alone | 8 runs this window (the repro + 7 lever runs), each with NF_DMG_TRACE=1; the ledgers are in the ignore message |
+| walkreal_07000008_live (whole) | **6 passed / 0 failed / 1 ignored** (the d3 ledger), 154.50 s on the final tree (149.02 s mid-window) — the d1 real-damage and d2 Agent walks green |
+| the d3 test alone | 11 runs this window (the repro + 10 lever runs), each with NF_DMG_TRACE=1; the ledgers are in the ignore message |
 
 The changed file is the 08 test file only (no crates/*/src/, no tests/common/), so no other
 binary's timeline can move; the whole-binary run above is the verification the gating needs.
@@ -98,15 +114,21 @@ binary's timeline can move; the whole-binary run above is the verification the g
 
 ## Live checks for the main agent
 
-1. The cabin floor topology (the next lever's target): during a fresh-boot 08 playthrough
-   at the bottom terminal (Bond in the cabin after the ride), `gdbwatch` Bond's feet y at
-   60 Hz while walking east from the ride-end spot (111.1, −179.7) toward the anchor
-   (112.5, −179.4) — expected: the drop edge at x ≈ 111.99 (feet 13.52 → 13.086, the
-   measured hole) and the lower plate's extent (the traces cover x 111.99-112.25,
-   z −179.16..−179.52). The exact hole/plate geometry decides the raw-press target.
-2. The hurt volume's box: `fieldprobe`/gdbwatch the world-damage call at the cabin — the
-   volume's y band (the zaps hit feet 13.3-13.5, not 13.086) and its x/z extent — expected:
-   the volume covers the upper floor plate and stops at the lower.
+1. The port's CROUCH LATCH semantics (the one remaining bug): at the bottom terminal,
+   crouch Bond (the crouch drop into the lower cabin floor), then find what input state
+   STANDS him up: a crouch:false tick, a second crouch:true press, the movement inputs —
+   the run-11 measurements from the walk's side: 4 default (crouch:false) ticks no-op AND a
+   crouch:true press no-op (bond.crouched stayed true) — is the latch edge-triggered with
+   the release edge consumed by the drop's ticks, or animation-locked? The d2 fight's
+   ledger ('the movement inputs stand Bond back up') suggests the uncrouch rides the dodge
+   episodes' inputs — confirm which input shape flips the latch. With the stand-up answer,
+   the fight runs standing on the lower floor (eye 13.77, the proven flat-ray windows) and
+   the walk should go green.
+2. The cabin floor topology: gdbwatch Bond's feet y at 60 Hz walking east from the ride-end
+   spot (111.1, −179.7) — the drop edge at x ≈ 111.99 (feet 13.52 → 13.086) and the lower
+   plate's extent (x 111.99-112.25, z −179.16..−179.52 per the runs).
+3. The hurt volume's box: the volume's y band (the zaps hit feet 13.3-13.5, not 13.086) and
+   its x/z extent — expected: it covers the upper floor plate and stops at the lower.
 
 ## ntfy failed
 
