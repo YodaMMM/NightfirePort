@@ -85,3 +85,15 @@ on the final tree; no other crates' sources were touched.
 
 not visible to me — this environment shows no token, credit, cost or context-window figures for the
 session (no gauge, no billing panel, no API counters are exposed to the agent).
+
+## ntfy failed
+
+All three fallbacks failed in order (16:48-16:52 UTC 2026-11-19):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: no output, the process was killed after a 60 s timeout with no response
+
+The notification payload would have been:
+`retune-nb-0d-7: the west-corridor probe opened the annex pocket and landed the +50 armour take (gated, defaults byte-identical; whole binaries 3/0/1 + 11/0); the walk stays red - the refreshed ledger + the round-8 lever (g18 dead before the ride + shift 60) are in the ignore message`
+
