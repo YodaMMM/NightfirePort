@@ -2299,7 +2299,6 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// byte-exact note]) with the delta_approach_scan after node 21 (the d3 chain's own law) and
 /// the d3 chain's loot pass keyed on the dry gun (clip+spare < 10) instead of a fixed node.
 #[test]
-#[ignore = "retune-nb-14-3 measured on the batch suite 2026-11-19: Bond dies t36801 at (5.05,1.13,-23.31), drones #28/#29 (weapon 0x1a) at ~4 u land 65.2 of the 100 (41 hits, 23 return-fire fights); re-tune the approach to that pair and un-ignore"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }
