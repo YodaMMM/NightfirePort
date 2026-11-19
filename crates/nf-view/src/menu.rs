@@ -8964,14 +8964,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                         // [M C_RBMPSTART 0x20d048:51-53: the image control gets TEX 0x030001a0, uv (0,0)-(127,63)]
                         quad640(&mut h, 0x0300_01a0, 117.0, 150.0, 128.0, 64.0, [0.0, 0.0, 128.0, 64.0], gs(0x7f7f7f, 0xff));
                         label(&mut h, font, &fe.mp_codename_at(a.codename_row), 70.0, 215.0, 226.0, 16.0, cream, true, 1.0);
-                        let yellow = gs(0xfec43e, 0xff);
-                        for (cx, left) in [(80.0f32, true), (284.0, false)] {
-                            let cy = 223.0;
-                            let (p0, p1, p2) = if left { ((cx + 6.0, cy - 6.0), (cx + 6.0, cy + 6.0), (cx - 6.0, cy)) } else { ((cx - 6.0, cy - 6.0), (cx - 6.0, cy + 6.0), (cx + 6.0, cy)) };
-                            let q = |p: (f32, f32), h: &Hud| HudVertex { p: h.ndc(Anchor::Centre, mx(p.0), my(p.1)), uv: [0.0, 0.0], c: yellow };
-                            let v = [q(p0, &h), q(p1, &h), q(p2, &h), q(p0, &h), q(p2, &h), q(p2, &h)];
-                            h.ndc_solid(-3, v, yellow);
-                        }
+                        for (cx, left) in [(80.0f32, true), (284.0, false)] { atlas_arrow(&mut h, cx, 223.0, left); }
                     }
                     (0, _) => { let t = fe.row_label(lang, 0); lines_at(&mut h, &t, py + 32.0 + 43.0); }
                     // Agents 2-4: the game's insert-controller texts (the port has one input) [L USATxt 0x3c0 / 0x4a2;
@@ -9092,7 +9085,6 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             page_header(&mut h, hfont, &bind(hdr));
             let on = gs(CREAM, 0xff);
             let off = gs(0x73330f, 0xc0);
-            let yellow = gs(0xfec43e, 0xff);
             let cur = fe.cursor.min(rows.len() - 1);
             for (i, (lbl, val, y, _, _)) in rows.iter().enumerate() {
                 let c = if i == cur { on } else { off };
@@ -9100,12 +9092,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 left_text(&mut h, font, &bind(*lbl), mx(54.0), my(mid + 6.0), c, true, 1.3);
                 centred(&mut h, font, -2, val, mx(457.0), my(mid + 6.0), c, true, 1.3);
                 if i == cur {
-                    for (cx, left) in [(357.0f32, true), (555.0, false)] {
-                        let (p0, p1, p2) = if left { ((cx + 7.0, mid - 7.0), (cx + 7.0, mid + 7.0), (cx - 7.0, mid)) } else { ((cx - 7.0, mid - 7.0), (cx - 7.0, mid + 7.0), (cx + 7.0, mid)) };
-                        let q = |p: (f32, f32), h: &Hud| HudVertex { p: h.ndc(Anchor::Centre, mx(p.0), my(p.1)), uv: [0.0, 0.0], c: yellow };
-                        let v = [q(p0, &h), q(p1, &h), q(p2, &h), q(p0, &h), q(p2, &h), q(p2, &h)];
-                        h.ndc_solid(-3, v, yellow);
-                    }
+                    for (cx, left) in [(357.0f32, true), (555.0, false)] { atlas_arrow(&mut h, cx, mid, left); }
                 }
             }
             if let Some(&(_, _, _, ctrl, v)) = rows.get(cur) {
@@ -9140,14 +9127,7 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                     let uv = if fe.mp_setup_state == 3 { [0.0, 32.0, 128.0, 96.0] } else { [0.0, 0.0, 128.0, 64.0] };
                     quad640(&mut h, tex, 117.0 + dx, 150.0 + dy, 128.0, 64.0, uv, gs(0x7f7f7f, 0xff));
                     label(&mut h, font, &fe.mp_setup_value_text(lang), 70.0 + dx, 215.0 + dy, 226.0, 16.0, cream, true, 1.0);
-                    let yellow = gs(0xfec43e, 0xff);
-                    for (cx, left) in [(80.0f32 + dx, true), (284.0 + dx, false)] {
-                        let cy = 223.0 + dy;
-                        let (p0, p1, p2) = if left { ((cx + 6.0, cy - 6.0), (cx + 6.0, cy + 6.0), (cx - 6.0, cy)) } else { ((cx - 6.0, cy - 6.0), (cx - 6.0, cy + 6.0), (cx + 6.0, cy)) };
-                        let q = |p: (f32, f32), h: &Hud| HudVertex { p: h.ndc(Anchor::Centre, mx(p.0), my(p.1)), uv: [0.0, 0.0], c: yellow };
-                        let v = [q(p0, &h), q(p1, &h), q(p2, &h), q(p0, &h), q(p2, &h), q(p2, &h)];
-                        h.ndc_solid(-3, v, yellow);
-                    }
+                    for (cx, left) in [(80.0f32 + dx, true), (284.0 + dx, false)] { atlas_arrow(&mut h, cx, 223.0 + dy, left); }
                 } else {
                     // A finished agent (or another joined one): its choice, centred in the panel.
                     label(&mut h, font, &p.pick, 70.0 + dx, 160.0 + dy, 226.0, 16.0, cream, true, 1.0);
@@ -11472,6 +11452,15 @@ fn hint_row_s(h: &mut Hud, font: &nf_formats::hud::Font, text: &str, x640: f32, 
 /// sides [L PCSX2 captures; the port's Anchor::Stretch quads filled the
 /// whole 16:9 window]. At a 4:3 window Centre ≡ Stretch, so 4:3 renders are unchanged.
 #[allow(clippy::too_many_arguments)]
+/// The ◀ / ▶ of the MP pick and value rows: the button atlas's 16×16 arrow cells (48,0) ◀ / (48,16) ▶ — orange
+/// triangles (236,122,20) [D 0x03000042, SET 3 COMPONENT 6's uv] — at full colour 0x7f7f7fff, 16×16 of the 512×448
+/// screen centred on (cx, cy) of 640×480. PCSX2 draws them orange, ~18×14 on 640 with soft edges (Join Game,
+/// Bot Setup) [L 2026-11-19, audits/mpmenus-1119]; the port's flat yellow triangles were a stand-in.
+fn atlas_arrow(h: &mut Hud, cx: f32, cy: f32, left: bool) {
+    let (w, hh) = (16.0 * MW / SW, 16.0 * MH / SH);
+    quad640(h, crate::fe_pages::ATLAS_BUTTONS, cx - w / 2.0, cy - hh / 2.0, w, hh, [48.0, if left { 0.0 } else { 16.0 }, 16.0, 16.0], gs(0x7f7f7f, 0xff));
+}
+
 fn quad640(h: &mut Hud, tex: u32, x: f32, y: f32, w: f32, hh: f32, uv: [f32; 4], c: [f32; 4]) {
     quad_uv(h, tex, mx(x), my(y), mx(w), my(hh), uv, c);
 }
