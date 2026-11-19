@@ -23,12 +23,6 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 claimed-by: sandbox3 at 2026-11-19T04:26Z
 
 ---
-## Report (done, 2026-11-19T05:50Z)
-
-
----
-## Report (done, 2026-11-19T05:50Z)
-
 # retune-nb-13-4 — the 13 warm-chain real-damage walk is GREEN (round 4)
 
 Branch: `s/retune-nb-13-4`, from current `origin/master` with `origin/s/retune-nb-13-3` merged in
@@ -163,3 +157,15 @@ suite's total line, it needs a sandbox with ~3 GB more free disk than this one (
 
 Not visible to me — this session's environment shows no token, credit or context-window
 figures to copy.
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (ntfy.sh unreachable — the same result as the
+13-2 and 13-3 sessions):
+- `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-13-4: GREEN - ..." https://ntfy.sh/nightfire-yoda-8k3x`
+  → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28)
+- `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'retune-nb-13-4: ...', headers={'Title':'NightfirePort'}), timeout=20)"`
+  → no output, killed at the 30 s cap (exit 124; the 20 s urlopen timeout elapsed without
+  connecting)
+- `wget -q -O- --post-data "retune-nb-13-4: GREEN - ..." https://ntfy.sh/nightfire-yoda-8k3x`
+  → exit 124 (timeout)
