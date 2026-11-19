@@ -42,3 +42,18 @@ the ignore message. Run the whole walkreal_07000008_live binary.
   shipped tree per its ignore-message ledger). Round-4 remaining bug: the d3 cabin fight runs
   CROUCHED on the lower floor (eye 13.3 blindfolded by the exterior ledge; the steep rising
   rays self-blast). This round: stand Bond up on the lower floor before the launch gates.
+- Round 5 result: still red at the machine fight, master's shipped run-10 state kept (death
+  t21070, 55 hits — the byte-exact control verified). The round-5 ledger: (a) the run-11
+  "crouch latch" mystery SOLVED — it is the stand/crouch LOCKOUT, BL+0x960 = 60 armed on
+  every substate change [M Player_ChangeSubState 0x190630:48; SSCrouch 0x1924c0:45-105];
+  the stand press after waiting the lockout out FIRES (crouched false, lockout 59) but the
+  standing capsule re-bridges the hole (feet 13.47) and the launch self-blasts earlier
+  (t20944/t20942) — TRIED and DEAD. (b) The pickup scan [L]: armour 0.0 health 14.0, rocket
+  clip 4 carried 0 vs the machine's 598 hp — UNWINNABLE on carried ammo; the cable car's
+  three rocket pickups (launcher + 2 boxes, 4 each [D 0x0600004C streams 37-39]) are UN-GONE
+  1.2-2.4 u away — 12 rockets win. (c) Collection walks TRIED and DEAD (both routes climb the
+  carriage's exterior into the hurt volume, deaths t21016/t21286). Next lever (in the ignore
+  message): collect the pickups DURING the ride (they are parented to the carriage and ride
+  with Bond), then the idle-wait sweep before the y-46 trio/#16 (the upstream bleed 84.0
+  leaves 14.0 hp at fight entry). Only crates/nf-view/tests/walkreal_07000008_live.rs and
+  docs/ changed; no crates/*/src/, no tests/common/.
