@@ -121,3 +121,7 @@ run, real input only, no top-ups, no damage/health writes, no guard-code changes
 
 not visible to me — this session's environment shows no token, context-window or cost figures,
 so there are no numbers to copy.
+
+---
+## Report from the worker (done, 2026-11-19T05:18Z)
+
