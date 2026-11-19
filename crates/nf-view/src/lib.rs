@@ -3502,7 +3502,7 @@ impl App {
 
     /// Test aid (NF_MENU_SCRIPT="ms:step,ms:step,..."): menu presses for the two-window MP checks,
     /// no desktop input. Each `ms` is the delay after the PREVIOUS step (the first counts from the
-    /// first frame). Steps: up/down/left/right/confirm/back/side/extra (`down*30` repeats), shot
+    /// first frame). Steps: up/down/left/right/confirm/back/side/extra (`down*30` repeats), esc (the Esc key), shot
     /// (the F12 capture), type=TEXT (the join page's typing), page=Name (wait until that page is up
     /// and no load runs — `page=None` is "in a level, no menu"), sleep (nothing). A wait holds the
     /// script, so a slow boot or load never lands presses on the wrong page.
@@ -3531,6 +3531,9 @@ impl App {
                 "confirm" => Some(MA::Confirm), "back" => Some(MA::Back), "side" => Some(MA::Side), "extra" => Some(MA::Extra), _ => None };
             if let Some(a) = a { for _ in 0..times { self.menu_input(a); } }
             else if step == "shot" { let m = self.spot_shot(); eprintln!("[spot] {m}"); }
+            // "esc": the Esc key through the window's own key path (in a mission it opens the pause page;
+            // `back` only reaches an open menu).
+            else if step == "esc" { for _ in 0..times { let _ = self.app_key(winit::keyboard::KeyCode::Escape, winit::event::ElementState::Pressed, false); } }
             // "bksp": the address/port pages' Backspace (the host's port field starts at 27420).
             else if step == "bksp" { for _ in 0..times { if let Some(fe) = self.fe.as_mut() { fe.mp_net_backspace(); } } }
             // "lobby": one line with this machine's one-screen lobby model (the two-window
