@@ -88,6 +88,12 @@ pub fn run<'a>(n: usize, f: &'a (dyn Fn(usize, usize) + Sync + 'a)) {
         for i in 0..n { f(i, 0); }
         return;
     }
+    // One job at a time: the pool has a single job slot / counter, so two threads calling `run` at
+    // once (two scenes in one process — the test harness runs tests in parallel) overwrote each
+    // other's job and skipped items ("every pose item ran"). The game drives it from one render
+    // thread, so the lock is uncontended there. `f` never calls `run` (no re-entry).
+    static RUN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = RUN.lock().unwrap_or_else(|e| e.into_inner());
     // SAFETY: the reference is published only between here and the wait below; `closed` turns
     // true before the wait, a worker checks it (SeqCst, after announcing itself in `active`)
     // before reading the job, and the wait holds until every announced worker has left `f`.
