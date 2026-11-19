@@ -138,3 +138,12 @@ that does is the missing lever for a +50 armour pool before the junction fights.
 
 Not visible to me — this session exposes no token, cost or context-window figures to the worker;
 nothing to copy.
+
+---
+
+## ntfy failed (appended)
+
+All three fallbacks failed (2026-11-19 ~13:05 UTC): curl (28) Connection timed out after 20002
+milliseconds; python urllib the 20 s urlopen timeout, killed by the wrapper, no output; wget
+exit 0 with an EMPTY body (a plain topic poll also times out — the endpoint unreachable, as in
+rounds 1-3). The branch push (s/retune-nb-14-4 @ 88b3099ec) and the queue pushes succeeded.
