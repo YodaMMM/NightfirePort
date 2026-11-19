@@ -30,3 +30,14 @@ Closed by the driver: the report is on `s/retune-nb-16-2` (docs/reports/retune-n
 ---
 ## Report from the worker (done, 2026-11-19T04:26Z)
 
+Branch `s/retune-nb-16-2` (pushed, final tree = master 73822d3a0 + the retune-nb-16 merge + this
+round's test/docs): the d3 walk stays RED at EXACT ZERO MARGIN (her landed stage rounds sum 19.5
+[L the traced runs]; the stage med-kit lifts the 9.5 entry to exactly 19.5; the armour #648 is
+live-wire-claimed during the loot window). Landed: the room loot hop (kit, liveness-aware
+game-shape probes), the KILL-FIRST restructure, the backpedal floor hold, the live-only wire
+escape — all d3 && !tops_up file-local. Reverted with ledgers: the exit-end wide corpse-hop
+(t10349), return-fire-ON loot windows, arrive 0.6 kit hops. walkreal_07000016_live WHOLE: 18
+passed, 0 failed, 1 ignored (one tops_up-gate regression caught and fixed mid-session). The
+refreshed ledger + the next lever (the wire gate's rise tick; the AR-drop + kit armed fast kill;
+the shelter-floor hold) are in the test's ignore message. Full report: docs/reports/retune-nb-16-2.md
+on the branch.
