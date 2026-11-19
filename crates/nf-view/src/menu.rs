@@ -10567,7 +10567,13 @@ fn results_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, hfont:
             // The header (105,120,431×16) LBL 0x2fd "Mission Failed", colour 0x7d6d59 [L the page's 0x10000001 control
             // m0x18/0x1b], centred in the control (Label_Update puts the label at ctrl.x + w/2 [M 0x218cb8:177-182])
             // in the same face size as the hint bar (PCSX2 07000005: the header's glyphs match the hint's).
-            centred(h, font, -2, &lbl(0x2fd, "MISSION FAILED"), mx(105.0 + 215.5), my(134.0), gs(0x7d6d59, 0xff), true, 1.25);
+            // Its format is "ff 03 fe 03" — face 3 FONTMedium, centred — in cream 0x645a49 [D 07000005 08000001, page
+            // 0x40000042 control 0x10000001]; PCSX2 11-19 shows the spaced tan Medium letters (audits/fail-1119), the port
+            // drew the body face.
+            match mfont {
+                Some(mf) => centred_tex(h, mf, 0x0300_00d8, -2, &lbl(0x2fd, "MISSION FAILED"), mx(105.0 + 215.5), my(138.0), gs(0x645a49, 0xff), true, 1.0),
+                None => centred(h, font, -2, &lbl(0x2fd, "MISSION FAILED"), mx(105.0 + 215.5), my(134.0), gs(0x645a49, 0xff), true, 1.25),
+            }
             // The rows: the 0x100001a4 list (197,186,246×115) holds exactly TWO items — m0x11 0x5bc "R E P L A Y"
             // (value 0) and 0x16c "Q U I T" (value 2) [L the mission menu-def, page 0x40000042]; the handler reads
             // the chosen item's VALUE (msg 0x35) [M P_ENDMISSION_Handler 0x216618:12-26], so the BaseMap arm 1 is
@@ -10582,7 +10588,9 @@ fn results_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, hfont:
                 // at y 216 / 254 of 480, the arrow at x 205.
                 centred(h, font, -2, &lbl(*id, fb), mx(197.0 + 123.0), my(223.0 + i as f32 * 38.0), c, false, 1.0);
             }
-            pause_cursor(h, 205.0, 216.0 + fe.cursor.min(1) as f32 * 38.0, gs(0x7f7f7f, 0xff));
+            // The fail list's cursor is dim: PCSX2 11-19 (131,66,9) in two frames 5 s apart (no pulse), ~0.53 of the pause
+            // cursor's (249,128,19) [L audits/fail-1119].
+            pause_cursor(h, 205.0, 216.0 + fe.cursor.min(1) as f32 * 38.0, gs(0x434343, 0xff));
             // The hint (97,341,446×18) LBL 0x5c8 [L the page's 0x1000006f].
             // The hint control (97,341,446×18) is centred on x = 320 like the 540-wide bars hint_bar assumes [L]:
             // hint_bar takes the 540-bar's left edge.
