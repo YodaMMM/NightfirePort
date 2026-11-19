@@ -406,6 +406,36 @@ pub const FRAME_BUTTONS: [(u32, u32, u16, i32, i32, i32, i32); 19] = [
     (0x4000_0033, 0x1000_015d, 7, 488, 94, 96, 253),
 ];
 
+/// The MP match summary 0x40000049's tinted plates [D page 0x40000049, type-5 labels TEX 0x03000042
+/// one texel, uv by [`msg2d_uv`]]: (id, layer, x, y, w, h, u, v, colour). Layer 0x20 = the column plates (msg 0x2d
+/// 0x00260013 = the white texel (38,19), blue
+/// 0x00007f80 / red 0x7f000080 at half alpha) a few pixels larger than their SET 7 boxes (layer 0x1e), so the
+/// tint rims each box and shows through it; layer 0x1c = the near-black title bars (0x00080016 = the grey texel (8,22), 0x070202ff)
+/// behind the column titles and the AI Bots row. The red column's records are its control 0x1000023e.
+pub const SUMMARY_PLATES: [(u32, u8, i32, i32, i32, i32, u16, u16, u32); 6] = [
+    (0x1000_0001, 0x20, 49, 165, 269, 246, 38, 19, 0x0000_7f80),
+    (0x1000_023e, 0x20, 322, 165, 269, 246, 38, 19, 0x7f00_0080),
+    (0x1000_0001, 0x1c, 52, 168, 263, 24, 8, 22, 0x0702_02ff),
+    (0x1000_023e, 0x1c, 325, 168, 263, 24, 8, 22, 0x0702_02ff),
+    (0x1000_0001, 0x1c, 52, 357, 263, 24, 8, 22, 0x0702_02ff),
+    (0x1000_023e, 0x1c, 325, 357, 263, 24, 8, 22, 0x0702_02ff),
+];
+
+/// The summary's plates, boxes and title bars back to front (layer 0x20, then the SET 7 boxes 0x1e,
+/// then 0x1c), the red column's (0x1000023e) only in a team game (P_MPCONFIRM shows it 1/2 [M menu.rs
+/// MpConfirm]); the settings band is its own SET 7 box.
+pub fn summary_plate_elems(team: bool) -> Vec<PageElem> {
+    let keep = |id: u32| team || id != 0x1000_023e;
+    let plate = |&(id, _l, x, y, w, h, u, v, c): &(u32, u8, i32, i32, i32, i32, u16, u16, u32)| PageElem {
+        ctrl: id, rect: control_rect(id, 5, x, y, w, h), colour: c,
+        what: ElemWhat::Tex { tex: ATLAS_BUTTONS, uv: [u as f32, v as f32, 1.0, 1.0] },
+    };
+    let mut out: Vec<PageElem> = SUMMARY_PLATES.iter().filter(|p| p.1 == 0x20 && keep(p.0)).map(plate).collect();
+    out.extend(FRAME_BUTTONS.iter().filter(|b| b.0 == 0x4000_0049 && keep(b.1)).flat_map(|&b| frame_button_elems(b)));
+    out.extend(SUMMARY_PLATES.iter().filter(|p| p.1 == 0x1c && keep(p.0)).map(plate));
+    out
+}
+
 /// The debriefing's result box (176,355,408×52) SET 7 [D page 0x40000033].
 pub const DEBRIEF_RESULT_BOX: (u32, u16, i32, i32, i32, i32) = (0x1000_0001, 7, 176, 355, 408, 52);
 
