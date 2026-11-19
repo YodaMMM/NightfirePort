@@ -7562,6 +7562,29 @@ pub fn run() -> Result<()> {
             let (fwd, turn) = (range("NF_FWD"), range("NF_TURN"));
             let aim_sweep: Option<(f32, f32)> = std::env::var("NF_AIM_SWEEP").ok()
                 .and_then(|v| v.split_once(':').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))));
+            // Render aid (recorded routes): `--replay <file>` with `--shot` plays the recording's ticks
+            // headless first (all of them, or `NF_REPLAY_UNTIL=n`), so a frame after a played route can
+            // be rendered; `NF_REPLAY_NEAR=x,z,r` logs the ticks Bond passes within r of (x, z).
+            if let Some(r) = &replay_recording {
+                let until = std::env::var("NF_REPLAY_UNTIL").ok().and_then(|v| v.parse().ok()).unwrap_or(r.ticks.len());
+                let near: Vec<f32> = std::env::var("NF_REPLAY_NEAR").ok().map(|v| v.split(',').filter_map(|t| t.parse().ok()).collect()).unwrap_or_default();
+                if let Some(o) = r.header.options {
+                    sim.auto_aim = o.auto_aim; sim.drones.auto_switch = o.auto_switch;
+                    sim.drones.crouch_toggle = o.crouch_toggle; sim.drones.crosshair = o.crosshair;
+                }
+                for (k, t) in r.ticks.iter().take(until).enumerate() {
+                    let (input, trigger, reload, use_key) = t.to_parts();
+                    if t.skip { sim.drones.scripts.skip_request = true; }
+                    sim.step_bond(input, trigger, reload, use_key);
+                    if near.len() == 3 {
+                        let (dx, dz) = (sim.bond.pos[0] - near[0], sim.bond.pos[2] - near[1]);
+                        if (dx * dx + dz * dz).sqrt() < near[2] && k % 20 == 0 {
+                            eprintln!("[replay-near] t{k} bond {:.2},{:.2},{:.2} yaw {:.3} weapon {:#x}", sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.yaw, sim.gun.weapon);
+                        }
+                    }
+                }
+                eprintln!("[replay] played {} ticks; bond {:?}", until.min(r.ticks.len()), sim.bond.pos);
+            }
             let aim0 = (sim.bond.yaw, sim.bond.pitch);
             for t in 1..=time as u32 {
                 if kill_at == Some(t) { let (h, r) = (&mut sim.drones.health, &mut sim.drones.rng); h.pain_generic(r, 500.0, 1, 0x0700_0005, 0); }
