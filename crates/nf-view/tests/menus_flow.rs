@@ -463,9 +463,11 @@ fn the_menu_overlay_draws_the_game_pages_with_their_own_sprites() {
     // the page's static 0x030000c4 is the Gadgets row].]
     assert!(has(0x4000_002b, 0x0300_019b), "the dossier draws its Records row's preview [L table 0x2dfcd0]");
     assert!(has(0x4000_001c, 0x0300_016d), "the list pages draw the logo [M control (434,38,156×43) TEX 0x0300016d]");
-    // The stamp control 0x10000224 (539,393, f1 0x2d) shows nothing in PCSX2's list pages (07000048 m06/m10/m12,
-    // 2026-10-15); the port's quad at (340,198) drew a ring arc across the description, so it is gone.
-    assert!(!has(0x4000_0023, 0x0300_014c), "the list pages draw no stamp ring (PCSX2 m10)");
+    // The corner stamp 0x10000224 (TEX 0x0300014c, forced to (340,198) unscaled, f1 0x2d) is on every page whose
+    // record carries it shown — PCSX2's Select Codename and Select Difficulty show its orange-edged corner at the
+    // bottom right [L 2026-11-19, audits/list-1119]; the 10-15 port drew it across the description, not the corner.
+    assert!(has(0x4000_0023, 0x0300_014c), "the difficulty page draws the corner stamp (PCSX2 11-19)");
+    assert!(has(0x4000_0025, 0x0300_014c), "the codename page draws the corner stamp (PCSX2 11-19)");
     // The hint bars draw the game's own specialchar icon font [M specialchar 0x2dd8d8: every entry's
     // texture is 0x03000075] — not the 64×64 atlas 0x03000042 the port guessed before, and the ✕ is
     // the table's (235,1,19×19) tile, not the font's letter X.

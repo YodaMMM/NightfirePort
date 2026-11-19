@@ -8904,6 +8904,14 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
     if !(aux != 0 && fe.backdrop_live) && !matches!(fe.page, Page::Pause | Page::Results | Page::CheatMedal) {
         plate(&mut h, 0.0, 0.0, MW, MH, gs(0x180c08, 0xff));
     }
+    // The corner stamp on every front-end page that carries it (control 0x10000224, msg 0x2b 6 [D
+    // 07000048 08000002], `CORNER_STAMP_PAGES`): the orange-edged corner at the bottom right that
+    // PCSX2 shows on Select Map, Scenario Options and the bot pages and not on Join Game or the Start
+    // summary [L 2026-11-19, audits/mpmenus-1119]. The stats / results / 007 Bonus pages draw it in
+    // their own arms.
+    if CORNER_STAMP_PAGES.contains(&fe.page_id()) && !matches!(fe.page_id(), 0x4000_0036..=0x4000_0038) {
+        corner_stamp(&mut h);
+    }
     match fe.page {
         // mp-menu-flow: the multiplayer pages draw from the same getters the other wheels use
         // (mp_row_preview/mp_row_desc/mp_row_locked + row_label); the drawing itself is not
@@ -10780,6 +10788,14 @@ fn stats_list(h: &mut Hud, font: &nf_formats::hud::Font, rows: &[(String, String
 /// Layer f1 0x2d: behind the list plates (0x28) and the text.
 /// Only the part inside the 512-wide screen is drawn: on PS2 the rest is off-screen, and the wide
 /// window would otherwise show the curve running on past the backdrop's right edge.
+/// Every page of the front end's menu def (07000048 08000002) whose control list carries the corner
+/// stamp 0x10000224 shown (msg 0x2b 6) [D; pinned by fe_corner_stamp_pages.rs].
+pub const CORNER_STAMP_PAGES: [u32; 22] = [
+    0x4000_0012, 0x4000_0013, 0x4000_0014, 0x4000_0017, 0x4000_001a, 0x4000_001b, 0x4000_001c, 0x4000_001d,
+    0x4000_0022, 0x4000_0023, 0x4000_0025, 0x4000_0027, 0x4000_0028, 0x4000_002c, 0x4000_002d, 0x4000_002e,
+    0x4000_0031, 0x4000_0036, 0x4000_0037, 0x4000_0038, 0x4000_003e, 0x4000_003f,
+];
+
 fn corner_stamp(h: &mut Hud) {
     let w = SW - 340.0; // 172 of the 255 texels
     h.quad(Anchor::Centre, 3, 0x0300_014c, 0, 340.0, 198.0, w, 255.0, [1.0, 1.0, w, 255.0], (false, false), gs(0x7f7f7f, 0xff));
