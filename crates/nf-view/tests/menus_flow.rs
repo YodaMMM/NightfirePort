@@ -1078,27 +1078,28 @@ fn the_title_prompt_uses_the_page_colour() {
 
 // --- fix-pause-menu2: the pause page's tab contents ---
 
-/// The yellow arrow cursor left of the selected MISSION row [L PCSX2 captures; the port had
-/// none]. The cursor is the page's only yellow draw (menu.rs `YELLOW`, the page
-/// data's 0x7f621f since fix-menus-real; it was 0xfec43e when this test was written), so its colour pins it.
+/// The row cursor left of the selected MISSION row [L PCSX2 captures; the port had none]: the button atlas's
+/// orange ▶ cell (48,16) — PCSX2 measures the orange arrow at x 154.5-169.8 for row 0 (2026-11-19; it was a
+/// yellow stand-in triangle before). Its atlas uv (u 48.5..63.5, v 16.5..31.5 texels) pins it.
 #[test]
-fn the_pause_mission_tab_has_the_yellow_row_cursor() {
+fn the_pause_mission_tab_has_the_orange_row_cursor() {
     let font = test_font();
     let textures: Vec<(u32, nf_view::scene::TextureImage)> = menu::MENU_TEXTURES.iter().map(|&h| (h, crate_texture(h))).chain(std::iter::once((0x0300_0003u32, crate_texture(0x0300_0003)))).collect();
     let mut fe = FrontEnd::new();
     fe.flow.current_level = 0x0700_0005;
     assert!(fe.open_pause());
-    let yellow = |f: &gpu::HudFrame| f.v.iter().filter(|v| (v.c[0] - 0x7f as f32 / 128.0).abs() < 0.02 && (v.c[1] - 0x62 as f32 / 128.0).abs() < 0.02).count();
+    // The HUD's uv is in texels / 8 (48.5 → 6.0625).
+    let is_cursor = |v: &&nf_view::gpu::HudVertex| (v.uv[0] - 48.5 / 8.0).abs() < 0.01 || (v.uv[0] - 63.5 / 8.0).abs() < 0.01;
+    let on_row = |v: &&nf_view::gpu::HudVertex| is_cursor(v) && ((v.uv[1] - 16.5 / 8.0).abs() < 0.01 || (v.uv[1] - 31.5 / 8.0).abs() < 0.01);
     let f = menu::menu_overlay(&fe, &font, &font, None, &textures, 4.0 / 3.0);
-    let n = yellow(&f);
-    assert!(n >= 3, "the MISSION tab draws the yellow row cursor (found {n} yellow verts)");
-    // Sister: the cursor follows the selection — its verts move down a row (the 640-space rows are
-    // 40 px apart [L the d1=6 list's 183+20+i*40 rows], 448-space 35 px).
+    let n = f.v.iter().filter(on_row).count();
+    assert!(n >= 4, "the MISSION tab draws the atlas row cursor (found {n} verts)");
+    // Sister: the cursor follows the selection — its verts move down a row.
     fe.cursor = 2;
     let f2 = menu::menu_overlay(&fe, &font, &font, None, &textures, 4.0 / 3.0);
-    // NDC y runs DOWN as the row index grows (row 0 ≈ +0.15, row 2 ≈ −0.18).
-    let y0 = f.v.iter().filter(|v| (v.c[0] - 0x7f as f32 / 128.0).abs() < 0.02 && (v.c[1] - 0x62 as f32 / 128.0).abs() < 0.02).map(|v| v.p[1]).fold(f32::MIN, f32::max);
-    let y2 = f2.v.iter().filter(|v| (v.c[0] - 0x7f as f32 / 128.0).abs() < 0.02 && (v.c[1] - 0x62 as f32 / 128.0).abs() < 0.02).map(|v| v.p[1]).fold(f32::MIN, f32::max);
+    // NDC y runs DOWN as the row index grows.
+    let y0 = f.v.iter().filter(on_row).map(|v| v.p[1]).fold(f32::MIN, f32::max);
+    let y2 = f2.v.iter().filter(on_row).map(|v| v.p[1]).fold(f32::MIN, f32::max);
     assert!(y0 > f32::MIN && y2 < y0 - 0.1, "the cursor moved to the selected row (y {y0} -> {y2})");
 }
 
