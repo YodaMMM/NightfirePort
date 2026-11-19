@@ -52,3 +52,13 @@ real input only, no top-ups, never lower damage or health, never change guard co
   background in the first minutes; the sandbox killed it between tool calls every time
   (suite.out stayed empty, no suite process) — the same background-jobs-die signature rounds
   1-5 recorded; the per-binary foreground runs above are the primary evidence.
+- The ROUND-7 lever (the roof-edge armour drop) was attempted the same session and is MEASURED
+  DEAD IN ONE RUN: the walk-off at (190.0, 19.65, -268.7) never fired (40 forward ticks south-east
+  ended still grounded at (191.01, 19.62, -268.85) — the roof extends OVER the pocket; the pocket
+  is under the roof/shed footprint, no drop exists into it), and the stray pocket nav then ate
+  #17's 48.0 on the roof (t16572, health 54.0 -> 6.0) and died t16779. Pickup #2's pocket is
+  SEALED (roof/shed above, the bay wall south, only the unprobed west corridor as a possible
+  access) — the armour lever is CLOSED at 00 Agent unless a live render proves the west corridor
+  open (the report's --bond spots).
+- Whole walkreal_0700000d_live re-run on the final tree (the else-restructure): 3 passed / 0
+  failed / 1 ignored (101.9 s) — the committed paths byte-identical with the knob unset.

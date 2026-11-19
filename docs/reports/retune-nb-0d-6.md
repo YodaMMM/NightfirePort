@@ -48,25 +48,27 @@ its own real run.
    (187.3,-269.7)/(186.8,-272)/(187.3,-274.3) — and the committed roof lane's
    (190.0, 19.65, -268.7) sits DIRECTLY ABOVE the pocket's north mouth.
 
-## The round-7 lever (in the refreshed ignore message)
+## The round-7 lever — attempted and measured dead the same session
 
-**THE ROOF-EDGE ARMOUR DROP**: walk the committed roof lane to (190.0, 19.65, -268.7), walk SOUTH
-off the roof's south edge into the pocket, land within the 1.91 u touch sphere of pickup #2 (the
-+50 armour), exit through the probed west corridor south to the bay enter (the corridor's
-along-length is UNPROBED — a probe walk first), rejoin the committed route. The ~9 m fall costs
-the SAME ~19.2 the committed annex drop already pays [M 0x1949a8: raw = timer - 60, the d3 factor
-1.2] — REPLACE the annex drop, not add. The +50 then eats #22's every-roll 46.0, the ride dice's
-0x12 draws and the landing burst (the absorb law [M Player_HandlePain 0x1902c8:84-96; the trace
-run's -0.00 entries are the absorbed 0x12 chips [L]]) — the route change re-rolls the ride dice,
-but the absorbed ride-kill classes become survivable with the armour alive.
+The probe suggested the committed roof lane's (190.0, 19.65, -268.7) sits directly above the
+pocket's north mouth, so the ROOF-EDGE ARMOUR DROP was implemented (`NF_0D_ROOF_ARMOUR=1`, the
+lane + the annex drop run as before when the knob is unset) and run. MEASURED DEAD IN ONE RUN:
+the walk-off never fired (40 forward ticks south-east ended still grounded at
+(191.01, 19.62, -268.85) — the roof extends OVER the pocket; the pocket is under the roof/shed
+footprint — no roof drop exists into it), and the stray pocket nav then ate #17's 48.0 on the
+roof (t16572, health 54.0 -> 6.0) and died t16779. Pickup #2's pocket is SEALED: roof/shed
+above, the bay wall south (the z ~-276.4 wedge), only the unprobed west corridor
+(x ~186.8-187.3) as a possible access. The armour lever is CLOSED at 00 Agent unless a live
+render proves that corridor open (the `--bond` spots below).
 
 ## How this was verified
 
-- Sixteen real runs of the d3 walk this session (`--ignored --nocapture`, each its own roll):
+- Seventeen real runs of the d3 walk this session (`--ignored --nocapture`, each its own roll):
   the baseline, the eight zone-axis configs, the three land-wait values, the three steer values,
-  plus the annex-armour machinery runs (the leg wedges + the probe).
-- The whole `walkreal_0700000d_live` binary on the final tree: **3 passed, 0 failed, 1 ignored**
-  (99.7 s) — the plain master replay, the d1 real-damage walk and the d2 Agent sister all pass
+  the annex-armour machinery runs (the leg wedges + the probe) and the roof-edge drop run.
+- The whole `walkreal_0700000d_live` binary on the final tree, run TWICE (before and after the
+  roof-armour else-restructure): **3 passed, 0 failed, 1 ignored** both times (99.7 s / 101.9 s)
+  — the plain master replay, the d1 real-damage walk and the d2 Agent sister all pass
   (every new knob is env-gated with the committed default = the master timeline byte-identical);
   the d3 walk stays ignored with the refreshed ledger.
 - `interactables_0700000d_live`: **11 passed, 0 failed** (27.7 s).
@@ -85,11 +87,12 @@ but the absorbed ride-kill classes become survivable with the armour alive.
 
 ## Live checks for the main agent
 
-- None new this session: the pocket geometry is answerable by the worker's own segment probe
-  (done); a live check could confirm the pickup #2 pocket's ceiling/floor structure visually
-  (the roof south edge at (190, 19.65, -268.7) vs the pocket floor ~y 10.2) and whether the west
-  corridor at x ~186.8-187.3 runs south to the bay — a `--bond 190,19.65,-268.7,0,0` render
-  looking south and a `--bond 187,10.6,-272,0,0` render would settle it.
+- One live check decides the closed armour lever: whether the west corridor at x ~186.8-187.3
+  (the 64-ray probe's only clear approach to pickup #2's sealed pocket) runs from open floor to
+  the bay enter — a `--bond 187,10.6,-272,0,0` render looking south and a
+  `--bond 190,19.65,-268.7,0,0` render looking south (the roof edge over the pocket) would
+  settle it. If the corridor is open, the round-7 lever is a corridor walk (not a roof drop):
+  enter from wherever the corridor opens, take the +50, exit to the bay enter.
 - The carried live checks from rounds 1-2 (the arming event's address on g0; the 18-tap roll's
   config in the main agent's session notes) stand as written in `docs/reports/retune-nb-0d-3.md`.
 
