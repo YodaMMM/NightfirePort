@@ -35,6 +35,42 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 fn bond_pos(w: &Walker) -> [f32; 3] { w.scene.sim.as_ref().unwrap().bond.pos }
 
+/// One steered corridor leg (retune-nb-0d-7, the west-corridor probe): the same plain steer
+/// the round-6 crawl legs use — turn clamp 0.08, forward when the aim error is inside 1 rad —
+/// with a tick cap, an optional single crouch/stand press edge ([M Player_HandleJump's crouch
+/// arms, 0x190630 dispatch]) and a death guard. Prints the leg's landing spot; the probe
+/// ledger reads the prints.
+fn corridor_leg(w: &mut Walker, tx: f32, tz: f32, tol: f32, max_ticks: u32, press_crouch: Option<bool>, label: &str) {
+    let start = w.total_ticks;
+    let mut pressed = false;
+    for k in 0..max_ticks {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let p = sim.bond.pos;
+        let d = walker::dxz(p, [tx, p[1], tz]);
+        if k >= 6 && d < tol { break; }
+        if sim.drones.health.health <= 0.0 {
+            eprintln!("[0d] corridor {label}: DIED mid-leg at ({:.2},{:.2},{:.2})", p[0], p[1], p[2]);
+            return;
+        }
+        let desired = (tx - p[0]).atan2(tz - p[2]);
+        let err = walker::wrap_pi(desired - sim.bond.yaw);
+        let mut input = nf_game::player::Input {
+            turn: err.clamp(-0.08, 0.08),
+            forward: if err.abs() > 1.0 { 0.0 } else { 1.0 },
+            ..Default::default()
+        };
+        if !pressed && k >= 4 && press_crouch.is_some() {
+            input.crouch = true;
+            pressed = true;
+        }
+        w.scene.sim.as_mut().unwrap().step_bond(input, false, false, false);
+        w.total_ticks += 1;
+    }
+    let p = bond_pos(w);
+    eprintln!("[0d] corridor {label}: at ({:.2},{:.2},{:.2}) +{} ticks{}", p[0], p[1], p[2], w.total_ticks - start,
+        if p[1] < 9.0 { " (y DROPPED)" } else { "" });
+}
+
 #[test]
 fn walk_arrival_to_the_c5_door() {
     walk_arrival_to_the_c5_door_at(1, false);
@@ -1364,6 +1400,50 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                 }
             }
         }
+        // ROUND-7 (retune-nb-0d-7): THE WEST-CORRIDOR PROBE — the ignore ledger's own
+        // precondition ("only the unprobed west corridor as a possible access — the corridor's
+        // along-length is UNPROBED"). The r6 fan says the pocket's west mouth is open at dirs
+        // 11-13 ((187.3,-269.7)/(186.8,-272)/(187.3,-274.3), both heights); the UNWALKED part
+        // is the corridor's south run: does x ~187 continue south past the bay-side wedge
+        // z ~-276.4 to the annex floor the bay-enter stand (194.0,10.6,-282.0) sits on? The
+        // probe walks the full loop: bay stand -> west to (187.0,-278.5) -> north through the
+        // wedge line at x ~187 -> the corridor spots -> the pickup -> the 40-tick take stand
+        // -> the same legs south. NF_0D_CORRIDOR_ARMOUR=1 walks it standing; =2 crosses the
+        // wedge legs CROUCHED (the crawl law: one press edge arms the toggle). Unset = the
+        // committed round-6 direct crawl attempt, byte-identical.
+        let corridor_mode: u32 = std::env::var("NF_0D_CORRIDOR_ARMOUR").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        if corridor_mode > 0 {
+            let crossed = corridor_mode >= 2;
+            // L1: west along the bay side, south of the wedge line.
+            corridor_leg(&mut w, 187.0, -278.5, 1.0, 900, None, "L1 west (bay side)");
+            // L2: north across the z ~-276.4 wedge line at x ~187.
+            corridor_leg(&mut w, 187.3, -274.3, 0.8, 900, if crossed { Some(true) } else { None }, "L2 wedge crossing");
+            // L3: the corridor's probed middle spot (the r6 fan r6 dir 12).
+            corridor_leg(&mut w, 186.8, -272.0, 0.8, 600, None, "L3 corridor middle");
+            // L4: east to the pickup (the r6 fan: the pickup<->(186.8,-272) segment clear).
+            corridor_leg(&mut w, 192.8, -272.0, 0.35, 900, None, "L4 pickup approach");
+            for _ in 0..40 {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+                w.total_ticks += 1;
+            }
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let taken = sim.drones.pickups.iter().enumerate()
+                    .find(|(_, p)| (p.m[3][0] - 192.82).abs() < 1.0 && (p.m[3][2] + 272.03).abs() < 1.0)
+                    .map(|(k, p)| (k, p.gone));
+                eprintln!("[0d] corridor armour: at {:?} armour {:.1} -> {} (pickup {:?})",
+                    sim.bond.pos, armour0, sim.drones.health.armour, taken);
+            }
+            // The return along the same corridor.
+            corridor_leg(&mut w, 186.8, -272.0, 0.8, 600, None, "R3 corridor middle");
+            corridor_leg(&mut w, 187.0, -278.5, 0.8, 900, None, "R2 wedge crossing south");
+            if crossed {
+                // A fresh press stands (the toggle) once back south of the wedge.
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+                w.total_ticks += 1;
+            }
+            corridor_leg(&mut w, 194.0, -282.0, 1.4, 900, None, "R1 back to the bay stand");
+        } else {
         // The approach: the plain nav walk AND the climb_stairs hop both wedge at z ~-276.4
         // (the STUCK prints: the segment to the pickup blocked 0.65 u ahead, the hop reached
         // y 11.08 and still capped) — the wall is the BAY's north wall with its LOW opening
@@ -1428,6 +1508,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             w.total_ticks += 1;
         }
         eprintln!("[0d] annex armour leg back: at {:?} crouched {}", bond_pos(&w), w.scene.sim.as_ref().unwrap().bond.crouched);
+        } // else: the committed round-6 direct crawl attempt
     }
     // THE YARD-GARRISON BAY-ENTER SCAN (level-0d-operative-walk, real-damage-gated): the ride
     // phase's measured Operative drain is the yard garrison's 0x12 trickle — 18 hits for 10.8
@@ -2308,6 +2389,13 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // stand inside four rifles' engage range.
         let skip_env = difficulty == 1;
         if container_drop {
+            // retune-nb-0d-7: the corridor armour is the sweep's BUDGET (the take landed at
+            // +50 [L the corridor probe run]; the absorb law eats the default-type 0x12 drain
+            // [M Player_HandlePain 0x1902c8:84-96]) — the pass cap is the knob: NF_0D_SWEEP_PASSES
+            // extends BOTH container sweep loops (12 = the committed default, byte-identical).
+            // Each killed guard is a REMOVED damage source; the pick loop breaks early when no
+            // clear-aim pick remains, so extra cap costs only while guards remain.
+            let sweep_passes: u32 = std::env::var("NF_0D_SWEEP_PASSES").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
             // THE CROUCH SWEEP (real-health-00agent-0d-2): the Operative ledger's proven kill
             // posture — the crouch carries into the sweep (the aim/sight target drops 0.45 [M
             // Player_GetHeadPos 0x195aa0:39-51], the visibility factor 0.75 [M
@@ -2319,7 +2407,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                 w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
                 w.total_ticks += 1;
             }
-            for _ in 0..12 {
+            for _ in 0..sweep_passes {
                 let pick = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let mut best: Option<(f32, usize)> = None;
@@ -2355,7 +2443,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             let _ = w.try_walk_to(Wp { at: [142.0, 5.0, -291.5], act: Act::None, arrive: 1.2 }, "the clear stand north-west of the container");
             eprintln!("[0d] the exit stand: {:?} health {}", bond_pos(&w), w.scene.sim.as_ref().unwrap().drones.health.health);
             if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
-            for _ in 0..12 {
+            for _ in 0..sweep_passes {
                 let pick = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let mut best: Option<(f32, usize)> = None;

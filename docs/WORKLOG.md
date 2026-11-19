@@ -75,3 +75,22 @@ nav ate #17's 48.0 on the roof. Helpers stay gated to level 0d + 00 Agent; real 
 lower damage or health, never change guard code. Each lever judged on its own real run.
 
 ### retune-nb-0d-7 progress
+- Round-7 re-measure on the merged tree (master 7ffabafbc + 0d-6): the death is byte-identical to the
+  0d-6 ledger (t19772, (141.22,4.88,-296.08), 21 hits for 80.8 + 19.2 fall, the converged 4-chip/6-tick
+  burst frames 19676-19682) — master's SniperAim ENTER change did NOT move the fight; the ledger's
+  damage-class invariant holds.
+- ROUND-7 LEVER (the west-corridor probe, the ignore ledger's own precondition) MEASURED OPEN: the new
+  NF_0D_CORRIDOR_ARMOUR probe (gated NF_0D_ANNEX_ARMOUR=1 + NF_0D_CORRIDOR_ARMOUR=1/2, defaults
+  byte-identical) walked the full loop from the bay-enter stand — L1 west 70 ticks to (187.89,10.56,-278.75),
+  L2 north across the z ~-276.4 wedge line at x ~187 STANDING in 59 ticks (no wall on the corridor line!),
+  L3 corridor middle 23 ticks, L4 to the pickup (900-tick cap, stopped 0.96 dxz short), the 40-tick take
+  stand LANDED THE +50 (armour 0.0 -> 50, pickup #2 gone [L]), R3/R2 back (the straight south crossing
+  stalls at z ~-275.09 — 900-tick cap — but the diagonal R1 south-east leg returns to the bay stand in 94
+  ticks). Detour cost ~2158 ticks. THE POCKET IS NOT SEALED: the west corridor is a real route at 00 Agent.
+- The corridor roll's fight: death moved t19772 -> t21952 (+2180 ticks = the detour's own cost), the same
+  80.8+19.2 pool. The +50 was consumed by the RE-ROLLED ride's chip drain (the detour re-rolls the
+  sight-event-keyed ride dice; this roll's ride ate ~48.6 of armour vs the committed roll's 3.6) and the
+  landing burst (17.0 health) finished it — the sweep picked NOTHING (no clear_box_aim pick remains at
+  this roll's converged positions; NF_0D_SWEEP_PASSES 24 changed nothing, the loops break early), the
+  burst kills inside the 40-tick land_wait. NF_0D_EXIT_CROUCH=1 on top: identical (t21956).
+- Next: the ride is a per-run lottery at the {30,60}-like alive band — each config its own roll.
