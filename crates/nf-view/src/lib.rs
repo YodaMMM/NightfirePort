@@ -3502,7 +3502,7 @@ impl App {
 
     /// Test aid (NF_MENU_SCRIPT="ms:step,ms:step,..."): menu presses for the two-window MP checks,
     /// no desktop input. Each `ms` is the delay after the PREVIOUS step (the first counts from the
-    /// first frame). Steps: up/down/left/right/confirm/back/side/extra (`down*30` repeats), esc (the Esc key), shot
+    /// first frame). Steps: up/down/left/right/confirm/back/side/extra (`down*30` repeats), esc (the Esc key), key=Q / keyup=Q (a held gameplay key), shot
     /// (the F12 capture), type=TEXT (the join page's typing), page=Name (wait until that page is up
     /// and no load runs — `page=None` is "in a level, no menu"), sleep (nothing). A wait holds the
     /// script, so a slow boot or load never lands presses on the wrong page.
@@ -3534,6 +3534,23 @@ impl App {
             // "esc": the Esc key through the window's own key path (in a mission it opens the pause page;
             // `back` only reaches an open menu).
             else if step == "esc" { for _ in 0..times { let _ = self.app_key(winit::keyboard::KeyCode::Escape, winit::event::ElementState::Pressed, false); } }
+            // "key=Q" / "keyup=Q": press / release a gameplay key through the window's key path (held until keyup).
+            else if let Some((name, up)) = step.strip_prefix("key=").map(|n| (n, false)).or_else(|| step.strip_prefix("keyup=").map(|n| (n, true))) {
+                use winit::keyboard::KeyCode as K;
+                let k = match name {
+                    "Q" => Some(K::KeyQ), "E" => Some(K::KeyE), "G" => Some(K::KeyG), "R" => Some(K::KeyR), "V" => Some(K::KeyV),
+                    "W" => Some(K::KeyW), "A" => Some(K::KeyA), "S" => Some(K::KeyS), "D" => Some(K::KeyD), "C" => Some(K::KeyC),
+                    "1" => Some(K::Digit1), "2" => Some(K::Digit2), "3" => Some(K::Digit3), "4" => Some(K::Digit4), "5" => Some(K::Digit5),
+                    "Space" => Some(K::Space), "Tab" => Some(K::Tab), _ => None,
+                };
+                // Gameplay keys act only while the session holds the mouse; mark it held without locking the
+                // real cursor (a scripted run must not take the desktop mouse).
+                if !up { self.grabbed = true; }
+                match k {
+                    Some(k) => { let _ = self.app_key(k, if up { winit::event::ElementState::Released } else { winit::event::ElementState::Pressed }, false); }
+                    None => eprintln!("[menu-script] unknown key {name}"),
+                }
+            }
             // "bksp": the address/port pages' Backspace (the host's port field starts at 27420).
             else if step == "bksp" { for _ in 0..times { if let Some(fe) = self.fe.as_mut() { fe.mp_net_backspace(); } } }
             // "lobby": one line with this machine's one-screen lobby model (the two-window
