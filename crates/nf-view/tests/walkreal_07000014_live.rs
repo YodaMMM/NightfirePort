@@ -1383,21 +1383,18 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// fired, and the 6000-tick burn's stream shift died EARLIER (the ascent base t21534, 42
 /// fights). Both fetches are REMOVED; the (e) block below records the wedge facts.
 ///
-/// NEXT LEVERS (round 5, retune-nb-14-5, in order): (1) THE CROSSING CONE — with the door-face
-/// law the squad #33/#34 died inside the west-face scan (zero volleys) and the walk CROSSED the
-/// doorway [L 2026-11-19 run 5: death moved t25036 → t25939, (−47.75,1.05,42.58), 34 hits for
-/// 100.0, 26 fights] — but the crossing leg ate a point-blank 15.57 from the near guard at
-/// (−49.6, 40.9) (d 2.5, inside the 3.0 auto-hit band [M DroneWeap_DoBulletAccuracy 0x179740:
-/// 113-115]) that the scans' gun-ray gate had dropped (his muzzle blocked from the west-face
-/// park, his eye on Bond) and left 1.93 for #28 (0x14, d 9.3) in the Kiko hold; the lever: the
-/// door-leg scans answer EYE-true guards too (the eye_ray_stands law, d3-scoped to these scan
-/// call sites) or the crossing waits out the near guard's first volley from the doorway lip;
-/// (2) the Kiko corridor's #20 read "still alive after 300 ticks" under the shipped 16-tick
-/// shoot_bounded (clip 21 spare 68, ZERO rounds landed at d 6.5) — the door-face fast-tap law
-/// or the eye-ray aim answers him; (3) then the Kiko-corridor armour fetch (−41.29,1.53,36.48)
-/// — +50 armour banks the pool for Rook's-wake legs.
+/// NEXT LEVERS (round 5, retune-nb-14-5, in order): (1) THE CORRIDOR-END HOLD vs #20 — the
+/// door-face law's second extension (the eye-true candidates + the Kiko picks' fast taps) moved
+/// the death t25939 → t26979 (−48.91,1.13,34.28, the round-1-era spot) [L 2026-11-19 run 6]:
+/// #20 (0x5000090, 0x14, hp 10, post (−51.0,1.0,32.6)) took ZERO rounds across FOUR fights
+/// (the fast taps at d 6.5, clips 21→0→17→19 burned) — his ray from the hold spot (−50.93,
+/// 39.16) dies on the corridor's own geometry (the rounds stop between z 39.2 and z 32.6) —
+/// then his point-blank 1.93 (d 2.7) finished the 1.9-health walk; the lever: a hold/stand
+/// spot whose ray to (−51.0, 32.6) clears (the corridor's west lane or the south leg's own
+/// lip), or the fights' creep law opens the line; (2) then the Kiko-corridor armour fetch
+/// (−41.29,1.53,36.48) — +50 armour banks the pool for Rook's-wake legs.
 #[test]
-#[ignore = "nb-scan-all round 5 (retune-nb-14-5): the round-4 ledger stands — the re-measure on this tree put the death back at t25036 (−60.22,0.73,37.94), 17.5 health, 34 hits for 100.0, 28 fights, the SAME door-face shape (the SniperAim ENTER merge did not re-roll this stream) [L 2026-11-19]; WHAT STANDS (the round-5 door-face law, each piece its own measured run): (a) switch_on_first_blood (the fights' retarget arm without the 30-tick cadence and the 3.0 margin — the #33 fight started t25030 in the re-measure and Bond died the tick his 55 damage landed), (b) the west-face leg's return-fire MUTE + the r(0.3) line park (the mid-leg fight parked Bond 1.6 u south of the corridor line where #32/#33 are near-collinear — 0.74 u — and every stand took ~2 dmg/tick while the volleys landed), (c) the door-face scans' weaker-first rank + the 4-tick slide-off fights (the shipped 16-tick cadence measured 44 damage over 50 ticks; the slide's first-60-tick strafe dragged Bond 3 u off the line into the blocked geometry; with the law the squad #33/#34 died INSIDE the west-face scan — killed true, killed true health −22, ZERO volleys — and the walk CROSSED the doorway for the first time since round 4 [L run 5]) — the death moved t25036 → t25939 (−47.75,1.05,42.58), 34 hits for 100.0, 26 fights: the CROSSING leg ate a point-blank 15.57 from the near guard (−49.6, 40.9) at d 2.5 (the 3.0 auto-hit band [M 0x179740:113-115]) whom the scans' gun-ray gate had dropped (muzzle blocked from the west-face park, eye on Bond) and left 1.93 for #28 (0x14, d 9.3) in the Kiko hold (the corridor's #20 read still-alive-after-300 under the shipped shoot_bounded, ZERO of 18 taps landed at d 6.5); NEXT: (1) the door-leg scans answer EYE-true guards too (the eye_ray_stands law, d3-scoped) or the crossing waits the near guard's first volley from the doorway lip; (2) the Kiko corridor's picks take the fast-tap/eye-ray law; (3) then the Kiko-corridor armour fetch (−41.29,1.53,36.48) — see the doc comment"]
+#[ignore = "nb-scan-all round 5 (retune-nb-14-5): the round-4 ledger stands — the re-measure on this tree put the death back at t25036 (−60.22,0.73,37.94), 17.5 health, 34 hits for 100.0, 28 fights, the SAME door-face shape (the SniperAim ENTER merge did not re-roll this stream) [L 2026-11-19]; WHAT STANDS (the round-5 door-face law, each piece its own measured run): (a) switch_on_first_blood (the fights' retarget arm without the 30-tick cadence and the 3.0 margin — the #33 fight started t25030 in the re-measure and Bond died the tick his 55 damage landed), (b) the west-face leg's return-fire MUTE + the r(0.3) line park (the mid-leg fight parked Bond 1.6 u south of the corridor line where #32/#33 are near-collinear — 0.74 u — and every stand took ~2 dmg/tick while the volleys landed), (c) the door-face scans' weaker-first rank + the 4-tick slide-off fights (the shipped 16-tick cadence measured 44 damage over 50 ticks; the slide's first-60-tick strafe dragged Bond 3 u off the line into the blocked geometry; with the law the squad #33/#34 died INSIDE the west-face scan — killed true, killed true health −22, ZERO volleys — and the walk CROSSED the doorway for the first time since round 4 [L run 5]) — the death moved t25036 → t25939 (−47.75,1.05,42.58), 34 hits for 100.0, 26 fights: the CROSSING leg ate a point-blank 15.57 from the near guard (−49.6, 40.9) at d 2.5 (the 3.0 auto-hit band [M 0x179740:113-115]) whom the scans' gun-ray gate had dropped (muzzle blocked from the west-face park, eye on Bond) and left 1.93 for #28 (0x14, d 9.3) in the Kiko hold; the SECOND extension (the door-leg scans answer EYE-true guards — the near guard's body boxes were exposed through the open leaf span while his muzzle was blocked — and the Kiko picks took the fast taps) moved the death t25939 → t26979 (−48.91,1.13,34.28, the round-1-era spot) [L run 6]; the Kiko hold's #20 (0x5000090, 0x14, hp 10, post (−51.0,1.0,32.6)) took ZERO rounds across FOUR fights (the fast taps at d 6.5, clips burned dry) — his ray from the hold spot dies on the corridor's own geometry between z 39.2 and his post — then his point-blank 1.93 (d 2.7) finished the 1.9-health walk; NEXT: (1) a hold/stand spot whose ray to (−51.0, 32.6) clears (the corridor's west lane or the south leg's own lip) or the fights' creep law opens the line; (2) then the Kiko-corridor armour fetch (−41.29,1.53,36.48) — see the doc comment"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
@@ -1602,7 +1599,10 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
             };
             let Some(di) = pick else { break };
             if !walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), di) { break; }
-            let _ = w.shoot_bounded(di, "the Kiko corridor's guards", 300);
+            // retune-nb-14-5: the fast taps (the round-5 measurement: the shipped 16-tick
+            // shoot_bounded landed ZERO of 18 taps on the corridor's #20 at d 6.5 — health 10
+            // unchanged after the capped fight [L run 5]).
+            let _ = w.shoot_bounded_fast(di, "the Kiko corridor's guards", 300);
         }
     }
     // 00 Agent: the squad (#20/#22/#23/#28/#29/#31/#61) converges on the escape-touch legs. A
@@ -3058,7 +3058,14 @@ fn route_scan_ranked(w: &mut Walker, dest: V3, label: &str, door_face_law: bool)
                 // muzzle line is blocked, and a fight on such a guard lands ZERO rounds while
                 // burning the 300-tick window (runs 5-7: #36 eye-visible gun-blocked at 5.6 u,
                 // killed false, health 10 unchanged, his convergence killed the walk after).
-                .filter(|&di| walker::DamageLog::visible_gun_rays(sim, di))
+                // retune-nb-14-5 (door_face_law): the EYE-true guards JOIN the candidates —
+                // the round-5 crossing death ate a point-blank 15.57 at d 2.5 from the near
+                // guard (−49.6, 40.9) whom this gate had dropped (his muzzle blocked from the
+                // west park, his eye and his BODY boxes on Bond through the open leaf span) [L
+                // 2026-11-19 run 5]. Bond's rounds follow the VIEW: an eye-true body box is a
+                // target the tight gate can land.
+                .filter(|&di| walker::DamageLog::visible_gun_rays(sim, di)
+                    || (door_face_law && walker::DamageLog::visible(sim, di)))
                 .min_by_key(|&di| {
                     let d = &sim.drones.list[di];
                     // 0x1a carriers first (the measured killers); then the ROAD-BLOCKER rank —
