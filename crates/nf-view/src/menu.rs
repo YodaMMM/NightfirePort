@@ -5255,6 +5255,9 @@ impl FrontEnd {
         self.cn_exit = None;
         self.cn_cheat_checked = false;
         self.cn_typed = if from == PAGE_CN_MENU { String::new() } else { "BOND".into() };
+        // The cheat grid is the same text box: its cursor opens on the ✓ cell too (PCSX2 11-19: Secret Unlocks
+        // opens with ✓ lit [L audits/cn2-1119/b-secret.png]; the port opened on "0").
+        if from == PAGE_CN_MENU { self.secret = SecretEntry { cursor: 38, ..SecretEntry::default() }; }
     }
 
     /// The typed name (the game's `buffer` 0x34e028) for the draw code.
@@ -5993,7 +5996,10 @@ impl FrontEnd {
                         if n != self.secret.cursor { self.secret.cursor = n; return self.focus_moved(); }
                     }
                     Action::Confirm => { self.secret_press(); return true; }
-                    Action::Back => { self.secret = SecretEntry::default(); self.enter_page(Page::CnMenu); self.cursor = 1; return true; }
+                    // Back lands on the row the page was opened from, Secret Unlocks (row 0), as the other
+                    // option pages return to theirs (PCSX2 11-19: Back from Secret Unlocks, then Down x3 = Advanced
+                    // Options [L audits/cn2-1119]; the port landed on Controller Setup).
+                    Action::Back => { self.secret = SecretEntry::default(); self.enter_page(Page::CnMenu); self.cursor = 0; return true; }
                     _ => return false,
                 }
             }
@@ -9806,7 +9812,8 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             // focused / msg-0x1c 0x73330f80 otherwise (the main menu's row convention); the ← / space
             // / ✓ cells draw their glyphs from TEX 0x03000075 at the msg-0x2d UV rects; the hint bar
             // (50,419) LBL 0x48e; the logo.
-            let title = if fe.cn_profile_mode { 0x1f5 } else { 0x1000_02d4 };
+            // Secret Unlocks' header is label 0x10002d4 (the wheel row's own name, CN_MENU[0]); the id had an extra 0.
+            let title = if fe.cn_profile_mode { 0x1f5 } else { 0x100_02d4 };
             // The two entries keep separate state (profile name: `cn_*`; cheat grid: `secret`).
             let (typed, focus): (&str, Option<usize>) = if fe.cn_profile_mode {
                 (fe.cn_typed.as_str(), FrontEnd::cn_cell_index(fe.cn_cell))
@@ -9826,7 +9833,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                     let text = if label.trim().is_empty() {
                         match SECRET_GRID[i] { SecretKey::Char(ch) => ch.to_string(), _ => String::new() }
                     } else { label };
-                    centred(&mut h, font, -2, &text, mx(x as f32 + w as f32 / 2.0), my(y as f32 + hh as f32 / 2.0 + 3.0), c, true, 1.0);
+                    // The cells' format is "ff 01 fe 03" — face 1 FONTNFont2 (the main menu rows' face), centred
+                    // [D page 0x40000020 control 0x10000074's NAME]; PCSX2 shows the big italic letters (11-19).
+                    centred_tex(&mut h, hfont, 0x0300_0005, -2, &text, mx(x as f32 + w as f32 / 2.0), my(y as f32 + hh as f32 / 2.0 + 6.0), c, true, 1.0);
                 }
             }
             if !fe.cn_profile_mode && fe.secret.accepted {
@@ -10951,14 +10960,10 @@ fn cn_controls_rows(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, la
     let bind = |id: u32| -> String { lang.and_then(|l| l.bind(id)).unwrap_or("").to_string() };
     let on = gs(CREAM, 0xff);
     let off = gs(0x73330f, 0xc0);
-    let yellow = gs(0xfec43e, 0xff);
     let sc = 1.3;
-    let arrow = |h: &mut Hud, cx: f32, cy: f32, left: bool| {
-        let (a, b, d) = if left { ((cx + 7.0, cy - 7.0), (cx + 7.0, cy + 7.0), (cx - 7.0, cy)) } else { ((cx - 7.0, cy - 7.0), (cx - 7.0, cy + 7.0), (cx + 7.0, cy)) };
-        let q = |p: (f32, f32), h: &Hud| HudVertex { p: h.ndc(Anchor::Centre, mx(p.0), my(p.1)), uv: [0.0, 0.0], c: yellow };
-        let v = [q(a, h), q(b, h), q(d, h), q(a, h), q(d, h), q(d, h)];
-        h.ndc_solid(-3, v, yellow);
-    };
+    // The style list's ◀ ▶: the atlas arrows, bright and larger than the option rows' (PCSX2 11-19: ~27×24 of
+    // 640, (240,130,19) [L audits/cn2-1119]).
+    let arrow = |h: &mut Hud, cx: f32, cy: f32, left: bool| atlas_arrow_sized(h, cx, cy, left, 22.0, [1.0, 1.0, 1.0, 1.0]);
     let rows = fe.opt_rows();
     let value_txt = |i: usize| -> String {
         let Some(r) = rows.get(i) else { return String::new() };
@@ -10969,7 +10974,7 @@ fn cn_controls_rows(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, la
     let (sel0, sel1) = (fe.cursor == 0, fe.cursor == 1);
     let mid0 = 109.0 + 12.0;
     centred(h, font, -2, &value_txt(0), mx(60.0 + 158.0), my(mid0 + 6.0), if sel0 { on } else { off }, true, sc);
-    if sel0 { arrow(h, 70.0, mid0, true); arrow(h, 356.0, mid0, false); }
+    if sel0 { arrow(h, 75.0, mid0, true); arrow(h, 357.0, mid0, false); } // PCSX2 11-19: x 61-88 and 345-370
     // The Y-Axis label and its value control. Both are cream whatever the focus: the label
     // 0x10000001 LBL 0x492 (376,113,83×16) and the button 0x100000c9's label carry 0x645a49ff in
     // both msg 0x1b and 0x1c [D page 0x40000022], and P_CNCONTROLS_Handler sends them no colour
@@ -10977,13 +10982,16 @@ fn cn_controls_rows(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, la
     // (cream / 0x73330fc0) is the style list 0x10000025's own [D its msg 0x1b / 0x1c].
     let mid1 = 109.0 + 12.5;
     let c1 = on;
-    if let Some(r) = rows.get(1) { left_text(h, font, &bind(r.label), mx(376.0), my(mid1 + 6.0), c1, true, sc); }
+    // The Y-Axis pair at the base face size: PCSX2 draws it smaller than the style name (11-19,
+    // "Y-Axis" ~39 units wide on 640 [L audits/cn2-1119]); the port drew it at the rows' 1.3.
+    let sc1 = 1.0;
+    if let Some(r) = rows.get(1) { left_text(h, font, &bind(r.label), mx(376.0), my(mid1 + 5.0), c1, true, sc1); }
     let value1 = value_txt(1);
-    centred(h, font, -2, &value1, mx(461.0 + 49.5), my(mid1 + 6.0), c1, true, sc);
+    centred(h, font, -2, &value1, mx(461.0 + 49.5), my(mid1 + 5.0), c1, true, sc1);
     // The arrows clear the word: "Inverted" runs wider than the fixed 55.5 either side.
     let (placed, _) = font.layout(&value1, 0.0, 0.0);
     let ink = placed.first().zip(placed.last()).map_or(0.0, |(p0, pl)| pl.x + font.glyphs[pl.glyph].w as f32 - p0.x);
-    let half = (ink * sc / (mx(1.0) - mx(0.0)) / 2.0 + 12.0).max(55.5);
+    let half = (ink * sc1 / (mx(1.0) - mx(0.0)) / 2.0 + 12.0).max(55.5);
     if sel1 { arrow(h, 510.5 - half, mid1, true); arrow(h, 510.5 + half, mid1, false); }
 }
 
@@ -10993,13 +11001,9 @@ fn opt_list(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Opti
     let (lx, sc) = match fe.page { Page::CnAv => (56.0, 1.22), _ => (54.0, 1.3) };
     let on = gs(CREAM, 0xff);
     let off = gs(0x73330f, 0xc0);
-    let yellow = gs(0xfec43e, 0xff);
-    let arrow = |h: &mut Hud, cx: f32, cy: f32, left: bool| {
-        let (a, b, d) = if left { ((cx + 7.0, cy - 7.0), (cx + 7.0, cy + 7.0), (cx - 7.0, cy)) } else { ((cx - 7.0, cy - 7.0), (cx - 7.0, cy + 7.0), (cx + 7.0, cy)) };
-        let q = |p: (f32, f32), h: &Hud| HudVertex { p: h.ndc(Anchor::Centre, mx(p.0), my(p.1)), uv: [0.0, 0.0], c: yellow };
-        let v = [q(a, h), q(b, h), q(d, h), q(a, h), q(d, h), q(d, h)];
-        h.ndc_solid(-3, v, yellow);
-    };
+    // The selected row's ◀ ▶: the atlas arrows, dim brown (PCSX2 11-19 Advanced / Multiplayer Options
+    // [L audits/cn2-1119]; the yellow triangles were a stand-in).
+    let arrow = |h: &mut Hud, cx: f32, cy: f32, left: bool| atlas_arrow_c(h, cx, cy, left, SPINNER_ARROW);
     let rect = |h: &mut Hud, x0: f32, y0: f32, x1: f32, y1: f32, c: [f32; 4]| {
         let (a, b) = (h.ndc(Anchor::Centre, mx(x0), my(y0)), h.ndc(Anchor::Centre, mx(x1), my(y1)));
         let q = |p: [f32; 2]| HudVertex { p, uv: [0.0, 0.0], c };
@@ -11467,14 +11471,21 @@ fn hint_row_s(h: &mut Hud, font: &nf_formats::hud::Font, text: &str, x640: f32, 
 /// the bright arrows' orange [L 2026-11-19, audits/list2-1119; the CRT filter makes the level approximate].
 const SPINNER_ARROW: [f32; 4] = [0.6, 0.6, 0.6, 1.0];
 
+fn atlas_arrow_sized(h: &mut Hud, cx: f32, cy: f32, left: bool, size: f32, c: [f32; 4]) {
+    let (w, hh) = (size * MW / SW, size * MH / SH);
+    // Layer -3, in front of the row plates and box frames (the triangles' layer) — at 0 the style box's edge cut the ◀'s tip.
+    h.quad(Anchor::Centre, -3, crate::fe_pages::ATLAS_BUTTONS, 0, mx(cx - w / 2.0), my(cy - hh / 2.0), mx(w), my(hh), [48.5, if left { 0.5 } else { 16.5 }, 15.0, 15.0], (false, false), c);
+}
+
 fn atlas_arrow_c(h: &mut Hud, cx: f32, cy: f32, left: bool, c: [f32; 4]) {
     let (w, hh) = (16.0 * MW / SW, 16.0 * MH / SH);
-    quad640(h, crate::fe_pages::ATLAS_BUTTONS, cx - w / 2.0, cy - hh / 2.0, w, hh, [48.0, if left { 0.0 } else { 16.0 }, 16.0, 16.0], c);
+    // Layer -3, in front of the row plates and box frames (the triangles' layer) — at 0 the style box's edge cut the ◀'s tip.
+    h.quad(Anchor::Centre, -3, crate::fe_pages::ATLAS_BUTTONS, 0, mx(cx - w / 2.0), my(cy - hh / 2.0), mx(w), my(hh), [48.5, if left { 0.5 } else { 16.5 }, 15.0, 15.0], (false, false), c);
 }
 
 fn atlas_arrow(h: &mut Hud, cx: f32, cy: f32, left: bool) {
     let (w, hh) = (16.0 * MW / SW, 16.0 * MH / SH);
-    quad640(h, crate::fe_pages::ATLAS_BUTTONS, cx - w / 2.0, cy - hh / 2.0, w, hh, [48.0, if left { 0.0 } else { 16.0 }, 16.0, 16.0], gs(0x7f7f7f, 0xff));
+    h.quad(Anchor::Centre, -3, crate::fe_pages::ATLAS_BUTTONS, 0, mx(cx - w / 2.0), my(cy - hh / 2.0), mx(w), my(hh), [48.5, if left { 0.5 } else { 16.5 }, 15.0, 15.0], (false, false), gs(0x7f7f7f, 0xff));
 }
 
 fn quad640(h: &mut Hud, tex: u32, x: f32, y: f32, w: f32, hh: f32, uv: [f32; 4], c: [f32; 4]) {
