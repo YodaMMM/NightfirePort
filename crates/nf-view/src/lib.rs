@@ -2337,13 +2337,17 @@ async fn device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) 
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: surface, ..Default::default() }).await?;
     // Player bug reports carry the GPU and its driver (bugreport.rs).
     let _ = bugreport::GPU_INFO.set({ let i = adapter.get_info(); format!("{} ({:?}; driver {} {})", i.name, i.backend, i.driver, i.driver_info) });
+    // Startup stages in the log (a native fault in the driver leaves no panic report; the last line says where).
+    eprintln!("gpu: adapter {}", bugreport::GPU_INFO.get().map(String::as_str).unwrap_or("?"));
     // batch-draws: the bindless texture array + per-draw first_instance the batched world pass needs
     // (gpu.rs `Batch`); requested only where the adapter has them — the per-draw path is the fallback.
     let want = wgpu::Features::TEXTURE_BINDING_ARRAY
         | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
         | wgpu::Features::INDIRECT_FIRST_INSTANCE;
     let desc = wgpu::DeviceDescriptor { required_features: adapter.features() & want, required_limits: adapter.limits(), ..Default::default() };
+    eprintln!("gpu: requesting the device (features {:?})", desc.required_features);
     let (device, queue) = adapter.request_device(&desc).await?;
+    eprintln!("gpu: device ready");
     Ok((adapter, device, queue))
 }
 
