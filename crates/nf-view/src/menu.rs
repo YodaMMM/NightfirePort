@@ -11042,9 +11042,10 @@ fn opt_list(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Opti
             OptKind::Slider => {
                 // The bar: a pale track with the yellow fill to the value (PCSX2 m38).
                 let (x0, x1) = (365.0, 552.0);
-                // PCSX2 m38: track #c8c8c8, fill #d4952b.
-                rect(h, x0, mid - 7.0, x1, mid + 7.0, gs(0x646464, 0xff));
-                rect(h, x0, mid - 7.0, x0 + (x1 - x0) * v as f32 / 100.0, mid + 7.0, gs(0x6a4a15, 0xff));
+                // PCSX2 11-19 AV Options (audits/av-1119): track (172,169,172), fill (255,137,22) — the atlas orange at
+                // full — 14 tall; the older m38 read (#c8c8c8 / #d4952b) was through the CRT filter's tint.
+                rect(h, x0, mid - 7.0, x1, mid + 7.0, gs(0x565456, 0xff));
+                rect(h, x0, mid - 7.0, x0 + (x1 - x0) * v as f32 / 100.0, mid + 7.0, gs(0x80450b, 0xff));
                 if sel { arrow(h, 357.0, mid, true); arrow(h, 560.0, mid, false); }
             }
             OptKind::Action => {}
