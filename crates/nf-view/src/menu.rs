@@ -10307,7 +10307,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
                     }
                     used += rows[i].len();
                 }
-                pause_cursor(h, 107.0, pause_objective_y(&lines, top, sel), gs(YELLOW, 0xff));
+                pause_cursor(h, 107.0, pause_objective_y(&lines, top, sel), gs(0x7f7f7f, 0xff));
             }
         }
         // The MISSION tab (default [L the page's initial state — the d1=6 list is the enabled one]).
@@ -10329,7 +10329,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
             // PCSX2 captures — the game's list cursor; the port had none]. Drawn as a
             // small yellow triangle at the list's cursor column (the port's stand-in sprite; the
             // disc's own cursor texture was not identified — live check).
-            if !confirming { pause_cursor(h, 153.0 + 9.0, 209.0 + fe.cursor.min(2) as f32 * 33.5, gs(YELLOW, 0xff)); }
+            if !confirming { pause_cursor(h, 153.0 + 9.0, 209.0 + fe.cursor.min(2) as f32 * 33.5, gs(0x7f7f7f, 0xff)); }
         }
     }
     // The YES/NO confirm box over the rows [L the d1=0xc text (187,188,266×16) and the d1=0xd list
@@ -10346,7 +10346,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
             let c = if i == fe.confirm_sel { bright } else { dim };
             label(h, font, &lbl(id, if i == 0 { "YES" } else { "NO" }), 238.0, 237.0 - 8.0 + i as f32 * 33.5, 165.0, 16.0, c, false, 1.0);
         }
-        pause_cursor(h, 238.0 + 9.0, 237.0 + fe.confirm_sel.min(1) as f32 * 33.5, gs(YELLOW, 0xff));
+        pause_cursor(h, 238.0 + 9.0, 237.0 + fe.confirm_sel.min(1) as f32 * 33.5, gs(0x7f7f7f, 0xff));
     }
     // The hint bar (45,341,550×18) — the TAB's own label [M C_GCPAUSE_Handler 0x204408 swaps the
     // hint per tab on entry: MISSION 0x201 (:275), OBJECTIVES 0x202 (:239), CONTROLS 0x204 (:501),
@@ -10543,12 +10543,10 @@ fn glyph_row(h: &mut Hud, font: &nf_formats::hud::Font, text: &str, x640: f32, y
 /// captures' yellow arrow; the disc's own cursor sprite was not identified — the port's stand-in,
 /// colour the title's yellow 0xfec43e [M page 0x40000009's 0x1b colour]].
 fn pause_cursor(h: &mut Hud, x: f32, y: f32, c: [f32; 4]) {
-    // PCSX2's arrow is ~15 wide × 16 tall (07000005 pause/fail, 2026-10-15).
-    let (a, b, d) = (h.ndc(Anchor::Centre, mx(x), my(y - 8.0)), h.ndc(Anchor::Centre, mx(x), my(y + 8.0)), h.ndc(Anchor::Centre, mx(x + 15.0), my(y)));
-    let p = |q: [f32; 2]| HudVertex { p: q, uv: [0.03, 0.03], c };
-    // One triangle: the first 3 verts; the second is degenerate (the frame wants 6).
-    let v = [p(a), p(b), p(d), p(a), p(d), p(d)];
-    h.ndc_solid(-3, v, c);
+    // The button atlas's ▶ cell (48,16), orange: PCSX2's pause cursor measures (249,128,19), x 154.5-169.8,
+    // y 202.5-216.7 for the MISSION list's first row (07000005, 2026-11-19 [L audits/pause-1119]) — 7.5 left of
+    // the yellow stand-in triangle's 162-177. `x` stays the list's cursor column.
+    h.quad(Anchor::Centre, -3, crate::fe_pages::ATLAS_BUTTONS, 0, mx(x - 7.5), my(y - 7.5), mx(15.5), my(15.0), [48.5, 16.5, 15.0, 15.0], (false, false), c);
 }
 
 /// The mission-end pages. Outcome::Failed = the fail/death menu, menu-def page 0x40000042 [M
@@ -10584,7 +10582,7 @@ fn results_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, hfont:
                 // at y 216 / 254 of 480, the arrow at x 205.
                 centred(h, font, -2, &lbl(*id, fb), mx(197.0 + 123.0), my(223.0 + i as f32 * 38.0), c, false, 1.0);
             }
-            pause_cursor(h, 205.0, 216.0 + fe.cursor.min(1) as f32 * 38.0, gs(YELLOW, 0xff));
+            pause_cursor(h, 205.0, 216.0 + fe.cursor.min(1) as f32 * 38.0, gs(0x7f7f7f, 0xff));
             // The hint (97,341,446×18) LBL 0x5c8 [L the page's 0x1000006f].
             // The hint control (97,341,446×18) is centred on x = 320 like the 540-wide bars hint_bar assumes [L]:
             // hint_bar takes the 540-bar's left edge.
