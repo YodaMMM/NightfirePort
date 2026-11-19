@@ -1706,17 +1706,40 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 if sim.bond.pos[1] <= 13.2 { break; }
                 w.tick(Input::default(), false);
             }
-            w.tick(Input { crouch: true, ..Default::default() }, false);
-            w.tick(Input::default(), false);
-            eprintln!("[08 anchor] bond {:?} after the crouch drop", w.scene.sim.as_ref().unwrap().bond.pos);
-            // run 11 TRIED and REVERTED: forcing the stance standing after the drop (the
-            // default-tick release, then a crouch toggle, then the assert) did NOT uncrouch
-            // Bond (the log: crouched true after 4 default ticks + a crouch press — the
-            // port's crouch latch resists both semantics from the walk's side) and the extra
-            // ~6 upper-floor ticks caught a missile blast (death t20760, was t21070) — the
-            // block is reverted to the run-10 state. The stance question needs the main
-            // agent's live check (the report lists it): what input state stands Bond up from
-            // the port's crouch latch.
+            // retune-nb-08-5: run 10's "uncrouch press" fired while the stand/crouch lockout was
+            // still counting — the crouch press that opened the drop re-arms BL+0x960 = 60 on
+            // the substate change [M Player_ChangeSubState 0x190630:48 writes FRAME_RATE on
+            // EVERY change; the port's crouch-on branch sets lockout = 60, player.rs:1844], and
+            // the stand branch requires lockout == 0 [M Player_SSCrouch 0x1924c0:45-53 — the
+            // stand gate reads +0x960 == 0 — and :84-105 the press; the port player.rs:1845-1852]
+            // plus the headroom LOS pos→pos+0.95 [M :87-96]. Run 11's 4-tick release never
+            // outlived the 60 (the fall breaks in a few ticks; ~55 lockout ticks remained — the
+            // "port's crouch latch" was the lockout, not an edge/animation latch). The wait runs
+            // on the zap-free lower floor (feet 13.086 [L run 1's in-place drop]; the run-10
+            // fight's zaps were ZERO in the fight [L the ledger]) and the stand press holds the
+            // crouch action one tick — Toggle mode stands a crouched Bond on the action press
+            // [M Player_SSCrouch 0x1924c0:84-105; the port: `input.crouch || input.jump`,
+            // player.rs:1845-1852]; the headroom ray over the hole is clear (the lintel 14.31 is
+            // above pos+0.95 = 14.04 [D the tri dump; the measured lower-floor feet 13.086]).
+            // Bounded: if the headroom or the latch refuses, the log says so and the fight runs
+            // in the run-10 crouched state (no worse than master). The d1/d2 sisters never enter
+            // this block (difficulty >= 3 gate) — their timelines stay byte-exact.
+            for _ in 0..70 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.bond.lockout == 0 { break; }
+                w.tick(Input::default(), false);
+            }
+            for _ in 0..4 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if !sim.bond.crouched { break; }
+                w.tick(Input { crouch: true, ..Default::default() }, false);
+                w.tick(Input::default(), false);
+            }
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[08 anchor] bond {:?} crouched {} lockout {} after the lockout wait + the stand press",
+                    sim.bond.pos, sim.bond.crouched, sim.bond.lockout);
+            }
         }
     }
     let ci = w.scene.sim.as_ref().unwrap().drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
