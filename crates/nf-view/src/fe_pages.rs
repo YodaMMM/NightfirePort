@@ -426,8 +426,12 @@ pub const SUMMARY_PLATES: [(u32, u8, i32, i32, i32, i32, u16, u16, u32); 6] = [
 /// MpConfirm]); the settings band is its own SET 7 box.
 pub fn summary_plate_elems(team: bool) -> Vec<PageElem> {
     let keep = |id: u32| team || id != 0x1000_023e;
+    // The plates' alpha byte 0x80 is half cover on the PS2: the blue rim measures (98,47,151) over the
+    // orange background, an even mix [L PCSX2 2026-11-19, audits/g051/ps2-mp-summary.png], so the
+    // byte is scaled 0..0xff → 0..1 here (the page drawer reads 0x80 as opaque).
+    let half = |c: u32| if c & 0xff == 0x80 { (c & !0xff) | 0x40 } else { c };
     let plate = |&(id, _l, x, y, w, h, u, v, c): &(u32, u8, i32, i32, i32, i32, u16, u16, u32)| PageElem {
-        ctrl: id, rect: control_rect(id, 5, x, y, w, h), colour: c,
+        ctrl: id, rect: control_rect(id, 5, x, y, w, h), colour: half(c),
         what: ElemWhat::Tex { tex: ATLAS_BUTTONS, uv: [u as f32, v as f32, 1.0, 1.0] },
     };
     let mut out: Vec<PageElem> = SUMMARY_PLATES.iter().filter(|p| p.1 == 0x20 && keep(p.0)).map(plate).collect();
