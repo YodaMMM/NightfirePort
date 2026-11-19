@@ -94,3 +94,22 @@ lower damage or health, never change guard code. Each lever judged on its own re
   this roll's converged positions; NF_0D_SWEEP_PASSES 24 changed nothing, the loops break early), the
   burst kills inside the 40-tick land_wait. NF_0D_EXIT_CROUCH=1 on top: identical (t21956).
 - Next: the ride is a per-run lottery at the {30,60}-like alive band — each config its own roll.
+- The ride lottery at the corridor (each config its own roll): shift 60 + corridor = the GREEN SHAPE
+  minus one guard — the pre-ride phases carried health 34.8 + armour 33.8 INTO the ride (the armour ate
+  the 0x12 chips as 0.0 health-deltas: #1 7 chips, #0 2), the ride's ONLY killer is g18 (owner 18, skin
+  0x5000087 — the same guard the route's in-bay kill targets): two 17.8/17.0 rounds (health deltas, NOT
+  absorbed — a bypass type) = exactly the 34.8 ride-entry pool; NF_0D_TAP_CADENCE=14 identical (the ride
+  fire is sight-event-keyed). The in-bay kill attempt landed FALSE in every corridor roll. ROUND-8 LEVER
+  (in the refreshed ignore message): kill g18/#18 at the bay stand (the knob-gated act variant), then
+  shift 60 + the corridor take — with g18 dead the ride has no killer and the landing arrives ~34.8+33.8.
+- The refreshed ledger + the round-8 lever are in the ignore message (item 8); item (7)'s "the pocket is
+  SEALED" claim is SUPERSEDED (the corridor IS the access).
+- Whole walkreal_0700000d_live on the final tree (knobs unset): 3 passed / 0 failed / 1 ignored (100.8 s)
+  — the plain replay, the d1 real-damage walk and the d2 Agent sister byte-identical. The ignored 00
+  Agent walk stays red (the ride g18 lottery / the landing burst; the ledger + the next lever are in the
+  ignore message). interactables_0700000d_live: 11 passed / 0 failed (34.6 s).
+- The fast runner (tools/test/suite.py): this sandbox kills background jobs between tool calls (the
+  rounds 1-6 signature; suite.out stayed empty every attempt) — the per-binary foreground runs above are
+  the primary evidence. The full 450+-binary suite does not fit the sandbox disk either (the venv's ML
+  packages share the 9.9 G rootfs quota; ~430 built nf-view test binaries were deleted to free the link
+  headroom, relinking all of them for a suite pass is ~hours).
