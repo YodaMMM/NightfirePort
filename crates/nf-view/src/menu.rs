@@ -9105,7 +9105,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                 left_text(&mut h, font, &bind(*lbl), mx(54.0), my(mid + 6.0), c, true, 1.3);
                 centred(&mut h, font, -2, val, mx(457.0), my(mid + 6.0), c, true, 1.3);
                 if i == cur {
-                    for (cx, left) in [(357.0f32, true), (555.0, false)] { atlas_arrow(&mut h, cx, mid, left); }
+                    // The value rows' arrows pulse with the menu alpha (PCSX2 11-19 Enviro-Mods: R 104..234 across samples
+                    // [L audits/pulse-env-1119]; Bot Setup caught bright, Game Rules dim — phases of the same pulse).
+                    for (cx, left) in [(357.0f32, true), (555.0, false)] { atlas_arrow_c(&mut h, cx, mid, left, cursor_pulse(fe)); }
                 }
             }
             if let Some(&(_, _, _, ctrl, v)) = rows.get(cur) {
@@ -11014,9 +11016,9 @@ fn opt_list(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Opti
     let (lx, sc) = match fe.page { Page::CnAv => (56.0, 1.22), _ => (54.0, 1.3) };
     let on = gs(CREAM, 0xff);
     let off = gs(0x73330f, 0xc0);
-    // The selected row's ◀ ▶: the atlas arrows, dim brown (PCSX2 11-19 Advanced / Multiplayer Options
-    // [L audits/cn2-1119]; the yellow triangles were a stand-in).
-    let arrow = |h: &mut Hud, cx: f32, cy: f32, left: bool| atlas_arrow_c(h, cx, cy, left, SPINNER_ARROW);
+    // The selected row's ◀ ▶: the atlas arrows with the menu alpha pulse (PCSX2 11-19: dim in the Advanced /
+    // Multiplayer Options frames, bright in Bot Setup's — the same pulse [L audits/cn2-1119, pulse-env-1119]).
+    let arrow = |h: &mut Hud, cx: f32, cy: f32, left: bool| atlas_arrow_c(h, cx, cy, left, cursor_pulse(fe));
     let rect = |h: &mut Hud, x0: f32, y0: f32, x1: f32, y1: f32, c: [f32; 4]| {
         let (a, b) = (h.ndc(Anchor::Centre, mx(x0), my(y0)), h.ndc(Anchor::Centre, mx(x1), my(y1)));
         let q = |p: [f32; 2]| HudVertex { p, uv: [0.0, 0.0], c };
