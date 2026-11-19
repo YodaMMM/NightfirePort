@@ -149,3 +149,8 @@ figures, so there are no numbers to copy.
 ## ntfy failed (worker addendum, 2026-11-19T00:45Z)
 
 curl: (28) Connection timed out after 20002 ms; python urllib hung (exit 124); wget hung on connect to ntfy.sh:443 (exit 124) — the same unreachable-endpoint signature rounds 1-2 recorded.
+
+---
+## Worker addendum (2026-11-19T00:55Z)
+
+Lever (d) the floor-landing crouch measured dead (two runs, machinery removed): the pre-exit crouch walls the crouched rim walk on the container ridge (541 ticks for 1.25 u); the landing-tick press toggles across the exit multi-landing structure and the longer exit ate 16.8 -> 9.6 (death t19846). Final tree re-verified: walkreal_0700000d_live 3/0/1i (102.9 s), interactables_0700000d_live 11/0 (31.6 s). The round-4 levers stand at (a)/(b)/(c) in the ignore message.
