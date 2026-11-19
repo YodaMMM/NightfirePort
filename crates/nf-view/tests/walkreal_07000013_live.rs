@@ -56,7 +56,7 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// exposed_part_gun_rays` (the lane ray set the 13 walk fights with) gates each pick, so a
 /// guard behind the lobby furniture is skipped, not crept toward. No position writes, no RNG
 /// draws, no health/ammo writes; the only inputs are the view drives and the trigger taps.
-fn clear_the_visible(w: &mut Walker, label: &str, radius: f32, d3: bool, stop_on_fail: bool) {
+fn clear_the_visible(w: &mut Walker, label: &str, radius: f32, d3: bool, stop_on_fail: bool, floor_only: bool) {
     w.switch_to_armed(label);
     for _ in 0..12 {
         let target = {
@@ -64,6 +64,13 @@ fn clear_the_visible(w: &mut Walker, label: &str, radius: f32, d3: bool, stop_on
             (0..sim.drones.list.len()).find(|&i| {
                 let d = &sim.drones.list[i];
                 d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                // retune-nb-13-2 (floor_only, the d3 sweeps): the elevated guards are the
+                // aimed-stand watch's business — the sweep's own stand on the mezzanine rifle
+                // #4 (dy 6, dxz 21.4) returned killed false, the stop_on_fail law then ENDED
+                // the sweep before the floor wave was answered, and #4's wake poured 40.5
+                // across the west-mid legs [L the nb-13-2 lever-4 run]. The d2 sister's
+                // sweeps keep the unfiltered pick (byte-identical).
+                    && (!floor_only || d.pos[1] - sim.bond.pos[1] <= 2.0)
                     && walker::dxz(d.pos, sim.bond.pos) < radius
                     && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some()
             })
@@ -105,12 +112,40 @@ fn clear_the_visible(w: &mut Walker, label: &str, radius: f32, d3: bool, stop_on
 /// guards land ~300 ticks apart) and takes each guard the moment the gun-ray set exposes him —
 /// from the already-taken spot, at the wave's own range, instead of meeting him at the leg's
 /// close band. One failed stand ends the drain (the unopenable box is the exposure itself; the
-/// stop_on_fail law above). No position writes, no RNG draws, no health/ammo writes; the only
-/// inputs are the wait ticks and the trigger taps through the ordinary `aimed_stand` machinery.
-fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, quiet_rounds: u32, wait: u32) {
+/// stop_on_fail law above) — unless `skip` is set: retune-nb-13-4 (the ignore message's law)
+/// keeps a failed-stand SKIP-SET instead — a failed stand (+retry) pushes the drone and the
+/// loop CONTINUES to its other rounds, so one unfinishable guard (the wave-rifle #6's
+/// furniture pocket, the still-gate cannot close him: levers 8-10 measured the stands deal 21
+/// for a 21-hp fire trade and the 4th pause never came) does not END the drain before its
+/// other rounds run — the watch drain keeps #4's kill and the door drain keeps #7's. The
+/// east-lane drain is the d2 SISTER's too (the byte-identity law) and passes false.
+///
+/// `loose_floor` (retune-nb-13-4, the door-drain lever): floor-level targets (|dy| <= 2.0) run
+/// the file's proven CHARGER LAW — `shoot_loose` (±0.07/±0.10, the 07000006 point-blank idiom;
+/// the 2026-11-06 measure: the tight gate "holds fire on 13's lobby CHARGERS — the stands
+/// waited on alignment while the movers landed −24/−27 volleys"; the answer block's loose-gate
+/// stand killed the wave-rifle charger #9 at ZERO health cost) instead of the still-gate
+/// `aimed_stand`. The cap-1 skip-set run measured why: at the door mouth the wave-rifle #6
+/// (a 0x5000006 charger, floor level, d 3.6, hp 24) stood killed-FALSE through the 700 cap and
+/// the 1400 retry while the trade ran 46.0 -> 23.0, and the E-leg return-fire fight then ate
+/// another −21.0 (23.0 -> 2.0) for killed false — Bond ran the whole room phase at 2.0 hp and
+/// the endgame resupply nav met the respawned #7's point-blank shell [L this session's run].
+/// At d <= 12 the loose band lands and the taps fire ~3x more often — the charger dies in
+/// ~100-250 ticks instead of never. Non-floor targets keep the still-gate stand (the mezzanine
+/// #4's kill is the still-gate's own proven act, 3x [L]). The east-lane and room drains pass
+/// false (byte-identity; the room's #8 kill is the still-gate's too).
+/// No position writes, no RNG draws, no health/ammo writes; the only
+/// inputs are the wait ticks and the trigger taps through the ordinary stand machinery.
+fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, quiet_rounds: u32, wait: u32, retry: bool, skip: bool, loose_floor: bool) {
     w.switch_to_armed(label);
     let mut quiet = 0u32;
     let mut taken = 0u32;
+    // retune-nb-13-4: the failed-stand skip-set (the ignore message's law) — the same shape as
+    // the west-mid answers' skip-set (lever-4): a drone the stands already failed on is
+    // skipped for the rest of THIS drain, and the loop keeps going to its other rounds
+    // instead of the stop_on_fail return. Param-gated: the east-lane drain (the d2 sister's)
+    // keeps the plain path.
+    let mut failed: Vec<usize> = Vec::new();
     while taken + quiet < max_rounds {
         let target = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -118,6 +153,7 @@ fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, qui
                 let d = &sim.drones.list[i];
                 d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
                     && walker::dxz(d.pos, sim.bond.pos) < radius
+                    && (!skip || !failed.contains(&i))
                     && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some()
             })
         };
@@ -137,10 +173,53 @@ fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, qui
         };
         quiet = 0;
         taken += 1;
-        let killed = aimed_stand(w, di, label, 700);
+        // retune-nb-13-4 (loose_floor): floor-level targets run the charger law's loose gate;
+        // everything else keeps the still-gate aimed stand. Bond is already armed (the drain's
+        // own switch_to_armed above) — the answers' own shape.
+        let floor_level = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            (sim.drones.list[di].pos[1] - sim.bond.pos[1]).abs() <= 2.0
+        };
+        let mut killed = if loose_floor && floor_level {
+            w.shoot_loose(di, label, 700)
+        } else {
+            aimed_stand(w, di, label, 700)
+        };
         w.dmg.aimed_fights = false;
+        // retune-nb-13-3 (lever-9, the one-tap-short retry, d3 drains only): the lever-8 run's
+        // #6 stand dealt 21 (hp 24 → 3) and still returned killed false — the 700 cap closed
+        // one tap before the guard's next still window — and the stop_on_fail law then ended
+        // the drain with the hp-3 rifle alive behind the glass-band legs; his fire (46.0 in 7
+        // hits) killed the walk at t5268 [L the lever-8 run]. A player whose exchange left the
+        // guard at 3 hp does not walk away: ONE more bounded attempt, the aim raised fresh
+        // (the settle + raise re-run — the still-gate catches his next pause), the tap lands.
+        // The retry rides the `retry` param: the east-lane drain is the d2 SISTER's too (the
+        // byte-identity law) and passes false — the watch and door drains are d3-only and
+        // pass true. d3 only.
+        if !killed && retry {
+            // lever-10: the retry's window is 1400, not 700 — the lever-9 run measured the
+            // pause cadence: three taps landed across the first stand's ~1400 active ticks
+            // (hp 24 -> 3, one per ~470-tick still window) and the 700-tick retry caught
+            // NONE (hp 3 unchanged, the guard in burst mode between pauses); his next pause
+            // is ~470 ticks out, so the doubled window is what the fourth tap needs. The
+            // trade: ~-14-21 of his fire for the KILL — at hp 3 the first tap of the pause
+            // ends him, and the crossing + the room then run with no rifle behind them.
+            killed = if loose_floor && floor_level {
+                w.shoot_loose(di, label, 1400)
+            } else {
+                aimed_stand(w, di, label, 1400)
+            };
+            w.dmg.aimed_fights = false;
+        }
         eprintln!("[013] {label}: the wave-drain stand on drone #{di} killed {killed}");
-        if !killed { return; }
+        if !killed {
+            // retune-nb-13-4 (the skip-set): a failed stand (+retry) pushes the drone and the
+            // drain CONTINUES — its other rounds still run (the quiet waits end on the first
+            // hit taken, the health-watch law); the stop_on_fail return only for the plain
+            // path (the east-lane drain, the d2 sister's).
+            if skip { failed.push(di); continue; }
+            return;
+        }
     }
 }
 
@@ -263,6 +342,115 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
     killed
 }
 
+/// retune-nb-13: the far pre-emptive stand (the mezzanine sniper from the re-anchor end). The
+/// file's `aimed_stand` is shared by every sweep INCLUDING the d2 sister's (her byte-identical
+/// law), so this copy carries the one change the far race needs: the tap fires at the fight
+/// machinery's own proven on-target band (err < 0.02, perr < 0.028 — `shoot_bounded`'s gate,
+/// the band every measured return-fire kill landed through) instead of the sweep stand's strict
+/// 0.01/0.01, because the mezzanine race is measured at ~62 ticks of grace: the death run's #5
+/// (hp 12, static at (−17.7, −362.4, 45.2)) opened fire 3767, ~67 ticks after the re-anchor
+/// arrival armed his cone, and the strict gate's convergence (the 1.24-rad cursor drive at
+/// ±0.08/tick) plus the raise left the first tap past his first two shots [L the lever-1 runs:
+/// two stands, death unchanged at t3774, #5 hp 12.0 at both his hits]. Same still gate idea
+/// (the root-motion check, 12 ticks), the same dry/absent give-ups, the exposure re-pick every
+/// 10 ticks, cap 700. Trace prints every 30 ticks (the stall measurement the lever needs).
+/// Only the d3 pre-emptive calls this; the sisters never run it.
+fn mezz_far_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.switch_state == 0 && !sim.gun.fire_state { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    let prev = w.dmg.aimed_fights;
+    w.dmg.aimed_fights = true;
+    let killed = {
+        let mut unseen = 0u32;
+        let mut last_tap = 0u32;
+        let mut aim: Option<[f32; 3]> = None;
+        let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let mut last_hit = 0u32;
+        let mut still = 0u32;
+        let mut last_pos = [0.0f32; 3];
+        let mut have_pos = false;
+        for t in 0..cap {
+            let (input, fire, reload) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[di];
+                if d.corpse || d.health <= 0.0 || !d.present { return true; }
+                if sim.disabled { return false; }
+                if sim.gun.clip == 0 && sim.gun.spare == 0 { return false; }
+                let moved = have_pos && ((d.pos[0] - last_pos[0]).powi(2)
+                    + (d.pos[1] - last_pos[1]).powi(2) + (d.pos[2] - last_pos[2]).powi(2)).sqrt() > 0.03;
+                have_pos = true;
+                last_pos = d.pos;
+                still = if moved { 0 } else { still.saturating_add(1) };
+                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                if t - last_hit > 1500 { return false; }
+                if t % 10 == 0 { aim = walker::DamageLog::exposed_part_gun_rays(&sim, di); }
+                if aim.is_none() { unseen += 1; if unseen > 60 { return false; } } else { unseen = 0; }
+                let b = sim.bond.pos;
+                let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+                let at = aim.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+                let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+                let h = (dx * dx + dz * dz).sqrt().max(0.5);
+                let desired_yaw = dx.atan2(dz);
+                let desired_pitch = (dy / h).atan();
+                let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+                let cx_want_raw = -yaw_err / 0.76966;
+                let cy_want_raw = pitch_err / 0.57724;
+                let cur = sim.cursor;
+                let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+                let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+                let aoff = sim.drones.aim_offset;
+                let err = { let mut a = yaw_err - aoff[0];
+                    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+                let perr = pitch_err - aoff[1];
+                let reload = sim.gun.clip == 0;
+                let fire = sim.aiming && !reload && unseen == 0 && err.abs() < 0.02 && perr.abs() < 0.028
+                    && still >= 12 && t.saturating_sub(last_tap) >= 8;
+                if t % 30 == 0 {
+                    eprintln!("[013] far-stand trace t{t}: aiming {} err {err:+.4} perr {perr:+.4} still {still} unseen {unseen} clip {} spare {} tgt hp {:.1}",
+                        sim.aiming, sim.gun.clip, sim.gun.spare, sim.drones.list[di].health);
+                }
+                (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
+            };
+            if reload {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+                w.total_ticks += 1;
+                w.after_step();
+                for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+            } else if fire {
+                last_tap = t;
+                w.tick_fire(input);
+            } else {
+                w.tick(input, false);
+            }
+        }
+        w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
+    };
+    w.dmg.aimed_fights = prev;
+    for _ in 0..90 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if p.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[013] the far stand ({label}): drone #{di} killed {killed}, health {:.1}",
+        sim.drones.health.health);
+    killed
+}
+
 /// The whole warm chain (12 → 4A → 13 → out) on real input. `real_damage` = the armour detour
 /// (see the real-damage test below); the wrapper turns the top-up off for every walker the walk
 /// makes. `difficulty` = the menu pick the chain runs at (the front-end's launch path [M
@@ -328,6 +516,10 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // cycle, the 02/03 00-Agent lever); `escalating_cooldowns` — a player who could not
             // answer a shooter from a spot does not re-take the same spot 240 ticks later (the
             // 0c Agent lever; the wait doubles per further failure on the same drone).
+            // retune-nb-13 (measured DEAD, not repeated): `finish_fights` (the determined pass
+            // after every failed fight) — the 12 run died EARLIER, t13833 at (−16.32, 1.13,
+            // 19.38) inside the flank's own melt zone, the determined 1800-tick passes'
+            // strafe/flank windows walking Bond into the posts' lines [L the lever-5 run].
             w.dmg.switch_dry = true;
             w.dmg.escalating_cooldowns = true;
             w.resupply_home = true;
@@ -440,6 +632,33 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         w.dmg.lane_floor_drops = true;
         w.dmg.switch_dry = true;
         w.dmg.escalating_cooldowns = true;
+        // retune-nb-13-2: the fetches on 13 run there-and-back like the 12 side's (the field doc's
+        // own lever): the measured re-anchor fetch left Bond AT the drop (4.93, −368.39, 34.15 —
+        // 2.4 u off the leg line [L the nb-13-2 repro]) and the guard-repin ledger measured the
+        // pocket displacement breaking the west-mid line (the 6000-tick furniture-corner cap).
+        // d3 only; the sisters never set it.
+        w.resupply_home = true;
+        // retune-nb-13-2 (the mezzanine law, the 07000016 flag's own filter): the fights never
+        // statue on the elevated guards — the plain stands measured dead twice (the #5 pick
+        // sprayed the refilled clip, 15 rounds 0 hits at dxz 13.3 dy 6 [L the lever-2 run]; the
+        // balcony rifle #4's 900-cap fight at dxz 37.2 cost 42.0, 46.0 -> 4.0 [L the lever-3
+        // run]). The aimed-stand watch below owns them. d3 only.
+        w.dmg.level_fights = true;
+        // retune-nb-13-3 (THE NEXT LEVER, from the nb-13-2 ignore message): the fights' weapon
+        // cycle prefers DEPTH. The lever-5 ledger: the pool lever had filled the inventory
+        // (17 -> 71 rounds) and the west-mid answers won their exchanges, but they dried the
+        // held clip doing it — the north-west leg's fight entry then found armed() false, the
+        // resupply fetch came back empty (every drop behind Bond), and the cycle landed on the
+        // wheel's 0x1c SPAS12 (8 shells, c8 s0 — no spare) instead of the pool's 0x18-type
+        // rounds; that 900-cap stand on the wave rifle #6 ate 46.5 — death INSIDE the fight
+        // stand, t5075, the north-west watch drain never ran [L the lever-5 run]. A player
+        // whose mag ran dry arms the magazine that actually has depth: the opt-in
+        // `switch_gun_deep` (the lesson-7 shape, the shared helpers' depth pass —
+        // switch_to_gun AND the dry-fallback arm switch_to_armed, the two paths a fight entry
+        // can arm through) cycles up to twelve draws and stops on the first gun with
+        // clip+spare >= 10, falling back to the plain first-armed rule when nothing owns 10.
+        // d3 only — the sisters never set it, byte-identical by construction.
+        w.switch_gun_deep = true;
     }
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -479,8 +698,14 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     if real_damage && difficulty >= 2 {
         // warm-chain-margin-3: the d3 walk caps its stands at 700 and keeps the retry (measured
         // green); the d2 sister runs the sight batch's byte-identical 2400-cap sweep.
-        clear_the_visible(&mut w, "13: the spawn pocket", 24.0, difficulty == 3, false);
+        clear_the_visible(&mut w, "13: the spawn pocket", 24.0, difficulty == 3, false, true);
     }
+    // retune-nb-13 (measured DEAD, not repeated): a pocket reposition + deliberate resupply to
+    // dodge the mid-leg fetch — the reposition leg's own ticks fired the low-ammo fetch first
+    // (the wave shooter existed), the north drop (4.9, −369.4, 22.2) won the pick from the
+    // sweep's end spot anyway (d 2.1 vs 2.9), and the fetch nav walked Bond into the pocket's
+    // north-west corner where the north-lobby rifleman #3 (then (5.2, −368.4, 43.3)) landed
+    // 19.5 in 10 hits — death t993, WORSE than the baseline [L the lever-4 run].
 
     // THE SECURITY GATE: the "Shutters2" SimpleScript #149 (out ch 0x23 [D param 3]) is the
     // entrance mouth's panel (the SS cel's glist spans x −8.54..−4.97 at z 65.02 [D the object
@@ -524,7 +749,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // re-anchor fight cost 34.0. Drain the wave from here: up to 12 rounds, done after 6
         // quiet rounds (~180-tick waits + the stand times), each guard taken from the taken
         // spot at d ~12.
-        drain_the_wave(&mut w, "13: the lobby east lane", 24.0, 12, 6, 180);
+        drain_the_wave(&mut w, "13: the lobby east lane", 24.0, 12, 6, 180, false, false, false);
     }
     // guard-repin-master re-anchor: the west-mid leg's return-fire fights (the north-lobby
     // shooters) displaced Bond SOUTH of the lane line into the lobby pocket at (0.60, −368.30,
@@ -535,7 +760,100 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // pulls the route back up to the east lane's proven line before the west leg: from the
     // pocket the segment to (2.5, 30.5) runs north-east, clear of the furniture corner, and
     // the west-mid line from there rides the old path.
+    // retune-nb-13: the aim-walk flag on the leg is RETIRED (measured null — the walk_to
+    // steering builds its own Input, so the flag never reached the leg's ticks; the lever-3 run
+    // reproduced the t0 err 1.5865 byte-identical [L]).
     w.walk_to(Wp::new(2.5, -368.4, 30.5).r(1.5), "13: the lobby mid re-anchor");
+    if real_damage && difficulty == 3 {
+        // retune-nb-13 (the mezzanine pre-emptive): the nb-scan-all ledger's death is the
+        // mezzanine pistol guard #5 (skin 0x5000004, weapon 0x19, hp 12) sniping the re-anchor
+        // end from d 25.7 — OUTSIDE the sweep's 24 radius below (he patrolled farther west than
+        // the guard-repin-master ledger's (−14.8, −368.4, 45.6) post: the 2026-11-18 repro run
+        // measured him at (−17.7, −362.4, 45.2), d 25.7 from the re-anchor spot, and his two
+        // −3.5/−3.0 pistol taps killed the 6.5-health walk at t3774 [L the retune-nb-13 repro
+        // run]). His box IS exposed from the re-anchor spot (the death fight's own gun-ray pick
+        // returned an aim point at t0 [L the same run, fight#5 aim Some]) and he had NOT opened
+        // fire while Bond stood there — he fired only once the west-mid leg started moving
+        // (~57 ticks in), the sight law the statue periods measured (the east-lane drain's
+        // ~2160 silent quiet-wait ticks drew no fire either [L the same run]). A player who has
+        // spotted the mezzanine shooter takes him from the re-anchor end BEFORE walking into his
+        // cone: the nearest live team-1 guard more than 2.0 above Bond's floor (the mezzanine
+        // band — the lobby floor guards and the floor spawner's wave all read Δy ≈ 0) within
+        // 32 u, up to three aimed stands through the ordinary fight machinery (the file's own
+        // aimed_stand — the strict aim-bit zero-spread act [M Bullet_init 0x12c5a0:139-170] is
+        // what lands at 25.7 u; the hip cone's ~3.4 u of scatter there is not). The balcony
+        // rifle post (16.2, −362.4, 41.7 [L the door-drain comment], d 16.3) may sit nearer and
+        // is taken first — he sniped the door wait in the margin-2 ledgers, so his early death
+        // only helps. Never lower damage or health; the sisters (d2/d1) skip the block.
+        // retune-nb-13-2: top the clip before the stands — the lever-4 far-stand converged on
+        // #4 with the held gun at clip 1 (the fill's rounds sat in the inventory slots), the
+        // first tap emptied it into the reload churn, and the statue ate the wave's volleys [L
+        // the lever-4 run]. A player tops the magazine before taking a sniper's post.
+        let _ = w.switch_to_armed("13: the mezzanine watch arm");
+        w.reload_full();
+        for _ in 0..3 {
+            let g = { let sim = w.scene.sim.as_ref().unwrap(); let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, bp) < 32.0 && d.pos[1] - bp[1] > 2.0
+                    && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some() })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp))) };
+            let Some(g) = g else { break };
+            let _ = w.switch_to_armed("13: the mezzanine pre-emptive");
+            let k = mezz_far_stand(&mut w, g, "13: the mezzanine pre-emptive", 700);
+            w.dmg.aimed_fights = false;
+            eprintln!("[013] 13: the mezzanine pre-emptive stand on drone #{g} killed {k}, health {:.1}",
+                w.scene.sim.as_ref().unwrap().drones.health.health);
+            if !k { break; }
+        }
+        // The aim-walk flag is the leg's own: restore the walk's default (the sweeps set and
+        // restore it around their stands; a leaked true would re-shape the west-mid legs).
+        w.dmg.aimed_fights = false;
+        // retune-nb-13-2 (THE POOL LEVER, the nb-13 report's first What's-left item): the
+        // byte-identical repro of the ledger death — 12 enters 13 at 54 hp + armour 50, the
+        // east-lane fights cost zero, the fights' own low-ammo pass fetched the lane-side drop
+        // (5.0, −369.4, 34.7) → clip 7 spare 15, the sweep killed the mezzanine #5 (t3959) and
+        // the west-mid answer killed #4 (t~4100, both zero cost) — and the pool then DRIED: the
+        // #10 answer missed 5 rounds and hit `out of ammo at +87`, the north-west pass came back
+        // `resupply done (false) clip 0 spare 0` (every drop rests BEHIND Bond — the mezzanine
+        // kills' guns rest 6 u UP on the mezzanine, outside the 1.5 floor band; the lane drops
+        // sit 15-20 u east), and the respawner stream (#6 rifle + #7's Spas12 0x1c + #11) poured
+        // 45.5 in — death t4849 at (−13.41, −368.30, 39.52), byte-identical to the ledger [L the
+        // nb-13-2 repro run]. The ledger's own law: with rounds the fights win EVERY measured
+        // exchange — the dry gun is the loss. The re-anchor end is the ONLY safe fetch moment in
+        // the lobby: the spawn-pocket pre-clear's drops (#1/#2, the 6.6/1.5 posts) and the
+        // lane-side drop rest 5-9 u behind, each a short there-and-back errand (resupply_home,
+        // set above) from a spot the sweep held at 54.5 for ~600 measured ticks; the mezzanine
+        // drops are unreachable (6 u up) and everything farther is the stream's kill zone (the
+        // margin-6 run-6 ledger: the 40-u pocket excursion cost 40.5). A player tops up EVERY
+        // magazine within reach before crossing the lobby's west half: up to three errands while
+        // the total rounds (held + inventory, the lane ammo shape the fights fire through
+        // switch_dry) sit under 40. The deep-pocket corner (4.9, −369.4, 22.2 [L the margin-6
+        // run-5 note]) is banned — its fetch walks INTO the spawn pocket under the wave. Sisters
+        // byte-identical (d3-only block).
+        w.no_fetch.push([4.9, -369.4, 22.2]);
+        for pass in 0..3u32 {
+            let held = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.gun.clip as i32 + sim.gun.spare as i32
+            };
+            if held >= 30 { break; }
+            eprintln!("[013] 13: the re-anchor pool fill: held {held} < 30, fetching (pass {})", pass + 1);
+            w.dmg.resupplying = true;
+            let got = w.resupply("13: the re-anchor pool fill");
+            w.dmg.resupplying = false;
+            eprintln!("[013] 13: the re-anchor pool fill: pass done ({got}) pool now {}, health {:.1}",
+                { let sim = w.scene.sim.as_ref().unwrap(); let mut total = sim.gun.clip as i32 + sim.gun.spare as i32;
+                  let inv = &sim.drones.inventory;
+                  for wid in 2..=0x47usize { if !inv.owned.get(wid).copied().unwrap_or(false) { continue; }
+                    let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, wid);
+                    total += inv.clip.get(slot).copied().unwrap_or(0) as i32;
+                    total += inv.carried.get(sim.weapons.ammo_type(wid)).copied().unwrap_or(0) as i32; }
+                  total },
+                w.scene.sim.as_ref().unwrap().drones.health.health);
+            if !got { break; }
+        }
+    }
     // civ-unignore-2's law at the re-anchor end (guard-repin-master): the same ray-gated sweep
     // runs one leg EARLIER — the west-mid route's fights used to be answered mid-leg from the
     // lane, but the guards' per-goal arrival radii [M 0x152548:174-181] close the pursuit to
@@ -549,7 +867,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // warm-chain-margin-2 (ported to master): a stand that cannot open the guard's box ENDS
         // the sweep here — the tick-2242 death bled out inside the post-failure stands (the
         // stop_on_fail law); the d2 sister keeps the master retry.
-        clear_the_visible(&mut w, "13: the lobby mid re-anchor", 24.0, difficulty == 3, difficulty == 3);
+        clear_the_visible(&mut w, "13: the lobby mid re-anchor", 24.0, difficulty == 3, difficulty == 3, true);
     }
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
     // civ-unignore-2 (the d3 pre-clear, second leg): the north-lobby shooters the east lane's
@@ -571,10 +889,220 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // Bond is a smaller target than a statue and the legs' return fire answers (iter-1:
             // the wave was answered from the glass band, killed true both).
         } else {
-            clear_the_visible(&mut w, "13: the lobby west mid", 24.0, false, false);
+            clear_the_visible(&mut w, "13: the lobby west mid", 24.0, false, false, false);
         }
     }
+    if real_damage && difficulty == 3 {
+        // retune-nb-13 (the west-mid answer): the lever-6 ledger — with the pool filled (clip 7
+        // spare 15) the west-mid leg crossed FLAT (54.5 held) and #5 died to the re-anchor's
+        // own fight (t3959, zero cost) — but the north-west leg's melt opened on #4 (skin
+        // 0x5000006, weapon 0x18, hp 24, the mezzanine EAST end at (16.1, −362.4, 43.3), d
+        // 28.5 from the north-west spot) whose fight returned killed false (the strict fight
+        // gate at 28.5 u outlived the 900 cap) and on #11 (skin 0x5000004, 0x19, hp 12, a wave
+        // guard at (6.7, −368.4, 31.2), d 20.4 behind Bond): 54.5 -> 0 across the failed-fight
+        // + resupply statues, death t4693 at (−11.58, −368.39, 40.38) [L the lever-6 run].
+        // From the west-mid end #4 is d 21.4 (7 u closer — the far stand's 0.02/0.028 band
+        // converges there) and #11 d 14.0. A player who has just crossed the lobby answers the
+        // mezzanine rifle FIRST (the dy > 2 exposed pick, the re-anchor pre-emptive's own
+        // machinery) and then the nearest floor guard, both through bounded stands — kill or
+        // move on (the lingering law above still caps this at three 700-tick stands, not the
+        // old open-ended ones). d3 only; the sisters keep the byte-identical legs.
+        // retune-nb-13-2 (the ammo-rich arm): the plain armed cycle stops on the FIRST gun with
+        // any round — the lever-5 run's west-mid answers spent the held clip dry and the fights'
+        // later switch_to_gun landed on the wheel's 0x1c (8 shells, c8 s0, no spare) whose
+        // 900-cap stand on the wave rifle #6 ate 46.5 — death inside the stand [L the lever-5
+        // run]. A player arms the magazine that actually has depth: cycle the wheel (the real
+        // cycle, no writes) up to twelve draws and stop on the first gun with clip+spare >= 10,
+        // then top the clip from its own carried rounds.
+        for k in 0..12u32 {
+            let (wpn, c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.weapon, sim.gun.clip, sim.gun.spare) };
+            if c + s >= 10 { break; }
+            eprintln!("[013] 13: the west-mid ammo-rich arm: cycling ({k}) (weapon {wpn:#x} clip {c} spare {s})");
+            w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+            for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        }
+        w.reload_full();
+        let mut failed: Vec<usize> = Vec::new();
+        for _ in 0..3 {
+            let g = { let sim = w.scene.sim.as_ref().unwrap(); let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, bp) < 32.0 && d.pos[1] - bp[1] > 2.0
+                    && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some() })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp))) };
+            let Some(g) = g else { break };
+            let _ = w.switch_to_armed("13: the west-mid mezzanine answer");
+            let mut k = mezz_far_stand(&mut w, g, "13: the west-mid mezzanine answer", 700);
+            // retune-nb-13-3 (lever-3): the same dry gap as the nearest answer below — the far
+            // stand that dries mid-stand re-arms deep and re-stands once (d3 only).
+            if !k {
+                let (c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
+                if c + s < 3 {
+                    let armed2 = w.switch_to_armed("13: the west-mid mezzanine answer re-arm");
+                    w.reload_full();
+                    if armed2 { k = mezz_far_stand(&mut w, g, "13: the west-mid mezzanine answer re-stand", 700); }
+                }
+            }
+            w.dmg.aimed_fights = false;
+            eprintln!("[013] 13: the west-mid mezzanine answer on drone #{g} killed {k}, health {:.1}",
+                w.scene.sim.as_ref().unwrap().drones.health.health);
+            if !k { failed.push(g); continue; }
+        }
+        let mut failed: Vec<usize> = Vec::new();
+        // retune-nb-13-3 (lever-7, the measured budget): the original 3-stand cap is RIGHT —
+        // the lever-6 run proved the shape (the loose gate + the re-arm killed #9, the
+        // charger, at ZERO health cost, 54.5 intact through the block) but its 5-stand cap
+        // then took a #6 iteration whose 176-tick dry stand + re-arm cycle was one more
+        // non-firing window in the wave rifle's line — death t5025 mid-re-arm [L the lever-6
+        // run]. Three stands (the block's own budget), the failed drone skipped, and the
+        // stream's next guard belongs to the WALK-ON LINE below (the dry fights walk the
+        // stretch) and the door drain (the radius-45 machinery) — not to more statues at an
+        // end whose furniture pocket keeps his box closed.
+        for _ in 0..3 {
+            let g = { let sim = w.scene.sim.as_ref().unwrap(); let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    // retune-nb-13-2: Bond's floor level only — the mezzanine guards (dy ≈ 6)
+                    // belong to the far-stand answer above (the lever-7 machinery). The unfiltered
+                    // pick took the mezzanine #5 at dxz 13.3 and sprayed the WHOLE refilled clip
+                    // (15 rounds, 0 hits, the +240-tick statue) while the balcony rifle #4 poured
+                    // 45.5 across the north-west legs [L the nb-13-2 lever-2 run]. The
+                    // north-west pistol block runs the same dy filter (the file's own law).
+                    && (d.pos[1] - bp[1]).abs() <= 2.0
+                    && walker::dxz(d.pos, bp) < 26.0
+                    // retune-nb-13-3 (lever-4): a drone the stands already failed on is skipped
+                    // for the rest of this block — the loop keeps going to the NEXT nearest
+                    // instead of breaking. The lever-3 run's death is exactly the break's cost:
+                    // the #9 answer dried and broke the loop with the wave-rifle #6 (hp 24, at
+                    // (−6.8, −368.4, 28.1), d 11.2 — INSIDE this radius, exposed) unanswered;
+                    // he opened fire at frame 4950 and his −7.0 rifle hits SHOVE Bond ~2.4 u
+                    // west per hit — 46.5 total, the walk's whole remaining health — carrying
+                    // the death to (−19.43, −368.30, 37.55) mid-re-arm [L the lever-3 run, the
+                    // 13-2 ledger's t5075 at the same spot]. A player who misses an exchange
+                    // does not stop answering: the next shooter in line gets his rounds — #6
+                    // dies at this end (~4 hits) BEFORE his first volley, and the north-west
+                    // leg walks the stretch with no rifle behind it. Bounded: the failed set
+                    // grows, the pick radius holds, the loop cap is 5.
+                    && !failed.contains(&i) })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp))) };
+            let Some(g) = g else { break };
+            let _ = w.switch_to_armed("13: the west-mid nearest answer");
+            // retune-nb-13-3 (lever-6, THE CHARGER LAW): the answer runs the LOOSE gate
+            // (shoot_loose, ±0.07/±0.10 — the 07000006 point-blank idiom). The file's own
+            // 2026-11-06 measure: the tight gate "holds fire on 13's lobby CHARGERS — the
+            // stands waited on alignment while the movers landed −24/−27 volleys" [L the run
+            // ledger]; the levers 1-5 runs measured the #9 answer's cost at 29.0 (54.5 -> 25.5)
+            // across a 179-tick stand whose taps mostly WAITED on the ±0.02 gate while the
+            // guard closed [L the lever-2/3/4 runs]. At d ≤ 12 the loose band lands (the torso
+            // box subtends ±0.03+ there), the taps fire ~3× more often, the guard dies in ~100
+            // ticks and the answer's own exposure window shrinks by the difference. d3 only.
+            let mut k = w.shoot_loose(g, "13: the west-mid nearest answer", 700);
+            // retune-nb-13-3 (lever-3, the raw answers' dry gap): the stands run the raw shoot
+            // loop (shoot_loose here — no fights machinery) — no fights machinery — so a mag that dries mid-stand just gives up and the
+            // 24-hp wave-rifle guard SURVIVES both measured runs (out of ammo at +176/+179
+            // [L the lever-1/lever-2 runs]) to chase the north-west leg; the leg then stands in
+            // the open arming under his fire and dies short of the watch drain. A player whose
+            // mag ran dry mid-answer swaps to the deepest gun (`switch_gun_deep`, the flag
+            // above) and finishes the exchange — the ledger's own law ("with rounds the fights
+            // win EVERY measured exchange"), one bounded re-stand, no displacement, the rounds
+            // come from the pool the re-anchor fill filled. d3 only.
+            if !k {
+                let (c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
+                if c + s < 3 {
+                    let armed2 = w.switch_to_armed("13: the west-mid nearest answer re-arm");
+                    w.reload_full();
+                    let (wpn, c2, s2) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.weapon, sim.gun.clip, sim.gun.spare) };
+                    eprintln!("[013] 13: the west-mid nearest answer re-arm on drone #{g}: armed {armed2} (weapon {wpn:#x} clip {c2} spare {s2})");
+                    if armed2 && c2 + s2 > 0 { k = w.shoot_loose(g, "13: the west-mid nearest answer re-stand", 700); }
+                }
+            }
+            eprintln!("[013] 13: the west-mid nearest answer on drone #{g} killed {k}, health {:.1}",
+                w.scene.sim.as_ref().unwrap().drones.health.health);
+            if !k { failed.push(g); continue; }
+        }
+        // retune-nb-13-3 (lever-5, MEASURED DEAD, removed): the west-mid wave drain
+        // (drain_the_wave at this end, floor_only) never ran in the lever-5 run — the death
+        // landed inside the answer block before it — and the lever-6 run measured why it
+        // cannot: #6's box never opened from this end across any run (the answers' picks
+        // never saw him; his furniture pocket at (−6.8/−4.1, 25-28) blocks Bond's rays while
+        // his own line carries), so the drain's quiet waits (6 × 180 = 1080 ticks) are pure
+        // statues in his fire. The stream's guards belong to the walk-on line (the fights'
+        // dry entry walks the stretch) and the door drain (radius 45, the proven killer).
+    }
+    // retune-nb-13-3 (lever-6, THE WALK-ON LINE, the fights' own dry-entry shape): the
+    // levers 1-5 runs measured the same wall four ways — ANY non-firing window (the cycle
+    // draws, the fetch walk, the re-arm) inside the wave rifle's line after ~t4900 dies, and
+    // the fights' dry entry (fetch-fail -> cycle, 61-244 ticks standing, no aim, no fire) is
+    // exactly such a window [L the lever-1/2/3/4 runs]. The fights' own opt-in for it already
+    // exists — `descent_stationary_fights` (the 07000014 descent field: "a dry gun walks on,
+    // the leg's own gate re-fights from the next spot") — set it SCOPED to the north-west
+    // stretch (this leg through the door drain): the armed fights still fight, the dry entry
+    // returns false and the LEG WALKS the stretch (a moving Bond under the sight law), and the
+    // door drain — the radius-45 machinery proven to land at 40.8 u [L the margin-2 note] and
+    // to kill the balcony rifle #4 at d 40.8 [L the 11-13 run] — takes the wave (#6 at d ~21
+    // from the door mouth, #4 at 40.8) FROM COVER before the E/crossing. The stretch's health
+    // budget: the answers exit at ~40+ (the charger law above), the walk eats the rifle's
+    // −7.0s while MOVING (the hits shove Bond WEST — toward the door). Restored after the
+    // door drain: the room's fights resume the fetch machinery (the room's own drops). d3
+    // only — the sisters never set it, byte-identical by construction.
+    if real_damage && difficulty == 3 {
+        w.dmg.descent_stationary_fights = true;
+        // retune-nb-13-3 (lever-8, the stretch's fire-trade gap): the lever-7 run measured the
+        // walk-on line WORKING — the answers exited intact (54.5, #11/#10/#9 all killed true,
+        // the charger law + the re-arm) and the north-west leg ARRIVED for the first time
+        // (+86 ticks) — and measured the remaining cost: the ARMED fights still answered the
+        // stretch's shooters (3 return-fire fights), trading ~25 hp of #4's −7.0 bursts for
+        // 14 dealt and drying the held the re-stand had armed; the watch drain then stood on
+        // #4 (hp 10 — ONE tap short) under his 5106/5113/5119 + 5185/5191 bursts and died by
+        // FOUR hp mid-stand [L the lever-7 run]. A player crossing a known sniper's lane does
+        // not stop to trade — he WALKS it: return_fire OFF for the stretch makes it a pure
+        // walk (the moving target under the sight law), keeps the held rounds the drain's arm
+        // then finds instantly (>= 5 in draw 0 — no cycle window), and the watch drain's own
+        // aimed-stand (the machinery that lands at 40.8 u) takes #4 with the full health
+        // budget behind it. The dry fights were already walking on (the flag above); this
+        // silences the armed trades too. Restored with the flag after the door drain.
+        w.dmg.return_fire = false;
+    }
     w.walk_to(Wp::new(-14.0, -368.4, 40.0).r(1.5), "13: the lobby north-west");
+    if real_damage && difficulty == 3 {
+        // retune-nb-13-2 (the mezzanine watch, one leg earlier — the lever-6 flank's own shape):
+        // the balcony rifle #4 (0x5000006, 0x18, hp 24, the mezzanine east end, patrolling z
+        // 37.7..43.3) sniped the whole north-west stretch from dxz 30.6-37.2 — 54.5 in 11 hits
+        // killed the lever-3 run 4.3 u short of the door drain that answers him [L the lever-3
+        // run]. The door drain's own machinery (aimed_stand — the aim-bit zero-spread act [M
+        // Bullet_init 0x12c5a0:139-170] is what lands at 40.8 u [L the margin-2 note]) reaches
+        // him from HERE: dxz 30.6 < 45, his box measured exposed from this area (the fights'
+        // own ray pick engaged him at t5583 [L the same run]), and every kill re-feeds the
+        // mezzanine post (~1100 ticks to the respawn's first volley [L lever-2: killed t4241,
+        // first volley t5358]) — so the watch runs at BOTH ends: this one kills him before the
+        // glass-band legs, the door drain mops the re-fed post. The fights walk on (level_fights,
+        // set above); the drain's health-watch breaks any stall. d3 only.
+        for k in 0..12u32 {
+            let (wpn, c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.weapon, sim.gun.clip, sim.gun.spare) };
+            if c + s >= 10 { break; }
+            eprintln!("[013] 13: the north-west watch arm: cycling ({k}) (weapon {wpn:#x} clip {c} spare {s})");
+            w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+            for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        }
+        w.reload_full();
+        // retune-nb-13-4 (the skip-set run's own measurement): max_rounds 8 -> 1. The skip-set
+        // (the ignore message's lever) measured WORSE — death t5253 at this spot [L this
+        // session's run]: after the failed #6 stand the drain's other rounds found NO other
+        // exposed target (the [013] log: only the #4 and #6 stands ran) and the quiet waits
+        // kept Bond statue-still in #6's line — #6 ADVANCED to d 14.6 (z 25.8) during them and
+        // burst 18.0 in 11 ticks (t5242/5248/5253). And the #6 stands themselves buy NOTHING:
+        // three caught pauses dealt 21 (hp 24 -> 3) for a -21 fire trade and the 4th pause never
+        // came in the 1400-tick retries (levers 9/10, byte-identical t5872; hp-3 #6 fired the
+        // SAME line at the crossing) — the rounds are spent at a guard the still-gate cannot
+        // finish. A player who has measured the exchange unwinnable does not re-enter it: ONE
+        // round — the pick takes the lowest live exposed drone (#4, the balcony sniper, killed
+        // true 3x proven — round 1 in every measured run) — and the drain ENDS: no quiet-wait
+        // statue, no #6 trade; the walk-on legs start at once and #6's sight-based fire (his
+        // first volley landed t5114 with Bond at this same spot [L the ledger]) meets a MOVING
+        // target. The door drain (radius 45, two legs later) mops the re-fed post and #7.
+        // skip=false: one round cannot fail-and-continue into anything (the cap exits first).
+        drain_the_wave(&mut w, "13: the north-west mezzanine watch", 45.0, 1, 3, 150, true, false, false);
+    }
     // warm-chain-margin-6 (measured dead, NOT repeated): a deliberate resupply at this leg end
     // took the spawn-pocket drop (clip 4 spare 28 — the right rounds) but stood Bond in the
     // pocket with the balcony rifle #4 STILL ALIVE (the drain that kills him runs at the door,
@@ -593,7 +1121,9 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // Radius 45 (was 24): the balcony rifle #4 (skin 0x5000006, 0x18, at (16.2, -362.4, 41.7),
         // 6 u up and 40.8 u east) sniped Bond through the whole door wait outside the 24 u drain
         // (40.5 in 11, the t4147 death); at 45 the drain kills him (the 11-13 run, -> t4958).
-        drain_the_wave(&mut w, "13: at the security-room door", 45.0, 8, 3, 150);
+        drain_the_wave(&mut w, "13: at the security-room door", 45.0, 8, 3, 150, true, true, true);
+        w.dmg.descent_stationary_fights = false;
+        w.dmg.return_fire = true;
     }
     w.walk_to(Wp::at(-26.65, -368.36, 37.44, walker::Act::Use { use_ticks: 90 }).r(1.4), "13: E the security-room door");
     w.wait(120); // the sliding door finishes [probe: state 0x8 → 0x4 within the wait]
@@ -618,7 +1148,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // the way 45 reached the balcony rifle #4 [L the 11-13 run]; the d2 sister keeps 12.0
         // and her byte-identical legs.
         let doorway_radius = if difficulty == 3 { 18.0 } else { 12.0 };
-        clear_the_visible(&mut w, "13: the security-room doorway", doorway_radius, difficulty == 3, false);
+        clear_the_visible(&mut w, "13: the security-room doorway", doorway_radius, difficulty == 3, false, true);
         // warm-chain-margin-6 (measured dead, NOT repeated): a deliberate resupply at this
         // spot. The lane 12-u band came back `done (false)` with ZERO attempts (every gun drop
         // sits > 12 u from the door spot or outside the ground band — clip 8, byte-identical,
@@ -658,7 +1188,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // pre-clear's own law, one wall earlier); the drain waits out his firing window and
         // takes him before the west-lane leg walks Bond through his TooClose band [M
         // DroneFiring_TooClose_Damage].
-        drain_the_wave(&mut w, "13: inside the security room", 12.0, 8, 3, 150);
+        drain_the_wave(&mut w, "13: inside the security room", 12.0, 8, 3, 150, false, false, false);
         // warm-chain-margin-6 (measured dead, NOT repeated): a deliberate resupply at this spot
         // (the room's own box at (-27.2, -369.4, 30.1), d 6.1) is ROOM MOVEMENT — #9 wakes at
         // the first step (he never fired through ~1050 static ticks, then opened 19 ticks after
@@ -780,7 +1310,80 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             let _ = k;
         }
     }
+    // retune-nb-13-4 (the exit ammo, the loose-floor run's measurement): the exit fights ran
+    // DRY — the doorway-mouth answers fired clip 4 spare 3 and then clip 4 spare 0 and BOTH
+    // mouth guards survived their 300-tick stands [L this session's run], the leaf opened onto
+    // a live SPAS12 respawn and his point-blank burst (−46.0 in 21 hits) took the walk's whole
+    // remaining health inside the room's north-east. A player tops his magazines from the room
+    // before stepping to the door: the room's own box at (−27.2,−369.4,30.1) and the dead
+    // guards' weapon drops all rest within ~3 u of this spot (one short there-and-back errand,
+    // resupply_home; the fights answer whatever the errand wakes). The margin-6 dead-fetch
+    // hazards are gone on THIS timeline: the room's bottom guard (health 24, at the old #9
+    // post, d 9.7) was killed by the last-guard loop above, #4/#6/#8 are dead, and the door is
+    // CLOSED for the errand (the mouth guards' pellets through the leaf measured 0.00 [L the
+    // loose-floor run]). Then the watch arm's own deepest-gun cycle, so the mouth answers fire
+    // armed. d3 only — the sisters' exit stays byte-identical.
+    if real_damage && difficulty == 3 {
+        // retune-nb-13-4 (the fill run's measurement): ONE pass fetched the nearest guard
+        // weapon drop (d 2.9) whose gun went to the INVENTORY — the held clip+spare stayed 7 —
+        // and the call's own ammo-rise check broke the attempt loop there [L the fill run].
+        // The mouth answers then fired crumbs (the arm cycle's wheel: 0x1c 7, 0x34 3, 0x1 1) —
+        // #7 fell but #11 (the 0x19 pistol at (−26.4,−368.4,40.9), −3.5 a volley, hp 12)
+        // survived and his 11 volleys took the crossing's 29.5 [L the same run]. The re-anchor
+        // fill's own law: up to THREE errands — the next nearest drops are the room's own box
+        // (−27.2,−369.4,30.1, d ~2.5) and the fallen guards' weapons, each a short there-and-back
+        // errand; the pass stops when the POOL (held + the inventory's owned rounds) reaches 25
+        // — the mouth exchange needs ~10 and the lobby's answer+fights need the rest. The
+        // margin-6 dead-fetch hazards stay gone on this timeline (the room's bottom guard was
+        // killed by the last-guard loop above; #4/#6/#8 dead; the door CLOSED — the mouth
+        // guards' pellets through the leaf measured 0.00). d3 only — the sisters' exit stays
+        // byte-identical.
+        w.no_fetch.push([4.9, -369.4, 22.2]);
+        for pass in 0..3u32 {
+            let pool = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let mut total = sim.gun.clip as i32 + sim.gun.spare as i32;
+                let inv = &sim.drones.inventory;
+                for wid in 2..=0x47usize {
+                    if !inv.owned.get(wid).copied().unwrap_or(false) { continue; }
+                    let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, wid);
+                    total += inv.clip.get(slot).copied().unwrap_or(0) as i32;
+                    total += inv.carried.get(sim.weapons.ammo_type(wid)).copied().unwrap_or(0) as i32;
+                }
+                total
+            };
+            if pool >= 25 { break; }
+            eprintln!("[013] 13: the exit fill: pool {pool} < 25, fetching (pass {})", pass + 1);
+            w.dmg.resupplying = true;
+            let got = w.resupply("13: the exit fill");
+            w.dmg.resupplying = false;
+            eprintln!("[013] 13: the exit fill: pass done ({got}) clip+spare now {}",
+                { let sim = w.scene.sim.as_ref().unwrap(); sim.gun.clip as i32 + sim.gun.spare as i32 });
+            if !got { break; }
+        }
+        for k in 0..12u32 {
+            let (wpn, c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.weapon, sim.gun.clip, sim.gun.spare) };
+            if c + s >= 10 { break; }
+            eprintln!("[013] 13: the exit arm: cycling ({k}) (weapon {wpn:#x} clip {c} spare {s})");
+            w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+            for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        }
+        w.reload_full();
+    }
     w.walk_to(Wp::new(-27.0, -368.4, 35.5).r(1.2), "13: back to the doorway");
+    // retune-nb-13-4 (the loose-floor run's measurement): the d3 exit answers the doorway
+    // mouth from the moment the leaf opens, not after a 300-tick stall. The cap-1 loose run
+    // measured the kill zone: the respawned #7 (skin 0x5000008, weapon 0x1c — a SPAS12, hp 12)
+    // stood IN the mouth (d 1.0) when the crossing's open window began and unloaded −39.0 in
+    // 21 hits into Bond (health 30.0 at the leg end) before the loop's k>300 answer ever fired
+    // [L this session's run — the death t11203 at (−27.55,−368.30,36.63), the last six hits
+    // one frame's pellets]. A player with a guard in the doorway shoots him the moment the
+    // leaf opens. The pick radius (1.6 of the mouth point) only ever matches guards IN the
+    // mouth, so the earlier trigger cannot fire at distant guards; the skip-set keeps one
+    // unfinishable mouth guard from burning the loop's budget on repeats. The d2/d1 sisters
+    // keep the stall law (k>300) and the plain pick — byte-identical.
+    let d3_exit = real_damage && difficulty == 3;
+    let mut mouth_failed: Vec<usize> = Vec::new();
     // The door auto-closes ≈150 ticks after the E [probe]: press it (only while closed — the E
     // is a toggle [M Door_Activate]) and hold forward through the doorway's west side in one
     // loop, so the crossing rides the open window.
@@ -791,7 +1394,8 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     // the pick keeps the leaf only once the use point is within 1.0 in front of it
     // [M Collide_Intersect 0x1ebaa8 → Intersect_PointGeom 0x1e92d8; nf_game::usepick], so the
     // first press from across the room cannot be the one that opens it.
-    for k in 0..900u32 {
+    let cross_cap = if d3_exit { 1500u32 } else { 900u32 };
+    for k in 0..cross_cap {
         let (door_closed, door_swinging, bp) = {
             let sim = w.scene.sim.as_ref().unwrap();
             let d = &sim.drones.doors.list[di];
@@ -804,13 +1408,18 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // (-26.78, -368.43, 38.12), the leaf stops on him at 0.76-0.88 and Bond never gets by
         // [L this branch's agent trace]. Once the leaf is open and the crossing has stalled for
         // 300 ticks, the player shoots him.
-        if !door_closed && k > 300 {
+        if !door_closed && (k > 300 || (d3_exit && k > 60)) {
             let g = {
                 let sim = w.scene.sim.as_ref().unwrap();
-                sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
-                    && walker::dxz(d.pos, [-26.9, bp[1], 38.4]) < 1.6)
+                sim.drones.list.iter().enumerate().position(|(idx, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, [-26.9, bp[1], 38.4]) < 1.6
+                    && (!d3_exit || !mouth_failed.contains(&idx)))
             };
-            if let Some(g) = g { w.shoot_loose(g, "13: the doorway guard", 300); continue; }
+            if let Some(g) = g {
+                let kg = w.shoot_loose(g, "13: the doorway guard", 300);
+                if d3_exit && !kg { mouth_failed.push(g); }
+                continue;
+            }
         }
         // Line up in front of the doorway first: east of x −26.7 the room's north wall (z 37.23,
         // x −26.46..−24.74) stands between Bond and the exit, and the straight line to (−27.05, 38.7)
@@ -1007,7 +1616,33 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// pre-clear at 14-16 u, no bridge_and_retry, no in-place creep or longer stands — each
 /// measured dead in the margin-4 report). Never lowered damage or health; no top-ups.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t3774 at (3.26,-368.39,31.72): Bond enters 13 with 20 health from the 12 chain [L 2026-11-18 run]; re-tune and un-ignore"]
+/// GREEN (retune-nb-13-4, 2026-11-19): the walk completed on this tree — MissionState 6, the
+/// entrance touch ch 0x50 written, the objective states asserted, `test result: ok` [L this
+/// session's run]. The round's lever chain, each judged on its own real run: (1) the nb-13-3
+/// ledger's own lever (the drain's failed-stand SKIP-SET) measured WORSE — death t5872 ->
+/// t5253: after the failed #6 stand the drain's other rounds found NO other exposed target
+/// (the [013] log: only the #4 and #6 stands ran) and the quiet waits kept Bond statue-still
+/// in #6's line — #6 ADVANCED to d 14.6 (z 25.8) during them and burst 18.0 in 11 ticks [L];
+/// (2) the watch drain capped at ONE round (max_rounds 1): the pick takes the lowest live
+/// exposed drone — #4, the balcony sniper, killed true (3x proven) — and the drain ENDS: the
+/// #6 stands buy NOTHING (three caught pauses dealt 21 for a −21 fire trade, hp 24 -> 3, the
+/// 4th pause never came — levers 9/10, byte-identical t5872; hp-3 #6 fired the SAME line) and
+/// the walk-on legs start at once; (3) `loose_floor` at the door drain: floor-level targets
+/// run the proven CHARGER LAW (`shoot_loose`) instead of the still-gate `aimed_stand` — at the
+/// mouth the wave-rifle #6 (a 0x5000006 charger, floor level, d 3.6) stood killed-FALSE
+/// through 700+1400 while the trade ran 46.0 -> 23.0 and the E fight ate −21.0 more for
+/// killed false (Bond ran the whole room phase at 2.0 hp [L]); (4) the d3 exit answers the
+/// doorway mouth from leaf-open (k>60, the stall law's k>300 measured too late vs a SPAS12
+/// respawn IN the mouth: −39.0 in 21 hits before the timer fired [L]) with a skip-set and the
+/// loop cap 1500 (900 measured tight once the answers run); (5) the exit ammo: the exit fights
+/// ran DRY (the mouth answers fired clip 4 spare 3 then clip 4 spare 0 — both guards survived;
+/// then #11's −3.5 volleys took the crossing [L]) — the 3-pass exit fill + the deepest-gun arm
+/// (the room's own box at (−27.2,−369.4,30.1) d ~2.5 and the fallen guards' weapon drops, the
+/// re-anchor fill's own 3-errand law, pool >= 25) armed the answers (clip 6 spare 10 — #11
+/// killed at d 0.9) and the crossing, the lobby rifle answer and the entrance band ran clean.
+/// The sisters stay byte-identical: every lever lives inside `real_damage && difficulty == 3`
+/// gates or a defaulted-off param (the east-lane and room drains pass skip=false,
+/// loose_floor=false; the crossing's k>300 law and plain pick are the sisters').
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
     let iso = iso();
     walker::with_real_damage_head_hunting(|| walk_the_warm_chain(&iso, true, 3));

@@ -268,6 +268,13 @@ pub struct DamageLog {
     /// player under overhead fire keeps walking the legs and fights the ring AT LEVEL (the
     /// route's own ring legs, hp 10 each). Off = master behaviour (the plain pick) everywhere
     /// else — no other walk changes.
+    /// retune-nb-13-2 (the 07000013 d3 chain): the same law on the tower lobby's mezzanine —
+    /// the plain stands measured dead on the elevated guards twice (the #5 pick sprayed the
+    /// whole refilled clip, 15 rounds 0 hits at dxz 13.3 [L the nb-13-2 lever-2 run]; the
+    /// balcony rifle #4's 900-cap fight at dxz 37.2 returned killed false and cost 42.0 —
+    /// 46.0 -> 4.0 — the walk dying 4 u short of the door drain that answers him [L the
+    /// lever-3 run]). The file's own aimed_stand machinery owns the elevated guards at the
+    /// leg ends; the fights walk on.
     pub level_fights: bool,
     /// OPT-IN (`tranq_fights`, the 0700000b walk): Bond's only conventional weapon on 0700000b is
     /// the Korsakov K5 sleep dart (0x43 — the silent-infiltration kit [M 0x1a7ef8 case
@@ -862,12 +869,32 @@ impl Walker {
                     d.pos[0], d.pos[1], d.pos[2], sim.gun.weapon, sim.gun.clip, sim.gun.spare);
             }
             let pick = newborn.or_else(|| if self.dmg.hurting_first {
-                cands.iter().copied()
+                let vis = cands.iter().copied()
                     .filter(|&i| DamageLog::visible(sim, i))
                     .min_by(|&a, &b| {
                         dmg_of(b).total_cmp(&dmg_of(a))
                             .then(dist_of(a).total_cmp(&dist_of(b)))
-                    })
+                    });
+                match vis {
+                    Some(i) => Some(i),
+                    // The unseen-cover fallback, opt-in (`with_real_damage_unseen_fights`): the
+                    // same fallback the plain and lane arms run. The 00 Agent walk's boarding
+                    // ledge death measured it (t17664, 2026-11-19): #27 (skin 0x500002f,
+                    // (100.8,28.3,-122.2), 9.3 u) burst 21.0 in 7 hits with hp 12 INTACT and
+                    // the return fire never landed a round on him — the half-open door leaves
+                    // stop every eye ray, this arm filtered VISIBLE only and returned None
+                    // every sample, so no fight ever opened on the shooter that was killing
+                    // Bond. The stand's own creep (the `unseen_fight` flag this arm sets)
+                    // opens the line at the lip, exactly like the lip stands the walk already
+                    // runs. The Agent sister keeps the None (glass fights, no UNSEEN_FIGHTS —
+                    // the d2 timeline stays byte-exact).
+                    None if UNSEEN_FIGHTS.with(|c| c.get()) => {
+                        unseen_fight = true;
+                        cands.iter().copied().find(|&i| dmg_of(i) > 0.0)
+                            .or_else(|| cands.first().copied())
+                    }
+                    None => None,
+                }
             } else if !self.dmg.lane_fights {
                 match cands.iter().copied().find(|&i| DamageLog::visible(sim, i)
                     || (self.dmg.world_ray_fights && DamageLog::world_ray_point(sim, i).is_some())) {

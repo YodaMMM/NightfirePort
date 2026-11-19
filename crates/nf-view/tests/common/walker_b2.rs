@@ -164,6 +164,26 @@ pub struct Walker {
     /// target (-8.00,1.10,17.00), segment Some(0.127) at tick 13980 [L]). A player who steps off
     /// the lane to grab ammo walks back to where he was heading and continues.
     pub resupply_home: bool,
+    /// OPT-IN (`switch_gun_deep`, set only by the 07000013 chain's d3 real-damage walk — no other
+    /// caller sets it, so every other walk is byte-identical): the fight-entry weapon cycle
+    /// (`switch_to_gun` and the dry-fallback arm `switch_to_armed`) first runs a bounded DEPTH
+    /// pass — cycle the wheel and stop on the first gun with clip+spare >= 10 within 4 draws,
+    /// else the first gun with clip+spare >= 5 within 8 draws — and only when neither lands
+    /// falls back to the plain first-armed rule below. The retune-nb-13-2 ledger: with the pool
+    /// filled the fights won EVERY measured floor exchange, but after the west-mid answers dried
+    /// the held clip the cycle landed on the wheel's 0x1c SPAS12 (8 shells, c8 s0 — no spare)
+    /// instead of the pool's 0x18-type rounds, and that 900-cap stand on the wave rifle #6 ate
+    /// 46.5 — death INSIDE the fight stand [L the lever-5 run, t5075]. A player whose mag ran
+    /// dry arms the magazine that actually has depth, not the first slot with a single shell.
+    /// The retune-nb-13-3 run measured the bound's reason: at the death moment NO owned gun
+    /// reached 10 (the pool's 56 rounds sat spread thin — the 0x1c at 8, the 0x18 rifle at ~9),
+    /// the unbounded >=10 pass stood cycling (61 ticks a draw, no return fire) while #10 (hp 8,
+    /// d 20.9) and #7 (d 24.7) poured −17.0 — death mid-cycle at t5619, 6.3 u short of the
+    /// north-west watch drain [L the lever-1 run]. The bound turns the pass into ~1-2 draws at
+    /// that state (the 0x1c's 8 shells clear the >=5 bar) and the fight RUNS. Default false: the
+    /// helpers run exactly the master cycle (the `if self.switch_gun_deep` guard reads nothing
+    /// else).
+    pub switch_gun_deep: bool,
     /// replay-parity (opt-in, `start_recording`): every stepped tick's exact input, appended by
     /// `step_recorded` in the replay file's own form. While recording, the sim is stepped with
     /// `to_parts()` of the just-pushed record — the sim sees exactly what is recorded — so a
@@ -233,6 +253,7 @@ impl Walker {
             alarm_props_dumped: None,
             no_fetch: Vec::new(),
             resupply_home: false,
+            switch_gun_deep: false,
             record_inputs: None,
             record_states: None,
         }
@@ -556,6 +577,22 @@ impl Walker {
 
     /// Cycle the weapon wheel until the gun in hand has ammo (or give up after 12 switches).
     pub fn switch_to_armed(&mut self, label: &str) -> bool {
+        // OPT-IN `switch_gun_deep` (see the field doc): the bounded depth pass first — a gun
+        // with clip+spare >= 10 inside 4 draws, else one with >= 5 inside 8; neither lands,
+        // fall through to the plain first-armed rule below.
+        if self.switch_gun_deep {
+            for k in 0..8 {
+                let (c, s) = {
+                    let sim = self.scene.sim.as_ref().unwrap();
+                    (sim.gun.clip, sim.gun.spare)
+                };
+                if c + s >= 10 && k < 4 { return true; }
+                if c + s >= 5 { return true; }
+                eprintln!("[walk] {label}: cycling for depth ({k})");
+                self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
+                for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
+            }
+        }
         for k in 0..12 {
             let (c, s) = {
                 let sim = self.scene.sim.as_ref().unwrap();
@@ -585,6 +622,23 @@ impl Walker {
             let sim = w.scene.sim.as_ref().unwrap();
             (2..=0x47).contains(&sim.gun.weapon) && sim.gun.clip + sim.gun.spare > 0
         };
+        // OPT-IN `switch_gun_deep` (see the field doc): the bounded depth pass first, a GUN
+        // (the fight gate's own 2..=0x47 band) with clip+spare >= 10 inside 4 draws, else one
+        // with >= 5 inside 8; neither lands, fall through to the plain armed rule below.
+        if self.switch_gun_deep {
+            for k in 0..8 {
+                {
+                    let sim = self.scene.sim.as_ref().unwrap();
+                    if (2..=0x47).contains(&sim.gun.weapon) {
+                        if sim.gun.clip + sim.gun.spare >= 10 && k < 4 { return true; }
+                        if sim.gun.clip + sim.gun.spare >= 5 { return true; }
+                    }
+                }
+                eprintln!("[walk] {label}: cycling to a deep gun ({k})");
+                self.tick(Input { weapon_cycle: 1, ..Default::default() }, false);
+                for _ in 0..60 { self.tick(Input::default(), false); } // the holster/draw cycle
+            }
+        }
         for k in 0..12 {
             if armed(self) { return true; }
             eprintln!("[walk] {label}: cycling to a gun ({k})");
