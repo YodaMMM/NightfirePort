@@ -63,3 +63,20 @@ the ignore message. Run the whole walkreal_07000008_live binary.
   re-measure the death on the merged tree, then take the next untried lever from the
   ignore message (skip measured-dead levers): collect the cable-car rocket pickups DURING
   the ride, then the idle-wait sweep before the y-46 trio/#16.
+- Round 6 result: still red, but the walk now dies t21773 (was t21070) — 700 ticks deeper, in
+  the RIM fight (feet 13.47, eye 14.18). The re-measure on the merged tree (SniperAim ENTER)
+  reproduced master's run-10 ledger exactly (t21070) — the guard change did not move this walk.
+  Ledger corrections: the round-5 "carried 0 / unwinnable" was a wrong-index read (the rocket
+  pool is ammo type 0xe, carried 4 — the fight already has 8 rockets); one cable-car ammo box
+  ALREADY auto-takes at ride start (the boarding spot is inside the take radius) and the cap
+  (ammo_data type 0xe = 4) refuses the other two forever — round-5's ride-collection lever
+  measured DEAD. The lower-floor stand-off lever measured DEAD: the standing capsule pops to
+  13.470367 at every lower-plate spot ((112.8,-179.15), (113.08,-179.02) — the crouched walk
+  holds feet 13.0856 east past x 113, the trench is narrower than the standing capsule). The
+  shipped tree (ride walk + stand-off) fights from the rim: nearly zap-free (one -1.73 row in
+  ~800 ticks), launches FIRE (t377/t585, both miss at the mid passes y 18.4/20.8) — and the
+  closer is the machine's MISSILE salvo (the -15.00/-3.27 blast lands at the same frame with
+  and without a launch [L the 14.5-band no-launch run]). Next levers: answer the salvo at the
+  rim (dodge arm / car-body cover), the upstream idle-wait sweep (the salvo takes 18.3; the
+  tree entered at 20.0 vs master's 14.0), then the low-band launches. Whole binary 6/0/1,
+  151.65 s. Only crates/nf-view/tests/walkreal_07000008_live.rs and docs/ changed.
