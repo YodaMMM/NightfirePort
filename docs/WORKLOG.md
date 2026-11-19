@@ -47,3 +47,33 @@ Task: commit 3412a89a3 made every guard run the game spacing scan and the close-
 
 - Merged origin/s/retune-nb-14-4 (the round-4 ledger, v16-v19) and origin/s/retune-nb-14 (the
   Operative sister's green d1 walk, un-ignored) into s/retune-nb-14-5 off master 434826a9b.
+- Re-measure on the merged tree [L 2026-11-19]: the 00agent death is UNCHANGED from the round-4
+  ledger (t25036, (−60.22,0.73,37.94), 17.5 health, 34 hits/100.0, 28 fights) — the SniperAim
+  ENTER merge did not re-roll the d3 stream before the door face. The round-4 ledger stands.
+- Lever 1 (the door face at 17.5) shipped in five measured pieces [L, each its own run]: (a) the
+  fights' switch_on_first_blood (opt-in, damage_log.rs — the retarget law without the 30-tick
+  cadence and the 3.0 margin; the re-measure showed the fight on #33 started t25030 and Bond
+  died the tick his 55 damage landed); (b) the west-face leg's return-fire mute + the r(0.3)
+  line park (the mid-leg fight parked Bond 1.6 u south of the corridor line where #32/#33 are
+  near-collinear 0.74 u and the stands took ~2 dmg/tick); (c) the door-face scans' weaker-first
+  rank + the 4-tick slide-off fights (walker_b2 shoot_bounded_fast: the shipped 16-tick cadence
+  measured 44 damage over 50 ticks; the slide's 60-tick strafe dragged Bond 3 u off the line
+  into the blocked geometry). RESULT [L run 5]: the squad #33/#34 died INSIDE the west-face
+  scan (killed true, killed true −22, ZERO volleys) and the walk CROSSED the doorway — the
+  death moved t25036 → t25939 (−47.75,1.05,42.58), 34 hits/100.0, 26 fights.
+- The new death: the crossing leg ate a point-blank 15.57 at d 2.5 from the near guard
+  (−49.6, 40.9) (the scans' gun-ray gate had dropped him — muzzle blocked from the west park,
+  eye on Bond) and left 1.93 for #28 (0x14, d 9.3) in the Kiko hold; the corridor's #20 read
+  still-alive-after-300 under the shipped shoot_bounded (zero of 18 taps at d 6.5). The
+  refreshed ledger + next levers (the eye_ray_stands law d3-scoped to the door-leg scans; the
+  fast-tap/eye-ray law for the Kiko picks; then the Kiko-corridor armour fetch) are in the
+  ignore message. Still red: the 00agent walk stays ignored.
+- The Operative d1 sister: green on s/retune-nb-14's own tree, but the merged master 434826a9b
+  RE-ROLLED its stream — the re-measure hit the retune-nb-14-3-era death (t36801 at
+  (5.05,1.13,−23.31), the wake legs' #28/#29 0x1a pair, 65.2 of the 100) [L run]. Re-ignored
+  with the refreshed ledger; my changes are d3-gated and did not touch the d1 stream.
+- Required binaries on the final tree: walkreal_07000014_live 8 passed / 1 ignored (the
+  00agent, the refreshed ledger) / 1 ignored (the d1 sister, the refreshed ledger); the two
+  non-00agent walk results unchanged. interactables_07000014_live run (see the report). The
+  fast suite produced no total line (the sandbox kills background jobs between tool calls; the
+  foreground four-crate build exceeds the window — the same note as round 4).
