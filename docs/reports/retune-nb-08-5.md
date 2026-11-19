@@ -73,3 +73,12 @@ the round branched from master directly and no merge was needed.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-19 ~13:10 UTC):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-08-5: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "retune-nb-08-5: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out after 60 s, killed by the harness (no output).
