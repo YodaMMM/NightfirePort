@@ -1332,7 +1332,41 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     let mut ch83 = false;
     for t in 0..3600u32 {
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x53) { ch83 = true; break; }
-        w.tick(Input::default(), false);
+        if difficulty == 3 {
+            // retune-nb-08-6 lever 1: collect the cable car's three rocket pickups DURING the
+            // ride (the ch1→ch53 loop). The ride script 0x0600004C parents them to the carriage
+            // [D streams 37-39] and they ride WITH Bond — the measured car-space offsets hold
+            // constant x/z through the whole descent [L this branch's t100-t1300 dump: the two
+            // ammo boxes at +0.52/+1.46 and −0.42/+2.21 planar, the launcher at +0.74/−1.53],
+            // each parked OUT past the take radius (root distance < bounds.radius + 1.1 [M
+            // Pickup::touches 0x18e148:210-214; Pickup_Handler 0x18e650] — the t1300 ammo read
+            // 1.106 u, just over), so the game's player walks to each one standing in the car
+            // (the launcher is handed over mid-ride [D stream 37]). The steer reads the LIVE
+            // centre every tick (the relative direction is car-space stable — no world-space
+            // aim), stops inside 0.85 planar u, and the take is the game's own sphere + LOS
+            // check — the owned launcher converts to carried rounds [M Pickup_Handler case 0
+            // else-branch → Player_EquipAmmo]. D3-GATED: the d1/d2 sisters' ride stays
+            // Input::default() byte-exact. No exposure: the machine engages only at the ride's
+            // end and the car body is cover.
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            let mut best: Option<([f32; 3], f32)> = None;
+            for p in sim.drones.pickups.iter() {
+                if p.gone || p.weapon != 0x2c || (p.kind != 0 && p.kind != 1) { continue; }
+                let c = p.centre();
+                let planar = ((c[0] - b[0]) * (c[0] - b[0]) + (c[2] - b[2]) * (c[2] - b[2])).sqrt();
+                if planar > 4.0 { continue; }
+                if best.map_or(true, |(_, d)| planar < d) { best = Some((c, planar)); }
+            }
+            let input = best.map(|(c, d)| {
+                let desired = (c[0] - b[0]).atan2(c[2] - b[2]);
+                let err = walker::wrap_pi(desired - sim.bond.yaw);
+                Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 1.0 || d < 0.85 { 0.0 } else { 1.0 }, ..Default::default() }
+            }).unwrap_or_default();
+            w.tick(input, false);
+        } else {
+            w.tick(Input::default(), false);
+        }
         if t % 300 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
             eprintln!("[08 ride t{t}] bond {:?} ch1 {} ch83 {} disabled {}", sim.bond.pos,
@@ -1732,6 +1766,65 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // block is reverted to the run-10 state. The stance question needs the main
             // agent's live check (the report lists it): what input state stands Bond up from
             // the port's crouch latch.
+        }
+        // retune-nb-08-6 stand-off lever: the fight must run STANDING on the lower floor
+        // (eye 13.77 — above the exterior ledge 13.3-13.5, under the lintel 14.31 — the
+        // proven flat-ray launch windows; the crouched eye 13.3 is blindfolded and its only
+        // rising launches self-blast in the west band — the shipped run-10 death t21070 and
+        // this branch's re-measure). The round-5 stand press WORKS mechanically [L: crouched
+        // false once the lockout is out] but the tried spots (the hole footprint, the plate's
+        // (112.2, −179.2) edge) put the standing capsule ON the hole's rim — it re-bridges
+        // (feet 13.47, eye 14.18, the launch self-blasts −14.00, t20944/t20942). UNTRIED: a
+        // stand spot a full planar unit OFF the hole centre (111.99, −179.51) — the lower
+        // plate runs north-east of the hole (the run-1 post-dodge positions (112.14..112.25,
+        // −179.16..−179.18) held feet 13.086) toward the cabin's east band (the 13.086 floor
+        // runs to x ≈ 113.6 [D the eye-ray stops]). The walk stays CROUCHED (the crouch
+        // capsule is inside the pit) and presses north-east ONLY while the feet stay on the
+        // 13.086 plate (feet ≤ 13.15 — the upper plateau's 13.52 step is the hurt volume's
+        // zap band, never climbed); then the stand press holds crouch until crouched false
+        // (the lockout armed by the drop's crouch press expires on the zap-free pit floor —
+        // [M Player_ChangeSubState 0x190630:48 arms BL+0x960 = 60 on every substate change;
+        // the round-5 press measured the stand through the same latch]). D3-GATED: the
+        // sisters' timelines stay byte-exact.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[08 standoff] pit entry bond {:?} crouched {}", sim.bond.pos, sim.bond.crouched);
+            // 1) the lockout out (70 default ticks on the zap-free pit floor).
+            for _ in 0..70 { w.tick(Input::default(), false); }
+            // 2) the crouched east walk to the off-hole stand spot (113.3, −179.25) — the
+            // first try's (112.8, −179.0) stand popped to the rim 13.47 [L the lever run:
+            // the crouch walk held feet 13.0856 to (112.74, −179.06) but the stand press
+            // put the standing capsule back on the step edge (feet 13.470, the launch
+            // t377 missed, the fight bled at the rim)]; the 13.086 floor runs east to the
+            // cabin's east band x ≈ 113.6 [D the eye-ray stops], so the stand spot pushes
+            // further east where the plate is wider than the standing capsule.
+            let stand = [113.3f32, -179.25f32];
+            for k in 0..220u32 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                if b[1] > 13.15 { break; }
+                let dx = stand[0] - b[0];
+                let dz = stand[1] - b[2];
+                if dx * dx + dz * dz < 0.12 * 0.12 { break; }
+                let want_yaw = dx.atan2(dz);
+                let yaw_err = walker::wrap_pi(want_yaw - sim.bond.yaw);
+                w.tick(Input { turn: yaw_err.clamp(-0.08, 0.08), forward: if yaw_err.abs() < 0.3 { 1.0 } else { 0.0 }, ..Default::default() }, false);
+                if k % 40 == 0 { let sim = w.scene.sim.as_ref().unwrap();
+                    eprintln!("[08 standoff] walk k{k} bond {:?} crouched {}", sim.bond.pos, sim.bond.crouched); }
+            }
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[08 standoff] walked bond {:?} crouched {}", sim.bond.pos, sim.bond.crouched);
+            // 3) the stand press: hold crouch until crouched false (bounded 80 ticks).
+            for k in 0..80u32 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if !sim.bond.crouched { break; }
+                w.tick(Input { crouch: true, ..Default::default() }, false);
+                if k % 20 == 0 { let sim = w.scene.sim.as_ref().unwrap();
+                    eprintln!("[08 standoff] stand k{k} bond {:?} crouched {}", sim.bond.pos, sim.bond.crouched); }
+            }
+            w.tick(Input::default(), false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[08 standoff] stood bond {:?} crouched {}", sim.bond.pos, sim.bond.crouched);
         }
     }
     let ci = w.scene.sim.as_ref().unwrap().drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
