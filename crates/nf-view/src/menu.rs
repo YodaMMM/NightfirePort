@@ -728,6 +728,10 @@ pub fn aux_movie_for(page_id: u32) -> u32 {
         // The Mission Stats page's PAGE record carries the same backdrop [D page 0x40000037 aux
         // 0x07350048]; PCSX2 shows it behind the list (07000004 finish, 2026-10-31).
         PAGE_STATS => 0x0735_0048,
+        // The Dossier's four pages carry the list backdrop too [D page records 0x4000003a..3d aux 0x07350048];
+        // PCSX2 shows the movie behind Records and Rewards (2026-11-19, audits/list2-1119) — the port drew the
+        // dark plate.
+        PAGE_RECORDS | PAGE_REWARDS | PAGE_GADGETS | PAGE_WEAPONS => 0x0735_0048,
         // mp-menu-flow: every MP page's PAGE record carries the same list backdrop (the menu-def
         // dump 2026-10-15: all 13 MP pages aux 0x07350048 [L]).
         PAGE_MP_JOIN | PAGE_MP_SCENARIO | PAGE_MP_MAP | PAGE_MP_SETUP | PAGE_MP_OPTIONS | PAGE_MP_RULES
@@ -9605,14 +9609,9 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             // The spinner 0x10000174 (132,124,376×16): the mission name centred, a yellow ◀ ▶ at its ends (PCSX2:
             // x 144 / 497) [M P_DSRECORDS 0x217248:11-13 fills it from sp_level].
             const REC_SCALE: f32 = 1.25; // the Records labels measure 1.25× the port's base face (PCSX2: "High Score" 120 units)
-            label(&mut h, font, &bind(CAMPAIGN[m].1), 132.0, 124.0, 376.0, 16.0, bright, true, REC_SCALE);
-            for (cx, left) in [(144.0f32, true), (497.0, false)] {
-                let yellow = gs(0xfec43e, 0xff);
-                let (a, b, d) = if left { ((cx + 8.0, 126.0), (cx + 8.0, 140.0), (cx - 8.0, 133.0)) } else { ((cx - 8.0, 126.0), (cx - 8.0, 140.0), (cx + 8.0, 133.0)) };
-                let q = |p: (f32, f32)| HudVertex { p: h.ndc(Anchor::Centre, mx(p.0), my(p.1)), uv: [0.0, 0.0], c: yellow };
-                let v = [q(a), q(b), q(d), q(a), q(d), q(d)];
-                h.ndc_solid(-3, v, yellow);
-            }
+            // The spinner's name in the labels' cream 0x645a49 (PCSX2 11-19: (216,196,156), not white) [L audits/list2-1119].
+            label(&mut h, font, &bind(CAMPAIGN[m].1), 132.0, 124.0, 376.0, 16.0, cream, true, REC_SCALE);
+            for (cx, left) in [(144.0f32, true), (497.0, false)] { atlas_arrow_c(&mut h, cx, 133.0, left, SPINNER_ARROW); }
             // The rows [L LBL 0x302/0x165/0x305 at (83,169/202/235)] left-aligned, the values [L 0x10000175/177/178
             // (375,·,185×16)] right-aligned to x 560 (PCSX2 558).
             let (best, moments, bonuses) = fe.record_row(m);
@@ -9645,7 +9644,10 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             // (C_RBDSREWARDS hides the stamps and captions, not the boxes [M 0x20c248]).
             draw_page_elems(&mut h, &crate::fe_pages::page_frame_elems(PAGE_REWARDS), [hfont, font, mfont.unwrap_or(font)], textures);
             let m = fe.cursor.min(CAMPAIGN.len() - 1);
-            label(&mut h, font, &bind(CAMPAIGN[m].1), 132.0, 93.0, 376.0, 16.0, bright, true, 1.0);
+            // The spinner's mission name at the Records size and its dim ◀ ▶ (PCSX2 11-19: the same face and
+            // arrows as Records, arrows at x ~142 / 497) [L audits/list2-1119].
+            label(&mut h, font, &bind(CAMPAIGN[m].1), 132.0, 93.0, 376.0, 16.0, cream, true, 1.25);
+            for (cx, left) in [(144.0f32, true), (497.0, false)] { atlas_arrow_c(&mut h, cx, 101.0, left, SPINNER_ARROW); }
             for (i, (shown, cap, tex)) in fe.reward_rows(m).into_iter().enumerate() {
                 if !shown { continue; }
                 quad640(&mut h, tex, 76.0, 130.0 + i as f32 * 72.0, 51.0, 51.0, [0.0, 0.0, 128.0, 128.0], gs(0x7f7f7f, 0xff));
@@ -11461,6 +11463,15 @@ fn hint_row_s(h: &mut Hud, font: &nf_formats::hud::Font, text: &str, x640: f32, 
 /// triangles (236,122,20) [D 0x03000042, SET 3 COMPONENT 6's uv] — at full colour 0x7f7f7fff, 16×16 of the 512×448
 /// screen centred on (cx, cy) of 640×480. PCSX2 draws them orange, ~18×14 on 640 with soft edges (Join Game,
 /// Bot Setup) [L 2026-11-19, audits/mpmenus-1119]; the port's flat yellow triangles were a stand-in.
+/// The Dossier spinners' arrows (Records, Rewards): the same atlas cells, dim — PCSX2 measures (148,75,10), ~0.6 of
+/// the bright arrows' orange [L 2026-11-19, audits/list2-1119; the CRT filter makes the level approximate].
+const SPINNER_ARROW: [f32; 4] = [0.6, 0.6, 0.6, 1.0];
+
+fn atlas_arrow_c(h: &mut Hud, cx: f32, cy: f32, left: bool, c: [f32; 4]) {
+    let (w, hh) = (16.0 * MW / SW, 16.0 * MH / SH);
+    quad640(h, crate::fe_pages::ATLAS_BUTTONS, cx - w / 2.0, cy - hh / 2.0, w, hh, [48.0, if left { 0.0 } else { 16.0 }, 16.0, 16.0], c);
+}
+
 fn atlas_arrow(h: &mut Hud, cx: f32, cy: f32, left: bool) {
     let (w, hh) = (16.0 * MW / SW, 16.0 * MH / SH);
     quad640(h, crate::fe_pages::ATLAS_BUTTONS, cx - w / 2.0, cy - hh / 2.0, w, hh, [48.0, if left { 0.0 } else { 16.0 }, 16.0, 16.0], gs(0x7f7f7f, 0xff));

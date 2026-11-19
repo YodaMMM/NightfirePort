@@ -31,3 +31,15 @@ fn the_corner_stamp_pages_are_the_discs() {
         assert!(!disc.contains(&no), "{no:#x} carries no corner stamp [D]");
     }
 }
+
+/// Every front-end page the port draws takes the backdrop movie its PAGE record names [D aux]: the Dossier's
+/// Records / Rewards / Gadgets / Weapons drew the dark plate (aux 0 in the port, 0x07350048 on the disc).
+#[test]
+fn the_dossier_pages_take_their_records_backdrop() {
+    let Ok(iso) = std::env::var("NF_ISO") else { return };
+    let md = menu_def(&iso);
+    for id in [nf_view::menu::PAGE_RECORDS, nf_view::menu::PAGE_REWARDS, nf_view::menu::PAGE_GADGETS, nf_view::menu::PAGE_WEAPONS] {
+        let aux = md.page(id).expect("the page record").aux;
+        assert_eq!(nf_view::menu::aux_movie_for(id), aux, "{id:#x}'s backdrop");
+    }
+}
