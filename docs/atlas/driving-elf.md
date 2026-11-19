@@ -298,10 +298,17 @@ vehicle physics core (since started: docs/systems/drive-physics.md), keeping doc
 
 ## 7. What's left / not done
 
-- The `Map `/`Wmap` record formats (the .crp contents) — phase 4.
+- The `Map `/`Wmap` record formats (the .crp contents) — phase 4. (Update 2026-11-18: the
+  `Map ` pool's `Rule`/`MSet`/`Trgr` mission layer is decoded and ported —
+  docs/systems/drive-mission-scripts.md + `mission.rs`; `Wmap` and the remaining Map children
+  stay open. The RefPack decompressor also exists now — `refpack.rs`, [M 0x323bb0] — the
+  driving-viv.md "not in the repo yet" line is stale.)
 - The per-subsystem vtable pinning (L-3) — phase 4.
-- The SYM name hints stay [S]: the SYM is a different build and is not extractable from this
-  ISO (§2 note); the pad/deadzone recipe of driving.md §4 remains the input-path entry.
+- The SYM name hints stay [S]: the SYM is a different build ~~and is not extractable from this
+  ISO~~ (Update 2026-11-18: the full image DOES carry it — `/DRIVING/DRIVING.SYM`, sha1
+  `8dbd38f9…`, extracts via `nf-extract iso-get`; 12,719 names parse, still hint-only per
+  symfile.rs's 4 %-boundary measurement). The pad/deadzone recipe of driving.md §4 remains the
+  input-path entry.
 - The second pass of `FUN_00168280` reads a parallel array at world+0x50 whose meaning
   (event slot per object, read by `FUN_00168678`'s third arg) is [S].
 - `FUN_001749e8`'s callee-level purpose split (render context creation vs input registration)

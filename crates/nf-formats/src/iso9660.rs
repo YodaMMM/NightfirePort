@@ -44,13 +44,156 @@ pub struct IsoEntry {
 }
 
 pub struct IsoImage<R = File> {
-    reader: Mutex<R>,
+    reader: Option<Mutex<R>>,
+    carved: Option<CarvedDir>,
     sector_count: u32,
     raw_sector_size: usize,
     raw_user_offset: usize,
     volume_id: String,
     volume_sectors: u32,
     entries: Vec<IsoEntry>,
+}
+
+struct CarvedRegion {
+    start: u64,
+    len: u64,
+    path: std::path::PathBuf,
+    file_offset: u64,
+}
+
+struct CarvedDir {
+    regions: Vec<CarvedRegion>,
+}
+
+impl CarvedDir {
+    fn open(root: &Path) -> Result<(Self, Vec<IsoEntry>, u32)> {
+        let mut entries = Vec::new();
+        let mut regions = Vec::new();
+        let mut next_lba = 32u32;
+
+        fn walk(
+            root: &Path,
+            dir: &Path,
+            prefix: &str,
+            next_lba: &mut u32,
+            entries: &mut Vec<IsoEntry>,
+            regions: &mut Vec<CarvedRegion>,
+        ) -> Result<()> {
+            let mut items: Vec<_> = std::fs::read_dir(dir)?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            items.sort_by_key(|e| e.file_name());
+            for item in items {
+                let name_os = item.file_name();
+                let name_str = name_os.to_string_lossy();
+                let upper = name_str.to_ascii_uppercase();
+                // Carved FILES.BIN entries live under `FILES/` and are mapped into virtual `/FILES.BIN`.
+                if prefix.is_empty() && (upper == "FILES" || upper == "FILES_INDEX.TSV") {
+                    continue;
+                }
+                let path_fs = item.path();
+                let iso_path = format!("{prefix}/{upper}");
+                let meta = item.metadata()?;
+                if meta.is_dir() {
+                    entries.push(IsoEntry {
+                        name: upper,
+                        path: iso_path.clone(),
+                        lba: 0,
+                        size: 0,
+                        is_directory: true,
+                    });
+                    walk(root, &path_fs, &iso_path, next_lba, entries, regions)?;
+                } else {
+                    let size = u32::try_from(meta.len())
+                        .map_err(|_| FormatError::Invalid(format!("carved file too large: {}", path_fs.display())))?;
+                    let lba = *next_lba;
+                    let sectors = (size as usize).div_ceil(SECTOR_SIZE).max(1) as u32;
+                    *next_lba = next_lba.saturating_add(sectors);
+                    entries.push(IsoEntry {
+                        name: upper,
+                        path: iso_path,
+                        lba,
+                        size,
+                        is_directory: false,
+                    });
+                    regions.push(CarvedRegion {
+                        start: lba as u64 * SECTOR_SIZE as u64,
+                        len: size as u64,
+                        path: path_fs,
+                        file_offset: 0,
+                    });
+                }
+            }
+            Ok(())
+        }
+
+        walk(root, root, "", &mut next_lba, &mut entries, &mut regions)?;
+
+        // Optional sparse `/FILES.BIN` mapped from `FILES_INDEX.tsv` (`name\toffset\tsize`) + `FILES/<name>`.
+        let index_path = root.join("FILES_INDEX.tsv");
+        if index_path.is_file() {
+            let files_dir = root.join("FILES");
+            let text = std::fs::read_to_string(&index_path)?;
+            let files_lba = next_lba;
+            let base = files_lba as u64 * SECTOR_SIZE as u64;
+            let mut max_end = 0u64;
+            for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let mut cols = line.split('\t');
+                let (Some(name), Some(off_s), Some(sz_s)) = (cols.next(), cols.next(), cols.next()) else {
+                    continue;
+                };
+                let off: u64 = off_s.parse().map_err(|_| FormatError::Invalid(format!("bad FILES_INDEX offset: {off_s}")))?;
+                let sz: u64 = sz_s.parse().map_err(|_| FormatError::Invalid(format!("bad FILES_INDEX size: {sz_s}")))?;
+                max_end = max_end.max(off + sz);
+                let fp = files_dir.join(name);
+                if fp.is_file() {
+                    regions.push(CarvedRegion {
+                        start: base + off,
+                        len: sz,
+                        path: fp,
+                        file_offset: 0,
+                    });
+                }
+            }
+            let total_sz = u32::try_from(max_end)
+                .map_err(|_| FormatError::Invalid("FILES_INDEX total size overflows u32".into()))?;
+            let sectors = (total_sz as usize).div_ceil(SECTOR_SIZE).max(1) as u32;
+            next_lba = next_lba.saturating_add(sectors);
+            entries.push(IsoEntry {
+                name: "FILES.BIN".to_string(),
+                path: "/FILES.BIN".to_string(),
+                lba: files_lba,
+                size: total_sz,
+                is_directory: false,
+            });
+        }
+
+        regions.sort_by_key(|r| r.start);
+        Ok((Self { regions }, entries, next_lba))
+    }
+
+    fn read_bytes(&self, offset: u64, size: u64) -> Result<Vec<u8>> {
+        let mut out = vec![0u8; size as usize];
+        let end = offset + size;
+        for r in &self.regions {
+            let r_end = r.start + r.len;
+            if r_end <= offset || r.start >= end {
+                continue;
+            }
+            let overlap_start = offset.max(r.start);
+            let overlap_end = end.min(r_end);
+            let count = (overlap_end - overlap_start) as usize;
+            let dst_off = (overlap_start - offset) as usize;
+            let src_off = r.file_offset + (overlap_start - r.start);
+            let mut f = File::open(&r.path)?;
+            f.seek(SeekFrom::Start(src_off))?;
+            f.read_exact(&mut out[dst_off..dst_off + count])?;
+        }
+        Ok(out)
+    }
 }
 
 impl IsoImage<File> {
@@ -60,7 +203,26 @@ impl IsoImage<File> {
     /// sceClose/sceLseek/sceRead/sceIoctl). Both run at boot — `main` 0x109080 → `PS2FreshBoot`
     /// 0x120ab0 → `RunNextModule` 0x120008 (jals 0x120030/0x120044/0x1200b8/0x1200ec [M scan];
     /// docs/systems/ps2-sdk-glue.md § boot). The port's slot is this `IsoImage` handle.
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> { Self::new(File::open(path)?) }
+    ///
+    /// Also accepts a carved-asset directory (containing `ACTION.ELF`, `FILES_INDEX.tsv` + `FILES/`,
+    /// and any disc subdirectories like `PS2/`) so platforms like Android need no 2.4 GB ISO.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let p = path.as_ref();
+        if p.is_dir() {
+            let (carved, entries, sector_count) = CarvedDir::open(p)?;
+            return Ok(IsoImage {
+                reader: None,
+                carved: Some(carved),
+                sector_count,
+                raw_sector_size: SECTOR_SIZE,
+                raw_user_offset: 0,
+                volume_id: "CARVED".to_string(),
+                volume_sectors: sector_count,
+                entries,
+            });
+        }
+        Self::new(File::open(p)?)
+    }
 }
 
 impl<R: Read + Seek> IsoImage<R> {
@@ -76,7 +238,7 @@ impl<R: Read + Seek> IsoImage<R> {
             (SECTOR_SIZE, 0)
         };
         let sector_count = u32::try_from(file_size / raw_sector_size as u64).map_err(|_| FormatError::Invalid("image too large".into()))?;
-        let mut iso = IsoImage { reader: Mutex::new(reader), sector_count, raw_sector_size, raw_user_offset, volume_id: String::new(), volume_sectors: 0, entries: Vec::new() };
+        let mut iso = IsoImage { reader: Some(Mutex::new(reader)), carved: None, sector_count, raw_sector_size, raw_user_offset, volume_id: String::new(), volume_sectors: 0, entries: Vec::new() };
 
         let pvd = iso.read_sectors(PVD_SECTOR, 1)?;
         let b = Buf(&pvd);
@@ -149,8 +311,11 @@ impl<R: Read + Seek> IsoImage<R> {
         if end > self.sector_count as u64 * ss {
             return bad(format!("byte range {offset:#x}+{size:#x} beyond end of image ({} sectors)", self.sector_count));
         }
+        if let Some(carved) = &self.carved {
+            return carved.read_bytes(offset, size);
+        }
         let mut out = vec![0u8; size as usize];
-        let mut r = self.reader.lock().unwrap_or_else(|e| e.into_inner());
+        let mut r = self.reader.as_ref().expect("IsoImage missing reader").lock().unwrap_or_else(|e| e.into_inner());
         if self.raw_sector_size == SECTOR_SIZE {
             r.seek(SeekFrom::Start(offset))?;
             r.read_exact(&mut out)?;

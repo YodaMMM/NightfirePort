@@ -160,7 +160,7 @@ mod tests {
         // Sister: the random source really varies the pick (the pin can fail) — over many fresh loads more
         // than one hint shows up.
         let mut seen = std::collections::HashSet::new();
-        for k in 0..40u32 { pick.reset(); let mut m = k * 2654435761; seen.insert(pick.get(0x0700_000c, || { m = m.wrapping_mul(1103515245).wrapping_add(12345); m >> 8 })); }
+        for k in 0..40u32 { pick.reset(); let mut m = k.wrapping_mul(2654435761); seen.insert(pick.get(0x0700_000c, || { m = m.wrapping_mul(1103515245).wrapping_add(12345); m >> 8 })); }
         assert!(seen.len() > 1, "the pick never varied across loads");
     }
 }

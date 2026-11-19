@@ -1560,7 +1560,7 @@ impl BotBrain {
         vars.character = record.character(); // +0x764 [M 0x1249e8:160]
         vars.recovery_b = stats[0x08]; // +0xA9 [M 0x126318:22]
         vars.slot = slot as i16;
-        vars.bot_index = (slot - 4) as i16;
+        vars.bot_index = vars.slot - 4;
         vars.grudge = -1; // 0xFF [M 0x1249e8:163]
         vars.last_pickup = -1;
         vars.goals[1].active = 1; // [M 0x1249e8:172-176: slot1+0x49 = 1, slot0+0x49 = 0]

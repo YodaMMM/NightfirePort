@@ -35,6 +35,7 @@ pub mod pss;
 pub mod refpack;
 pub mod sfx;
 pub mod soundbank;
+pub mod ssh;
 pub mod sha1;
 pub mod sha256;
 pub mod symfile;

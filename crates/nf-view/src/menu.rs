@@ -6275,8 +6275,11 @@ impl FrontEnd {
                     // only row a fresh profile opens, is a driving mission). The row says so instead,
                     // and `unlocked_row` lets the next on-foot row open through it [S port choice].
                     if is_driving_level(level) {
-                        self.notice = Some(format!("{} is a driving mission.\nDriving isn't in the PC port yet -\nthe next mission is unlocked.",
-                            CAMPAIGN_NAMES.get(self.mission).copied().unwrap_or("This")));
+                        self.flow.push_state(7, 84);
+                        self.requested_level = Some(level);
+                        self.menu_movie = false;
+                        self.back_stack.clear();
+                        self.remove_pair();
                         return true;
                     }
                     self.flow.reset_map_level_to_load(level, false, false);
@@ -9157,20 +9160,20 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
         Page::MpConfirm => {
             let s = fe.mp_confirm_summary(lang);
             page_header(&mut h, hfont, &bind(0x173));
-            let fill = |h: &mut Hud, x0: f32, y0: f32, x1: f32, y1: f32, c: [f32; 4]| {
-                let (a, b) = (h.ndc(Anchor::Centre, mx(x0), my(y0)), h.ndc(Anchor::Centre, mx(x1), my(y1)));
-                let q = |p: [f32; 2]| HudVertex { p, uv: [0.0, 0.0], c };
-                let v = [q([a[0], a[1]]), q([b[0], a[1]]), q([b[0], b[1]]), q([a[0], a[1]]), q([b[0], b[1]]), q([a[0], b[1]])];
-                // Layer 1: under the portraits (layer 0) — lower layers draw on top [M hud.rs finish].
-                h.ndc_solid(1, v, c);
-            };
+            // The three SET 7 frame boxes [D page 0x40000049: settings band (49,82,542×78),
+            // left column (52,167,264×242), right column 0x1000023e (324,167,265×242)].
+            // Drawn first so they sit behind the tinted plates, portraits and text.
+            let frames: Vec<_> = crate::fe_pages::page_frame_elems(PAGE_MP_CONFIRM)
+                .into_iter()
+                .filter(|e| s.team_game || e.ctrl != 0x1000_023e)
+                .collect();
+            draw_page_elems(&mut h, &frames, [hfont, font, mfont.unwrap_or(font)], textures);
             let right_text = |h: &mut Hud, s: &str, xr: f32, y: f32| {
                 let (placed, _) = font.layout(s, 0.0, 0.0);
                 let w = placed.last().map_or(0.0, |p| p.x + font.glyphs[p.glyph].w as f32) * 1.3;
                 left_text(h, font, s, mx(xr) - w, my(y), cream, true, 1.3);
             };
             // The settings band.
-            fill(&mut h, 50.0, 82.0, 590.0, 158.0, [0.0, 0.0, 0.0, 0.45]);
             let r = &s.rows;
             let colon = |l: u32, v: String| format!("{} : {}", bind(l), v);
             left_text(&mut h, font, &colon(r.map_label, bind(r.map_name_label)), mx(60.0), my(101.0), cream, true, 1.3);
@@ -9182,16 +9185,25 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
             for (row, y) in [(&r.time_row, 101.0f32), (&r.points_row, 124.0), (&r.friendly_fire_row, 147.0)] {
                 right_text(&mut h, &row.replace(": ", " : "), 579.0, y);
             }
-            // The two columns.
-            let cols = [(50.0f32, 317.0f32, true), (324.0, 591.0, false)];
-            for &(x0, x1, blue) in &cols {
+            // The two columns: tinted plates and header bars via TEX 0x03000042 labels inside the SET 7 boxes.
+            let plate_elem = |ctrl: u32, x: i32, y: i32, w: i32, hh: i32, colour: u32| crate::fe_pages::PageElem {
+                ctrl,
+                rect: crate::fe_pages::control_rect(ctrl, 5, x, y, w, hh),
+                colour,
+                what: crate::fe_pages::ElemWhat::Tex { tex: crate::fe_pages::ATLAS_BUTTONS, uv: [38.0, 19.0, 1.0, 1.0] },
+            };
+            let cols = [(52i32, 264i32, true, 0x1000_0001u32), (324, 265, false, 0x1000_023e)];
+            for &(bx, bw, blue, ctrl) in &cols {
                 if !blue && !s.team_game { continue; }
-                let (body, edge) = if blue { ([0.16, 0.07, 0.36, 0.85], [0.25, 0.22, 0.95, 1.0]) } else { ([0.42, 0.04, 0.03, 0.75], [0.95, 0.12, 0.08, 1.0]) };
-                fill(&mut h, x0, 167.0, x1, 412.0, body);
-                for (a0, b0, a1, b1) in [(x0, 167.0, x1, 169.0), (x0, 410.0, x1, 412.0), (x0, 167.0, x0 + 2.0, 412.0), (x1 - 2.0, 167.0, x1, 412.0)] {
-                    fill(&mut h, a0, b0, a1, b1, edge);
-                }
-                fill(&mut h, x0 + 2.0, 169.0, x1 - 2.0, 191.0, [0.0, 0.0, 0.0, 0.85]);
+                let (x0, x1) = (bx as f32, (bx + bw) as f32);
+                let body_c = if blue { 0x1409_2e6d } else { 0x3605_0460 };
+                let bar_c = 0x0000_006d;
+                let plates = [
+                    plate_elem(ctrl, bx + 4, 171, bw - 8, 234, body_c),
+                    plate_elem(ctrl, bx + 4, 171, bw - 8, 20, bar_c),
+                    plate_elem(ctrl, bx + 4, 359, bw - 8, 23, bar_c),
+                ];
+                draw_page_elems(&mut h, &plates, [hfont, font, mfont.unwrap_or(font)], textures);
                 let title = if s.team_game { bind(if blue { 0x1c8 } else { 0x1c7 }) } else { bind(s.header_label) };
                 centred(&mut h, font, -2, &title, mx((x0 + x1) / 2.0), my(186.0), cream, true, 1.5);
                 for (k, a) in s.humans.iter().filter(|a| a.blue == blue).enumerate() {
@@ -9201,7 +9213,6 @@ pub fn menu_overlay_fonts(fe: &FrontEnd, font: &nf_formats::hud::Font, hfont: &n
                     let hc = if a.handicap < 0 { a.handicap.to_string() } else { format!("+{}", a.handicap) };
                     right_text(&mut h, &hc, x1 - 14.0, y + 24.0);
                 }
-                fill(&mut h, x0 + 2.0, 359.0, x1 - 2.0, 382.0, [0.0, 0.0, 0.0, 0.85]);
                 centred(&mut h, font, -2, &bind(0x1ad), mx((x0 + x1) / 2.0), my(377.0), cream, true, 1.5);
                 let bots = if blue { &s.bot_portraits_blue } else { &s.bot_portraits_red };
                 for (k, &tex) in bots.iter().enumerate().take(10) {
@@ -11554,6 +11565,7 @@ fn page_rows_no_head(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, y
 /// The keyboard mapping the host uses. The game's menu engine walks cursors with the d-pad and
 /// confirms with the action buttons [M 0x21c3d8's per-controller action loop]; the port adds keyboard
 /// per the task ("mouse and keyboard work everywhere") [S].
+#[cfg(not(target_os = "android"))]
 pub fn key_action(key: winit::keyboard::KeyCode) -> Option<Action> {
     use winit::keyboard::KeyCode;
     Some(match key {
@@ -11640,6 +11652,7 @@ pub const MOUSE_RIGHT_ACTION: Action = Action::Back;
 /// (docs/systems/codename-entry.md). `None` keeps the key on `key_action` — the space bar
 /// stays Confirm (the game's X presses the focused cell), and Backspace maps to the ← cell
 /// 1000 by the caller [M :39-42, the erase].
+#[cfg(not(target_os = "android"))]
 pub fn cnname_char_key(key: winit::keyboard::KeyCode) -> Option<u32> {
     use winit::keyboard::KeyCode;
     let c = match key {
@@ -11696,6 +11709,7 @@ pub fn wheel_scroll_action(y: f32) -> Option<Action> {
 /// (a colon is Shift+Semicolon on the US layout, and the physical key is what arrives) [S §2.2;
 /// the task's typed set is digits, dots, colon]. Numpad digits and the numpad decimal point
 /// count too.
+#[cfg(not(target_os = "android"))]
 pub fn net_char_key(key: winit::keyboard::KeyCode) -> Option<char> {
     use winit::keyboard::KeyCode;
     Some(match key {

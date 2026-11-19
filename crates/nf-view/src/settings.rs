@@ -74,6 +74,7 @@ pub fn config_dir() -> Option<PathBuf> {
 /// build writes them to the config dir (never beside the exe, e.g. on the Desktop); a dev build keeps the working
 /// folder (the dev tools read `nf-shots/` there).
 pub fn output_dir() -> PathBuf {
+    #[cfg(not(target_os = "android"))]
     if crate::launcher::update::current_version().is_some() {
         if let Some(d) = config_dir() {
             let _ = std::fs::create_dir_all(&d);

@@ -26,3 +26,18 @@ __pycache__/
 CLAUDE.local.md
 __pycache__/
 *.pyc
+
+# Android build / NDK / OBB / game archive outputs (never commit)
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/app/src/main/jniLibs/
+android/local.properties
+*.viv
+*.VIV
+*.crp
+*.CRP
+*.ssh
+*.SSH
+*.obb

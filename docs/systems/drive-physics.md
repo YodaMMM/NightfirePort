@@ -159,9 +159,15 @@ Reverse flips the steer force sign (`FUN_00190f88`:428-433 [M]). The steering sl
   wheel frame; `front_lateral = −(rotated x) · 5.0` **clamped ±12.5**; the rear mirrors it
   (the ±9.375-12.0 rear band per the response limits) — units are the force-API's
   accelerations (see §6).
-- The 18 world colliders @0x331a60 (stride 0x50): spring-damper `F = fps · Δv · compression`
-  (:870-975) — the suspension consumer; constants per collider (the SPRING_* attrs ride the
-  car params) [S for the full form; the exact per-collider table is not lifted yet].
+- ~~The 18 world colliders @0x331a60 (stride 0x50): spring-damper `F = fps · Δv · compression`
+  (:870-975) — the suspension consumer; constants per collider~~ **Corrected 2026-11-18 (G-056,
+  IDA database of work/elfs/DRIVING.ELF):** the table at 0x331a60 is 19 **invisible boundary
+  sheets** (4 corner points + plane normal + thickness band), and the (:870-975) region is the
+  boundary response — a dt-scaled penalty force along the sheet normal with the accumulated
+  inward acceleration removed, plus a scrape torque. Full decode:
+  docs/systems/driving-world-bounds.md; port: `crates/nf-game/src/driving/bounds.rs`. The
+  suspension consumer itself lives elsewhere in the tyre pass; the SPRING_* attrs ride the car
+  params (that part of the old note stands [M]).
 - `ROLLING_RESISTANCE` 0x3319a4 and the friction/lateralLoss surface tables feed the same
   accumulators [M registration 0x185668].
 

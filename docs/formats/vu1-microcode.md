@@ -101,9 +101,15 @@ qwords sit at data (vi02+20). The XGKICK fires once per batch with the output
 buffer address held in vi01 — the VU-built GIF packet — after which the
 program stops on E until the next MSCNT.
 
-Dispatch targets seen in the jump-table range: 0x25e (return), 0x2a3, 0x2e0,
-0x340 (micro 0x004-0x017 hold the matching constants; the 0x400000xx words
-there double as float constants and branch-shaped data).
+Dispatch targets seen in the jump-table range (`micro 0x000-0x017`):
+- `0x000`: `B 0x034` (MSCALF 0, clipped entry)
+- `0x002`: `B 0x018` (MSCALF 2, unclipped entry)
+- `0x004`: `B 0x46e` (MSCALF 4, per-sprite-colored billboard/quad entry; raw imm11 `0x469` wraps in 11-bit VU1 PC)
+- `0x006`: `B 0x42b` (MSCALF 6, constant-color billboard/quad entry; raw imm11 `0x424` wraps in 11-bit VU1 PC)
+- `0x008`: `B 0x25e` (selector 8, mode 0: transform + ST*Q)
+- `0x00a`: `B 0x2a3` (selector 8, mode +2: transform + ST*Q + ambient tint)
+- `0x00c`, `0x00e`: `B 0x340` (selector 8, modes +4/+6: transform + ST*Q + 2-light diffuse + ambient)
+- `0x010`, `0x012`, `0x014`, `0x016`: `B 0x2e0` (selector 0x10, all modes: transform + env-map ST + ambient tint)
 
 ### The handler index (viewmodel-light, 2026-10-31) [M]
 
@@ -167,6 +173,59 @@ ST out = LQIxy(B+0xc7+i) · Q ; out.zw = (1.0, ...) ← ST scaled by Q, output Q
   The output tag starts with the word 0x8000 (EOP, NLOOP placeholder — ISW at
   0x1d5/0x1dc/0x0a5) and the VU patches the real NLOOP from vi11.
 
+## Remaining handlers and second DMA packet (`0x2e0-0x50e`, G-014) [M]
+
+Note on `vu1dis.py --elf` addressing: `.vutext` is a VIF1 DMA packet whose
+embedded `MPG` headers sit at file qwords `0x000-0x001` (`MPG 0x000`), `0x102`
+(`MPG 0x100`), `0x203` (`MPG 0x200`), `0x304` (`MPG 0x300`), and `0x405`
+(`MPG 0x400`, 180 instructions, ending at `0x4b9`), followed by 6 zero qwords
+and a second DMA packet at `0x4c0-0x50f` (`70000027`, `MPG 0x000`, 77
+instructions). Subtracting the embedded `MPG` headers maps `0x2e0-0x4b3` in
+true VU1 micro-PC space (`file 0x2e4-0x4b9`) plus the 77-instruction skinning
+overlay (`file 0x4c3-0x50f`, `micro 0x000-0x04c`).
+
+- `0x2e0-0x33f` (env-map + ambient tint, selector `0x10` all modes): loads
+  env-map matrix rows from `data 0x10-0x13` into `vf05-vf08` (`.xyw`, setting
+  `vf05.z = 1.0` at `0x2e0`), transforms position (`vf01-vf04`) with `DIV Q`
+  and `FTOI4.xyz` -> `SQ.xyz` (preserving `.w` ADC), transforms `ITOF0` normal
+  by `vf05-vf08` and scales by `Q` into both `B+0xc7+i` (`SQI`) and the vertex
+  STQ slot (`-8(vi01)`), tints RGBA (`vf12 * rgba` -> `FTOI0` -> `-7(vi01)`),
+  then restores `vf05-vf08` from `data 8, 9, 12, 13` at `0x33b-0x33f` before
+  `JR vi15` (`0x33e`).
+- `0x340-0x3d5` (2-light point/radial diffuse + ambient, selector `8` modes
+  `+4`/`+6`): keeps `vf05-vf08` as light 0/1 positions (`data 9, 8`) and
+  light 0/1 colors+radii (`data 13, 12`). Per vertex: transforms position
+  (`SQ.xyz`, preserving `.w` ADC), computes `L0 = vf05 - p` and `L1 = vf06 - p`,
+  squared distances (`ERSADD vf27` -> `MFPx` for `|L0|^2`, `vf30` dot + `DIV`
+  for `L1`), subtracts `vf07.w`/`vf08.w` and clamps with `MAXx.xy >= 0`, scales
+  `ITOF0` normal by immediate `I = 0x3c000000` (`1/128.0f` at `0x359/0x37d/0x3a1`),
+  accumulates `vf12 * rgba + vf07 * diff0 + vf08 * diff1`, clamps to `255.0f`
+  (`MINIi` with immediate `I = 0x437f0000` at `0x392/0x3b5/0x3cc`), converts
+  via `FTOI0`, scales ST by `Q`, and returns via `JR vi15` (`0x3d3`).
+- `0x3d6-0x42a` (standalone `MSCALF` beam/ribbon expander): calls setup
+  (`BAL 0x24f, vi15`), then uses `XTOP vi01` per `MSCNT` batch (`vi02 = vi01 +
+  0xa8` output). Reads vertex pairs (`vi03 += 6`, `vi10 -= 3`), transforms and
+  divides both endpoints, expands screen-space perpendicular offsets using
+  `vf12` (`MULy.x`/`MULx.y` at `0x3fa-0x3fd`), emits 3 vertices with constant STs
+  (`data 0x10-0x12`) and color `vf08`, clip-tests both endpoints against
+  `vf13-vf16` (`FCAND 0xfff`), sets `vi11 = 0x8000` (`ISW.w` at `0x41d-0x41f`)
+  when clipped, and `XGKICK vi02` (`0x425`).
+- `0x42b-0x46d` (`MSCALF 6` via `0x006`, constant-color sprite/quad) and
+  `0x46e-0x4b3` (`MSCALF 4` via `0x004`, per-sprite-colored): both call setup,
+  load 4 sprite constants (`vf22, vf26, vf24, vf25`) from the first `XTOP`
+  buffer, then loop over `XTOP vi01` points (`vi02 = vi01 + 0x3b`). Each
+  point is transformed, expanded into 2 `SPRITE` vertices (`vf21/vf23 +/-
+  vf21.z * vf22.z`, `FTOI4`), clip-tested against `vf13-vf16` (`FCAND 0x3f`;
+  clipped points copy `vf22.w` ADC via `MOVEw`), and written as 6 qwords
+  (`vi07 += 6`). `0x46e-0x4b3` additionally loads per-sprite RGBA from `vi04 =
+  vi01 + 0x1d` (`0x4a1`).
+- `file 0x4c3-0x50f` (second DMA packet, `MPG 0x000`, 77 instructions): three
+  skinning matrix-blend routines (`NOP{E}` at `0x015`, `0x02c`, `0x04b`) that
+  unpack bone indices via `MTIR` (`vf04.xy`, `vf09.xy`) and weights via
+  `ITOF15.xyz`, load 4x4 bone matrices at stride `64` qwords (`0, 64, 128, 192`),
+  and blend into `vf02, vf07, vf11, vf12` (the third routine loops with
+  `IBGEZ 0x033, vi00, vi10`).
+
 ## Findings vs the port's batch assumptions (ps2gfx.md "medium" items)
 
 | Assumption | Verdict |
@@ -174,17 +233,13 @@ ST out = LQIxy(B+0xc7+i) · Q ; out.zw = (1.0, ...) ← ST scaled by Q, output Q
 | Entry points 0 = clipped / 2 = unclipped | **Confirmed** [M] (trampolines at micro 0x000/0x002; vi14 = 0x400 on entry 0; clip machinery present). |
 | UV: disc ST used directly, no ST·Q tail on the disc | **Confirmed** — and the mechanism is now known: the VU computes ST·(1/w) and outputs Q = 1.0, so the GS interpolates the raw ST values [M]. |
 | Lighting: none in the batch path | **Confirmed as far as the code was read** — no light-vector dot products anywhere in the transform/clip/emission paths; vertex RGBA passes through. The EE-side lighting (if any) happens before the unpack. |
-| Signed V4-8 = normal + no-kick flag | **Partially confirmed.** The interleaved per-vertex record (pos/rgba/nrm at stride 3, nrm.w sign-extended to {0,−1}) is exactly what the microcode walks. The consumption point of the w flag (the per-vertex strip-break) is in the not-yet-read handler tails (0x2e0-0x4f4); the output-NLOOP counter vi11 proves the VU decides per-vertex what enters the output packet. Keep "medium" until the tail is read. |
+| Signed V4-8 = normal + no-kick flag | **Confirmed** [M]. The `V4-8s` unpack places `(nx, ny, nz, w)` with `w` sign-extended to `{0, -1}` (`0x00000000` / `0xffffffff`) in the `+2` (`XYZ2`) qword (`B+3, B+6, ...`). In the **unclipped** path, all four transform handlers (`0x25e`, `0x2a3`, `0x2e0`, `0x340`) write only `.xyz` via `SQ.xyz` (`0x280/288/29e/2a4`, `0x2c3/2ce/2d7/2de`, `0x303/312/321/32d`, `0x371/395/3b8`), preserving the `.w` lane in place so bit 15 acts directly as the GS `XYZ2` ADC (no-kick) bit on `XGKICK`. In the **clipped** path (`0x079`, `0x092`), `ILW.w vi08, 2(vi07)` reads the `.w` lane of the triangle's 3rd vertex and `IBNE 0x082, vi00, vi08` skips clipping/emission when `vi08 != 0`. |
 
 No renderer changes came with this reading; nothing above
 contradicts the port's implemented behavior.
 
 ## Not yet read / open
 
-- Handlers 0x2e0-0x33f and 0x340-0x50e (≈40% of the program): the strip-break
-  (w-flag) consumption, the skinning matrix palette walk visible at 0x4f4-0x50c
-  (LQ stride 0x40 qwords — the CacheSkin/SkinIt upload path, G-015), and the
-  second-matrix use (data 24-27 loaded at 0x1dd).
 - 14 lower-op words the public tables do not cover: 0x810273ff-class
   (minor 0x3f, fd 0x1f, it/is pattern = LQD-like register restore paired with
   the SQD save block at 0x208-0x216; also 0x810a73fe-class at 0x230-0x23d).

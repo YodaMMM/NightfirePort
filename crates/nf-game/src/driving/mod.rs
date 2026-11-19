@@ -4,6 +4,10 @@
 //! write-ups; `ai::SimCar` is the physics seam (506's `Car` plugs in — see `ai::AiDriver`).
 
 pub mod ai;
+// G-056 world-bounds: the driving maps' invisible boundary sheets (DRIVING.ELF 0x331a60).
+pub mod bounds;
+// G-057 suspension: the per-wheel spring–damper (sub_18FC00 + kind siblings).
+pub mod suspension;
 // 647 drive-mission-scripts: the mission state machine (objectives, fails, timers, the PTP end).
 pub mod mission;
 pub mod physics;

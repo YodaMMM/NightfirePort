@@ -52,6 +52,53 @@ pub const TAG_CGRD: u32 = 0x4347_5264;
 pub const TAG_CI: u32 = 0x6369_2020;
 /// `cn  ` — CDat collision nodes [D measured].
 pub const TAG_CN: u32 = 0x636e_2020;
+/// `ca  ` — article collision strip mesh (`ca#0`) [D measured / M 0x216EC0].
+pub const TAG_CA: u32 = 0x6361_2020;
+/// `in  ` — article 4x4 instance transform (64 bytes, row-major f32) [D measured].
+pub const TAG_IN: u32 = 0x696e_2020;
+
+/// One world-space triangle extracted from `.crp` `CDat` (`ci#0` + `Arti` `ca#0`) [M 0x216EC0].
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollisionTri {
+    pub v: [[f32; 3]; 3],
+    pub flags: u16,
+}
+
+/// One placed article instance from `.crp` `Map` (`in#0` + `sr`) with its inverted
+/// local-to-world 3x4 transform (`v_world = (v_local - tr) * M^T / |r0|^2`) [D measured].
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapInstance {
+    pub article: String,
+    pub r0: [f32; 3],
+    pub r1: [f32; 3],
+    pub r2: [f32; 3],
+    pub tr: [f32; 3],
+    pub inv_scale2: f32,
+}
+
+impl MapInstance {
+    #[inline]
+    pub fn transform(&self, p: [f32; 3]) -> [f32; 3] {
+        let dx = p[0] - self.tr[0];
+        let dy = p[1] - self.tr[1];
+        let dz = p[2] - self.tr[2];
+        [
+            (dx * self.r0[0] + dy * self.r1[0] + dz * self.r2[0]) * self.inv_scale2,
+            (dx * self.r0[1] + dy * self.r1[1] + dz * self.r2[1]) * self.inv_scale2,
+            (dx * self.r0[2] + dy * self.r1[2] + dz * self.r2[2]) * self.inv_scale2,
+        ]
+    }
+}
+
+/// One trigger volume from `.crp` `Map` `Trgr` (64-byte records, `[x, y, z, radius]` at
+/// `+0..+16`, flags at `+16`, id at `+24`) [D measured].
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapTrigger {
+    pub pos: [f32; 3],
+    pub radius: f32,
+    pub flags: u32,
+    pub id: u32,
+}
 
 /// A parsed track article: name + bbox + the part references [D].
 #[derive(Clone, Debug, PartialEq)]
@@ -193,6 +240,243 @@ impl<'a> Crp<'a> {
                     }
                     TAG_CN => out.cn_records += 1,
                     _ => {}
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Extract all world-space collision triangles from `CDat` (`ci#0` instances + `sr` refs +
+    /// each `Arti`'s `ca#0` triangle strips) [M 0x216EC0 / D measured].
+    pub fn extract_collision_tris(&self) -> Result<Vec<CollisionTri>> {
+        use std::collections::HashMap;
+        let mut arti_ca: HashMap<String, &[u8]> = HashMap::new();
+        let mut cdat_sr: HashMap<u16, String> = HashMap::new();
+        let mut ci_payloads: Vec<&[u8]> = Vec::new();
+
+        for rec in self.pool()? {
+            if rec.tag == tag::ARTI {
+                let (start, end) = rec.window(self.data)?;
+                let mut name: Option<String> = None;
+                let mut ca: Option<&[u8]> = None;
+                for o in (start..end).step_by(0x10) {
+                    let r = Record::parse(self.data, o)?;
+                    if r.tag == tag::NAME {
+                        name = Some(payload_string(self.payload(&r)?));
+                    } else if r.tag_code() == TAG_CA {
+                        ca = Some(self.payload(&r)?);
+                    }
+                }
+                if let (Some(n), Some(c)) = (name, ca) {
+                    arti_ca.insert(n, c);
+                }
+            } else if rec.tag == tag::CDAT {
+                let (start, end) = rec.window(self.data)?;
+                for o in (start..end).step_by(0x10) {
+                    let r = Record::parse(self.data, o)?;
+                    if r.tag_code() == TAG_SR {
+                        if let Some(inst) = r.instance() {
+                            let s = payload_string(self.payload(&r)?);
+                            let clean = s.strip_prefix("CARP::").unwrap_or(&s).to_string();
+                            cdat_sr.insert(inst, clean);
+                        }
+                    } else if r.tag_code() == TAG_CI {
+                        ci_payloads.push(self.payload(&r)?);
+                    }
+                }
+            }
+        }
+
+        let mut tris = Vec::new();
+        for ci_data in ci_payloads {
+            for item in ci_data.chunks_exact(64) {
+                let sr_tag = u32::from_le_bytes(item[28..32].try_into().unwrap());
+                let sr_idx = (sr_tag & 0xffff) as u16;
+                let Some(aname) = cdat_sr.get(&sr_idx) else {
+                    continue;
+                };
+                let Some(&ca) = arti_ca.get(aname) else {
+                    continue;
+                };
+                if ca.len() < 32 {
+                    continue;
+                }
+                let r0 = [
+                    f32::from_le_bytes(item[0..4].try_into().unwrap()),
+                    f32::from_le_bytes(item[4..8].try_into().unwrap()),
+                    f32::from_le_bytes(item[8..12].try_into().unwrap()),
+                ];
+                let r2 = [
+                    f32::from_le_bytes(item[32..36].try_into().unwrap()),
+                    f32::from_le_bytes(item[36..40].try_into().unwrap()),
+                    f32::from_le_bytes(item[40..44].try_into().unwrap()),
+                ];
+                let tr = [
+                    f32::from_le_bytes(item[48..52].try_into().unwrap()),
+                    f32::from_le_bytes(item[52..56].try_into().unwrap()),
+                    f32::from_le_bytes(item[56..60].try_into().unwrap()),
+                ];
+                let xform = |lx: f32, ly: f32, lz: f32| -> [f32; 3] {
+                    [
+                        tr[0] + lx * r0[0] + lz * r2[0],
+                        tr[1] + lx * r0[1] + ly + lz * r2[1],
+                        tr[2] + lx * r0[2] + lz * r2[2],
+                    ]
+                };
+
+                let gcnt = u16::from_le_bytes([ca[0], ca[1]]) as usize;
+                let geom_sz = u16::from_le_bytes([ca[2], ca[3]]) as usize;
+                let geom_end = ca.len().min(32 + geom_sz);
+                if 32 + gcnt * 16 > ca.len() {
+                    continue;
+                }
+                for g in 0..gcnt {
+                    let gh = &ca[32 + g * 16..32 + (g + 1) * 16];
+                    let voff = u16::from_le_bytes([gh[14], gh[15]]) as usize;
+                    let next_voff = if g + 1 < gcnt {
+                        let ngh = &ca[32 + (g + 1) * 16..32 + (g + 2) * 16];
+                        32 + u16::from_le_bytes([ngh[14], ngh[15]]) as usize
+                    } else {
+                        geom_end
+                    };
+                    let end = geom_end.min(next_voff);
+                    let mut cur = 32 + voff;
+                    while cur + 16 <= end {
+                        let vc = u32::from_le_bytes(ca[cur + 12..cur + 16].try_into().unwrap())
+                            as usize;
+                        if vc < 3 || cur + vc * 16 > end {
+                            break;
+                        }
+                        let mut verts = Vec::with_capacity(vc);
+                        let mut words = Vec::with_capacity(vc);
+                        for k in 0..vc {
+                            let vo = cur + k * 16;
+                            let lx = f32::from_le_bytes(ca[vo..vo + 4].try_into().unwrap());
+                            let ly = f32::from_le_bytes(ca[vo + 4..vo + 8].try_into().unwrap());
+                            let lz = f32::from_le_bytes(ca[vo + 8..vo + 12].try_into().unwrap());
+                            let w = u32::from_le_bytes(ca[vo + 12..vo + 16].try_into().unwrap());
+                            verts.push(xform(lx, ly, lz));
+                            words.push(w);
+                        }
+                        for k in 2..vc {
+                            let w = words[k];
+                            if (w & 1) != 0 {
+                                let flags = (w >> 16) as u16;
+                                tris.push(CollisionTri {
+                                    v: [verts[k - 2], verts[k - 1], verts[k]],
+                                    flags,
+                                });
+                            }
+                        }
+                        cur += vc * 16;
+                    }
+                }
+            }
+        }
+        Ok(tris)
+    }
+
+    /// Extract all placed world article instances from `Map` (`in#0` 64-byte world-to-local
+    /// matrices + `sr` article symbol references) [D measured on `paris_mis01.crp`].
+    pub fn extract_map_instances(&self) -> Result<Vec<MapInstance>> {
+        use std::collections::HashMap;
+        let mut map_sr: HashMap<u16, String> = HashMap::new();
+        let mut in_payloads: Vec<&[u8]> = Vec::new();
+
+        for rec in self.pool()? {
+            if rec.tag != tag::MAP {
+                continue;
+            }
+            let (start, end) = rec.window(self.data)?;
+            for o in (start..end).step_by(0x10) {
+                let r = Record::parse(self.data, o)?;
+                if r.tag_code() == TAG_SR {
+                    if let Some(inst) = r.instance() {
+                        let s = payload_string(self.payload(&r)?);
+                        let clean = s.strip_prefix("CARP::").unwrap_or(&s);
+                        let art = clean.split("::{").next().unwrap_or(clean).to_string();
+                        map_sr.insert(inst, art);
+                    }
+                } else if r.tag_code() == TAG_IN {
+                    in_payloads.push(self.payload(&r)?);
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        for in_data in in_payloads {
+            for item in in_data.chunks_exact(64) {
+                let sr_tag = u32::from_le_bytes(item[28..32].try_into().unwrap());
+                if (sr_tag >> 16) != 0x7372 {
+                    continue;
+                }
+                let sr_idx = (sr_tag & 0xffff) as u16;
+                let Some(article) = map_sr.get(&sr_idx) else {
+                    continue;
+                };
+                let r0 = [
+                    f32::from_le_bytes(item[0..4].try_into().unwrap()),
+                    f32::from_le_bytes(item[4..8].try_into().unwrap()),
+                    f32::from_le_bytes(item[8..12].try_into().unwrap()),
+                ];
+                let r1 = [
+                    f32::from_le_bytes(item[16..20].try_into().unwrap()),
+                    f32::from_le_bytes(item[20..24].try_into().unwrap()),
+                    f32::from_le_bytes(item[24..28].try_into().unwrap()),
+                ];
+                let r2 = [
+                    f32::from_le_bytes(item[32..36].try_into().unwrap()),
+                    f32::from_le_bytes(item[36..40].try_into().unwrap()),
+                    f32::from_le_bytes(item[40..44].try_into().unwrap()),
+                ];
+                let tr = [
+                    f32::from_le_bytes(item[48..52].try_into().unwrap()),
+                    f32::from_le_bytes(item[52..56].try_into().unwrap()),
+                    f32::from_le_bytes(item[56..60].try_into().unwrap()),
+                ];
+                let s2 = r0[0] * r0[0] + r0[1] * r0[1] + r0[2] * r0[2];
+                if s2 < 1e-6 {
+                    continue;
+                }
+                out.push(MapInstance {
+                    article: article.clone(),
+                    r0,
+                    r1,
+                    r2,
+                    tr,
+                    inv_scale2: 1.0 / s2,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Extract all `Trgr` trigger records from `Map` (64-byte records, `[x, y, z, radius]` at
+    /// `+0..+16`).
+    pub fn extract_map_triggers(&self) -> Result<Vec<MapTrigger>> {
+        const TAG_TRGR: u32 = 0x5472_6772; // "Trgr"
+        let mut out = Vec::new();
+        for rec in self.pool()? {
+            if rec.tag != tag::MAP {
+                continue;
+            }
+            let (start, end) = rec.window(self.data)?;
+            for o in (start..end).step_by(0x10) {
+                let r = Record::parse(self.data, o)?;
+                if r.tag != TAG_TRGR {
+                    continue;
+                }
+                let payload = self.payload(&r)?;
+                for item in payload.chunks_exact(64) {
+                    let pos = [
+                        f32::from_le_bytes(item[0..4].try_into().unwrap()),
+                        f32::from_le_bytes(item[4..8].try_into().unwrap()),
+                        f32::from_le_bytes(item[8..12].try_into().unwrap()),
+                    ];
+                    let radius = f32::from_le_bytes(item[12..16].try_into().unwrap());
+                    let flags = u32::from_le_bytes(item[16..20].try_into().unwrap());
+                    let id = u32::from_le_bytes(item[24..28].try_into().unwrap());
+                    out.push(MapTrigger { pos, radius, flags, id });
                 }
             }
         }
@@ -452,6 +736,26 @@ impl TrackModule {
         out
     }
 
+    /// Like `model_segments`, but matches any `{as  NNNN}::Model[0].NN` variant (used by car `.crp`s).
+    pub fn model_segments_any(&self, article: &str) -> Vec<(u8, u32)> {
+        let prefix = format!("__Model:::{article}::{{as  ");
+        let mut out = Vec::new();
+        for s in &self.symbols {
+            if let Some(after_p) = s.name.strip_prefix(&prefix) {
+                if let Some(rest) = after_p.split("}::Model[0].").nth(1) {
+                    if rest.len() == 2 {
+                        if let Ok(seg) = u8::from_str_radix(rest, 16) {
+                            out.push((seg, s.value));
+                        }
+                    }
+                }
+            }
+        }
+        out.sort();
+        out.dedup_by(|a, b| a.0 == b.0);
+        out
+    }
+
     /// The `__GPRenderMethod_<article>::{as  0000}::Model[0].NN_<x>_name` strings in the module
     /// image (the EAGL GeoPrim render-method names) [D measured at paris 0x180544]. Returns
     /// (article, segment, image offset) triples.
@@ -483,6 +787,410 @@ impl TrackModule {
         }
         out
     }
+
+    /// Decode all VIF DMA packets for `article` into dequantized triangle-strip vertices
+    /// (`V3-16` positions mapped into `bbox_min..bbox_max`, `V2-16` UVs scaled by 1/4096,
+    /// `V3-8` RGB/normal bytes).
+    pub fn extract_article_mesh(
+        &self,
+        article: &str,
+        bbox_min: [f32; 3],
+        bbox_max: [f32; 3],
+    ) -> Vec<MeshStrip> {
+        let mut segs = self.model_segments(article);
+        if segs.is_empty() {
+            segs = self.model_segments_any(article);
+        }
+        self.extract_segments(&segs, bbox_min, bbox_max)
+    }
+
+    /// Decode VIF DMA packets across ALL `{as  XXXX}` parts of `article` (used for car `.crp`
+    /// models such as `vanquish` where chassis, wheels, and attachments have separate `as` parts).
+    pub fn extract_all_article_parts(
+        &self,
+        article: &str,
+        bbox_min: [f32; 3],
+        bbox_max: [f32; 3],
+    ) -> Vec<MeshStrip> {
+        let prefix = format!("__Model:::{article}::{{as  ");
+        let mut segs = Vec::new();
+        for s in &self.symbols {
+            if let Some(after_p) = s.name.strip_prefix(&prefix) {
+                if let Some(rest) = after_p.split("}::Model[0].").nth(1) {
+                    if rest.len() == 2 {
+                        if let Ok(seg) = u8::from_str_radix(rest, 16) {
+                            segs.push((seg, s.value));
+                        }
+                    }
+                }
+            }
+        }
+        segs.sort_by_key(|&(seg, val)| (val, seg));
+        segs.dedup_by_key(|x| x.1);
+        self.extract_segments(&segs, bbox_min, bbox_max)
+    }
+
+    /// Decode only the intact primary-variant (`vd#1` if present) parts of a car `.crp`,
+    /// using the article's `Base` bounding box and `in#0` bone transforms (excluding EMP/damage
+    /// spheres and alternate damage variants).
+    pub fn extract_car_mesh(&self, crp: &crate::crp::Crp, fallback_name: &str) -> Vec<MeshStrip> {
+        let Ok(articles) = crp.track_articles() else {
+            return self.extract_all_article_parts(fallback_name, [-1.0, -1.0, -2.5], [1.0, 1.0, 2.5]);
+        };
+        let Some(art) = articles.first() else {
+            return self.extract_all_article_parts(fallback_name, [-1.0, -1.0, -2.5], [1.0, 1.0, 2.5]);
+        };
+
+        let mut vd1: Option<Vec<u16>> = None;
+        let mut in_bones: Vec<[f32; 16]> = Vec::new();
+        let mut as_bone: std::collections::HashMap<u16, u16> = std::collections::HashMap::new();
+        if let Ok(pool) = crp.pool() {
+            for rec in pool {
+                if rec.tag != crate::crp::tag::ARTI {
+                    continue;
+                }
+                if let Ok((start, end)) = rec.window(crp.data) {
+                    for o in (start..end).step_by(0x10) {
+                        let Ok(r) = crate::crp::Record::parse(crp.data, o) else { continue };
+                        // "vd  " = 0x7664_2020
+                        if r.tag_code() == 0x7664_2020 && r.instance() == Some(1) {
+                            if let Ok(p) = crp.payload(&r) {
+                                vd1 = Some(
+                                    p.chunks_exact(2)
+                                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                        .collect(),
+                                );
+                            }
+                        } else if r.tag_code() == TAG_IN {
+                            if let Ok(p) = crp.payload(&r) {
+                                for m in p.chunks_exact(64) {
+                                    let mut mat = [0.0f32; 16];
+                                    for i in 0..16 {
+                                        mat[i] = f32::from_le_bytes(m[i * 4..i * 4 + 4].try_into().unwrap());
+                                    }
+                                    in_bones.push(mat);
+                                }
+                            }
+                        } else if r.tag_code() == 0x6173_2020 {
+                            if let (Some(as_idx), Ok(p)) = (r.instance(), crp.payload(&r)) {
+                                if p.len() >= 0x1a {
+                                    as_bone.insert(as_idx, u16::from_le_bytes([p[0x18], p[0x19]]));
+                                }
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
+        let prefix = format!("__Model:::{}::{{as  ", art.name);
+        let mut by_as: std::collections::BTreeMap<u16, Vec<(u8, u32)>> =
+            std::collections::BTreeMap::new();
+        for s in &self.symbols {
+            if let Some(after_p) = s.name.strip_prefix(&prefix) {
+                let mut parts = after_p.split("}::Model[0].");
+                if let (Some(as_hex), Some(rest)) = (parts.next(), parts.next()) {
+                    if rest.len() == 2 {
+                        if let (Ok(as_idx), Ok(seg)) = (
+                            u16::from_str_radix(as_hex, 16),
+                            u8::from_str_radix(rest, 16),
+                        ) {
+                            if vd1.as_ref().map_or(true, |allowed| allowed.contains(&as_idx)) {
+                                by_as.entry(as_idx).or_default().push((seg, s.value));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        for (as_idx, mut segs) in by_as {
+            segs.sort_by_key(|&(seg, val)| (val, seg));
+            segs.dedup_by_key(|x| x.1);
+            let mut strips = self.extract_segments(&segs, art.bbox_min, art.bbox_max);
+            if let Some(&bone_idx) = as_bone.get(&as_idx) {
+                if let Some(m) = in_bones.get(bone_idx as usize) {
+                    for strip in &mut strips {
+                        for p in &mut strip.positions {
+                            let [x, y, z] = *p;
+                            *p = [
+                                m[0] * x + m[4] * y + m[8] * z + m[12],
+                                m[1] * x + m[5] * y + m[9] * z + m[13],
+                                m[2] * x + m[6] * y + m[10] * z + m[14],
+                            ];
+                        }
+                    }
+                }
+            }
+            out.extend(strips);
+        }
+        out
+    }
+
+    fn extract_segments(
+        &self,
+        segs: &[(u8, u32)],
+        bbox_min: [f32; 3],
+        bbox_max: [f32; 3],
+    ) -> Vec<MeshStrip> {
+        let mut strips = Vec::new();
+        let mut seen_pkts = std::collections::HashSet::new();
+        for &(_seg, addr) in segs {
+            let Some(off) = self.addr_to_offset(addr) else {
+                continue;
+            };
+            // Model header +0xc8 = group count, +0xcc = pointer to the `[0xA0000000, 0, count]` groups.
+            let group_count = self.u32_at_img(off + 0xc8).unwrap_or(1).min(1024) as usize;
+            let Some(tbl_addr) = self.u32_at_img(off + 0xcc) else {
+                continue;
+            };
+            let Some(mut cur) = self.addr_to_offset(tbl_addr) else {
+                continue;
+            };
+            let mut current_tex: Option<String> = None;
+            let limit = self.image.len().saturating_sub(8);
+            for _ in 0..group_count {
+                if cur + 12 > limit {
+                    break;
+                }
+                let tag_w = self.u32_at_img(cur).unwrap_or(0);
+                if tag_w == 0xA000_0000 {
+                    let count = self.u32_at_img(cur + 8).unwrap_or(0) as usize;
+                    let n_pairs = count / 2;
+                    cur += 12;
+                    for _ in 0..n_pairs {
+                        if cur + 8 > limit {
+                            break;
+                        }
+                        if self.u32_at_img(cur) != Some(0xA000_FFFF) {
+                            break;
+                        }
+                        let pkt_addr = self.u32_at_img(cur + 4).unwrap_or(0);
+                        if seen_pkts.insert(pkt_addr) {
+                            if let Some(po) = self.addr_to_offset(pkt_addr) {
+                                if let Some(tex) = self.packet_texture(po) {
+                                    current_tex = Some(tex);
+                                }
+                                for mut strip in self.parse_vif_packet(po, bbox_min, bbox_max) {
+                                    strip.texture = current_tex.clone();
+                                    strips.push(strip);
+                                }
+                            }
+                        }
+                        cur += 8;
+                    }
+                } else if tag_w == 0xA000_FFFF {
+                    let pkt_addr = self.u32_at_img(cur + 4).unwrap_or(0);
+                    if seen_pkts.insert(pkt_addr) {
+                        if let Some(po) = self.addr_to_offset(pkt_addr) {
+                            if let Some(tex) = self.packet_texture(po) {
+                                current_tex = Some(tex);
+                            }
+                            for mut strip in self.parse_vif_packet(po, bbox_min, bbox_max) {
+                                strip.texture = current_tex.clone();
+                                strips.push(strip);
+                            }
+                        }
+                    }
+                    cur += 8;
+                } else {
+                    break;
+                }
+            }
+        }
+        strips
+    }
+
+    fn addr_to_offset(&self, addr: u32) -> Option<usize> {
+        let s = self
+            .sections
+            .iter()
+            .find(|s| s.size > 0 && addr >= s.offset && addr < s.offset.saturating_add(s.size))?;
+        let off = s.data_offset as u64 + (addr - s.offset) as u64;
+        (off < self.image.len() as u64).then_some(off as usize)
+    }
+
+    fn u32_at_img(&self, off: usize) -> Option<u32> {
+        let b = self.image.get(off..off + 4)?;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn packet_texture(&self, po: usize) -> Option<String> {
+        let rm_list_addr = self.u32_at_img(po.checked_sub(0x18)?)?;
+        let rm_off = self.addr_to_offset(rm_list_addr)?;
+        for i in 0..20 {
+            let op = self.u32_at_img(rm_off + i * 4)?;
+            if (op & 0xffff_fff0) == 0x0300_0000 {
+                let rm_ptr = self.u32_at_img(rm_off + (i + 1) * 4)? & 0x0fff_ffff;
+                let target = self.addr_to_offset(rm_ptr)?;
+                let b = self.image.get(target + 4..target + 8)?;
+                if b.iter().all(|&c| c.is_ascii_graphic()) {
+                    return Some(String::from_utf8_lossy(b).into_owned());
+                }
+            }
+        }
+        None
+    }
+
+    fn parse_vif_packet(
+        &self,
+        po: usize,
+        bbox_min: [f32; 3],
+        bbox_max: [f32; 3],
+    ) -> Vec<MeshStrip> {
+        let Some(dma_tag) = self.u32_at_img(po + 8) else {
+            return Vec::new();
+        };
+        let qwc = (dma_tag & 0xffff) as usize;
+        let mut cur = po + 0x10;
+        let end = (cur + qwc * 16).min(self.image.len());
+
+        let mut out = Vec::new();
+        let mut positions: Vec<[f32; 3]> = Vec::new();
+        let mut uvs: Vec<[f32; 2]> = Vec::new();
+        let mut colors: Vec<[u8; 3]> = Vec::new();
+        let mut batch_attr_idx: usize = 0;
+
+        let flush_batch = |out: &mut Vec<MeshStrip>,
+                           positions: &mut Vec<[f32; 3]>,
+                           uvs: &mut Vec<[f32; 2]>,
+                           colors: &mut Vec<[u8; 3]>| {
+            if !positions.is_empty() {
+                out.push(MeshStrip {
+                    positions: std::mem::take(positions),
+                    uvs: std::mem::take(uvs),
+                    colors: std::mem::take(colors),
+                    texture: None,
+                });
+            } else {
+                uvs.clear();
+                colors.clear();
+            }
+        };
+
+        while cur + 4 <= end {
+            let Some(vif) = self.u32_at_img(cur) else {
+                break;
+            };
+            cur += 4;
+            let op = ((vif >> 24) & 0x7f) as u8;
+            if op < 0x20 {
+                if op == 0x14 || op == 0x15 || op == 0x17 {
+                    flush_batch(&mut out, &mut positions, &mut uvs, &mut colors);
+                    batch_attr_idx = 0;
+                }
+                continue;
+            }
+            if op == 0x20 {
+                cur += 4;
+                continue;
+            }
+            if op == 0x30 || op == 0x31 {
+                cur += 16;
+                continue;
+            }
+            if op == 0x50 || op == 0x51 {
+                let imm = (vif & 0xffff) as usize;
+                let q = if imm == 0 { 0x10000 } else { imm };
+                cur += q * 16;
+                continue;
+            }
+            if (op & 0x60) == 0x60 {
+                let num = ((vif >> 16) & 0xff) as usize;
+                let vn = ((op >> 2) & 3) as usize;
+                let vl = (op & 3) as usize;
+                let elem_sz = [4usize, 2, 1, 2][vl];
+                let byte_len = (num * (vn + 1) * elem_sz + 3) & !3;
+                if cur + byte_len > end {
+                    break;
+                }
+                if vn == 3 && vl == 0 && num > 1 {
+                    // Uncompressed V4-32 attribute batch:
+                    // attr 0 = positions, attr 1 = normals, attr 2 = UVs, attr 3/4 = colors/weights.
+                    if batch_attr_idx == 0 {
+                        for k in 0..num {
+                            let o = cur + k * 16;
+                            let x = f32::from_le_bytes([self.image[o], self.image[o + 1], self.image[o + 2], self.image[o + 3]]);
+                            let y = f32::from_le_bytes([self.image[o + 4], self.image[o + 5], self.image[o + 6], self.image[o + 7]]);
+                            let z = f32::from_le_bytes([self.image[o + 8], self.image[o + 9], self.image[o + 10], self.image[o + 11]]);
+                            positions.push([x, y, z]);
+                        }
+                    } else if batch_attr_idx == 2 {
+                        for k in 0..num {
+                            let o = cur + k * 16;
+                            let u = f32::from_le_bytes([self.image[o], self.image[o + 1], self.image[o + 2], self.image[o + 3]]);
+                            let v = f32::from_le_bytes([self.image[o + 4], self.image[o + 5], self.image[o + 6], self.image[o + 7]]);
+                            uvs.push([u, v]);
+                        }
+                    }
+                    batch_attr_idx += 1;
+                } else if vn == 2 && vl == 0 && num > 1 {
+                    // V3-32 float positions
+                    if batch_attr_idx == 0 {
+                        for k in 0..num {
+                            let o = cur + k * 12;
+                            let x = f32::from_le_bytes([self.image[o], self.image[o + 1], self.image[o + 2], self.image[o + 3]]);
+                            let y = f32::from_le_bytes([self.image[o + 4], self.image[o + 5], self.image[o + 6], self.image[o + 7]]);
+                            let z = f32::from_le_bytes([self.image[o + 8], self.image[o + 9], self.image[o + 10], self.image[o + 11]]);
+                            positions.push([x, y, z]);
+                        }
+                    }
+                    batch_attr_idx += 1;
+                } else if vn == 2 && vl == 1 && num > 1 {
+                    // V3-16 positions quantized to [-32768..32767] across bbox_min..bbox_max
+                    if batch_attr_idx == 0 {
+                        for k in 0..num {
+                            let o = cur + k * 6;
+                            let ix = i16::from_le_bytes([self.image[o], self.image[o + 1]]) as f32;
+                            let iy = i16::from_le_bytes([self.image[o + 2], self.image[o + 3]]) as f32;
+                            let iz = i16::from_le_bytes([self.image[o + 4], self.image[o + 5]]) as f32;
+                            let deq = |v: f32, axis: usize| {
+                                bbox_min[axis]
+                                    + ((v + 32768.0) / 65535.0) * (bbox_max[axis] - bbox_min[axis])
+                            };
+                            positions.push([deq(ix, 0), deq(iy, 1), deq(iz, 2)]);
+                        }
+                    }
+                    batch_attr_idx += 1;
+                } else if vn == 1 && vl == 1 && num > 1 {
+                    // V2-16 UVs
+                    for k in 0..num {
+                        let o = cur + k * 4;
+                        let iu = i16::from_le_bytes([self.image[o], self.image[o + 1]]) as f32;
+                        let iv = i16::from_le_bytes([self.image[o + 2], self.image[o + 3]]) as f32;
+                        uvs.push([iu / 4096.0, iv / 4096.0]);
+                    }
+                    batch_attr_idx += 1;
+                } else if vn == 2 && vl == 2 && num > 1 {
+                    // V3-8 colours / normals
+                    for k in 0..num {
+                        let o = cur + k * 3;
+                        colors.push([self.image[o], self.image[o + 1], self.image[o + 2]]);
+                    }
+                    batch_attr_idx += 1;
+                } else if num > 1 {
+                    batch_attr_idx += 1;
+                }
+                cur += byte_len;
+            } else {
+                break;
+            }
+        }
+
+        flush_batch(&mut out, &mut positions, &mut uvs, &mut colors);
+        out
+    }
+}
+
+/// One decoded VIF triangle-strip mesh chunk from a `.crp` `TrackModule` [D measured].
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshStrip {
+    pub positions: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub colors: Vec<[u8; 3]>,
+    pub texture: Option<String>,
 }
 
 #[cfg(test)]
@@ -554,5 +1262,304 @@ mod tests {
         d[0x34..0x38].copy_from_slice(&(0x04u32 << 8).to_le_bytes()); // Base size 4
         let c3 = crate::crp::Crp::parse(&d).unwrap();
         assert!(c3.track_articles().is_err());
+    }
+
+    #[test]
+    fn extracts_vif_strip_from_track_module() {
+        // Build a minimal relocated TrackModule image:
+        // 0x000..0x0d0: Model[0].00 header with +0xcc = 0x100 (table addr)
+        // 0x100..0x108: {0xA000FFFF, 0x120}
+        // 0x120..0x154: VIF DMA packet: +0x08 DMA RET QWC=3, +0x10 V3-16 (2 verts), +0x20 V2-16 (2 UVs), +0x2c V3-8 (2 colors), +0x34 MSCNT
+        let mut img = vec![0u8; 0x180];
+        img[0xc8..0xcc].copy_from_slice(&1u32.to_le_bytes());
+        img[0xcc..0xd0].copy_from_slice(&0x100u32.to_le_bytes());
+        img[0x100..0x104].copy_from_slice(&0xA000_FFFFu32.to_le_bytes());
+        img[0x104..0x108].copy_from_slice(&0x120u32.to_le_bytes());
+        // DMA RET QWC=3 (48 bytes from 0x130..0x160)
+        img[0x128..0x12c].copy_from_slice(&0x6000_0003u32.to_le_bytes());
+        // VIF UNPACK V3-16 NUM=2 (0x6902_c000) -> 12 bytes
+        img[0x130..0x134].copy_from_slice(&0x6902_c000u32.to_le_bytes());
+        img[0x134..0x136].copy_from_slice(&(-32768i16).to_le_bytes());
+        img[0x136..0x138].copy_from_slice(&(-32768i16).to_le_bytes());
+        img[0x138..0x13a].copy_from_slice(&(-32768i16).to_le_bytes());
+        img[0x13a..0x13c].copy_from_slice(&32767i16.to_le_bytes());
+        img[0x13c..0x13e].copy_from_slice(&32767i16.to_le_bytes());
+        img[0x13e..0x140].copy_from_slice(&32767i16.to_le_bytes());
+        // VIF UNPACK V2-16 NUM=2 (0x6502_c010) -> 8 bytes
+        img[0x140..0x144].copy_from_slice(&0x6502_c010u32.to_le_bytes());
+        img[0x144..0x146].copy_from_slice(&4096i16.to_le_bytes());
+        img[0x146..0x148].copy_from_slice(&(-4096i16).to_le_bytes());
+        // VIF UNPACK V3-8 NUM=2 (0x7a02_c020) -> 6 bytes padded to 8
+        img[0x14c..0x150].copy_from_slice(&0x7a02_c020u32.to_le_bytes());
+        img[0x150..0x156].copy_from_slice(&[10, 20, 30, 40, 50, 60]);
+        // MSCNT
+        img[0x158..0x15c].copy_from_slice(&0x1700_0000u32.to_le_bytes());
+
+        let m = TrackModule {
+            image: img,
+            elfd_size: 0x180,
+            sections: vec![ModuleSection {
+                name: ".data".into(),
+                sh_type: 1,
+                offset: 0,
+                size: 0x180,
+                data_offset: 0,
+                link: 0,
+                entsize: 0,
+            }],
+            symbols: vec![ModuleSymbol {
+                name: "__Model:::TestRoad::{as  0000}::Model[0].00".into(),
+                value: 0,
+                size: 4,
+                info: 0,
+                shndx: 1,
+            }],
+            relocations: 0,
+        };
+        let strips = m.extract_article_mesh("TestRoad", [-10.0, -5.0, 0.0], [10.0, 5.0, 20.0]);
+        assert_eq!(strips.len(), 1);
+        assert_eq!(strips[0].positions.len(), 2);
+        assert!((strips[0].positions[0][0] - (-10.0)).abs() < 1e-3);
+        assert!((strips[0].positions[1][0] - 10.0).abs() < 1e-3);
+        assert!((strips[0].uvs[0][0] - 1.0).abs() < 1e-4);
+        assert_eq!(strips[0].colors, vec![[10, 20, 30], [40, 50, 60]]);
+    }
+
+    #[test]
+    fn extracts_cdat_collision_tris() {
+        // Minimal CARP with 1 Arti ("road", ca#0 with 1 group, 1 strip of 4 verts -> 2 tris)
+        // and 1 CDat (sr#1 = "CARP::road", ci#0 = 1 identity instance at (100, 5, 200)).
+        let mut buf = vec![0u8; 0x300];
+        let w32 = |b: &mut [u8], o: usize, v: u32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        let wi32 = |b: &mut [u8], o: usize, v: i32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        let wf32 = |b: &mut [u8], o: usize, v: f32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        let w16 = |b: &mut [u8], o: usize, v: u16| b[o..o + 2].copy_from_slice(&v.to_le_bytes());
+
+        // Pool records at 0x10 (Arti), 0x20 (CDat); root CARP window at 0x30 (len 0 -> 1 dummy)
+        // 0x00: CARP root: pool at 0x10 (2 records -> 0x30), dir count=0
+        w32(&mut buf, 0x00, crate::crp::CARP);
+        w32(&mut buf, 0x04, 2 << 5);
+        wi32(&mut buf, 0x08, 0);
+        wi32(&mut buf, 0x0c, 0x10);
+
+        // 0x10: Arti -> window at 0x40, count=2 (Name, ca#0)
+        w32(&mut buf, 0x10, crate::crp::tag::ARTI);
+        w32(&mut buf, 0x14, 0);
+        wi32(&mut buf, 0x18, 2);
+        wi32(&mut buf, 0x1c, 0x40);
+
+        // 0x20: CDat -> window at 0x60, count=2 (sr#1, ci#0)
+        w32(&mut buf, 0x20, crate::crp::tag::CDAT);
+        w32(&mut buf, 0x24, 0);
+        wi32(&mut buf, 0x28, 2);
+        wi32(&mut buf, 0x2c, 0x60);
+
+        // 0x40: Name ("road\0", 5 bytes at 0x100)
+        w32(&mut buf, 0x40, crate::crp::tag::NAME);
+        w32(&mut buf, 0x44, 5 << 8);
+        wi32(&mut buf, 0x48, 0);
+        wi32(&mut buf, 0x4c, 0x100);
+        buf[0x100..0x105].copy_from_slice(b"road\0");
+
+        // 0x50: ca#0 (96 bytes at 0x120: 32 hdr + 16 grp + 64 4-vert strip)
+        w32(&mut buf, 0x50, TAG_CA | 0x0000); // ca#0, short tag bit 0x01
+        w32(&mut buf, 0x54, (112 << 8) | 0x01);
+        wi32(&mut buf, 0x58, 0);
+        wi32(&mut buf, 0x5c, 0x120);
+        w16(&mut buf, 0x120, 1); // gcnt = 1
+        w16(&mut buf, 0x122, 80); // geom_sz = 16 (grp hdr) + 64 (verts)
+        w16(&mut buf, 0x140 + 14, 16); // grp 0 voff = 16 from ca+32 -> 0x150
+        // 4 strip verts at 0x150
+        let pts = [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0]];
+        let ws = [4u32, 0, 0x0007_0001, 0x0007_0001];
+        for k in 0..4 {
+            let vo = 0x150 + k * 16;
+            wf32(&mut buf, vo, pts[k][0]);
+            wf32(&mut buf, vo + 4, pts[k][1]);
+            wf32(&mut buf, vo + 8, pts[k][2]);
+            w32(&mut buf, vo + 12, ws[k]);
+        }
+
+        // 0x60: sr#1 ("CARP::road\0", 11 bytes at 0x1a0)
+        w32(&mut buf, 0x60, (TAG_SR & 0xFFFF_0000) | 1);
+        w32(&mut buf, 0x64, (11 << 8) | 0x01);
+        wi32(&mut buf, 0x68, 0);
+        wi32(&mut buf, 0x6c, 0x1a0);
+        buf[0x1a0..0x1ab].copy_from_slice(b"CARP::road\0");
+
+        // 0x70: ci#0 (1 item = 64 bytes at 0x1c0)
+        w32(&mut buf, 0x70, TAG_CI & 0xFFFF_0000);
+        w32(&mut buf, 0x74, (64 << 8) | 0x01);
+        wi32(&mut buf, 0x78, 1);
+        wi32(&mut buf, 0x7c, 0x1c0);
+        wf32(&mut buf, 0x1c0, 1.0); // r0.x
+        wf32(&mut buf, 0x1c0 + 40, 1.0); // r2.z
+        w32(&mut buf, 0x1c0 + 28, 0x7372_0001); // sr#1
+        wf32(&mut buf, 0x1c0 + 48, 100.0);
+        wf32(&mut buf, 0x1c0 + 52, 5.0);
+        wf32(&mut buf, 0x1c0 + 56, 200.0);
+
+        let crp = crate::crp::Crp::parse(&buf).unwrap();
+        let tris = crp.extract_collision_tris().unwrap();
+        assert_eq!(tris.len(), 2);
+        assert_eq!(tris[0].flags, 7);
+        assert_eq!(tris[0].v[0], [100.0, 5.0, 200.0]);
+        assert_eq!(tris[1].v[2], [101.0, 5.0, 201.0]);
+    }
+
+    #[test]
+    fn extracts_map_triggers_and_masked_packet_textures() {
+        // Test Map -> Trgr 64-byte record parsing.
+        let mut buf = vec![0u8; 0x200];
+        let w32 = |b: &mut [u8], o: usize, v: u32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        let wi32 = |b: &mut [u8], o: usize, v: i32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        let wf32 = |b: &mut [u8], o: usize, v: f32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+
+        // 0x00: CARP root, pool at 0x10 (1 record = Map), dir count=0
+        w32(&mut buf, 0x00, crate::crp::CARP);
+        w32(&mut buf, 0x04, 1 << 5);
+        wi32(&mut buf, 0x08, 0);
+        wi32(&mut buf, 0x0c, 0x10);
+        // 0x10: Map -> window at 0x20, count=1 (Trgr)
+        w32(&mut buf, 0x10, crate::crp::tag::MAP);
+        w32(&mut buf, 0x14, 0);
+        wi32(&mut buf, 0x18, 1);
+        wi32(&mut buf, 0x1c, 0x20);
+        // 0x20: Trgr -> 64 bytes at 0x40
+        w32(&mut buf, 0x20, 0x5472_6772);
+        w32(&mut buf, 0x24, 64 << 8);
+        wi32(&mut buf, 0x28, 1);
+        wi32(&mut buf, 0x2c, 0x40);
+        wf32(&mut buf, 0x40, -10.5);
+        wf32(&mut buf, 0x44, 2.0);
+        wf32(&mut buf, 0x48, 30.25);
+        wf32(&mut buf, 0x4c, 4.5);
+        w32(&mut buf, 0x50, 0x0407_0101);
+        w32(&mut buf, 0x58, 0x656c_0001);
+
+        let crp = crate::crp::Crp::parse(&buf).unwrap();
+        let trgs = crp.extract_map_triggers().unwrap();
+        assert_eq!(trgs.len(), 1);
+        assert_eq!(trgs[0].pos, [-10.5, 2.0, 30.25]);
+        assert!((trgs[0].radius - 4.5).abs() < 1e-6);
+        assert_eq!(trgs[0].flags, 0x0407_0101);
+        assert_eq!(trgs[0].id, 0x656c_0001);
+
+        // Test packet_texture with 0x0300_0002 + 0x4000_0000 high bit and V3-32 after STMOD (0x05).
+        let mut img = vec![0u8; 0x200];
+        // Texture descriptor at 0x20: [0, "plow"]
+        img[0x24..0x28].copy_from_slice(b"plow");
+        // RM list at 0x40: [0x0300_0002, 0x4000_0020]
+        w32(&mut img, 0x40, 0x0300_0002);
+        w32(&mut img, 0x44, 0x4000_0020);
+        // Packet at 0x80: po - 0x18 = 0x68 -> 0x40
+        w32(&mut img, 0x68, 0x40);
+        w32(&mut img, 0x88, 3); // qwc = 3 (48 bytes at 0x90..0xc0)
+        // VIF stream: STMOD (0x0500_0001), then V3-32 UNPACK (0x7802_0000, 2 verts)
+        w32(&mut img, 0x90, 0x0500_0001);
+        w32(&mut img, 0x94, 0x7802_0000);
+        wf32(&mut img, 0x98, 1.0);
+        wf32(&mut img, 0x9c, 2.0);
+        wf32(&mut img, 0xa0, 3.0);
+        wf32(&mut img, 0xa4, 4.0);
+        wf32(&mut img, 0xa8, 5.0);
+        wf32(&mut img, 0xac, 6.0);
+        // Segment table at 0xc0: [0xA000_0000, 0, 2, 0xA000_FFFF, 0x80]
+        w32(&mut img, 0xc0, 0xA000_0000);
+        w32(&mut img, 0xc8, 2);
+        w32(&mut img, 0xcc, 0xA000_FFFF);
+        w32(&mut img, 0xd0, 0x80);
+        // Model header at 0x100: +0xc8 = 1, +0xcc = 0xc0
+        img.resize(0x200, 0);
+        w32(&mut img, 0x1c8, 1);
+        w32(&mut img, 0x1cc, 0xc0);
+
+        let m = TrackModule {
+            image: img,
+            elfd_size: 0x200,
+            sections: vec![ModuleSection {
+                name: ".data".into(),
+                sh_type: 1,
+                offset: 0,
+                data_offset: 0,
+                size: 0x200,
+                link: 0,
+                entsize: 0,
+            }],
+            symbols: vec![ModuleSymbol {
+                name: "__Model:::Car::{as  0000}::Model[0].00".into(),
+                value: 0x100,
+                size: 0,
+                info: 0,
+                shndx: 1,
+            }],
+            relocations: 0,
+        };
+        let strips = m.extract_all_article_parts("Car", [-1.0; 3], [1.0; 3]);
+        assert_eq!(strips.len(), 1);
+        assert_eq!(strips[0].texture.as_deref(), Some("plow"));
+        assert_eq!(strips[0].positions, vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+    }
+
+    #[test]
+    fn ignores_secondary_v4_32_attribute_blocks_in_batch() {
+        let mut img = vec![0u8; 0x300];
+        let w32 = |buf: &mut [u8], o: usize, v: u32| {
+            buf[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        };
+        let wf32 = |buf: &mut [u8], o: usize, v: f32| w32(buf, o, v.to_bits());
+
+        // VIF packet at 0x20: dma_tag qwc=8 (128 bytes) at 0x28
+        w32(&mut img, 0x28, 8);
+        // Header V4-32 (num=1) at 0x30 -> skipped (20 bytes -> 0x44)
+        w32(&mut img, 0x30, 0x6c01_c000);
+        // Batch attr 0: V4-32 positions (num=2) at 0x44 -> 36 bytes -> 0x68
+        w32(&mut img, 0x44, 0x6c02_c022);
+        wf32(&mut img, 0x48, 0.1);
+        wf32(&mut img, 0x4c, 0.2);
+        wf32(&mut img, 0x50, 0.3);
+        wf32(&mut img, 0x54, 1.0);
+        wf32(&mut img, 0x58, 0.4);
+        wf32(&mut img, 0x5c, 0.5);
+        wf32(&mut img, 0x60, 0.6);
+        wf32(&mut img, 0x64, 1.0);
+        // Batch attr 1: V4-32 normals (num=2) at 0x68 -> must NOT be pushed to positions
+        w32(&mut img, 0x68, 0x6c02_c04e);
+        wf32(&mut img, 0x6c, 1.0);
+        wf32(&mut img, 0x70, 0.0);
+        wf32(&mut img, 0x74, 0.0);
+        wf32(&mut img, 0x78, 0.0);
+        wf32(&mut img, 0x7c, 0.0);
+        wf32(&mut img, 0x80, 1.0);
+        wf32(&mut img, 0x84, 0.0);
+        wf32(&mut img, 0x88, 0.0);
+        // Batch attr 2: V4-32 UVs (num=2) at 0x8c
+        w32(&mut img, 0x8c, 0x6c02_c07a);
+        wf32(&mut img, 0x90, 0.25);
+        wf32(&mut img, 0x94, 0.75);
+        wf32(&mut img, 0xa0, 0.5);
+        wf32(&mut img, 0xa4, 0.5);
+        // MSCNT at 0xb0
+        w32(&mut img, 0xb0, 0x1700_0000);
+
+        let m = TrackModule {
+            image: img,
+            elfd_size: 0x300,
+            sections: vec![ModuleSection {
+                name: ".data".into(),
+                sh_type: 1,
+                offset: 0,
+                data_offset: 0,
+                size: 0x300,
+                link: 0,
+                entsize: 0,
+            }],
+            symbols: Vec::new(),
+            relocations: 0,
+        };
+        let strips = m.parse_vif_packet(0x20, [-1.0; 3], [1.0; 3]);
+        assert_eq!(strips.len(), 1);
+        assert_eq!(strips[0].positions, vec![[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]);
+        assert_eq!(strips[0].uvs, vec![[0.25, 0.75], [0.5, 0.5]]);
     }
 }

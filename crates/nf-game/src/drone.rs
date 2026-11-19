@@ -23219,6 +23219,34 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // bound by `NDrone_InitDoorNodes` 0x139a70:24-70) and `NDrone2_FindElevatorDoor`
             // 0x14a940:23-52 — nearest class-0x1C with state & 2 within squared dist 4.0.)
             if dr.enabled && !dr.corpse && frame > dr.door_open_at + 60 {
+                if dr.hit_door.is_none()
+                    && (dr.velocity[0] * dr.velocity[0] + dr.velocity[2] * dr.velocity[2]) > 1e-4
+                {
+                    let mut best: Option<(f32, usize)> = None;
+                    for (i, door) in self.doors.list.iter().enumerate() {
+                        if (door.state & 0x12) == 0
+                            || door.ch_open != 0
+                            || self.doors.is_locked(i, &self.channels)
+                        {
+                            continue;
+                        }
+                        let dp = door.pos;
+                        let dy = (dr.pos[1] - dp[1]).abs();
+                        if dy > 2.5 {
+                            continue;
+                        }
+                        let d2 = (dr.pos[0] - dp[0]).powi(2)
+                            + (dr.pos[1] - dp[1]).powi(2)
+                            + (dr.pos[2] - dp[2]).powi(2);
+                        if d2 < 3.24 && best.map_or(true, |(b, _)| d2 < b) {
+                            best = Some((d2, i));
+                        }
+                    }
+                    if let Some((_, i)) = best {
+                        dr.hit_door = Some(i);
+                        dr.hit_door_open = false;
+                    }
+                }
                 if let Some(i) = dr.hit_door {
                     let dp = self.doors.list[i].pos;
                     if (dr.pos[0] - dp[0]).powi(2) + (dr.pos[1] - dp[1]).powi(2) + (dr.pos[2] - dp[2]).powi(2) > 4.0 {

@@ -761,11 +761,12 @@ impl MpMatch {
                 .get(sp as usize + 2)
                 .map(|p| p.facing[1].to_bits())
                 .unwrap_or(0);
-            let mut brain = crate::mp::bots::BotBrain::bot_init(rec, slot as u8, pos, yaw, class_word, &mut Rng::new(0));
+            let mut brain = crate::mp::bots::BotBrain::bot_init(rec, (slot as u8).max(4), pos, yaw, class_word, &mut Rng::new(0));
             class_words.push(class_word);
             self.arm_bot(&mut brain);
             // mp-16-slots: the bot's index is its list position (the game's slot − 4 wraps once
             // bots follow the humans — the visit stamps were indexed at 254).
+            brain.vars.slot = slot as i16;
             brain.vars.bot_index = i as i16;
             let weapon = rec.preferred_weapon_class();
             self.game.slots[slot].pos = Some(pos);

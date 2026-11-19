@@ -20,6 +20,8 @@
 
 use std::collections::BTreeMap;
 
+use super::bounds::{ZONES, ZoneQuad};
+
 /// The game's fixed physics step [M `FUN_002d6b90`'s {60,60,50,60} table; sim+0xdc0 = 1/fps].
 pub const DT: f32 = 1.0 / 60.0;
 
@@ -509,7 +511,21 @@ impl Car {
         // 4. Integrate [M 0x1f89e0's VU0 contract, [S] Euler form]: vel += acc·dt; pos += vel·dt;
         //    yaw += yaw_rate·dt. The flat surface holds the ride height (the world-collider
         //    spring keeps y; the port zeroes vy on contact) [S].
-        let acc = [fwd[0] * accel, self.gravity, fwd[2] * accel];
+        let mut acc = [fwd[0] * accel, self.gravity, fwd[2] * accel];
+        if let Some(zone_idx) = ZoneQuad::first_hit([self.pos[0], self.pos[1], self.pos[2], 1.0]) {
+            let zone = &ZONES[zone_idx];
+            let n = zone.normal;
+            let v_n = -(self.vel[0] * n[0] + self.vel[1] * n[1] + self.vel[2] * n[2]);
+            let v_n_clamped = ZoneQuad::clamped_approach_speed(v_n);
+            let mass = self.params.mass;
+            let force_acc = [acc[0] * mass, acc[1] * mass, acc[2] * mass, 0.0];
+            let f = zone.boundary_force(v_n_clamped, force_acc, mass, dt, 1.0);
+            if f[0] * n[0] + f[1] * n[1] + f[2] * n[2] > 0.0 {
+                acc[0] += f[0];
+                acc[1] += f[1];
+                acc[2] += f[2];
+            }
+        }
         if self.grounded {
             self.vel[0] += acc[0] * dt;
             self.vel[2] += acc[2] * dt;
@@ -541,5 +557,42 @@ impl Car {
         } else {
             self.grounded = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zone_quad_boundary_pushes_back_approaching_car_and_skips_receding_car() {
+        let world = FlatWorld::paved();
+        let rigid = Rigid::game_defaults();
+        let input = CarInput::default();
+
+        // Inside ZONES[5] band (z = 419.897, normal = [0, 0, -1], thickness = 10.0)
+        let mut at_wall = Car::new(CarParams::vanquish(), [300.0, 0.0, 415.0], 0.0);
+        at_wall.vel = [0.0, 0.0, 5.0];
+        let mut off_sheet = Car::new(CarParams::vanquish(), [0.0, 0.0, 0.0], 0.0);
+        off_sheet.vel = [0.0, 0.0, 5.0];
+
+        at_wall.step(&input, &world, &rigid, DT);
+        off_sheet.step(&input, &world, &rigid, DT);
+
+        // Approaching the wall (+z) triggers a -z boundary pushback on top of rolling resistance.
+        assert!(at_wall.vel[2] < off_sheet.vel[2], "expected boundary pushback along -z");
+        let expected_push = -(5.0 * DT) * DT;
+        assert!((at_wall.vel[2] - off_sheet.vel[2] - expected_push).abs() < 1e-6);
+
+        // Receding from the wall (-z) fails the k > 0 gate and receives no boundary force.
+        let mut receding_at_wall = Car::new(CarParams::vanquish(), [300.0, 0.0, 415.0], 0.0);
+        receding_at_wall.vel = [0.0, 0.0, -5.0];
+        let mut receding_off_sheet = Car::new(CarParams::vanquish(), [0.0, 0.0, 0.0], 0.0);
+        receding_off_sheet.vel = [0.0, 0.0, -5.0];
+
+        receding_at_wall.step(&input, &world, &rigid, DT);
+        receding_off_sheet.step(&input, &world, &rigid, DT);
+
+        assert_eq!(receding_at_wall.vel[2], receding_off_sheet.vel[2]);
     }
 }
