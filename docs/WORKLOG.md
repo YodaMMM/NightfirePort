@@ -62,3 +62,16 @@ real input only, no top-ups, never lower damage or health, never change guard co
   open (the report's --bond spots).
 - Whole walkreal_0700000d_live re-run on the final tree (the else-restructure): 3 passed / 0
   failed / 1 ignored (101.9 s) — the committed paths byte-identical with the knob unset.
+
+## retune-nb-0d-7 (2026-11-19, s/retune-nb-0d-7)
+
+Task: round 7 of the 0d arrival-to-C5-door 00 Agent walk `walk_arrival_to_the_c5_door_real_damage_00agent`.
+Branched from origin/master 7ffabafbc and merged origin/s/retune-nb-0d-6 (not on master). Master changed the
+guards again (SniperAim's ENTER finds the elevator door and sets the alert status like the game, c0e23ff23),
+so the death is re-measured on the merged tree first. The 0d-6 ledger: the roof-edge armour drop (the round-6
+ignore message's ROUND-7 LEVER) was measured dead in one run — the walk-off never fired, the pocket is sealed
+(roof/shed above, the bay wall south, only the unprobed west corridor as possible access), and the stray pocket
+nav ate #17's 48.0 on the roof. Helpers stay gated to level 0d + 00 Agent; real input only, no top-ups, never
+lower damage or health, never change guard code. Each lever judged on its own real run.
+
+### retune-nb-0d-7 progress
