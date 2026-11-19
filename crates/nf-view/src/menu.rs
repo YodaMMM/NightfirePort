@@ -10307,7 +10307,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
                     }
                     used += rows[i].len();
                 }
-                pause_cursor(h, 107.0, pause_objective_y(&lines, top, sel), gs(0x7f7f7f, 0xff));
+                pause_cursor(h, 107.0, pause_objective_y(&lines, top, sel), cursor_pulse(fe));
             }
         }
         // The MISSION tab (default [L the page's initial state — the d1=6 list is the enabled one]).
@@ -10329,7 +10329,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
             // PCSX2 captures — the game's list cursor; the port had none]. Drawn as a
             // small yellow triangle at the list's cursor column (the port's stand-in sprite; the
             // disc's own cursor texture was not identified — live check).
-            if !confirming { pause_cursor(h, 153.0 + 9.0, 209.0 + fe.cursor.min(2) as f32 * 33.5, gs(0x7f7f7f, 0xff)); }
+            if !confirming { pause_cursor(h, 153.0 + 9.0, 209.0 + fe.cursor.min(2) as f32 * 33.5, cursor_pulse(fe)); }
         }
     }
     // The YES/NO confirm box over the rows [L the d1=0xc text (187,188,266×16) and the d1=0xd list
@@ -10346,7 +10346,7 @@ fn pause_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, lang: Op
             let c = if i == fe.confirm_sel { bright } else { dim };
             label(h, font, &lbl(id, if i == 0 { "YES" } else { "NO" }), 238.0, 237.0 - 8.0 + i as f32 * 33.5, 165.0, 16.0, c, false, 1.0);
         }
-        pause_cursor(h, 238.0 + 9.0, 237.0 + fe.confirm_sel.min(1) as f32 * 33.5, gs(0x7f7f7f, 0xff));
+        pause_cursor(h, 238.0 + 9.0, 237.0 + fe.confirm_sel.min(1) as f32 * 33.5, cursor_pulse(fe));
     }
     // The hint bar (45,341,550×18) — the TAB's own label [M C_GCPAUSE_Handler 0x204408 swaps the
     // hint per tab on entry: MISSION 0x201 (:275), OBJECTIVES 0x202 (:239), CONTROLS 0x204 (:501),
@@ -10542,6 +10542,15 @@ fn glyph_row(h: &mut Hud, font: &nf_formats::hud::Font, text: &str, x640: f32, y
 /// The MISSION tab's row cursor: a small filled triangle pointing right at (x, y centre) [L the
 /// captures' yellow arrow; the disc's own cursor sprite was not identified — the port's stand-in,
 /// colour the title's yellow 0xfec43e [M page 0x40000009's 0x1b colour]].
+/// The list cursor's colour: the list's highlight 0x7f7f7f plus the menu alpha pulse byte-wise
+/// (`List_Update` 0x21a598:441-447 adds `Menu_AlphaGet` to each of r, g, b when +0x568 is set; `Menu_AlphaUpdate`
+/// 0x1f3170: alpha = sin(counter)·64, counter += 0.2 per frame). PCSX2 11-19 (pause and fail lists): the arrow swings
+/// from (128,66,10) to (238,165,26) — 0x7f−64 .. 0x7f+64 on the orange texel [L audits/pulse-1119, pulse-pause-1119].
+fn cursor_pulse(fe: &FrontEnd) -> [f32; 4] {
+    let v = (0x7f + fe.menu_alpha_get() as i32).clamp(0, 0xff) as u32;
+    gs(v << 16 | v << 8 | v, 0xff)
+}
+
 fn pause_cursor(h: &mut Hud, x: f32, y: f32, c: [f32; 4]) {
     // The button atlas's ▶ cell (48,16), orange: PCSX2's pause cursor measures (249,128,19), x 154.5-169.8,
     // y 202.5-216.7 for the MISSION list's first row (07000005, 2026-11-19 [L audits/pause-1119]) — 7.5 left of
@@ -10588,9 +10597,7 @@ fn results_page(h: &mut Hud, fe: &FrontEnd, font: &nf_formats::hud::Font, hfont:
                 // at y 216 / 254 of 480, the arrow at x 205.
                 centred(h, font, -2, &lbl(*id, fb), mx(197.0 + 123.0), my(223.0 + i as f32 * 38.0), c, false, 1.0);
             }
-            // The fail list's cursor is dim: PCSX2 11-19 (131,66,9) in two frames 5 s apart (no pulse), ~0.53 of the pause
-            // cursor's (249,128,19) [L audits/fail-1119].
-            pause_cursor(h, 205.0, 216.0 + fe.cursor.min(1) as f32 * 38.0, gs(0x434343, 0xff));
+            pause_cursor(h, 205.0, 216.0 + fe.cursor.min(1) as f32 * 38.0, cursor_pulse(fe));
             // The hint (97,341,446×18) LBL 0x5c8 [L the page's 0x1000006f].
             // The hint control (97,341,446×18) is centred on x = 320 like the 540-wide bars hint_bar assumes [L]:
             // hint_bar takes the 540-bar's left edge.
