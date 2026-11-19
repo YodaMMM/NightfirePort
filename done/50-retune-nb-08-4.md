@@ -130,12 +130,12 @@ binary's timeline can move; the whole-binary run above is the verification the g
 3. The hurt volume's box: the volume's y band (the zaps hit feet 13.3-13.5, not 13.086) and
    its x/z extent — expected: it covers the upper floor plate and stops at the lower.
 
-## ntfy failed
+## ntfy
 
-All three fallbacks failed:
-1. curl: `curl: (28) Connection timed out after 20002 milliseconds`
-2. python urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
-3. wget: timed out at the tool's 90 s limit (killed, no output)
+First round: curl `curl: (28) Connection timed out after 20002 milliseconds`; python urllib
+`URLError: <urlopen error [Errno 101] Network is unreachable>`; wget killed at the tool's
+90 s limit. Second round (after the final pushes): curl timed out again, python unreachable
+again, and the wget fallback **exited 0 — sent**.
 
 ## Usage
 
