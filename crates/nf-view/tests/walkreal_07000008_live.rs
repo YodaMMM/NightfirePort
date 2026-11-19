@@ -1724,6 +1724,32 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // Bounded: if the headroom or the latch refuses, the log says so and the fight runs
             // in the run-10 crouched state (no worse than master). The d1/d2 sisters never enter
             // this block (difficulty >= 3 gate) — their timelines stay byte-exact.
+            // retune-nb-08-5 run 1 (measured, its own real run): the fall landed (the run-10
+            // mechanism held) and the lockout wait + stand press WORKED — the log read
+            // `crouched false lockout 59` — but Bond stood up INSIDE the hole's footprint
+            // ((111.99, −179.52) → (112.02, 13.47, −179.53)): the standing capsule re-bridged
+            // the hole on its rim (feet 13.47, eye 14.18), the fight's first launch (t67, the
+            // machine's low pass y 17.9, dist 43.8) self-blasted −14.00 at frame 20945 (the
+            // run-10 signature) and the walk died t20944. The stand must happen OFF the hole:
+            // walk the measured lower-floor plate crouched to (112.2, −179.2) [L the run-1
+            // traces: the 13.086 floor covers (111.99..112.25, −179.16..−179.52); the hole is
+            // the small patch at (111.99, −179.52); run 1's post-dodge fight STOOD on that
+            // plate], then top off the lockout, then stand on solid lower floor (feet 13.086,
+            // eye 13.77 — above the ledge 13.5, under the lintel 14.31). The crouched walk
+            // drains the lockout as it goes [M the port decrements 1/tick, player.rs:1804].
+            // Bounded: if the walk wedges or the headroom refuses, the log says so and the
+            // fight runs in the run-10 crouched state (no worse than master). The d1/d2
+            // sisters never enter this block (difficulty >= 3 gate) — byte-exact.
+            for _ in 0..50 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = sim.bond.pos;
+                let dx = 112.2 - b[0];
+                let dz = -179.2 - b[2];
+                if dx * dx + dz * dz < 0.2 * 0.2 { break; }
+                let want_yaw = dx.atan2(dz);
+                let yaw_err = walker::wrap_pi(want_yaw - sim.bond.yaw);
+                w.tick(Input { turn: yaw_err.clamp(-0.08, 0.08), forward: if yaw_err.abs() < 0.3 { 1.0 } else { 0.0 }, ..Default::default() }, false);
+            }
             for _ in 0..70 {
                 let sim = w.scene.sim.as_ref().unwrap();
                 if sim.bond.lockout == 0 { break; }
@@ -1737,7 +1763,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             }
             {
                 let sim = w.scene.sim.as_ref().unwrap();
-                eprintln!("[08 anchor] bond {:?} crouched {} lockout {} after the lockout wait + the stand press",
+                eprintln!("[08 anchor] bond {:?} crouched {} lockout {} after the plate walk + the stand press",
                     sim.bond.pos, sim.bond.crouched, sim.bond.lockout);
             }
         }
@@ -1759,6 +1785,23 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // launcher is picked up in and flies each rocket into the body with the real look input
     // (`Bullet_update` 0x12e7b0:177-244's steering) — no ammo or damage pokes.
     const ROCKET: u8 = 0x2c;
+    {
+        // retune-nb-08-5: the pickup scan the task orders — every un-gone pickup within 60 u of
+        // Bond at fight entry (kind: 0 weapon, 1 ammo, 2 key, 3 ARMOUR [M pickup.rs kind::ARMOUR;
+        // take() hard-sets armour 50.0 when < 50.0, 0x18e650:220-225], 4 label, 5 message,
+        // 6 bonus). Diagnostic only: no sim tick runs here, every timeline stays byte-exact.
+        let sim = w.scene.sim.as_ref().unwrap();
+        let b = sim.bond.pos;
+        let mut near: Vec<(f32, u16, u16, i16, [f32; 3])> = sim.drones.pickups.iter()
+            .filter(|p| !p.gone)
+            .map(|p| { let c = p.centre();
+                let d = ((c[0]-b[0])*(c[0]-b[0]) + (c[1]-b[1])*(c[1]-b[1]) + (c[2]-b[2])*(c[2]-b[2])).sqrt();
+                (d, p.kind, p.weapon, p.rounds, c) })
+            .filter(|e| e.0 < 60.0)
+            .collect();
+        near.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+        eprintln!("[08 pickups] bond armour {:.1} health {:.1} at fight entry; un-gone pickups within 60 u: {:?}", sim.drones.health.armour, sim.drones.health.health, near);
+    }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         let inv = &sim.drones.inventory;
