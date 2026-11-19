@@ -1338,6 +1338,21 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             eprintln!("[08 ride t{t}] bond {:?} ch1 {} ch83 {} disabled {}", sim.bond.pos,
                 sim.drones.channels.on(1) as u8, sim.drones.channels.on(0x53) as u8, sim.disabled);
         }
+        // retune-nb-08-6: the ride-time pickup geometry the lever needs — the three cable-car
+        // rocket pickups' live world centres (the ride script 0x0600004C parents them to the
+        // carriage [D streams 37-39]) and their distances to Bond. Diagnostic only: eprintln,
+        // no sim write, the timeline stays byte-exact with the shipped walk.
+        if t % 200 == 100 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            let rocket_picks: Vec<(f32, u16, i16, [f32; 3], bool)> = sim.drones.pickups.iter()
+                .filter(|p| p.weapon == 0x2c)
+                .map(|p| { let c = p.centre();
+                    let d = ((c[0]-b[0])*(c[0]-b[0]) + (c[1]-b[1])*(c[1]-b[1]) + (c[2]-b[2])*(c[2]-b[2])).sqrt();
+                    (d, p.kind, p.rounds, c, p.gone) })
+                .collect();
+            eprintln!("[08 ride t{t}] rocket pickups (dist, kind, rounds, centre, gone): {:?}", rocket_picks);
+        }
     }
     assert!(ch83, "the ride script wrote ch 83 (0x53) at its tick 1410 [D stream 46]");
     {
