@@ -57,3 +57,9 @@ the ignore message. Run the whole walkreal_07000008_live binary.
   with Bond), then the idle-wait sweep before the y-46 trio/#16 (the upstream bleed 84.0
   leaves 14.0 hp at fight entry). Only crates/nf-view/tests/walkreal_07000008_live.rs and
   docs/ changed; no crates/*/src/, no tests/common/.
+## retune-nb-08-6 (2026-11-19, s/retune-nb-08-6)
+- Round 6 of the 08 whole-mission 00-Agent real-damage walk. Branched from origin/master
+  (SniperAim ENTER landed since round 5), merged origin/s/retune-nb-08-5 in. First:
+  re-measure the death on the merged tree, then take the next untried lever from the
+  ignore message (skip measured-dead levers): collect the cable-car rocket pickups DURING
+  the ride, then the idle-wait sweep before the y-46 trio/#16.
