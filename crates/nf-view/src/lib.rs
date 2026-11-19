@@ -3534,6 +3534,8 @@ impl App {
             // "esc": the Esc key through the window's own key path (in a mission it opens the pause page;
             // `back` only reaches an open menu).
             else if step == "esc" { for _ in 0..times { let _ = self.app_key(winit::keyboard::KeyCode::Escape, winit::event::ElementState::Pressed, false); } }
+            // "fire" / "fireup": the left mouse button's trigger (held until fireup), as the window's click sets it.
+            else if step == "fire" || step == "fireup" { self.grabbed = true; self.trigger = step == "fire"; }
             // "key=Q" / "keyup=Q": press / release a gameplay key through the window's key path (held until keyup).
             else if let Some((name, up)) = step.strip_prefix("key=").map(|n| (n, false)).or_else(|| step.strip_prefix("keyup=").map(|n| (n, true))) {
                 use winit::keyboard::KeyCode as K;
