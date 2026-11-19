@@ -25,3 +25,30 @@ real input only, no top-ups, never lower damage or health, never change guard co
   round-4 cadence hunt measured, now proven for the zone axis too. The baseline (committed defaults) reproduced
   byte for byte first: death t19772, 21 hits for 80.8, other 19.2, #22 46.0, the floor-landing burst
   (#3 10.8 / #1 9.0 / #2 6.0), 0.0 real-damage test FAILED as committed.
+- The driver's fallback levers measured dead: the PICKUP SCAN (NF_0D_PICKUP_SCAN, all 14 placed
+  pickups) — NO health pickup exists on 0700000d and none near the yard death; the armour pickups
+  sit at (147.00, 21.76, -252.77) [2.1+ u above every route point], the closed pocket, and the
+  annex pocket (192.82, 10.79, -272.03); the POST-LANDING IDLE WAIT sweep NF_0D_LAND_WAIT
+  {0,10,20} (the committed 40) — all dead, the same 80.8 pool (deaths t19757/t19767/t19682); the
+  EXIT-FALL DRIFT STEER NF_0D_EXIT_YAW {-2.356,-2.8,-3.14159} — the landing moves ~1.5-2 u and
+  the deaths stretch to t20135-20177, but the same 80.8 lands and the landings cost more
+  (11.4/13.2/9.6 vs 16.8). THE INVARIANT: sixteen rolls this round all landed exactly 80.8 guard
+  damage + 19.2 fall — the walk needs a REMOVED damage source, not a re-roll.
+- The ANNEX ARMOUR lever: pickup #2 is 10 u north of the bay-enter stand at the same floor, but
+  the plain nav walk, the climb_stairs hop and the crouch crawl all wedge at z ~-276.4 (a
+  waist-above wall on the bay side). The 64-ray segment-fan probe maps the pocket OPEN to the
+  west/north-west (r4 dirs 9-14; the r2-3 north mouth) with the r6 west corridor — and the
+  committed roof lane's (190.0, 19.65, -268.7) sits DIRECTLY ABOVE the pocket's north mouth.
+- ROUND-7 LEVER (in the refreshed ignore message): THE ROOF-EDGE ARMOUR DROP — walk off the
+  roof's south edge at (190.0, 19.65, -268.7) into the pocket, land in the 1.91 u touch sphere,
+  take the +50 (the ~9 m fall costs the same ~19.2 the committed annex drop already pays —
+  REPLACE it, not add), exit through the west corridor (along-length unprobed — probe walk
+  first) to the bay enter, rejoin the route. The +50 eats #22's 46.0, the ride's 0x12 draws and
+  the landing burst [M Player_HandlePain 0x1902c8:84-96].
+- Whole walkreal_0700000d_live on the final tree: 3 passed / 0 failed / 1 ignored (99.7 s) —
+  the plain replay, the d1 real-damage walk and the d2 Agent sister byte-identical (all new
+  machinery is env-gated, defaults reproduce the master timeline). interactables_0700000d_live:
+  11 passed / 0 failed (27.7 s). The fast runner (tools/test/suite.py) was started in the
+  background in the first minutes; the sandbox killed it between tool calls every time
+  (suite.out stayed empty, no suite process) — the same background-jobs-die signature rounds
+  1-5 recorded; the per-binary foreground runs above are the primary evidence.
