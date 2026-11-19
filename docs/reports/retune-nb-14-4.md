@@ -107,3 +107,20 @@ that does is the missing lever for a +50 armour pool before the junction fights.
 
 Not visible to me — this session exposes no token, cost or context-window figures to the worker;
 nothing to copy.
+
+---
+
+## ntfy failed (appended)
+
+All three fallbacks failed (2026-11-19 ~13:05 UTC), the same endpoint-unreachable shape rounds
+1-3 recorded:
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` →
+   `curl: (28) Connection timed out after 20002 milliseconds`.
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → the 20 s urlopen timeout swallowed by the wrapper kill; no output, no confirmation.
+3. `wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → exit 0 with an EMPTY
+   body (a plain topic poll also times out — the endpoint is unreachable from this sandbox).
+
+The branch push (`s/retune-nb-14-4` @ 025f2193a) and the queue pushes (the done record with this
+report attached) both succeeded, so the result reached the driver through the repo and the queue.
