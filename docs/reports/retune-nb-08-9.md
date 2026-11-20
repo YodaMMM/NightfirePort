@@ -114,3 +114,22 @@ pair's 28.0 bleed is structurally answered by the shipped lever.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (ntfy.sh unreachable — the same failure as
+rounds 5-8; each fallback ran its full attempt at 2026-11-20 ~08:10-08:15 UTC):
+
+1. curl (twice, the second with the corrected result line):
+   `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib: the request hangs — killed by the 25 s outer timeout (`exit 124`; no
+   response within the 20 s urlopen timeout), no traceback, nothing written. (Two earlier
+   attempts piped the process through `tail`, which masked the true exit status — the clean
+   unmasked run above is the evidence.)
+3. wget: `Connecting to ntfy.sh (ntfy.sh)|159.203.148.75|:443...` — connection hung, true
+   exit code 124 (killed mid-connect by the outer timeout; the same signature as round 8).
+
+The notification text that could not be delivered:
+`retune-nb-08-9: shipped the pit level_fights lever, death t26803 was t22649 (4154 ticks
+deeper), whole binary 6/0/1`
+
