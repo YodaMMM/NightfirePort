@@ -153,6 +153,16 @@ signature as round-12:
    is down today, while github.com and the game-file host both worked all session).
 3. wget: exit 124 (killed at 30 s, no output — the POST never completed).
 
+A second full pass at ~20:47 UTC (after the addendum) failed with the IDENTICAL signature:
+curl `curl: (28) Connection timed out after 20002 milliseconds` (exit 28), python3 urllib exit
+124 (killed at 30 s), wget exit 124 (killed at 30 s) — six attempts total across both passes,
+zero deliveries. The payload of the second curl (the others carried `retune-nb-0d-13: done`):
+`retune-nb-0d-13: walk still red but THE ROUND-12 CONSTRAINT LIFTED (the fast-arrival leg: the
+escape walk 105 ticks cost 3.4, the land_wait=10 keeps the landing 34.8; the trench reached at
+~27 with the fast legs) - the new wall is the armed pack's chips vs the act costs (the
+trench->roof aim never converges); the round-14 lever (the crouched stand acts, level pitch
+only) is in the ignore message; walkreal 3/0/2 + interactables 11/0 whole`.
+
 The curl payload attempted (identical in meaning in all three):
 `retune-nb-0d-13: walk still red - THE ESCAPE-WALK DRAG PINNED (the walker's d<2.2 arrival zone
 crawls 0.01 u/tick) and LIFTED (the fast-arrival leg: the escape walk 105 ticks cost 3.4, the
