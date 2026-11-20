@@ -113,7 +113,7 @@ not visible to me
 ## ntfy failed
 
 All three fallbacks failed from this sandbox (ntfy.sh unreachable — the same failure as rounds
-5-11; each attempt at 2026-11-20 ~00:43-00:45 UTC):
+5-11; each attempt at 2026-11-20 ~23:44-23:46 UTC):
 
 1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (rc 28)
 2. python3 urllib: killed by the outer 25 s timeout (rc 124) — no response within the 20 s
