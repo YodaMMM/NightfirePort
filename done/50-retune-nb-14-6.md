@@ -85,3 +85,16 @@ that goes silent.
 
 not visible to me — this environment exposes no token, credit, context-window or cost figures
 for the session; nothing to copy.
+
+## ntfy failed
+
+All three fallbacks failed, in order, at 02:22-02:24 UTC 2026-11-20 (the same failure mode
+round 5 recorded — the DNS resolves, the TLS connect to ntfy.sh hangs):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-14-6: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 -c "import urllib.request as u; r = u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'retune-nb-14-6: done …', headers={'Title':'NightfirePort'}), timeout=20); print('HTTP', r.status)"`
+   → hung silently, killed by the 25 s timeout wrapper with no output (no HTTP status, no traceback).
+3. `wget -O- --post-data "retune-nb-14-6: done …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `Resolving ntfy.sh (ntfy.sh)... 129.212.146.227, 159.203.148.75, 144.126.249.138, ...` /
+   `Connecting to ntfy.sh (ntfy.sh)|129.212.146.227|:443...` then hung; true exit 124 (killed at 25 s).
+
