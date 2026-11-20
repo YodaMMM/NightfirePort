@@ -136,3 +136,15 @@ approach's node 22 to a world blast on a pool the #39/#40 exchanges drained.**
 
 not visible to me — this environment exposes no token, credit, context-window or cost
 figures for the session; nothing to copy.
+
+## ntfy failed
+
+All three fallbacks failed, in order, at ~17:00 UTC 2026-11-20 (the same failure mode rounds
+5-9 recorded — the DNS resolves, the TLS connect to ntfy.sh hangs):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-14-10: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20003 milliseconds` (exit 28).
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'retune-nb-14-10: …', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → hung silently, killed by the 25 s wrapper with no output (exit 124).
+3. `wget -q -O- --post-data "retune-nb-14-10: …" https://ntfy.sh/nightfire-yoda-8k3x`
+   → hung with no output; the 25 s wrapper kill hit before wget's own timeout produced
+   anything (exit 124).
