@@ -26,3 +26,7 @@ claimed-by: sandbox4 at 2026-11-20T00:19Z
 ## Report (done, 2026-11-20T01:13Z)
 
 Closed by the driver: the report is on `s/retune-nb-0d-8` (docs/reports/retune-nb-0d-8.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-11-20T01:18Z)
+
