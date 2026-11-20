@@ -113,3 +113,15 @@ lower damage or health, never change guard code. Each lever judged on its own re
   the primary evidence. The full 450+-binary suite does not fit the sandbox disk either (the venv's ML
   packages share the 9.9 G rootfs quota; ~430 built nf-view test binaries were deleted to free the link
   headroom, relinking all of them for a suite pass is ~hours).
+
+## Task ID: retune-nb-0d-8
+Agent: main
+Task: retune-nb-0d-8 — the 0d arrival-to-C5-door 00 Agent walk green again (round 8)
+
+Work Log:
+- Branch s/retune-nb-0d-8 cut from origin/master (ccd79b5be) with origin/s/retune-nb-0d-7 merged in
+  (0d-7 was not on master; merge 17ad07011, clean). WORKLOG entry pushed at branch creation.
+- Round-8 lever from the 0d-7 ignore message: kill g18/#18 at the bay stand before the ride
+  (act variant over the measured patrol band), then NF_0D_RIDE_SHIFT=60 + the corridor take.
+- Master moved past the round-7 measurement (ccd79b5be pose pool / 434826a9b laser HUD) — the death
+  re-measure on the merged tree comes first, per the round-7 procedure.
