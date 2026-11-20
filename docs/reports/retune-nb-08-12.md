@@ -76,7 +76,9 @@ dive-window damage (a rocket landed −101.0 where every earlier dive-window run
   does not fit the remaining window after the five lever runs. What ran instead, on the final
   tree: the whole `walkreal_07000008_live` binary above (6/0/1, 149.84 s). No `crates/*/src/`
   change this window, so every other binary is byte-identical in behavior to the merged 08-11
-  state, whose numbers are in docs/reports/retune-nb-08-11.md.
+  state, whose numbers are in docs/reports/retune-nb-08-11.md. `nf-game --lib` also ran on
+  the final tree: **796 passed / 0 failed / 4 ignored** — the same numbers the merged 08-11
+  state reported, confirming the no-src-change byte-identity [L the final-tree run].
 
 ## What's left (the next window's levers, in priority order)
 
