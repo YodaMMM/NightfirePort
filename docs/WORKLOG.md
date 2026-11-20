@@ -279,3 +279,13 @@ every lever the ledger marks measured dead; helpers stay gated to the level and 
   suite.py fast runner was killed between tool calls twice (nohup and setsid, suite.out empty —
   the rounds-1-10 signature); the four-crate build also exceeds the rootfs left. Report:
   docs/reports/retune-nb-0d-13.md.
+- Round-14 lever TRIED SAME-SESSION (post-finish, four real runs 14-a..14-d): the pass-0
+  certain kill landed at 4.2 (the roll; the 1-tick crouch press did not stick — the trench act
+  printed the standing eye); SWEEP_PASSES=1 + the fast legs reached THE TRENCH at ~27 (the legs
+  66/195/117 ticks) and died mid roof-act — the trench->roof aim never converged (cd(snap) 2.086
+  at +330; the roof edge blocks the up-line); the 5-tick press DID crouch but the crouched
+  up-pitch aim DEGENERATED (cd(snap) 248) — the crouch is LEVEL-pitch only; the plate roof act
+  (NF_0D_PLATE_ROOF_KILL) rolled into the #6 back-fire death. The next-round shape stands: the
+  fast legs + the land_wait=10 + SWEEP_PASSES=1 reach the trench at ~25-27; the roof act needs a
+  working line; #6's back-fire remains the legs' tax. Final-tree evidence re-verified whole:
+  walkreal 3 passed / 0 failed / 2 ignored (106.1 s), interactables 11 passed / 0 failed (31.6 s).

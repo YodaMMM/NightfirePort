@@ -102,6 +102,41 @@ knobs-unset tree is the merged 0d-12 tree plus additive test-file code.
 - Live checks for the main agent: none needed this round — the levers were judged on the
   direct test binary's own runs; the round-12 census [D] answer stands.
 
+## Post-finish addendum: the round-14 lever tried same-session (runs 14-a..14-d)
+
+The finish steps were complete at ~20:10 UTC with time left before the 21:15 stop-new-work
+line, so the round-14 lever (the crouched stand acts) was implemented as knobs and judged on
+its own real runs (all [L], each its own roll, the composed shape + the round-13 proven knobs):
+
+1. **Run 14-a** (`NF_0D_STAND_CROUCH=1`, the 1-tick press): the pass 0 certain kill LANDED at
+   **cost 4.2** (g2 d 9.4, the act returned true; 31.4 → 27.2) — but the trench act later
+   printed the STANDING eye 5.80: the 1-tick press did not stick, so the 4.2 was the roll, not
+   the crouch. Pass 1 (g0 d 17.4) died mid-act t22803.
+2. **Run 14-b** (`STAND_CROUCH` + `SWEEP_PASSES=1`): the legs fast and cheap (66/195/117 ticks)
+   and **the trench reached at ~27** — the furthest this walk has ever been after the stand —
+   then died t23299 mid roof-act: the trench→roof aim NEVER CONVERGED (cd(snap) 2.086 still at
+   +330; the roof edge over the trench blocks/mangles the up-line) while #29 chipped 1.8 per
+   ~55 ticks from d 7.9. #25/#26 were already down (the strays beat the walk to them).
+3. **Run 14-c** (the 5-tick press idiom, which DID crouch — the eye 5.34): the crouched
+   up-pitch aim DEGENERATED (cd(snap) 248.157, the cursor flew off at +95) — **the crouch is
+   for LEVEL-pitch stands only**; the roof act from a crouched stand is unusable.
+4. **Run 14-d** (the roof-shooter plate act, `NF_0D_PLATE_ROOF_KILL=1` — the ~13° pitch from
+   the plate over the open yard): the roll landed the 13-g shape's death instead (t22927, #6's
+   north-band back-fire 5 × 1.8 from d 26.9) — the plate act's own merit stays unmeasured this
+   round.
+
+The next-round shape stands as written in the ignore message (the crouched stand acts), now
+with the refined law: the crouch LEVEL pitch only and the 5-tick press idiom; the roof act
+needs a working line (the plate act's roll on a fresh stream, a head variant, or the main
+agent's fieldprobe of the plate→roof line); #6's back-fire remains the legs' tax. All the
+round-14 code is env-gated knobs (`NF_0D_STAND_CROUCH`, `NF_0D_PLATE_ROOF_KILL`), defaults off,
+byte-identical.
+
+- Final-tree evidence (re-verified whole after the 14-a..14-d trials):
+  **walkreal_0700000d_live 3 passed / 0 failed / 2 ignored (106.1 s)**;
+  **interactables_0700000d_live 11 passed / 0 failed (31.6 s)**.
+
+
 ## Usage
 
 not visible to me — this environment shows no token, credit, cost or context-window figures for

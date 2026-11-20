@@ -2757,6 +2757,22 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                     da, db, (40.0 * (1.0 - (da - 1.0576).max(0.0) / 5.0)).max(0.0), (40.0 * (1.0 - (db - 1.0576).max(0.0) / 5.0)).max(0.0));
             }
             eprintln!("[0d] the exit stand: {:?} health {}", bond_pos(&w), w.scene.sim.as_ref().unwrap().drones.health.health);
+            // retune-nb-0d-13/14, THE CROUCHED STAND ACTS (the round-14 lever, tried this round
+            // post-finish): the armed pack's converged chips drain ~0.25/tick off a standing
+            // aim act and ~0.1/tick crouched [L round-9 run 8], because the crouch drops the
+            // sight target 0.45 [M Player_GetHeadPos 0x195aa0:39-51] and multiplies the
+            // visibility by 0.75 [M Drone_ProcessOpponents 0x1390c0:40-42] — and the 0d-2
+            // ledger's crouched sweep kills LANDED at d 24. NF_0D_STAND_CROUCH=1 presses the
+            // crouch AT THE STAND only (after the fast arrival; the escape walk and the yard
+            // legs keep the standing gait), the stand press follows after the sweep. Unset =
+            // byte-identical.
+            let stand_crouch = std::env::var("NF_0D_STAND_CROUCH").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+            if stand_crouch && stand_first && !w.scene.sim.as_ref().unwrap().bond.crouched {
+                for _ in 0..5 {
+                    w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+                    w.total_ticks += 1;
+                }
+            }
             if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
             // retune-nb-0d-9: under the stand-first lever the stand sweep carries a FAILED-GUARD
             // memory (the else-branch's own pattern): a pass that returned false is not
@@ -2864,6 +2880,15 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             let _ = kill_guard_at_present(&mut w, at, tol, label, 300);
         }
     }
+    // retune-nb-0d-14: the stand press after the crouched stand acts (the gait for the yard
+    // legs stays standing). Unset = byte-identical.
+    if std::env::var("NF_0D_STAND_CROUCH").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0
+        && w.scene.sim.as_ref().unwrap().bond.crouched {
+        for _ in 0..5 {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+        }
+    }
     // retune-nb-0d-13, THE NORTH-BAND KILL (the round-11 lever (c) implemented this round):
     // the yard-south run legs' measured back-fire killer — #6 at the C5-door corner
     // (137.1, 5.0, -275.5), 5 x 1.8 chips through skip_return_fire (run 11-d death t22798).
@@ -2898,6 +2923,14 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         sim.drones.props.subjects.iter().find(|s| s.channel == 0x1e).expect("the laser subjects [D #494/#495]").clone()
     };
     let sc = [(subject.lo[0] + subject.hi[0]) / 2.0, (subject.lo[1] + subject.hi[1]) / 2.0, (subject.lo[2] + subject.hi[2]) / 2.0];
+    // retune-nb-0d-14: THE ROOF-SHOOTER PLATE ACT — the trench->roof line's aim never
+    // converged (run 14-b: cd(snap) 2.086 still at +330; run 14-c: the crouched up-pitch
+    // cursor degenerated, cd(snap) 248) — the roof edge over the trench blocks/mangles the
+    // up-line. From the PLATE the pitch is ~13 deg over the open yard. NF_0D_PLATE_ROOF_KILL=1
+    // arms it (the run variant only; unset = byte-identical).
+    if yard_run && std::env::var("NF_0D_PLATE_ROOF_KILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0 {
+        let _ = kill_guard_certain_at(&mut w, [138.9, -325.3], [3.5, 3.5], 11.0, "the roof shooter above the trench (the plate act)", 300);
+    }
     if yard_fast { fast_leg(&mut w, [137.0, 5.2, -320.0], 1.5, "the display trench"); }
     else { w.walk_to(Wp::new(137.0, 5.2, -320.0).r(1.5), "the display trench"); }
     // The trench pair (level-0d-real-health-crossfire-5): #25/#26 sleep at (134.5/129.6,
@@ -2917,10 +2950,25 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // trench take them BEFORE the return. Gated to the run variant (unset = byte-identical);
     // each act's world gate holds fire on a blocked line and the cap bounds the exposure.
     if yard_run {
+        // retune-nb-0d-14: the trench certain acts run CROUCHED under the knob (the drain
+        // halves during the aim phases); the stand press follows. Unset = byte-identical.
+        let trench_crouch = std::env::var("NF_0D_STAND_CROUCH").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+        if trench_crouch && !w.scene.sim.as_ref().unwrap().bond.crouched {
+            for _ in 0..5 {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+                w.total_ticks += 1;
+            }
+        }
         let _ = kill_guard_certain_at(&mut w, [134.5, -325.7], [4.0, 4.0], 8.0, "the trench sleeper #25 (the certain box act, the run legs' drain)", 300);
         let _ = kill_guard_certain_at(&mut w, [129.6, -325.6], [4.0, 4.0], 8.0, "the trench sleeper #26 (the certain box act)", 300);
         let _ = kill_guard_certain_at(&mut w, [138.9, -325.3], [3.5, 3.5], 11.0, "the roof shooter above the trench (the certain box act, the run-10-f roof drain)", 300);
         let _ = kill_guard_certain_at(&mut w, [154.0, -291.0], [6.0, 6.0], 8.0, "the yard-east armed (the certain box act, the #1 0x12 cadence)", 300);
+        if trench_crouch && w.scene.sim.as_ref().unwrap().bond.crouched {
+            for _ in 0..5 {
+                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+                w.total_ticks += 1;
+            }
+        }
     }
     {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -3197,13 +3245,28 @@ the fast arrival (the escape walk and the yard legs stay standing/fast), run the
 AND the trench certain acts CROUCHED: the crouch drops the sight target 0.45 [M Player_GetHeadPos
 0x195aa0:39-51] and multiplies the visibility by 0.75 [M Drone_ProcessOpponents 0x1390c0:40-42]
 — the round-9 run 8 measured the crouched pass drain ~0.1/tick vs ~0.25 standing (the acts'
-costs halve; the crouch engages only at the stands, never on a walk gait). This round's knobs:
+costs halve; the crouch engages only at the stands, never on a walk gait). THE ROUND-14 LEVER
+TRIED SAME-SESSION (four real runs): (a) the STAND_CROUCH 1-tick press did not stick (the
+trench act printed the standing eye 5.80) but the pass 0 STILL landed at 4.2 (the roll, not the
+crouch); with SWEEP_PASSES=1 the run reached THE TRENCH at ~27 (the legs fast 66/195/117 ticks)
+and died mid roof-act: the trench->roof aim never converged (cd(snap) 2.086 still at +330, the
+roof edge over the trench blocks/mangles the up-line [L run 14-b]); (b) the 5-tick press idiom
+DID crouch (the eye 5.34) but the crouched up-pitch aim DEGENERATED (cd(snap) 248.157, the
+cursor flew off) [L run 14-c] — the crouch is for LEVEL-pitch stands only; (c) the roof-shooter
+plate act (NF_0D_PLATE_ROOF_KILL, the shallower ~13-deg pitch from the plate) rolled into the
+13-g #6 back-fire death (t22927) [L run 14-d]. THE NEXT-ROUND SHAPE: the fast legs + the
+land_wait=10 + SWEEP_PASSES=1 reach the trench at ~25-27 every roll that lands pass 0; the roof
+act needs a WORKING line (the plate act's roll, or a head variant, or the main agent's
+fieldprobe of the plate->roof line), and #6's north-band back-fire (5 x 1.8, d 26.9) remains
+the legs' tax — the round-14 lever stands AS WRITTEN (the crouched stand acts), now with the
+crouch law refined: LEVEL pitch only, the 5-tick press idiom. This round's knobs:
 NF_0D_WIRE_THREAD (measured worse), NF_0D_WIRE_FAST (PROVEN), NF_0D_YARD_FAST (the legs fast),
 NF_0D_NORTH_KILL (measured uneconomical), NF_0D_LAND_WAIT (PROVEN at 10), NF_0D_SWEEP_PASSES=0/1
 (the pack-thin shapes) — all default byte-identical; the fast_leg helper is test-local (no
 common/ change). Whole binaries on the knobs-unset tree (THIS sandbox holds 4 GB and ran them
-whole): walkreal_0700000d_live 3 passed / 0 failed / 2 ignored (102.0 s), interactables_0700000d_live
-11 passed / 0 failed (31.4 s). The fast runner (tools/test/suite.py) was started twice (nohup and
+whole, re-verified on the FINAL tree after the round-14 lever trials): walkreal_0700000d_live
+3 passed / 0 failed / 2 ignored (106.1 s), interactables_0700000d_live 11 passed / 0 failed
+(31.6 s). The fast runner (tools/test/suite.py) was started twice (nohup and
 setsid) in the first minutes and this sandbox killed it between tool calls both times with
 suite.out empty (the rounds-1-10 signature); the four-crate test-binary build also exceeds the
 rootfs left (2.8 GB free vs ~5.5 GB needed) — the per-binary foreground runs above are the
