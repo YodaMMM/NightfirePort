@@ -125,3 +125,11 @@ Branch s/retune-nb-14-9, from origin/master + merge of s/retune-nb-14-8 (fresh s
 ### retune-nb-14-9 progress (2026-11-20, fresh sandbox)
 - Setup redone from the task message (clone into /tmp/my-project, work-slim + ISO downloads, rustup, ALSA user prefix, cargo fetch). Branch created and pushed with this WORKLOG entry at setup.
 - In progress: reading the round-8 ignore message ledger; next levers in order (1) Kiko-corridor armour ledge approach via NF_SRV_PROBE, (2) door-face armour drain law, (3) dry-gun law west of the door.
+
+### retune-nb-14-9 close-out (2026-11-20)
+- Fresh sandbox (clone, work-slim + ISO, rustup 1.100, the ALSA user prefix needed PKG_CONFIG_ALLOW_SYSTEM_LIBS=1 + a rewritten alsa.pc prefix + RUSTFLAGS -L — no root this round; the repo moved to local disk, PolarFS small-file writes are ~340x slower). Branch pushed with the WORKLOG at setup; origin/s/retune-nb-14-8 merged clean.
+- Lever 1 (the Kiko-corridor armour approach) MEASURED DEAD read-only: the NF_SRV_PROBE extension dumped nav_route lane-end->armour = NO ROUTE and armour->touch = NO ROUTE — the ledge is off the web both ways; never a walk leg spent on it.
+- Lever 3 SHIPPED as the opt-in `no_lane_fetch` DamageLog law (the fights' dry/low fetch quieted; set only by this walk's round_dodge stream, cleared after the touch cut-scene). v1 caught the scope INSIDE the lane crossing (the mid-leg return-fire gate fires the LOW fetch); v2 fixed the scope: no fetch, no pocket swing, no wire death.
+- Lever 2 landed as the Kiko fast taps REMOVED (v3): the v2 trace measured them zero-kill (#20 hp 10 unchanged ×4 stands) and pure drain (the 0x1 15+61 -> 0+19, the bank eaten standing in the GL line).
+- Results: death t25389 -> t28518 (v1) -> t34252 (v2) -> t36527 (v3); the pocket squad killed (#29/#22/#31/#61/#30), the escape touch #456 REACHED, the wake legs loaded the GL armed (c15+s59). New death shape: the wake-legs node-1 ambush (#62, d 3.9, hp 10 full, 28.0 in 11 hits unanswered during the #43/#31 exchange).
+- Whole-binary runs: walkreal_07000014_live 9 passed / 0 failed / 1 ignored (173.50 s); interactables_07000014_live 10 passed / 0 failed (15.27 s). The sisters stay green (the gates hold). Still red: the ignore message refreshed with the round-9 ledger + the next levers (the node-1 ambush law, the door-face bank drain, the lane-crossing wedge).
