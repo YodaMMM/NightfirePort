@@ -185,3 +185,9 @@ changes, helpers gated to level 08 + difficulty). Status: two levers shipped, ea
   MEASURED at f25710-25800, y 12.84-13.61, dist ~49 SW — the fight loop opens f26248, ~450 ticks
   late) and the tail stamps (the drop block f24872-25309, 437 ticks with ~140 wedged in the east
   walk; the shoot-out f25309-26196, 887 ticks for one pane round). Report: docs/reports/retune-nb-08-10.md.
+
+## retune-nb-08-11 (2026-11-20)
+Round 11 of the 08 whole-mission 00 Agent real-damage walk. Branch s/retune-nb-08-11 from
+origin/master (ccd79b5be) with origin/s/retune-nb-08-10 merged in. Setup done; reading the
+round-10 report and the walk's ignore message next, then evaluating the next untried lever on
+its own real run. Report: docs/reports/retune-nb-08-11.md.
