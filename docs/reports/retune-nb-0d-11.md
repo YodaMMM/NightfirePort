@@ -65,7 +65,8 @@ knobs-unset tree is byte-identical — the whole-binary runs below are the proof
 ## How it was verified
 
 - Whole binaries on the final tree (knobs unset): `walkreal_0700000d_live` **3 passed / 0 failed /
-  1 ignored** (107.2 s); `interactables_0700000d_live` **11 passed / 0 failed** (31.9 s).
+  1 ignored** (107.2 s; a second stability sample on the same committed tree: 3/0/1, 105.8 s);
+  `interactables_0700000d_live` **11 passed / 0 failed** (31.9 s).
 - The fast runner (`tools/test/suite.py`) was started in the background in the first minutes per
   the driver's instruction; this sandbox killed it between tool calls with `suite.out` empty (the
   rounds 1-10 signature). The rule-5 four-crate build then hit **rootfs disk full** (9.9 GB; the
