@@ -168,3 +168,12 @@ Work Log:
   fix) or the yard-south run variant; the full item (10) is in the ignore message.
 - Whole binaries on the final tree (knobs unset): walkreal 3/0/1 (102.1 s), interactables 11/0
   (31.0 s). Report: docs/reports/retune-nb-0d-9.md.
+
+## retune-nb-0d-10 (2026-11-20, s/retune-nb-0d-10)
+- Branch off master ccd79b5be with origin/s/retune-nb-0d-9 merged in first (0d-9 was not on
+  master; fast-forward). Round 10 of the 0d arrival-to-C5-door 00 Agent real-damage walk
+  (walk_arrival_to_the_c5_door_real_damage_00agent, still red): the round-10 lever from the
+  ignore message item (10) — fix the stand sweep's Y-law to the bullet's own law (the bullet
+  flies bond.pitch x FRAC_PI_2 from the anim-posed muzzle, no cursor-y), so the g6-class passes
+  land and the runs 6-7 kill race closes at ~10 health margin. Fallback: the yard-south run
+  variant (skip the sweep, skip_return_fire through the plate legs). Work continues below.
