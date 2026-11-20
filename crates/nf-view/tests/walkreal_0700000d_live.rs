@@ -1346,6 +1346,31 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // (194, 10.6, −282) Bond is in the ROOM with it: a horizontal in-room ray at d ~17-21,
     // no wall between. Its ride hit (16) and its bay-phase fire both come off the table.
     let _ = w.try_walk_to(Wp::new(194.0, 10.6, -282.0).r(1.4), "bay enter");
+    // retune-nb-0d-8 probe (env NF_0D_BAY_CENSUS, prints only — no sim state): the round-8
+    // lever needs to know WHERE the ride killer g18 (owner 18, skin 0x5000087) is when the
+    // walk reaches the bay stand, and whether any clear_box_aim ray from here reaches it
+    // (the ride hit's measured spot (181.21, 3.54, -291.54) is in the yard pit — the
+    // in-bay kill box (210.0,-288.8) found NO live guard within 14 u in the round-7
+    // corridor rolls, so the "in-bay" target had already left the bay floor by then).
+    if std::env::var("NF_0D_BAY_CENSUS").is_ok() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0d:bay-census] at {:?} tick {}", sim.bond.pos, w.total_ticks);
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if d.corpse || d.health <= 0.0 { continue; }
+            let dist = walker::dxz(sim.bond.pos, d.pos);
+            if dist > 45.0 { continue; }
+            eprintln!("[0d:bay-census] g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) enabled {} present {} health {:.0} state {:#x} d {:.1}",
+                d.skin, d.pos[0], d.pos[1], d.pos[2], d.enabled, d.present, d.health, d.state, dist);
+        }
+        for (i, d) in sim.drones.list.iter().enumerate() {
+            if !d.present || d.corpse || d.health <= 0.0 { continue; }
+            if d.pos[1] >= 6.5 { continue; }
+            if !(110.0..=190.0).contains(&d.pos[0]) { continue; }
+            if !(-315.0..=-260.0).contains(&d.pos[2]) { continue; }
+            let aim = clear_box_aim(sim, i);
+            eprintln!("[0d:bay-census] pit g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) clear_box_aim {:?}", d.skin, d.pos[0], d.pos[1], d.pos[2], aim.map(|(c, p)| (c, p)));
+        }
+    }
     let bay18_killed = kill_guard_at_present(&mut w, [210.0, -288.8], [8.0, 5.0], "the bay guard #18 (from inside the bay)", 400);
     eprintln!("[0d] the in-bay #18 kill: landed {} pool {:.1}", bay18_killed, w.scene.sim.as_ref().unwrap().drones.health.health);
     // THE GROUND SPAWNER #32 from the bay/annex floor (level-0d-real-health-crossfire-4): the
@@ -1416,6 +1441,45 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             let crossed = corridor_mode >= 2;
             // L1: west along the bay side, south of the wedge line.
             corridor_leg(&mut w, 187.0, -278.5, 1.0, 900, None, "L1 west (bay side)");
+            // retune-nb-0d-8: THE PIT-KILL LEVER — the census (NF_0D_BAY_CENSUS) refuted the
+            // round-8 lever's premise on BOTH timelines: at the bay stand (t16104 byte-identical)
+            // the ride killer g18 (owner 18, skin 0x5000087) is IN THE PIT at
+            // (176.48, 0.98, -282.16) state 0x74 present+enabled, the in-bay kill box
+            // (210.0,-288.8) has NO live guard within 14 u (the bay patrol band
+            // (207.26,-288.74)->(211.96,-288.73) belongs to g11/g22, skins 0x5000093/0x5000090,
+            // both long dead), and clear_box_aim from the bay stand is None for EVERY pit guard
+            // (the yard-east wall). But the detour's own L1 leg stands Bond at the corridor
+            // mouth ~12 u WEST of g18 and ~9.6 u ABOVE the pit floor — the rim-act's measured
+            // down-shot geometry (the v1 g1 head kill from the container rim). NF_0D_PIT_KILL=1
+            // arms the act here (container roll + corridor roll only; unset = the committed
+            // round-7 corridor walk byte-identical). With g18 dead the shift-60 ride has no
+            // measured killer (its 17.8+17.0 WAS the whole 34.8 ride-entry pool).
+            if std::env::var("NF_0D_BAY_CENSUS").is_ok() {
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[0d:pit-census] at {:?} tick {}", sim.bond.pos, w.total_ticks);
+                for (i, d) in sim.drones.list.iter().enumerate() {
+                    if !d.present || d.corpse || d.health <= 0.0 { continue; }
+                    if d.pos[1] >= 6.5 || walker::dxz(sim.bond.pos, d.pos) > 25.0 { continue; }
+                    let aim = clear_box_aim(sim, i);
+                    eprintln!("[0d:pit-census] g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) state {:#x} d {:.1} clear_box_aim {:?}",
+                        d.skin, d.pos[0], d.pos[1], d.pos[2], d.state, walker::dxz(sim.bond.pos, d.pos), aim.map(|(c, p)| (c, p)));
+                }
+            }
+            if std::env::var("NF_0D_PIT_KILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0 {
+                let alive18 = w.scene.sim.as_ref().unwrap().drones.list.get(18)
+                    .map(|d| d.present && !d.corpse && d.health > 0.0).unwrap_or(false);
+                if alive18 {
+                    let g18 = &w.scene.sim.as_ref().unwrap().drones.list[18];
+                    eprintln!("[0d:pit-kill] targeting g18 skin {:#x} pos ({:.2},{:.2},{:.2}) state {:#x}",
+                        g18.skin, g18.pos[0], g18.pos[1], g18.pos[2], g18.state);
+                    let landed = rim_sweep_act(&mut w, 18, "the pit ride-killer g18 (the L1 mouth down-shot)", 600);
+                    eprintln!("[0d:pit-kill] landed {} pool {:.1}/{:.1}", landed,
+                        w.scene.sim.as_ref().unwrap().drones.health.health,
+                        w.scene.sim.as_ref().unwrap().drones.health.armour);
+                } else {
+                    eprintln!("[0d:pit-kill] g18 already down at the L1 mouth");
+                }
+            }
             // L2: north across the z ~-276.4 wedge line at x ~187.
             corridor_leg(&mut w, 187.3, -274.3, 0.8, 900, if crossed { Some(true) } else { None }, "L2 wedge crossing");
             // L3: the corridor's probed middle spot (the r6 fan r6 dir 12).
@@ -2403,9 +2467,24 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             // less), and its d 20-24 kills LANDED on this very level (the Operative roll's
             // 23.8 u gunner, down at +210) while the standing roll's d 24-32 rounds sprayed
             // zero lands. A fresh press stands after (the yard walk needs the stand).
-            for _ in 0..5 {
-                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
-                w.total_ticks += 1;
+            // retune-nb-0d-8: NF_0D_FLOOR_STAND=1 runs the FIRST sweep STANDING — the cadence-14
+            // roll measured the crouch FATAL here: the exit lands standing at (141.22, 5.06)
+            // ABOVE the live-wire hurt volume, the crouch drops the pos to 4.64 INTO the
+            // volume ("frame …: -18.80 from the world (live wire / blast / hurt volume)" twice,
+            // 18.8 total [L the cadence-14 run]) and Bond died AT the landing spot inside the
+            // first sweep with zero kills (the crouched eye also breaks Bond's own head-rays —
+            // the 0d-3 sub-law). The Operative sister measured the same verdict from the other
+            // side: "crouched, three kills and Bond left at 4.6 for the plate leg, t20383;
+            // standing, four kills and the yard, the plate and the photograph pass". The
+            // survival math: the fight's 80.8 pool minus the ~50 the armour ate = 30.8 health
+            // < 33.2 landed — the wire's 18.8 is exactly the margin. Unset = the committed
+            // crouch, byte-identical.
+            let floor_stand = std::env::var("NF_0D_FLOOR_STAND").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+            if !floor_stand {
+                for _ in 0..5 {
+                    w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+                    w.total_ticks += 1;
+                }
             }
             for _ in 0..sweep_passes {
                 let pick = {
