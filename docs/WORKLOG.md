@@ -130,3 +130,11 @@ level 08 + difficulty). Status: setup; levers not started yet.
   full round-8 ledger and the next levers (the crossfire geometry, the pre-raised descent, the
   armour-order swap). No src changes; whole walkreal_07000008_live binary 6 passed / 0 failed /
   1 ignored, 152.57 s on the final tree.
+
+## retune-nb-08-9 (2026-11-20)
+Round 9 of the 08 whole-mission 00 Agent real-damage walk. Branch s/retune-nb-08-9 from
+origin/master with origin/s/retune-nb-08-8 merged. Plan: read the 08-8 report and the ignore
+message on walk_the_whole_mission_on_real_input_real_damage_00agent, skip levers the ledger
+marks measured dead, try the next untried lever on its own real run; rules unchanged (real
+input only, no top-ups, never lower damage or health, no guard-code changes, helpers gated to
+level 08 + difficulty). Status: setup; levers not started yet.
