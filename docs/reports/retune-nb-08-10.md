@@ -112,3 +112,18 @@ and the round-9 ledger's priority lever (the pre-fight walk-down zaps) is struct
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (ntfy.sh unreachable — the same failure as rounds
+5-9; each attempt at 2026-11-20 ~16:32-16:33 UTC):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (rc 28)
+2. python3 urllib: killed by the outer 25 s timeout (rc 124) — no response within the 20 s
+   urlopen timeout, no traceback, nothing written
+3. wget: killed by the outer 25 s timeout mid-connect (rc 124, quiet mode, no output)
+
+The notification text that could not be delivered:
+`retune-nb-08-10: shipped the drop-before-arming reorder (fight entry 41.5 was 20.0) + the
+anchor to the zap-free stand spot, death t28256 was t26803, whole binary 6/0/1; the dive
+measured f25710-25800, the fight loop 450 ticks late`
