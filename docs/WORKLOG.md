@@ -134,3 +134,13 @@ Work Log:
 - The refreshed ledger + the round-9 lever (the proven-clear stand (142,-291.5) FIRST, then the
   sweep; the stall audit) are in the ignore message item (9). Whole binaries: walkreal 3/0/1
   (99.6 s), interactables 11/0 (20.3 s). Report: docs/reports/retune-nb-0d-8.md.
+
+## Task ID: retune-nb-0d-9
+Agent: main
+Task: retune-nb-0d-9 — the 0d arrival-to-C5-door 00 Agent walk green again (round 9)
+
+Work Log:
+- Branch s/retune-nb-0d-9 cut from origin/master (ccd79b5be) with origin/s/retune-nb-0d-8 merged in
+  (0d-8 was not on master; the merge is clean). WORKLOG entry pushed at branch creation.
+- Sandbox reused from earlier rounds: repo present, no work/ no ISO no cargo — the setup steps
+  (downloads, rust, p7z) are being redone this session. In progress.
