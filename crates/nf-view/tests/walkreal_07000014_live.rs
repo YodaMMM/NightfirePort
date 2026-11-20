@@ -1563,6 +1563,31 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
                 }
             }
         }
+        // retune-nb-14-9 lever-1 probe (the round-8 ignore message's lever 1: the Kiko-corridor
+        // armour ledge (−41.29,1.53,36.48) approach from the east lane's end (−44.5,0.9,34.0)):
+        // the route topology answered from the sim's own STATIC nav web before any walk leg is
+        // spent on it — (a) lane's end → armour (the take leg), (b) armour → the escape touch
+        // (the post-take continuation), (c) lane's end → touch (the shipped shape, for
+        // comparison). The south swing the v5/v6 deaths rode was the fights' RESUPPLY wander's
+        // route to this armour from west of the lane; from the lane's end the web may stay north.
+        let kiko_armour = [-41.29f32, 1.53, 36.48];
+        for (label, from, dest) in [
+            ("lane-end->kiko-armour", [-44.5f32, 0.9, 34.0], kiko_armour),
+            ("kiko-armour->touch", kiko_armour, [-33.1f32, 0.9, 26.8]),
+            ("lane-end->touch", [-44.5f32, 0.9, 34.0], [-33.1, 0.9, 26.8]),
+        ] {
+            match walker::nav_route(sim, from, dest) {
+                Some(pts) => {
+                    eprintln!("[srv-probe] nav {label} -> ({:.2},{:.2},{:.2}): {} nodes",
+                        dest[0], dest[1], dest[2], pts.len());
+                    for q in &pts {
+                        eprintln!("  ({:.2},{:.2},{:.2})", q[0], q[1], q[2]);
+                    }
+                }
+                None => eprintln!("[srv-probe] nav {label} -> ({:.2},{:.2},{:.2}): NO ROUTE",
+                    dest[0], dest[1], dest[2]),
+            }
+        }
         for d in &sim.drones.list {
             if d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 {
                 let dd = walker::dxz(d.pos, armour);
@@ -1694,44 +1719,18 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     }
     w.walk_to(Wp::new(-51.4, 0.4, 39.56).r(1.0), "through the opened doorway");
     w.walk_to(Wp::new(-49.2, 0.9, 38.4).r(1.0), "the Kiko corridor east");
-    // 00 Agent real health: the Kiko corridor squad (#20/#21/#29/#31, hp 10 each) converges on
-    // the escape-touch legs; answered from here, nearest first, while one stands EXPOSED (an
-    // unexposed 600-tick stand burned the window: t26813), 300 ticks each. Measured: death
-    // t26213 -> t27134 (escape-touch node 4).
-    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
-        for _ in 0..4 {
-            let pick = {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let bp = sim.bond.pos;
-                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
-                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 15.0 && (d.pos[1] - bp[1]).abs() < 2.0 })
-                    // retune-nb-14: the GUN-RAY gate (the delta approach scan's own law) — the v1
-                    // run's stand on #20 (eye-visible at d 6.6, muzzle blocked) landed ZERO
-                    // rounds in the 300-tick window while his GL rounds blasted the stand; the
-                    // scan comment's own measured shape ("#36 eye-visible gun-blocked at 5.6 u,
-                    // killed false, health 10 unchanged").
-                    .filter(|&di| walker::DamageLog::visible_gun_rays(sim, di))
-                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)))
-            };
-            let Some(di) = pick else { break };
-            if !walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), di) { break; }
-            // retune-nb-14-5: the fast taps (the round-5 measurement: the shipped 16-tick
-            // shoot_bounded landed ZERO of 18 taps on the corridor's #20 at d 6.5 — health 10
-            // unchanged after the capped fight [L run 5]).
-            let _ = w.shoot_bounded_fast(di, "the Kiko corridor's guards", 300);
-        }
-        // retune-nb-14-8 MEASURED (v3-v5, the ledger): (a) the corridor-end drop scoop granted
-        // DRY guns ("the corridor scoop: gun 0x1 clip 1 spare 0" — the door squad spent their
-        // rounds on Bond before dying) — removed; (b) the Kiko-corridor armour take BEFORE the
-        // lane fired the fights' own resupply law (the dry gun walks to the nearest pickup =
-        // this armour), whose nav route swings SOUTH through the pocket convergence zone — the
-        // v5 run died t30347 inside that wander (#23/#31/#30 2.50s, then #28's −61.84 grenade),
-        // the same shape the round-7 lever-2 verdict recorded from the north band [L]. The
-        // lane crossing itself PASSED in the v5 stream once the leg was the only change; the
-        // armour ledge needs an approach the nav web reaches without the convergence swing —
-        // round 9's probe work (nav_route to (−41.29,1.53,36.48) from the lane's end), not a
-        // blind leg. d3 real-damage only.
-    }
+    // retune-nb-14-9 lever 2 (the round-8 ignore message's lever 2, the door-face armour DRAIN
+    // law, judged on this round's own v2 run [L 2026-11-20]): the Kiko corridor's fast taps are
+    // REMOVED. The v2 trace measured them ZERO-KILL and PURE DRAIN: four 300-tick stands at
+    // d 6.5 left #20 hp 10 UNCHANGED every time (the round-5 note's own zero-of-18-taps
+    // measurement, re-confirmed), "out of ammo at +164" — the 0x1 went 15+61 → 0+19 across the
+    // loop, the gun DRY west of the door that the round-8 ledger's lever-3 shape rides — and
+    // the stands themselves sat Bond in the squad's 0x14 GL line, which drained the 35-bank
+    // (the round-8 ledger's 2.5-by-the-corridor) to 0 by the lane. A player at the corridor end
+    // does NOT stand in a GL line he cannot answer — he walks on and lets the lane fight (the
+    // v2 trace's own #20 kill, t27930, killed true) and the pocket approach's fights answer the
+    // squad WITH the clips the taps used to burn. 00 Agent real health only — the d1/d2
+    // streams never ran this block.
     // 00 Agent: the squad (#20/#22/#23/#28/#29/#31/#61) converges on the escape-touch legs. A
     // player holds the corridor end first: 600 ticks answering the nearest visible guard in short
     // stands and stepping away from any live grenade (the 15 door[51] pattern). Measured: death
@@ -1874,6 +1873,23 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         // the descent foot) now covers its bullet bill: the pocket #20's 1.93-5.0 post shots
         // and #30's 2.5s absorb into the armour instead of the health pool [M Player_HandlePain
         // 0x1902c8:84-104 — bullet pain (type 0) absorbs into armour first].
+        // retune-nb-14-9 (the round-8 ignore message's lever 3, the dry-gun law, judged on the
+        // probe's own verdict [L 2026-11-20 NF_SRV_PROBE quick run] and on this round's own v1
+        // run [L]): lever 1 (the Kiko-corridor armour take from the lane's end) is MEASURED DEAD
+        // read-only — nav_route gives NO ROUTE from the lane's end (−44.5,0.9,34.0) to the
+        // armour (−41.29,1.53,36.48) AND none from the armour to the touch, so the take is a
+        // blind walk the ledger forbids. The lever-3 law takes its place, and the v1 run fixed
+        // its scope: the fights' LOW gate fires INSIDE the lane crossing leg itself (the
+        // walk_to's mid-leg return-fire gate — the v1 resupply fired at t27840 mid-leg and its
+        // nav walk went south through the pocket convergence zone into the kind-52 world
+        // explosion at (−40.6,0.0,24.2) r 8.0, death t28518, the same tick as the v6 ledger's
+        // shape) — so the no-fetch scope starts at the lane crossing, not after the aimed pass.
+        // With the gun DRY/LOW west of the door, the fetch's only live target IS the
+        // Kiko-corridor armour (in the lane's 0.5 floor band at the corridor's walk y 1.13). A
+        // player whose gun runs dry past the pocket walks on; the wake legs' node-7 scoop
+        // re-arms AFTER the touch. The flag clears after the touch cut-scene, so the wake legs
+        // keep the shipped stream (their fights still fetch under the old law).
+        w.dmg.no_lane_fetch = true;
         w.lenient = true;
         w.walk_to(Wp::new(-44.5, 0.9, 34.0).r(1.2), "the east lane above the pocket line");
         w.lenient = false;
@@ -1898,6 +1914,11 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         assert!(sim.drones.channels.on(0x0c), "the room touch #456 fired 0x0C on contact [D]");
     }
     assert!(ch4a, "the escape cut-scene must write ch 0x4A [D]");
+    // retune-nb-14-9: the touch is banked — the no-fetch law's scope ends here (the cut-scene
+    // holds the sim, no fights run inside it); the wake legs keep the shipped stream.
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() && w.round_dodge {
+        w.dmg.no_lane_fetch = false;
+    }
     // fix-objective-banner: the monitor completes the objective the tick after the channel.
     for _ in 0..2 { w.tick(nf_game::player::Input::default(), false); }
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][2], 4, "objective 3 completes [M 0x1827d8]");

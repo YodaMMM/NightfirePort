@@ -238,6 +238,17 @@ pub struct DamageLog {
     /// Inside a return-fire resupply pass (`resupply`'s nav walks run the leg walks, whose
     /// return-fire gate would call `resupply` again — the recursion overflowed the stack).
     pub resupplying: bool,
+    /// OPT-IN (`no_lane_fetch`, set by the 07000014 00 Agent walk's escape-touch legs): the
+    /// fights' own dry/low fetches stay OFF — a dry gun bails the fight and the leg walks on
+    /// instead of the lane resupply's walk_nav_to fetches. The v6 run's measured death (the
+    /// round-8 ledger): the fights' LOW gate fetched the nearest live pickup from the lane's
+    /// end — the Kiko-corridor armour (−41.29,1.53,36.48), in the lane's 0.5 floor band at the
+    /// corridor's walk y 1.13 — and the fetch's nav route swung SOUTH through the pocket
+    /// convergence zone into the live-wire hurt volume (the WORLD's −30.51 at z ~28 finished
+    /// the walk, death t28518). A player whose gun runs dry past the pocket walks to the
+    /// touch; the wake legs' node-7 scoop re-arms AFTER the touch. Off = master behaviour (the
+    /// fetch) everywhere else — no other walk sets it.
+    pub no_lane_fetch: bool,
     /// OPT-IN lane tactics for a long open-floor crossing (the 07000013 lobby probe): the wide
     /// shooters window (48 u / 7.5 u instead of 20 u / 6.0 u), the damage-weighted target pick,
     /// and the floor-drop resupply passes around a fight. Off = the plain return fire every
@@ -1012,7 +1023,7 @@ impl Walker {
         let lane = !self.dmg.descent_stationary_fights
             && (self.dmg.lane_fights || UNSEEN_FIGHTS.with(|c| c.get()));
         if !armed(self) {
-            if lane && !self.dmg.resupplying {
+            if lane && !self.dmg.resupplying && !self.dmg.no_lane_fetch {
                 self.dmg.resupplying = true;
                 self.resupply(label);
                 self.dmg.resupplying = false;
@@ -1025,7 +1036,7 @@ impl Walker {
             // walking the nav legs under crossfire — the spawn-lobby chew on the skipped-fight
             // run): the dry stand's own resupply-after covers the empty gun.
             let low = { let sim = self.scene.sim.as_ref().unwrap(); sim.gun.clip + sim.gun.spare < 10 };
-            if low && !self.dmg.resupplying {
+            if low && !self.dmg.resupplying && !self.dmg.no_lane_fetch {
                 self.dmg.resupplying = true;
                 self.resupply(label);
                 self.dmg.resupplying = false;
