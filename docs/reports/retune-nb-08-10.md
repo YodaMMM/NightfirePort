@@ -44,9 +44,10 @@ and the round-9 ledger's priority lever (the pre-fight walk-down zaps) is struct
    southeast bearings exit through the south-east corner post (the ray to (135.8, 16.5, −209.5)
    crosses z −182.18 at x ~115.4, ~1.8 u east of the shot-out south pane's east edge 113.62) and
    the high passes stop on the lintel. The proven launchable window — the machine's LOW approach
-   dive, y 12.8-13.7 [L the round-4 landings] — ran frames ~25620-26320, UNDER the shoot-out +
-   the moved drop block (the fight loop starts 26248). The fight is now survivable for the whole
-   low-band window but cannot launch in it.
+   dive, y 12.8-13.7 [L the round-4 landings] — falls somewhere in the machine's approach; its
+   exact frames are [S] unverified (the flight dumps start at the fight loop, f26250), and the
+   2000 observed fight ticks never saw the machine below y 18.4 — the low band did NOT arrive at
+   fight t~1400-2100 in this window (the round-7 finding was that tree's fight window).
 
 ## How it was verified
 
@@ -75,10 +76,10 @@ and the round-9 ledger's priority lever (the pre-fight walk-down zaps) is struct
 
 ## What's left (the next window's levers, in priority order)
 
-1. **Start the fight loop BEFORE the machine's approach ends** — shrink the pre-shoot-out
-   overhead (~850 ticks from the cinematic's end: the flying wait, the door-arc assert, the moved
-   drop block) or interleave the shoot-out into the moved block's tail, so the loop opens ~26000
-   with the LOW dive incoming — the proven launchable window (the round-4 landings, y 12.8-13.7).
+1. **Dump the machine's approach flight first** — the pre-fight frames ~25620-26250: the
+   `pre_fight` recorder already captures (pos, state, path, t) every 30 ticks; print the buffer
+   and find the dive's true frame window before spending a start-tick lever (the fight loop
+   currently opens 26248 with the machine's approach nearly done, path t ~630).
 2. **The east-pane bearing** — a stand spot a few tenths south (z −179.3..−179.5, still
    rim-height zap-free per this window's zap map) swings the machine's southeast circuit bearings
    into the east pane pair's windows (113.37-113.62, −180.7..−181.6).
