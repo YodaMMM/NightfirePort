@@ -228,6 +228,20 @@ fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, radius: f32, d
         let Some(di) = di else { break };
         if below && excursions < 3 {
             excursions += 1;
+            // retune-nb-08-8 (d3): the excursion's own descent legs are the #16-class bleed — the
+            // 2026-11-20 baseline re-measure [L the NF_DMG_TRACE run] pins 28.0 on them: #16
+            // fired from below during the walked legs (5 hits, t5168-5583) while the legs' own
+            // return-fire stands on the pit pair failed twice each (`killed false` at t5044 and
+            // t5384) before the ramp mid opened the line at t5585. The same player tactic the
+            // shipped hall crossing and briefcase stretch use (crouch the exposed crossing): press
+            // the crouch BEFORE the descent legs — the pit pair's aim point drops to the crouched
+            // capsule and the ramp's west edge sits between. [S] unverified as game behaviour for
+            // these legs; this file's fight helper runs at difficulty 3 only (both call sites are
+            // d3-gated), and the lever gets its own real run (retune-nb-08-8 lever 1).
+            if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.scene.sim.as_ref().unwrap().bond.crouched {
+                w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+                eprintln!("[08 crouch] the pit excursion legs crouched at tick {}", w.total_ticks);
+            }
             eprintln!("[08 guards] {label}: the pit pick #{di} ({:?}) is unseen from here — the pit excursion {excursions} at tick {}, health {:.1}",
                 w.scene.sim.as_ref().unwrap().drones.list[di].pos, w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
             // The route's own descent legs (the outbound list below, "the gondola: the descent to
@@ -588,6 +602,22 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // health and dies at t29598, was t26671).
         if difficulty >= 3 && !w.tops_up() && name == "the walkway head" && !w.scene.sim.as_ref().unwrap().bond.crouched {
             w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+        }
+        // retune-nb-08-8 (d3): the east-deck-head nav is the SECOND exposed 0xa crossing — the
+        // 2026-11-20 baseline re-measure [L the NF_DMG_TRACE run] pins 36.0 of the deck-pin bleed
+        // on it: the nav wedged at (149.6, 46.1, −93.1) for ~300 ticks while the return-fire
+        // stands ground on the dry pistol (0x1 clip 1 spare 0 [L the same run's `[walk] the east
+        // deck head nav 1: cycling weapons` row]) and the surviving y-46 trio fired from d 4.2-12.9
+        // (#2 8.0 in 2, #14 16.0 in 4 — #14 was never picked by any stand, #11 12.0 in 3 — all at
+        // Bond (149.5-149.6, 46.1, −93.1) t738-1009). The same player tactic the shipped hall
+        // crossing and the briefcase stretch use (their measured wins: t26671 → t29598, t29598 →
+        // t34720): press the crouch BEFORE the crossing — the trio's aim point drops to the
+        // crouched capsule and the deck's south rail sits between it and the shooters. [S]
+        // unverified as game behaviour for this leg: the crouch's burst-eating is measured on the
+        // sister legs, this leg gets its own real run (retune-nb-08-8 lever 1).
+        if difficulty >= 3 && !w.tops_up() && name == "the east deck head" && !w.scene.sim.as_ref().unwrap().bond.crouched {
+            w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+            eprintln!("[08 crouch] the east deck head nav crouched at tick {}", w.total_ticks);
         }
         // The east deck head takes the tight 0.7 arrival: the 1.5 radius counted an arrival
         // 1.3 u west of the measured node and the next nav re-routed through the east door
