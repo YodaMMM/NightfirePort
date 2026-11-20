@@ -160,4 +160,24 @@ origin/master with origin/s/retune-nb-08-9 merged (08-9 was not on master). Plan
 08-9 report and the ignore message on walk_the_whole_mission_on_real_input_real_damage_00agent,
 skip levers the ledger marks measured dead, try the next untried lever on its own real run;
 rules unchanged (real input only, no top-ups, never lower damage or health, no guard-code
-changes, helpers gated to level 08 + difficulty). Status: started.
+changes, helpers gated to level 08 + difficulty). Status: two levers shipped, each judged on
+  its own real run. (1) the pre-fight walk-down zaps — the whole d3 drop sequence (the anchor
+  walk_to + the drop press + the crouch drop + the lockout + the stand-off walk + the stand
+  press) moved ABOVE the pane shoot-out, right after the bottom-of-mountain cinematic: the
+  baseline's zaps' anatomy is 8 during the shoot-out (the volume arms with the machine's approach
+  ~106 ticks after wait_enabled returns, first zap t25666) + 4 during the anchor walk; the drop
+  (~65 ticks) now lands the zap-free plate BEFORE the arming and the shoot-out runs from the rim —
+  the pre-fight zaps drop 12 → 1, the fight entry returns to health 41.5 (was 20.0), death t27636
+  (was t26803, 833 ticks deeper). (2) the d3 fight anchor moves to the shipped stand spot
+  (113.08, −179.02): the lever-1 run measured the old anchor (112.5-112.6, −179.39) at rim height
+  zapping the fight away (13 −2.00 rows in the last ~830 fight ticks); the stand spot measured ONE
+  row in ~430 ticks and the round-6 launches fired from it — the lever-2 run: the anchor zaps
+  gone (Bond held 13.6 health for 981 fight ticks), the fight reaches ~2000 ticks (the round-7
+  low-band window), death t28256 (1453 ticks deeper than the shipped tree). Still red — ZERO
+  launches in both lever runs (line_ok FALSE at all 105 samples, the machine's hp 598 untouched):
+  the machine's route phase at fight t0 flew the whole window on the southeast far legs and the
+  high overhead passes, whose bearings exit through the south-east corner post / the lintel; the
+  proven launchable window (the machine's LOW approach dive, frames ~25620-26320) ran UNDER the
+  shoot-out + the moved drop block. The next levers are in the ignore message. Whole binary
+  6 passed / 0 failed / 1 ignored, 111.74 s [L the final-tree run]; the affected-binary set is
+  walkreal_07000008_live alone (no src/ or common/ changes). Report: docs/reports/retune-nb-08-10.md.
