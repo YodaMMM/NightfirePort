@@ -84,3 +84,9 @@ Agent: main worker (NightfirePort sandbox)
 Work Log:
 - Fresh sandbox; cloned repo, branch s/retune-nb-14-6 from origin/master (ccd79b5be), merged origin/s/retune-nb-14-5 (not on master) cleanly at 240843c2b, pushed checkpoint. WORKLOG entry opened.
 - Round 6 body: the Operative d1 walk green + un-ignored (three runs: run 0 the traced re-measure — same t36801 death as the round-5 ledger; run 1 the named candidates byte-identical — no retarget/no first-blood fired; run 2 green with fire_through_disabled (a dormant guard held the #28 stand's line its whole 300-tick cap; the game's own collide drops Enable(0) objects [M Collide_PickObj 0x1eae80]) + hurting_first (the cooled #28 pick silenced the response ~600 ticks while #29 chewed) — the guards died t35382/t35705, walked out 40206 ticks, 07000015 warm). The 00agent d3 re-measured: the SAME t26979 death as round 5 (the two new master commits re-rolled nothing) — ignore message refreshed with the round-6 ledger, the standing levers (the ray probe from candidate hold spots, then the armour fetch) and the d1-measured fight-law candidates. Binaries: walkreal_07000014_live 9 passed/0 failed/1 ignored (168.63 s), interactables_07000014_live 10 passed/0 failed. The background suite died between tool calls again (rounds 4-5's documented sandbox behaviour); the report carries the detail.
+
+## retune-nb-14-7 — 14 infiltration to the delta exit 00 Agent walk green again (round 7)
+Task ID: 1 (whole round)
+Agent: main worker (NightfirePort sandbox)
+Work Log:
+- Fresh sandbox; cloned repo, branch s/retune-nb-14-7 from origin/master (ccd79b5be), merged origin/s/retune-nb-14-6 (not on master) — entry opened, checkpoint pushed.
