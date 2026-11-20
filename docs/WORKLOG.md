@@ -255,3 +255,27 @@ real-damage walk (walk_arrival_to_the_c5_door_real_damage_00agent).
 Branched from origin/master ccd79b5be; merged origin/s/retune-nb-0d-12 (not on master) per the
 task message. Round-13 takes the next untried lever from the ignore message item (13), skipping
 every lever the ledger marks measured dead; helpers stay gated to the level and difficulty.
+- Round-13 measured (five real runs, each its own roll): THE ESCAPE-WALK DRAG IS THE ARRIVAL
+  ZONE, NOT THE NAV FIGHTS — the NF_WALKTRACE pinned it [L run 13-d]: ~10 ticks turning, ~12 at
+  full stick, then ~160 crawling the walker's arrival zone (d < 2.2 -> forward 0.45, ~0.01
+  u/tick). THE WAYPOINT THREAD lever measured WORSE (the per-leg overhead: 379 ticks, the stand
+  at 9.8). THE FAST-ARRIVAL LEG PROVEN: the test-local fast_leg (the stick at 1.0 to the arrive
+  check, the walker's own tick) walks the escape leg in 105 ticks at cost 3.4 (the stand at
+  31.4 vs 15.2) and generalises to the yard legs (NF_0D_YARD_FAST, Legs 2-4 at 110-122 ticks) —
+  the round-12 'binding constraint' (the escape walk's exposure) LIFTED. THE LAND_WAIT LEVER
+  PROVEN: NF_0D_LAND_WAIT=10 keeps the landing at 34.8 (the 40-tick wait's burst ate armour
+  50->0 + 3.4; the 10-tick wait ate 0.2). THE NORTH-BAND KILL implemented (NF_0D_NORTH_KILL)
+  and measured UNECONOMICAL (the act's aim phase at d ~17-21 burns ~15-25 under the converged
+  pack; the 13-c death mid-act). THE NEW BINDING CONSTRAINT: the armed pack's steady
+  sight-event-keyed chips (~0.06-0.10/tick across the legs + acts) exceed the ~31 entry budget
+  unless the pack thins — the 13-e sweep pass 0's act refused (the aim-gate roll) and the pack
+  drained 31.4->0 in 61 ticks; the 13-f pure-run died at the plate (#29's roof 2.6); the 13-g
+  sweep-1-pass died to #6's north-band back-fire. THE ROUND-14 LEVER: THE CROUCHED STAND ACTS
+  (the crouch drops the sight target 0.45 [M Player_GetHeadPos 0x195aa0] and the visibility
+  x0.75 [M Drone_ProcessOpponents 0x1390c0] — the round-9 run 8's crouched drain ~0.1/tick vs
+  ~0.25 standing; the acts' costs halve; never on a walk gait). Whole binaries on the
+  knobs-unset tree (this sandbox holds 4 GB and ran them whole, unlike round-12's): walkreal
+  3 passed / 0 failed / 2 ignored (102.0 s), interactables 11 passed / 0 failed (31.4 s). The
+  suite.py fast runner was killed between tool calls twice (nohup and setsid, suite.out empty —
+  the rounds-1-10 signature); the four-crate build also exceeds the rootfs left. Report:
+  docs/reports/retune-nb-0d-13.md.

@@ -35,6 +35,40 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 fn bond_pos(w: &Walker) -> [f32; 3] { w.scene.sim.as_ref().unwrap().bond.pos }
 
+/// retune-nb-0d-13, THE FAST-ARRIVAL LEG (the round-13 lever (a), generalised): the walker's
+/// arrival zone (d < 2.2 -> forward 0.45) crawls at ~0.01 u/tick on the measured roll
+/// [L run 13-d's NF_WALKTRACE: the escape leg spent ~10 ticks turning, ~12 at full stick,
+/// then ~160 crawling the 0.45 zone] — and the same crawl taxes EVERY committed yard leg
+/// (~100-160 ticks of exposure each, the pack's chips riding every one). This test-local leg
+/// holds the stick at 1.0 to the arrive check — the walker's own tick() (the same tick
+/// discipline, the fight hooks and the RNG draw pattern ride unchanged; only the stick
+/// magnitude in the last 1.6 u differs), the same 0.07 turn clamp and the walker's own
+/// stop-and-turn rule for err > 1.2, a 1200-tick leg cap (a wedge gives up, the next leg
+/// re-aims). Callers gate it (NF_0D_WIRE_FAST / NF_0D_YARD_FAST); unset = the committed
+/// walker legs, byte-identical.
+fn fast_leg(w: &mut Walker, at: [f32; 3], arrive: f32, label: &str) {
+    let t0 = w.total_ticks;
+    loop {
+        let (p, yaw) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, sim.bond.yaw) };
+        let d = walker::dxz(p, at);
+        if d < arrive {
+            for _ in 0..6 { w.tick(nf_game::player::Input::default(), false); }
+            eprintln!("[walk] {label}: fast-arrived at +{} ticks pos ({:.2},{:.2},{:.2})",
+                w.total_ticks - t0, p[0], p[1], p[2]);
+            return;
+        }
+        if w.total_ticks - t0 >= 1200 {
+            eprintln!("[walk] {label}: fast leg gave up at the 1200-tick cap at {:?}", p);
+            return;
+        }
+        let desired = (at[0] - p[0]).atan2(at[2] - p[2]);
+        let err = walker::wrap_pi(desired - yaw);
+        let mut input = nf_game::player::Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, ..Default::default() };
+        if err.abs() > 1.2 { input.forward = 0.0; }
+        w.tick(input, false);
+    }
+}
+
 /// One steered corridor leg (retune-nb-0d-7, the west-corridor probe): the same plain steer
 /// the round-6 crawl legs use — turn clamp 0.08, forward when the aim error is inside 1 rad —
 /// with a tick cap, an optional single crouch/stand press edge ([M Player_HandleJump's crouch
@@ -109,6 +143,13 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // phases) — the objectives (the ST-3 plate, the photograph, the C5 door) need no guard
     // kill. NF_0D_YARD_RUN=1 arms it (rides NF_0D_STAND_FIRST=1; unset = byte-identical).
     let yard_run = std::env::var("NF_0D_YARD_RUN").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+    // retune-nb-0d-13, THE FAST YARD LEGS (the round-13 lever (a) generalised to the run
+    // variant's yard legs): the walker's arrival zone (d < 2.2 -> forward 0.45) crawls at
+    // ~0.01 u/tick [L run 13-d's NF_WALKTRACE] — ~100-160 ticks of exposure per leg the
+    // pack's chips ride. NF_0D_YARD_FAST=1 walks the yard's plain legs (Legs 2-4) with the
+    // test-local fast_leg (the stick at 1.0 to the arrive check; the walker's own tick, the
+    // same turn clamp, the stop-and-turn rule; a 1200-tick cap). Unset = byte-identical.
+    let yard_fast = std::env::var("NF_0D_YARD_FAST").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
     // The warm carry: 0c's record-11 channels ride the save [M 0x182270:92-95].
     let cold = if difficulty == 1 {
         nf_view::load_with_carry(&iso, "0700000d.bin", false, None).expect("load cold")
@@ -2635,10 +2676,71 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                 let p = w.scene.sim.as_ref().unwrap().bond.pos;
                 w.face_toward(stand_at[0], stand_at[2], "the stand pre-turn");
             }
+            // retune-nb-0d-13, THE WAYPOINT THREAD (the round-13 lever (a)): the escape leg's
+            // committed cost is the walk's own exposure while the armed pack's converged fire
+            // has the line (~0.106/tick x the walk ticks — runs 12-b/c/e measured 18.0 at
+            // 167-241 ticks; the round-12 verdict: "the binding constraint is the escape
+            // walk's EXPOSURE"). NF_0D_WIRE_THREAD="x1,z1,x2,z2,..." walks explicit
+            // mid-waypoints FIRST (each try_walk_to, arrive 0.6, the same skip_return_fire
+            // state as the stand walk). Unset = byte-identical (the committed single-leg walk).
+            let wire_thread = std::env::var("NF_0D_WIRE_THREAD").ok().and_then(|v| {
+                let v: Vec<f32> = v.split(|c: char| c == ',' || c == ' ' || c == ';')
+                    .filter_map(|s| s.trim().parse::<f32>().ok()).collect();
+                (!v.is_empty() && v.len() % 2 == 0).then(|| {
+                    v.chunks(2).map(|c| [c[0], 5.0, c[1]]).collect::<Vec<[f32; 3]>>()
+                })
+            });
+            // retune-nb-0d-13, THE FAST-ARRIVAL LEG (the round-13 lever (a), v2 — the thread's
+            // own measurement): the run 13-b thread legs each paid ~90-175 ticks and the whole
+            // stack landed WORSE (379 ticks, the stand at 9.8) — and the NF_WALKTRACE of run
+            // 13-d pinned the real drag [L]: ~10 ticks turning in place, ~12 at full stick,
+            // then ~160 ticks crawling the walker's arrival zone (d < 2.2 -> forward 0.45, the
+            // stick curve ~0.01 u/tick there) — the escape walk's 167-241 ticks are MOSTLY
+            // this crawl, not the nav fights. NF_0D_WIRE_FAST=1 walks the stand leg (and the
+            // WIRE_THREAD waypoints when set) with a test-local loop that holds the stick at
+            // 1.0 to the arrive check — the walker's own tick() (the same tick discipline, the
+            // fight hooks and the RNG draw pattern ride unchanged; only the stick magnitude in
+            // the last 1.6 u differs), the same 0.07 turn clamp, a 600-tick leg cap. Unset =
+            // byte-identical (the committed walker legs).
+            let wire_fast = std::env::var("NF_0D_WIRE_FAST").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+            if let Some(wps) = &wire_thread {
+                if !wire_fast {
+                    for (k, tp) in wps.iter().enumerate() {
+                        let _ = w.try_walk_to(Wp { at: *tp, act: Act::None, arrive: 0.6 }, &format!("the wire thread {k}"));
+                    }
+                }
+            }
+            if wire_fast {
+                let mut legs: Vec<([f32; 3], f32)> = Vec::new();
+                if let Some(wps) = &wire_thread { for tp in wps { legs.push((*tp, 0.6)); } }
+                legs.push((stand_at, if wire_stand.is_some() { 0.5 } else { 1.2 }));
+                for (k, (at, arr)) in legs.iter().enumerate() {
+                    let t0 = w.total_ticks;
+                    loop {
+                        let (p, yaw) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, sim.bond.yaw) };
+                        let d = walker::dxz(p, *at);
+                        if d < *arr {
+                            for _ in 0..6 { w.tick(nf_game::player::Input::default(), false); }
+                            eprintln!("[walk] the fast leg {k}: arrived at +{} ticks pos ({:.2},{:.2},{:.2})",
+                                w.total_ticks - t0, p[0], p[1], p[2]);
+                            break;
+                        }
+                        if w.total_ticks - t0 >= 600 {
+                            eprintln!("[walk] the fast leg {k}: gave up at the 600-tick cap at {:?}", p);
+                            break;
+                        }
+                        let desired = (at[0] - p[0]).atan2(at[2] - p[2]);
+                        let err = walker::wrap_pi(desired - yaw);
+                        let input = nf_game::player::Input { turn: err.clamp(-0.07, 0.07), forward: 1.0, ..Default::default() };
+                        w.tick(input, false);
+                    }
+                }
+            } else {
             // retune-nb-0d-12: under the knob the walk walks the FULL distance (arrive 0.5 —
             // run 12-d measured the committed arrive 1.2 stopping 1.2 u short of the target,
             // exactly into the barrel band: the booms cost 4.40 + 0.00 at t22689 [L]).
             let _ = w.try_walk_to(Wp { at: stand_at, act: Act::None, arrive: if wire_stand.is_some() { 0.5 } else { 1.2 } }, "the clear stand north-west of the container");
+            }
             // retune-nb-0d-10: under the run variant the answer stays skipped through the yard
             // legs (the runs dodge the armed pack's drain; the escape leg measured ZERO cost
             // [L run 2]); the committed path restores it here as before.
@@ -2762,9 +2864,24 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             let _ = kill_guard_at_present(&mut w, at, tol, label, 300);
         }
     }
+    // retune-nb-0d-13, THE NORTH-BAND KILL (the round-11 lever (c) implemented this round):
+    // the yard-south run legs' measured back-fire killer — #6 at the C5-door corner
+    // (137.1, 5.0, -275.5), 5 x 1.8 chips through skip_return_fire (run 11-d death t22798).
+    // The certain box act (the exact fire law) takes it from the stand BEFORE the legs:
+    // the stand->corner line d ~16.5 is the gate's proven far class (run 10-d landed g0 at
+    // d 17.4, part Some(4, 0.113) [L]). NF_0D_NORTH_KILL=1 arms it (the run variant only;
+    // unset = byte-identical).
+    if yard_run && std::env::var("NF_0D_NORTH_KILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0 {
+        let _ = kill_guard_certain_at(&mut w, [137.1, -275.5], [6.0, 6.0], 10.0, "the north-band kill (the C5-door corner back-fire)", 260);
+    }
     // Leg 2: the yard south to the ST-3 plate (the nav web [D path 7]) — walked.
-    w.walk_to(Wp::new(136.5, 4.5, -290.0).r(2.0), "the yard south 1");
-    w.walk_to(Wp::new(136.0, 4.5, -308.5).r(1.2), "the plate");
+    if yard_fast {
+        fast_leg(&mut w, [136.5, 4.5, -290.0], 2.0, "the yard south 1");
+        fast_leg(&mut w, [136.0, 4.5, -308.5], 1.2, "the plate");
+    } else {
+        w.walk_to(Wp::new(136.5, 4.5, -290.0).r(2.0), "the yard south 1");
+        w.walk_to(Wp::new(136.0, 4.5, -308.5).r(1.2), "the plate");
+    }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x1d),
         "the ST-3 plate #378 → ch 0x1d (objective 4) [D]");
     {
@@ -2781,7 +2898,8 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         sim.drones.props.subjects.iter().find(|s| s.channel == 0x1e).expect("the laser subjects [D #494/#495]").clone()
     };
     let sc = [(subject.lo[0] + subject.hi[0]) / 2.0, (subject.lo[1] + subject.hi[1]) / 2.0, (subject.lo[2] + subject.hi[2]) / 2.0];
-    w.walk_to(Wp::new(137.0, 5.2, -320.0).r(1.5), "the display trench");
+    if yard_fast { fast_leg(&mut w, [137.0, 5.2, -320.0], 1.5, "the display trench"); }
+    else { w.walk_to(Wp::new(137.0, 5.2, -320.0).r(1.5), "the display trench"); }
     // The trench pair (level-0d-real-health-crossfire-5): #25/#26 sleep at (134.5/129.6,
     // −325.6) [census] — the run-4 ledger: #25 fired 16 hits for 10.2 across the trench/plate
     // phases. The camera switch below ends the gun legs, so the grunt dies first. Log-only.
@@ -2825,8 +2943,13 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // Leg 4: north to the shooting stand — the yard face of bigdoor02 #96 (bounds
     // 131.78..137.08, 3.99..7.35, −269.85..−269.15 [D placed gfx]) seen from 11+ m out, outside
     // the death blast's reach (blast damage 1000 [D p5]; top_up_health guards anyway).
-    w.walk_to(Wp::new(138.0, 4.5, -305.0).r(1.5), "back to the plate");
-    w.walk_to(Wp::new(135.0, 4.5, -281.0).r(1.5), "the shooting stand");
+    if yard_fast {
+        fast_leg(&mut w, [138.0, 4.5, -305.0], 1.5, "back to the plate");
+        fast_leg(&mut w, [135.0, 4.5, -281.0], 1.5, "the shooting stand");
+    } else {
+        w.walk_to(Wp::new(138.0, 4.5, -305.0).r(1.5), "back to the plate");
+        w.walk_to(Wp::new(135.0, 4.5, -281.0).r(1.5), "the shooting stand");
+    }
     // Operative real damage too (the standing yard sweep reaches the stand alive): the yard-east
     // gunner there is #1 (0x500007e) at (155.2, 5.0, -295.1), chipping 0.6 from 23.8 u - the
     // box is centred on his spot. Measured: down at +210 and the walk COMPLETES (was t23462).
@@ -3046,21 +3169,46 @@ exact fire law's third confirmation: cd(snap) 0.342/0.420 at +58, hp -22); (iv) 
 nudge + arrive 0.5): the walk 241 ticks 18.0, arrived gap 5.79 (boom 2.11), the floor refused at
 9.8, died t22860; (v) run 12-c (the pre-turn + the committed stand): 170 ticks, cost 18.0 — the
 PRE-TURN LEVER NO-GAIN (the walk duration is the walker's nav steering + stuck mitigation, not
-the turn drag; run 2's 70 ticks was that roll's clean steering). THE ROUND-13 LEVER: (a) thread
-the escape walk with explicit mid-waypoints along the container's west face (the run-2-proven
-clean line) so the steering fights cannot stretch the walk — hold the 70-tick class EVERY roll;
-(b) shorten the 40-tick land_wait pinned INSIDE the barrel radius under the run variant (verify
-the landing burst still resolves); (c) with the walk cost held ~0-3 the entry budget (~20-27)
-affords the sweep's pass 0 (the certain g2 kill at +58) AND the north-band kill (the round-11
-lever (c), the #6-class back-fire at the C5-door corner (137.1, -275.5)) — then the run legs with
-the trench certain acts. This round's knobs: NF_0D_WIRE_STAND (the stand target x,z, arrive 0.5
-under the knob), NF_0D_PRETURN (the face_toward pre-turn) — both default byte-identical; the
-hurt_census_0700000d probe test (ignored). Whole binaries: THIS SANDBOX OOMs the single-process
-whole-binary runs (3 GB RAM, the walkreal process peaks ~2.9 GB anon, dmesg oom-kill; the
-interactables binary the same at 2 tests) — per-test evidence instead: walkreal 3/0 (+1 census
-ignored) and interactables 11/0, each test its own process; the four-crate suite build also
-exceeds the rootfs (2.8 GB free vs ~5.5 GB needed). The merged 0d-11 ignore message carried raw
-double quotes (the tree did not compile) — syntax-fixed this round, no test weakened."]
+the turn drag; run 2's 70 ticks was that roll's clean steering). THE ROUND-13 RUNS (five real
+runs, each its own roll): (vi) the WAYPOINT THREAD (NF_0D_WIRE_THREAD='141.4,-294.8,141.5,-293.2')
+measured WORSE — the thread legs each paid ~90-175 ticks (the per-leg overhead), the whole stack
+landed at 9.8 (vs 15.2 single-leg); and the NF_WALKTRACE of run 13-d pinned the REAL drag [L]:
+~10 ticks turning in place, ~12 at full stick, then ~160 ticks crawling the walker's arrival
+zone (d < 2.2 -> forward 0.45, ~0.01 u/tick there) — the escape walk's 167-241 ticks are MOSTLY
+this crawl, not the nav fights. (vii) THE FAST-ARRIVAL LEG PROVEN (the round-13 lever (a),
+NF_0D_WIRE_FAST=1 + the generalised NF_0D_YARD_FAST=1 on the yard legs, the test-local fast_leg
+holding the stick at 1.0 to the arrive check through the walker's own tick): the escape walk
+105 ticks at cost 3.4 (the stand at 31.4 vs 15.2), the yard south 1 110-122 ticks — THE ROUND-12
+'BINDING CONSTRAINT' (the escape walk's exposure) LIFTED [L runs 13-e/f]. (viii) THE LAND_WAIT
+LEVER PROVEN (the round-13 lever (b), NF_0D_LAND_WAIT=10): the landing kept 34.8 — the 40-tick
+wait's burst ate armour 50->0 + 3.4, the 10-tick wait ate armour 0.2 only [L run 13-e]. (ix)
+THE NORTH-BAND KILL (the round-13 lever (c), NF_0D_NORTH_KILL=1, the certain act on the north
+band) implemented and measured UNECONOMICAL: the act's aim phase at d ~17-21 burns ~15-25 under
+the converged pack (the run 13-c death mid-act; the plan print cd(snap) 5.367 still far from
+converged). (x) THE NEW BINDING CONSTRAINT — the armed pack's steady chips: the run 13-e sweep
+pass 0's act refused (the aim-gate oscillation roll) and the pack drained 31.4 -> 0 in 61 ticks
+(#6/#4 1.8-chips); the run 13-f (the pure-run shape, SWEEP_PASSES=0) died at the plate to the
+accumulated chips + #29's roof 2.6 (d 15.8); the run 13-g (sweep 1 pass) died on the plate leg
+to #6's north-band back-fire (5 x 1.8 from d 26.9) — the pack deals ~0.06-0.10/tick across the
+~1000-1900 ticks of legs + acts (sight-event-keyed [L the round-1 ledger]), and every certain
+act at d 9-21 costs 12-25 under the converged fire; the ~31 entry budget cannot afford the
+unthinned pack. THE ROUND-14 LEVER: THE CROUCHED STAND ACTS — press crouch at the stand after
+the fast arrival (the escape walk and the yard legs stay standing/fast), run the sweep's passes
+AND the trench certain acts CROUCHED: the crouch drops the sight target 0.45 [M Player_GetHeadPos
+0x195aa0:39-51] and multiplies the visibility by 0.75 [M Drone_ProcessOpponents 0x1390c0:40-42]
+— the round-9 run 8 measured the crouched pass drain ~0.1/tick vs ~0.25 standing (the acts'
+costs halve; the crouch engages only at the stands, never on a walk gait). This round's knobs:
+NF_0D_WIRE_THREAD (measured worse), NF_0D_WIRE_FAST (PROVEN), NF_0D_YARD_FAST (the legs fast),
+NF_0D_NORTH_KILL (measured uneconomical), NF_0D_LAND_WAIT (PROVEN at 10), NF_0D_SWEEP_PASSES=0/1
+(the pack-thin shapes) — all default byte-identical; the fast_leg helper is test-local (no
+common/ change). Whole binaries on the knobs-unset tree (THIS sandbox holds 4 GB and ran them
+whole): walkreal_0700000d_live 3 passed / 0 failed / 2 ignored (102.0 s), interactables_0700000d_live
+11 passed / 0 failed (31.4 s). The fast runner (tools/test/suite.py) was started twice (nohup and
+setsid) in the first minutes and this sandbox killed it between tool calls both times with
+suite.out empty (the rounds-1-10 signature); the four-crate test-binary build also exceeds the
+rootfs left (2.8 GB free vs ~5.5 GB needed) — the per-binary foreground runs above are the
+evidence. The merged 0d-11 ignore message carried raw double quotes (the tree did not compile)
+— syntax-fixed that round, no test weakened."]
 fn walk_arrival_to_the_c5_door_real_damage_00agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(3, true));
 }
