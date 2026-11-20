@@ -137,4 +137,16 @@ origin/master with origin/s/retune-nb-08-8 merged. Plan: read the 08-8 report an
 message on walk_the_whole_mission_on_real_input_real_damage_00agent, skip levers the ledger
 marks measured dead, try the next untried lever on its own real run; rules unchanged (real
 input only, no top-ups, never lower damage or health, no guard-code changes, helpers gated to
-level 08 + difficulty). Status: setup; levers not started yet.
+level 08 + difficulty). Status: three levers judged on their own real runs. (1) the deck stand pull west 2.5 u —
+  DEAD (the trio's lanes cover the whole deck line; deck-head fight armed 12.0 was ~52.0,
+  death t7313 was t22649), reverted with the note at the site. (2) the aim press before the
+  excursion legs — DEAD (the hip cone fires during the raise [M Player_SetWeaponAnimObj case
+  0xf]; the holds wobbled the rolls, death t18365 to #26 point-blank), reverted. SHIPPED: the
+  pit fight's legs under level_fights (the existing ±2.0-y opt-in pick filter, this one call,
+  d3-gated — sisters byte-exact): the blind below-level stands never open, #16 28.0/5 -> 8.0/1,
+  mid-game health 44.0 was 20.0, death t26803 was t22649 (4154 ticks deeper). Whole
+  walkreal_07000008_live binary 6 passed / 0 failed / 1 ignored, 151.76 s on the final tree;
+  the full suite.py did not fit (the background runner killed by the sandbox between tool
+  calls, the ~200-binary build does not fit the window); nf-game --lib 796/0, nf-formats 98/0
+  except the allowed 3 slim-ISO disc_golden failures, nf-audio 35/0. Report:
+  docs/reports/retune-nb-08-9.md.
