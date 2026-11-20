@@ -44,6 +44,20 @@ and the round-10 lever are in the ignore message item (10).
    `shoot_far_aim`; every other call site passes 0.0).
 7. **Run 5**: the scoped 0.88 lift OVERSHOT HIGH (that shot's muzzle was 6.12: the bullet
    crossed g6's plane ~1.4 u above its pos, part None) and the pass burned its 260 cap draining
+   25.2 (27.8 → 2.6), death t22891 in pass 1. A fixed lift cannot compensate a moving muzzle —
+   but the audit's two misses sit at the SAME ~+0.22 above the aimed point, so **run 6 tried the
+   NEGATIVE lift −0.22 and the far kills LANDED**: g6 (d 17.5) and g1 (d 19.7) both down
+   (death t22839 mid-pass-2 at 11.6 — the kill race closes to ~5-7 health but the ~135-tick
+   passes' drain (-9.0 to -11.3 each) outruns the remaining passes).
+8. **Run 7** (the [S] 0x68 filter removed — the guard states are dynamic noise, the nearest-first
+   restored): g2 down at +57, then g6 down, death t22831 mid-pass-2 at 7.5 — two kills per roll
+   is now routine; the last ~5-7 health is the wall.
+9. **Run 8** re-measured the round-4 crouch law at the stand (the retune-nb-0d-4 ledger item
+   (iv) — the 0x12 cadence fires through the 0.75 visibility + the 0.45 drop at this range): the
+   crouched escape gait cost 10.8 (run 2's standing escape cost ZERO — the slower gait doubled
+   the exposure) and the crouched pass still drained ~0.1/tick. The presses stay GATED; the
+   stand-first escape stays STANDING. Reverted before the final tree. (that shot's muzzle was 6.12: the bullet
+   crossed g6's plane ~1.4 u above its pos, part None) and the pass burned its 260 cap draining
    25.2 (27.8 → 2.6), death t22891 in pass 1. A fixed lift cannot compensate a moving muzzle.
 
 No guard code changed, no damage/health constants changed, no top-ups: the new machinery is one
@@ -58,13 +72,16 @@ Every lever was judged on its own real run through the real-input path (NF_ISO, 
 teleports after the load). Runs this round (all [L], the direct test binary, `--test-threads=1`,
 `--ignored`): run 1 t22479 (the return-fire pin), run 2 t22767 (the wire dodged, the g6 miss),
 run 3 t22767 (the failed-memory bound), run 4 t1789 (the global-lift re-roll), run 5 t22891
-(the scoped lift overshoot).
+(the scoped lift overshoot), run 6 t22839 (the lift −0.22: two far kills), run 7 t22831
+(the nearest-first: g2 +57 then g6), run 8 t23022 (the crouch re-dead at the stand, reverted).
 
 Whole binaries on the final tree (knobs unset):
 
-- `walkreal_0700000d_live`: **3 passed / 0 failed / 1 ignored** (219.6 s) — the plain replay,
-  the d1 real-damage walk and the d2 Agent sister byte-identical.
-- `interactables_0700000d_live`: **11 passed / 0 failed** (32.7 s).
+- `walkreal_0700000d_live`: **3 passed / 0 failed / 1 ignored** (102.1 s on the final tree;
+  219.6 s on the mid-round tree) — the plain replay, the d1 real-damage walk and the d2 Agent
+  sister byte-identical.
+- `interactables_0700000d_live`: **11 passed / 0 failed** (31.0 s on the final tree; 32.7 s
+  mid-round).
 
 The fast runner (`tools/test/suite.py`): started in the background in the first minutes per the
 driver's instruction; this sandbox killed it between tool calls (the rounds 1-8 signature — no

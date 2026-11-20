@@ -160,5 +160,11 @@ Work Log:
   health (death t22891). The refreshed ledger + the round-10 lever (the tap gate's Y-law must
   match the bullet's own dir law — muzzle-pose access or a bond.pitch-driven pre-turn; the
   fallback yard-south run variant) are in the ignore message item (10).
-- Whole binaries on the final tree (knobs unset): walkreal 3/0/1 (219.6 s), interactables 11/0
-  (32.7 s). Report: docs/reports/retune-nb-0d-9.md.
+- Runs 6-8 (the lift sweep): lift -0.22 LANDS THE FAR KILLS (run 6: g6+g1 down, run 7: g2+57
+  then g6 with the nearest-first restored — the kill race closes to ~5-7 health but the
+  ~135-tick passes' drain outruns the rest); run 8 re-measured the round-4 crouch law at the
+  stand (the crouched escape cost 10.8 vs run 2's standing ZERO) — the presses stay gated, the
+  crouch reverted. The round-10 lever: lift -0.22 + nearest-first + a faster pass (the Y-law
+  fix) or the yard-south run variant; the full item (10) is in the ignore message.
+- Whole binaries on the final tree (knobs unset): walkreal 3/0/1 (102.1 s), interactables 11/0
+  (31.0 s). Report: docs/reports/retune-nb-0d-9.md.
