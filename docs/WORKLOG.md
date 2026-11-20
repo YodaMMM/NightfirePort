@@ -191,3 +191,20 @@ Round 11 of the 08 whole-mission 00 Agent real-damage walk. Branch s/retune-nb-0
 origin/master (ccd79b5be) with origin/s/retune-nb-08-10 merged in. Setup done; reading the
 round-10 report and the walk's ignore message next, then evaluating the next untried lever on
 its own real run. Report: docs/reports/retune-nb-08-11.md.
+
+## retune-nb-08-11 (2026-11-20)
+Round 11 of the 08 whole-mission 00 Agent real-damage walk. Branch s/retune-nb-08-11 from
+origin/master (ccd79b5be) with origin/s/retune-nb-08-10 merged in. The tail compression SHIPPED:
+the shoot-out's 887 ticks were arm_fullest's 12-cycle scan (762 — the direct inventory pick is
+the same 0xa/35 in 5 presses, tail-only; the mid-game calls keep the shipped scan after the
+first lever run's t24113 wobble) + the blind 90-tick reload wait + the east walk's 142 wedged
+ticks (the wedge break parks byte-identical). The shoot-out ends f25713 (was 26196), the fight
+loop opens ~25714 INSIDE the measured dive (f25710-25830), and rocket 1 LAUNCHED at fight t36
+dist 49.9 — the first dive-window launch of the retune. The dive-window fight dies t25822: 10
+dense approach zaps (−20 of the 44.0 entry) + the machine's reply missile ON the west-band
+corner d 3.4 (−26.00) MID-RIDE (the camera-locked ride cannot dodge; the d3 dodge miss band
+2.0→4.0 tried, no effect on this death). Still red — the refreshed ledger and the reply-line
+geometry lever (the launch chest clears the doorway gap only at z ≥ −178.35; the anchor is
+0.67 short) are in the ignore message. Whole binary 6 passed / 0 failed / 1 ignored, 108.67 s
+[L the final-tree run]; the affected-binary set is walkreal_07000008_live alone (no src/ or
+common/ change). Report: docs/reports/retune-nb-08-11.md.
