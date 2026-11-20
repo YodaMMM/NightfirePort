@@ -247,3 +247,11 @@ message; this round takes the next untried lever from the ledger, skipping lever
   fixed. Whole binaries: this sandbox OOMs the single-process runs (3 GB RAM, ~2.9 GB peak) —
   per-test evidence instead: walkreal 3/0 (+1 census ignored), interactables 11/0, each test
   its own process. Report: docs/reports/retune-nb-0d-12.md.
+
+## retune-nb-0d-13
+
+2026-11-20. Branch s/retune-nb-0d-13. Worker round-13 on the 0d arrival-to-C5-door 00 Agent
+real-damage walk (walk_arrival_to_the_c5_door_real_damage_00agent).
+Branched from origin/master ccd79b5be; merged origin/s/retune-nb-0d-12 (not on master) per the
+task message. Round-13 takes the next untried lever from the ignore message item (13), skipping
+every lever the ledger marks measured dead; helpers stay gated to the level and difficulty.
