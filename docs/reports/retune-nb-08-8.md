@@ -87,3 +87,19 @@ measurements recorded.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (ntfy.sh unreachable — the same failure as
+rounds 5-7; each fallback ran its full attempt at 2026-11-20 ~04:47-04:58 UTC):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib: the request hangs — killed by the 25 s outer timeout (no response within
+   the 20 s urlopen timeout), no traceback, nothing written
+3. wget: `Connecting to ntfy.sh (ntfy.sh)|144.126.249.138|:443...` — connection hung, true
+   exit code 124 (killed mid-connect by the outer timeout)
+
+The notification text that could not be delivered:
+`retune-nb-08-8: still red — the idle-wait sweep's two crouch levers measured dead on their
+own runs (deck-nav wedge, excursion death t6918), both reverted; bleed fully attributed;
+whole binary 6/0/1; ledger+next levers pushed`
