@@ -724,6 +724,39 @@ impl Walker {
                 // skipped the walker's per-tick work, and a recorded walk fell through it).
                 self.tick_inner(input, false, trigger, reload);
             }
+            // retune-nb-14-10 (the round-9 ledger's unanswered-race shape; OPT-IN on the
+            // `switch_on_first_blood && finish_fights` pair — both set only by the 07000014 00
+            // Agent walk [L 2026-11-20 runs v1-v3 of retune-nb-14-9 + this round's v2
+            // NF_RF_TRACE run]): the `finish_fights` determined pass (damage_log.rs's
+            // shoot_bounded 1800 arm) is a single-target fight with NO visibility break — the
+            // v2 trace measured it holding the machinery 752 ticks on #43 (hp 6, aim None
+            // behind cover, zero rounds landed both ways after his t35707 volley) while #62
+            // (0x14, fixed post (−30.4,1.0,22.1), hp 10 FULL) raced 28.0 in 11 hits
+            // UNANSWERED to the death at t36527 — `fighting=true` blocked the return-fire gate
+            // the whole stretch. The player's own read: the blocker he cannot hit is not the
+            // shooter killing him — break the pass when the target has dealt NO damage over
+            // the 240-frame window (the switch law's own window) while ANOTHER shooter HAS,
+            // and let the leg's own gate re-pick (the unseen fallback finds the new shooter;
+            // the broken target takes the wrapper's 240-tick cooldown). Every 10th tick;
+            // flags off = the first condition short-circuits, byte-identical.
+            if self.dmg.switch_on_first_blood && self.dmg.finish_fights && t % 10 == 0 {
+                let sim = self.scene.sim.as_ref().unwrap();
+                let now = sim.drones.frame;
+                let dmg_of = |i: usize| -> f32 {
+                    sim.drones.player_hits.iter().rev()
+                        .take_while(|h| now.saturating_sub(h.0) <= 240)
+                        .filter(|h| h.1 == i)
+                        .map(|h| h.2).sum::<f32>()
+                };
+                let other_blood = sim.drones.player_hits.iter().rev()
+                    .take_while(|h| now.saturating_sub(h.0) <= 240)
+                    .any(|h| h.1 != di && h.2 > 0.0);
+                if dmg_of(di) <= 0.0 && other_blood {
+                    drop(sim);
+                    eprintln!("[walk] {label}: the pass's target {di} went silent while another shooter drew blood — breaking the pass at +{t}");
+                    return false;
+                }
+            }
             // Out of ammo: give up (the caller resupplies and retries).
             if self.scene.sim.as_ref().unwrap().gun.clip == 0
                 && self.scene.sim.as_ref().unwrap().gun.spare == 0 && t > 60 {

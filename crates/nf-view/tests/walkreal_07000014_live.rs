@@ -1983,6 +1983,25 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
                 for (k, p) in pts.iter().enumerate() {
                     let _ = w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3),
                         &format!("east to Rook's wake touch #476 node {k}"));
+                    // retune-nb-14-10 lever 1 (the round-9 ignore message's lever 1, the
+                    // wake-legs node-1 ambush law): after node 0's leg (the spot the landing-5
+                    // note itself names — '#43 answered before the round only from node 1'), the
+                    // delta approach's OWN scan shape (route_scan_ranked, up to 4 fights, each a
+                    // bounded 300-tick stand, the STRICT gun-ray gate, the road-blocker rank
+                    // anchored on the remaining route). The round-9 v3 ledger [L 2026-11-20]:
+                    // the walk died INSIDE node 1's leg at (−34.18,1.13,21.37) — #62 (skin
+                    // 0x5000090, 0x14, hp 10 FULL, post (−30.4,1.0,22.1), d 3.85 from the node-1
+                    // point) dealt 28.0 in 11 hits unanswered while the fight machinery
+                    // exchanged with #43/#31 — the shipped stream's fights only start AFTER the
+                    // hit, and node 1's leg opens inside #62's GL line with nobody answered
+                    // before the round. #62's post sits BETWEEN node 0 (−30.84,1.03,24.32, d
+                    // 2.26) and node 1 — the scan at node 0 answers him (and any gun-ray-clear
+                    // blocker) BEFORE node 1's leg, the same law that carries the legs from
+                    // node 21. Zero ticks when no gun-ray-clear candidate stands (the pick
+                    // breaks before any stand), so the sisters and the no-ambush streams stay
+                    // byte-identical; the candidate dump also answers the round-9 live-check
+                    // question (is #62 in gun-ray sight from node 0?) read-only [L this run].
+                    if k == 0 { delta_approach_scan(&mut w, k); }
                     // Two stops, the measured killers' answer points: node 2 (#24's post is ON
                     // the route — the shipped first round -7.00 lands at d 1.0 (t40127) with the
                     // walk past node 4; answered from node 2 at 4.2 u BEFORE the round) and
