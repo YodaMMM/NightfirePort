@@ -2604,11 +2604,56 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             // here (the container blocks the rays, the rifle is nearly dry after the pit act),
             // so the fight never resolves and the wire's ~1300-tick cadence outruns it.
             w.skip_return_fire = stand_first;
-            let _ = w.try_walk_to(Wp { at: [142.0, 5.0, -291.5], act: Act::None, arrive: 1.2 }, "the clear stand north-west of the container");
+            // retune-nb-0d-12, THE WIRE-DODGE STAND (the round-12 lever (a)): the yard's "live
+            // wire" is the oil-barrel pair the garrison's stray bullets detonate — the #141
+            // placements at (143.30, 4.01, -298.41) and (144.22, 4.01, -298.34) [D the level
+            // census], health 20 (param 3), `Destroy_Smash` blast radius 5.0 (param 5 500 x0.01
+            // [M 0x12c45c-0x12c470]) and damage 40 (the type byte 4 x10 [M 0x12bcd8-0x12bd0c]),
+            // ONE propagate per boom [M the EXPLODEINFO 0x3A latch]. Their radius covers the
+            // landing spot (d 3.29 -> gap 2.23 -> 22.2 a boom) and the escape corridor (the
+            // closest approach ~4.4 dxz -> ~13 mid-walk); the committed stand (142, -291.5)
+            // sits ON the radius edge (d 5.97 -> gap 4.91 -> 0.7 a boom) — run 11-d measured
+            // the boom AT the stand (-4.56). NF_0D_WIRE_STAND="x,z" moves the stand (the escape
+            // walk follows; unset = the committed byte-identical walk). The dodge law: the
+            // falloff is 40 x (1 - gap/5) with gap = d - 1.0576 [M explode.rs falloff] — keep
+            // the stand and the sweep at d >= 6.06 (gap >= 5) from BOTH barrels.
+            let wire_stand = std::env::var("NF_0D_WIRE_STAND").ok().and_then(|v| {
+                let v: Vec<f32> = v.split(|c: char| c == ',' || c == ' ' || c == ';')
+                    .filter_map(|s| s.trim().parse::<f32>().ok()).collect();
+                (v.len() == 2).then_some([v[0], 5.0, v[1]])
+            });
+            let stand_at = wire_stand.unwrap_or([142.0, 5.0, -291.5]);
+            // retune-nb-0d-12, THE PRE-TURN (the round-12 lever (b)): the escape leg's
+            // committed cost is the re-aim turn-drag (run 11-d's walk took 180 ticks vs
+            // run 2's 70 — the pack's chips ride the slow turn-walk). Turn Bond to the
+            // stand bearing FIRST (the stick, the walker's own clamp [port player.rs]),
+            // so the walk starts moving north at once. NF_0D_PRETURN=1 arms it (unset =
+            // byte-identical). Run 12-b measured the far-west stand variant DEAD: the
+            // 5.5-u west walk took 217 ticks and 18.0 health (the armed pack's 0x12
+            // chips on open ground) — the dodge stays a NUDGE, not a detour.
+            if std::env::var("NF_0D_PRETURN").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0 {
+                let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                w.face_toward(stand_at[0], stand_at[2], "the stand pre-turn");
+            }
+            // retune-nb-0d-12: under the knob the walk walks the FULL distance (arrive 0.5 —
+            // run 12-d measured the committed arrive 1.2 stopping 1.2 u short of the target,
+            // exactly into the barrel band: the booms cost 4.40 + 0.00 at t22689 [L]).
+            let _ = w.try_walk_to(Wp { at: stand_at, act: Act::None, arrive: if wire_stand.is_some() { 0.5 } else { 1.2 } }, "the clear stand north-west of the container");
             // retune-nb-0d-10: under the run variant the answer stays skipped through the yard
             // legs (the runs dodge the armed pack's drain; the escape leg measured ZERO cost
             // [L run 2]); the committed path restores it here as before.
             w.skip_return_fire = yard_run;
+            {
+                // retune-nb-0d-12: the dodge law's witness — the gap to BOTH barrel pair
+                // blasts (radius 5.0, damage 40 [D census; M 0x12c45c/0x12bcd8]) at the
+                // stand arrival; a boom here costs 40 x (1 - gap/5).
+                let sim = w.scene.sim.as_ref().unwrap();
+                let p = sim.bond.pos;
+                let d = |bx: f32, bz: f32| ((p[0] - bx).powi(2) + (p[1] - 4.01).powi(2) + (p[2] - bz).powi(2)).sqrt();
+                let (da, db) = (d(143.30, -298.41), d(144.22, -298.34));
+                eprintln!("[0d] the barrel gaps at the stand: A {:.2} B {:.2} (boom cost {:.2} / {:.2})",
+                    da, db, (40.0 * (1.0 - (da - 1.0576).max(0.0) / 5.0)).max(0.0), (40.0 * (1.0 - (db - 1.0576).max(0.0) / 5.0)).max(0.0));
+            }
             eprintln!("[0d] the exit stand: {:?} health {}", bond_pos(&w), w.scene.sim.as_ref().unwrap().drones.health.health);
             if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
             // retune-nb-0d-9: under the stand-first lever the stand sweep carries a FAILED-GUARD
@@ -2972,8 +3017,8 @@ stand; the yard legs' NEW gate is the north band's back-fire (#6-class at the C5
 (137.1,-275.5) — the run-10-f roll had it silent); the entry budget is the binding constraint.
 THE ROUND-12 LEVER: (a) move the stand OUT of the wire volume (probe the wire hurt-volume bounds
 — a LIVE CHECK for the main agent: fieldprobe the hurt volume's bounds with Bond standing at
-(142,-291.5) and at 1-u steps south-east, watching for the -x.xx "live wire / blast / hurt
-volume" prints); (b) shrink the escape leg's cost (the walk took 180 ticks vs run 2's 70 — the
+(142,-291.5) and at 1-u steps south-east, watching for the -x.xx 'live wire / blast / hurt
+volume' prints); (b) shrink the escape leg's cost (the walk took 180 ticks vs run 2's 70 — the
 re-aim turns; pre-turn the yaw before the walk or move the stand closer to the landing spot
 inside the ray-clear band); (c) the trench certain acts still UNMEASURED — a roll that reaches
 the trench needs the yard legs' #6-class back-fire handled first (kill the north band
@@ -3835,5 +3880,47 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, _label
         }
         w.total_ticks += 1;
         w.after_step();
+    }
+}
+
+/// THE WIRE CENSUS (retune-nb-0d-12, the round-12 lever (a) probe): every placement whose
+/// translation sits in the yard landing box (x 128..158, z -310..-278, y < 14) — the landing
+/// spot (141.2, 5.1, -296.1), the stand (142, 5, -291.5) and the container between them —
+/// with kind, name, params. Plus every 0xE4 hurt-kind placement anywhere in the level and
+/// every 0xE1 Destroy object (the barrels' blast is the other no-owner damage source).
+/// Pure level-data read; the walk and the knobs untouched.
+#[test]
+#[ignore = "census probe: run explicitly, not a pass/fail walk"]
+fn hurt_census_0700000d() {
+    let iso_img = nf_formats::iso9660::IsoImage::open(&iso()).expect("iso");
+    let (entries, bin) = nf_formats::disc::files_bin_entries(&iso_img).expect("FILES.BIN");
+    let fe = entries.iter().find(|e| e.name.eq_ignore_ascii_case("0700000d.bin")).expect("0700000d.bin");
+    let data = iso_img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read");
+    let level = nf_formats::level::Level::parse(&data).expect("parse");
+    eprintln!("[0d:hurt] maps {}", level.maps.len());
+    for (mi, m) in level.maps.iter().enumerate() {
+        for p in &m.placements {
+            let kind = p.flags & 0xff;
+            let name = if p.by_hash() {
+                level.by_hash.get(&p.hashcode).map(|(om, oi)| level.maps[*om].objects[*oi].name.clone()).unwrap_or_default()
+            } else if (p.index as usize) < m.objects.len() { m.objects[p.index as usize].name.clone() } else { String::new() };
+            let in_yard = p.translation[0] >= 128.0 && p.translation[0] <= 158.0
+                && p.translation[2] >= -310.0 && p.translation[2] <= -278.0
+                && p.translation[1] < 14.0;
+            if in_yard {
+                eprintln!("[0d:hurt] YARD map {} plc {} kind {:#x} flags {:#x} at ({:.2},{:.2},{:.2}) name {} params {:?}",
+                    mi, p.index, kind, p.flags,
+                    p.translation[0], p.translation[1], p.translation[2], name, p.params);
+            }
+            if kind == 0xe4 {
+                eprintln!("[0d:hurt] E4 map {} plc {} flags {:#x} at ({:.2},{:.2},{:.2}) name {} params {:?} folded {:?}",
+                    mi, p.index, p.flags, p.translation[0], p.translation[1], p.translation[2], name, p.params,
+                    nf_formats::level::Level::folded_hurt(p));
+            }
+            if kind == 0xe1 {
+                eprintln!("[0d:hurt] E1 map {} plc {} at ({:.2},{:.2},{:.2}) name {} params {:?}",
+                    mi, p.index, p.translation[0], p.translation[1], p.translation[2], name, p.params);
+            }
+        }
     }
 }
