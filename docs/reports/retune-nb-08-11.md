@@ -114,4 +114,15 @@ not visible to me
 
 ## ntfy failed
 
-(filled after the finish step — see the report's final state)
+All three fallbacks failed from this sandbox (ntfy.sh unreachable — the same failure as rounds
+5-10; each attempt at 2026-11-20 ~20:29-20:31 UTC):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (rc 28)
+2. python3 urllib: killed by the outer 25 s timeout (rc 124) — no response within the 20 s
+   urlopen timeout, no traceback, nothing written
+3. wget: killed by the outer 25 s timeout mid-connect (rc 124, quiet mode, no output)
+
+The notification text that could not be delivered:
+`retune-nb-08-11: the tail compression landed the dive — rocket 1 launched inside it (fight
+t36 dist 49.9, was zero launches); the dive-window fight dies t25822 to the mid-ride reply
+blast + 10 dense zaps; whole binary 6/0/1`
