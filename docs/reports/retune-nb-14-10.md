@@ -148,3 +148,14 @@ All three fallbacks failed, in order, at ~17:00 UTC 2026-11-20 (the same failure
 3. `wget -q -O- --post-data "retune-nb-14-10: …" https://ntfy.sh/nightfire-yoda-8k3x`
    → hung with no output; the 25 s wrapper kill hit before wget's own timeout produced
    anything (exit 124).
+
+### The v4 addendum (17:09 UTC, its own run)
+
+The round-11 lever 1(a) (the fights' near-dry switch to the owned 0x14) was implemented and
+judged on its own real run: **MEASURED NET-NEGATIVE, reverted** — the low gate fires EARLY in
+the walk (the south loop's fights run low guns throughout; the node-45 fight stood Bond
+cycling to a deep gun) and every switch stand re-rolls the deep stream (the round-9 v4 shape
+again): the run wedged at the server-room armour take's 6000-tick cap. The near-dry switch
+needs a scope that cannot fire before the delta approach (a leg-label or distance gate) —
+recorded in the refreshed ignore message. The final tree is the v3 shape (the pass-break +
+the node-0 scan), verified by the whole-binary run above.
