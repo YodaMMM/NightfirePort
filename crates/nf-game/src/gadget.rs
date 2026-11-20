@@ -160,7 +160,11 @@ pub fn laser_tick(head: V3, dir: V3, world: &crate::world::CollisionWorld) -> (V
 /// no decompile or disc evidence pins the game's idle refill (the old "+1 per 4 frames" shape was
 /// the gadget-clip regen [M Player_Update 0x193600 disasm 0x193f18-58], which regenerates the
 /// gadget clips, not this meter); it is kept for the HUD's usability and kept OUT of pass/fail.
-pub const LASER_CHARGE_DRAIN_PER_TICK: f32 = 31.0 / 60.0;
+// [L PCSX2 2026-11-19, 07000005 start spot, beam on open scenery, the game's frame counter GameState+0x34
+// read per shot (audits/laser-1119/timed): 100 @28483, 97 @28500, 93, 90, 86, 83, 79, 76, 72, 69 @28640 —
+// 0.2 per frame (12/s), the same rate as the 500-round clip's 1/tick spend as a percentage. The 2026-10-14
+// "~31/s" was timed by wall clock with the conditions unrecorded.]
+pub const LASER_CHARGE_DRAIN_PER_TICK: f32 = 0.2;
 pub const LASER_CHARGE_REFILL_PER_TICK: f32 = 0.25;
 
 /// One tick of the held meter: `beam_on` (the beam drew this tick) drains, an idle tick refills;
@@ -246,9 +250,9 @@ mod tests {
     #[test]
     fn laser_charge_tick_drains_at_the_measured_rate_and_clamps() {
         let mut c = 100.0f32;
-        // 60 beam ticks = ~31 drained [D the measured ~31/s]; the floor is 0.
-        for _ in 0..60 { laser_charge_tick(&mut c, true); }
-        assert!((100.0 - c - 31.0).abs() < 0.01, "60 beam ticks drain ~31 (drained {:.2})", 100.0 - c);
+        // 140 beam ticks drain 28 [L 2026-11-19: 97 -> 69 over 140 game frames]; the floor is 0.
+        for _ in 0..140 { laser_charge_tick(&mut c, true); }
+        assert!((100.0 - c - 28.0).abs() < 0.01, "140 beam ticks drain 28 (drained {:.2})", 100.0 - c);
         for _ in 0..600 { laser_charge_tick(&mut c, true); }
         assert_eq!(c, 0.0, "the charge floors at 0");
         // The idle REFILL SHAPE is [S] unverified (the game's writer is unlocated — see the module

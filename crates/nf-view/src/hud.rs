@@ -1004,13 +1004,13 @@ pub fn overlay(scene: &crate::scene::Scene, aspect: f32) -> HudFrame {
         // The strips draw the same transformed clip'/max' for kind 0x1f [M 0x19a7f0:129-136 flows into
         // :254-269]: the filled height = clip'·px/round of the full max'·px/round column, and the filled
         // strip's v starts (max'−clip')·px/round down the bullet texture.
-        // fix-laser-watch-look: the held laser's strip shows the charge of 100 (the pane's second
-        // value reads the same instance's f32 [M 0x19a7f0:172]; the sprite layout's exact gauge is a
-        // render live check).
+        // The held laser (view state 0xb) leaves the strips alone: that branch writes the two counts
+        // and RETURNS before the strip blocks [M 0x19a7f0:161-176], so the bar keeps its clip view.
+        // (Rebuilt from the charge of 100 it took the 16x percent width and drew a small square;
+        // PCSX2 11-19 shows the tall bar while firing, audits/laser-1119/hud.png.)
+        let _ = laser_held;
         let (clip_n, max_n) = if let Some(strip) = mount_heat {
             strip
-        } else if laser_held {
-            (s.laser_charge, 100.0)
         } else if ammo_type as u8 == 0x1f {
             let mx = (clip_size as u32).saturating_sub(12);
             (mx.min((clip_size as u32).saturating_sub(s.gun.clip)) as f32, mx as f32)

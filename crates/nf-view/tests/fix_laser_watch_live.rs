@@ -144,18 +144,18 @@ fn the_beam_points_its_negative_z_at_the_hit() {
 /// the report's live checks]. On the release the beam stops and the fire script rings out into the
 /// release script [M Player_SetWeaponAnimObj 0x1a2e38 case 0xb].
 #[test]
-fn the_held_meter_drains_31_per_second() {
+fn the_held_meter_drains_12_per_second() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     let (_, _) = setup_laser(&mut scene);
     hold_fire(&mut scene, 1);
     let c0 = scene.sim.as_ref().unwrap().laser_charge;
     assert!((c0 - 100.0).abs() < 0.01, "the meter starts at 100 [D the measured first sample]");
-    // 60 held ticks = 1 s → ~31 drained [D]; per tick ≈ 0.517.
+    // 60 held ticks = 1 s → 12 drained [L 2026-11-19 frame-counted PCSX2: 0.2 per frame].
     hold_fire(&mut scene, 60);
     let (c1, clip) = { let s = scene.sim.as_ref().unwrap(); (s.laser_charge, s.gun.clip) };
     let drained = c0 - c1;
-    assert!((drained - 31.0).abs() < 2.0, "the meter drains ~31/s while held (drained {drained:.1} in 60 ticks)");
+    assert!((drained - 12.0).abs() < 1.0, "the meter drains 12/s while held (drained {drained:.1} in 60 ticks)");
     assert_eq!(clip, 499 - 60, "the clip keeps its own 1/tick spend [M Player_RoundToFire]");
     // The release: the beam stops, the fire script rings out, and the meter refills while idle
     // (the game's gadget regen shape [M Player_Update 0x193600 clip +1 per 4 frames] — [S] for the
