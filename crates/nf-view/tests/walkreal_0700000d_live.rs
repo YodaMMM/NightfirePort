@@ -2480,54 +2480,118 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             // < 33.2 landed — the wire's 18.8 is exactly the margin. Unset = the committed
             // crouch, byte-identical.
             let floor_stand = std::env::var("NF_0D_FLOOR_STAND").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
-            if !floor_stand {
+            // retune-nb-0d-9, THE ROUND-9 LEVER (a) (the retune-nb-0d-8 ignore message): SKIP the
+            // landing-spot sweep and take the probe's proven-clear stand (142, -291.5) FIRST,
+            // sweep from there, then walk the yard. The measured wall: the round-8 cadence-14
+            // roll landed standing (141.22, 5.06) health 33.2 [L NF_0D_TAP_CADENCE=14], the
+            // first sweep from the landing spot ran ~1345 ticks with ZERO kill prints (the
+            // converged garrison hugs the container's south-west corner and the container
+            // blocks the landing spot's rays — the round-7 no-clear-pick law), and the
+            // PERIODIC live-wire hurt volume at the landing spot fired inside that window
+            // (-22.40 standing / -18.80 crouched, ~1300-tick cadence, NOT height-gated [L
+            // NF_0D_FLOOR_STAND=1]) — death t22500 AT the landing spot with zero kills. The
+            // stand re-open's own probe law reads the (142, -291.5) band's rays CLEAR standing
+            // [L], the walk out is ~4.6 u (~90 ticks — well inside the wire's cadence window),
+            // and the fight's own 12.4 leaves 33.2 - 12.4 = 20.8 [L run 9] for the yard legs
+            // the d1/d2 sisters already prove navigable. NF_0D_STAND_FIRST=1 arms it
+            // (container roll only; unset = the committed path byte-identical).
+            let stand_first = std::env::var("NF_0D_STAND_FIRST").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+            // retune-nb-0d-9, LEVER (b): the stall audit — per-pass pick/clip/health prints
+            // (env NF_0D_AUDIT, prints only, no sim state) that pin the sweep-stall mechanism
+            // (NO pick = the blocked-ray law; pick + no kill = the act's ray/round law).
+            let land_audit = std::env::var_os("NF_0D_AUDIT").is_some();
+            if !floor_stand && !stand_first {
                 for _ in 0..5 {
                     w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
                     w.total_ticks += 1;
                 }
             }
-            for _ in 0..sweep_passes {
-                let pick = {
-                    let sim = w.scene.sim.as_ref().unwrap();
-                    let mut best: Option<(f32, usize)> = None;
-                    for (i, d) in sim.drones.list.iter().enumerate() {
-                        if !d.present || d.corpse || d.health <= 0.0 { continue; }
-                        if d.pos[1] >= 10.5 { continue; }
-                        if !(118.0..=182.0).contains(&d.pos[0]) { continue; }
-                        if !(-335.0..=-263.0).contains(&d.pos[2]) { continue; }
-                        if clear_box_aim(sim, i).is_none() { continue; }
-                        let dist = walker::dxz(sim.bond.pos, d.pos);
-                        if best.map_or(true, |(bd, _)| dist < bd) { best = Some((dist, i)); }
+            if !stand_first {
+                for pass in 0..sweep_passes {
+                    let pick = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let mut best: Option<(f32, usize)> = None;
+                        for (i, d) in sim.drones.list.iter().enumerate() {
+                            if !d.present || d.corpse || d.health <= 0.0 { continue; }
+                            if d.pos[1] >= 10.5 { continue; }
+                            if !(118.0..=182.0).contains(&d.pos[0]) { continue; }
+                            if !(-335.0..=-263.0).contains(&d.pos[2]) { continue; }
+                            if clear_box_aim(sim, i).is_none() { continue; }
+                            let dist = walker::dxz(sim.bond.pos, d.pos);
+                            if best.map_or(true, |(bd, _)| dist < bd) { best = Some((dist, i)); }
+                        }
+                        best
+                    };
+                    let Some((pd, di)) = pick else {
+                        if land_audit {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            eprintln!("[0d:land-audit] pass {pass}: NO pick (no clear_box_aim) clip {} spare {} health {:.1} armour {:.1} at {:?}",
+                                sim.gun.clip, sim.gun.spare, sim.drones.health.health, sim.drones.health.armour, sim.bond.pos);
+                        }
+                        break;
+                    };
+                    if land_audit {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        eprintln!("[0d:land-audit] pass {pass}: pick g{di} d {pd:.1} clip {} spare {} health {:.1} armour {:.1}",
+                            sim.gun.clip, sim.gun.spare, sim.drones.health.health, sim.drones.health.armour);
                     }
-                    best
-                };
-                let Some((_, di)) = pick else { break };
-                // THE PASS CAP 260 (the ledger's own law: a FAILED ray burns the whole cap
-                // while Bond STANDS in the crossfire — the optional kills ride 260) and the
-                // RELOAD HOLD between passes (the l4 roll: the #30 pass burned 400 ticks on
-                // clip 0 spare 10 — the 20-tick reload PULSE restarts the anim and never
-                // fills; the walker's reload_full holds the R ~100 ticks and does).
-                if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
-                shoot_far_box_fast(&mut w, di, "the container drop-then-sweep (the fast act, the nearest first)", 260);
+                    // THE PASS CAP 260 (the ledger's own law: a FAILED ray burns the whole cap
+                    // while Bond STANDS in the crossfire — the optional kills ride 260) and the
+                    // RELOAD HOLD between passes (the l4 roll: the #30 pass burned 400 ticks on
+                    // clip 0 spare 10 — the 20-tick reload PULSE restarts the anim and never
+                    // fills; the walker's reload_full holds the R ~100 ticks and does).
+                    if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
+                    let down = shoot_far_box_fast(&mut w, di, "the container drop-then-sweep (the fast act, the nearest first)", 260);
+                    if land_audit { eprintln!("[0d:land-audit] pass {pass}: the act returned {down}"); }
+                }
+            } else {
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[0d] the landing sweep skipped (stand-first, lever a): health {:.1} armour {:.1} at {:?} clip {} spare {}",
+                    sim.drones.health.health, sim.drones.health.armour, sim.bond.pos, sim.gun.clip, sim.gun.spare);
             }
             // THE STAND RE-OPEN (real-health-00agent-0d-2): whatever survived the landing sweep
             // gets a second pass from the probe's proven-clear band (142, -291.5) — the walk
             // itself is the exposure the first sweep just thinned. The press STANDS first (the
             // crouch walk is the slower gait and the band's rays were read standing).
             eprintln!("[0d] the post-sweep stand walk: {:?} health {}", bond_pos(&w), w.scene.sim.as_ref().unwrap().drones.health.health);
-            for _ in 0..5 {
-                w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
-                w.total_ticks += 1;
+            // retune-nb-0d-9: under the stand-first lever the walk itself IS the first leg —
+            // Bond is STANDING here (the landing crouch is skipped above), and these presses
+            // would CROUCH him for the stand walk (the toggle arms on a new press edge [M
+            // Player_HandleJump's crouch arms, 0x190630 dispatch]) while the band's rays were
+            // probe-read STANDING. The committed path keeps them (they stand the crouched
+            // first-sweep posture).
+            if !stand_first {
+                for _ in 0..5 {
+                    w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+                    w.total_ticks += 1;
+                }
             }
+            // retune-nb-0d-9, lever (a): the escape leg walks THROUGH the garrison's fire (the
+            // opt-in walker flag — set for THIS leg only; the committed path keeps the answer).
+            // Run 1 measured the fight answer pinning Bond ON the landing spot until the wire
+            // fired (death t22479, position unchanged [L]): the answer's acts cannot land from
+            // here (the container blocks the rays, the rifle is nearly dry after the pit act),
+            // so the fight never resolves and the wire's ~1300-tick cadence outruns it.
+            w.skip_return_fire = stand_first;
             let _ = w.try_walk_to(Wp { at: [142.0, 5.0, -291.5], act: Act::None, arrive: 1.2 }, "the clear stand north-west of the container");
+            w.skip_return_fire = false;
             eprintln!("[0d] the exit stand: {:?} health {}", bond_pos(&w), w.scene.sim.as_ref().unwrap().drones.health.health);
             if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
-            for _ in 0..sweep_passes {
+            // retune-nb-0d-9: under the stand-first lever the stand sweep carries a FAILED-GUARD
+            // memory (the else-branch's own pattern): a pass that returned false is not
+            // re-picked — the pack's kills race the drain (run 2 measured the g6-class miss
+            // burning ~170 ticks for ~12 health: the crouched 0x68 guard's head-aim bullet
+            // crossed its z-plane 0.54 u HIGH — the muzzle-ray drop lands under the crouched
+            // boxes), so re-picking the same guard bleeds the margin; the next-nearest clear
+            // guard (a standing pose) takes its place. The committed path re-picks (unchanged).
+            let mut failed: Vec<usize> = Vec::new();
+            for pass in 0..sweep_passes {
                 let pick = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let mut best: Option<(f32, usize)> = None;
                     for (i, d) in sim.drones.list.iter().enumerate() {
                         if !d.present || d.corpse || d.health <= 0.0 { continue; }
+                        if stand_first && failed.contains(&i) { continue; }
                         if d.pos[1] >= 10.5 { continue; }
                         if !(118.0..=182.0).contains(&d.pos[0]) { continue; }
                         if !(-335.0..=-263.0).contains(&d.pos[2]) { continue; }
@@ -2537,9 +2601,23 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                     }
                     best
                 };
-                let Some((_, di)) = pick else { break };
+                let Some((pd, di)) = pick else {
+                    if land_audit {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        eprintln!("[0d:stand-audit] pass {pass}: NO pick (no clear_box_aim) clip {} spare {} health {:.1} armour {:.1} at {:?}",
+                            sim.gun.clip, sim.gun.spare, sim.drones.health.health, sim.drones.health.armour, sim.bond.pos);
+                    }
+                    break;
+                };
+                if land_audit {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    eprintln!("[0d:stand-audit] pass {pass}: pick g{di} d {pd:.1} clip {} spare {} health {:.1} armour {:.1}",
+                        sim.gun.clip, sim.gun.spare, sim.drones.health.health, sim.drones.health.armour);
+                }
                 if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
-                shoot_far_box_fast(&mut w, di, "the container stand sweep (the second pass)", 260);
+                let down = shoot_far_box_fast(&mut w, di, "the container stand sweep (the second pass)", 260);
+                if land_audit { eprintln!("[0d:stand-audit] pass {pass}: the act returned {down}"); }
+                if stand_first && !down { failed.push(di); }
             }
         } else {
         let mut failed: Vec<usize> = Vec::new();
