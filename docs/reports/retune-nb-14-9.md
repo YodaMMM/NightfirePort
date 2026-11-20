@@ -58,6 +58,13 @@ this walk has ever been, and all three round-8 levers are now measured.**
   (the determined pass on #31 cost −21.20; #43's stand burned ~700 ticks without a kill).
   The node-1 ambush is the landing-5 note's own answer point ("#43 answered before the round
   only from node 1") that the shipped code covers only at node 2/21.
+- **A fourth run (v4) measured the round-10 loadout-law variant NET-NEGATIVE and removed it**:
+  switch_to the owned 0x11 crossbow (c2 dmg 60.0 in the loadout dump [M player.rs:2696
+  "crossbow 0x11"]) before the wake legs — the 90-tick real-input switch stand never reached a
+  fight; it re-rolled the deep stream (wake start health 41.7 vs the v3 stream's 57.7; the wake
+  route recomputed; a node-0 resupply fetched Bond west into #30's line, death t36285 vs the v3
+  tree's t36527). The switch stand IS the change — the tree keeps the v3 shape, and the ignore
+  message records the design question (a switch that rides INSIDE a leg's own walk).
 - The ignore message is refreshed with the round-9 ledger and the next levers in order:
   (1) the wake-legs node-1 ambush law — an answer point before node 1's leg, or the loadout
   law (the owned 0x11 reads c2 dmg 60.0 in the loadout dump — two 60-dmg rounds kill every
@@ -72,7 +79,8 @@ this walk has ever been, and all three round-8 levers are now measured.**
 ## How it was verified
 
 - **walkreal_07000014_live (whole binary, the final tree, --test-threads=1)** [L 2026-11-20]:
-  **9 passed / 0 failed / 1 ignored, 173.50 s** — the ignored one is the 00agent sister
+  **9 passed / 0 failed / 1 ignored, 172.73 s** (the v3 tree ran 173.50 s with the same
+  counts before the v4 revert; the final tree's only diffs from it are comments) — the ignored one is the 00agent sister
   (its refreshed ledger in the ignore message). Includes the un-ignored Operative d2 walk,
   the plain/tops-up walk, the d1 real-damage walk, the vent-drop, grill, E-cascade and
   tripbomb tests — the sisters stay green with the `no_lane_fetch` law and the taps removal
@@ -103,8 +111,9 @@ this walk has ever been, and all three round-8 levers are now measured.**
 ## Still red / what's left (the round-10 levers, in the ignore message too)
 
 1. **The wake-legs node-1 ambush law** — the walk dies to #62's unanswered GL line at the
-   wake legs' node 1; an answer point before the leg (the landing-5 note's own law), or the
-   loadout law (the 0x11's two 60-dmg rounds) — the loadout dump is in the trace.
+   wake legs' node 1; an answer point before the leg (the landing-5 note's own law). The
+   loadout-law variant (the 0x11 crossbow switch) is MEASURED NET-NEGATIVE (v4) and removed
+   — a standing switch re-rolls the deep stream; the switch must ride inside a leg's walk.
 2. **The door-face bank drain** — the mute legs + scans still drain the 35-bank to 0 by the
    lane (health 87.5 constant); a shorter stand shape banks it for the pocket + wake legs.
 3. **The lane-crossing wedge** — the blind walk_to burns the 6000-tick cap every run since
@@ -127,7 +136,7 @@ figures for the session; nothing to copy.
 
 ## ntfy failed
 
-All three fallbacks failed, in order, at ~13:16 UTC 2026-11-20 (the same failure mode rounds
+All three fallbacks failed, in order, at ~12:42 UTC 2026-11-20 (the same failure mode rounds
 5-8 recorded — the DNS resolves, the TLS connect to ntfy.sh hangs):
 1. `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-14-9: …" https://ntfy.sh/nightfire-yoda-8k3x`
    → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28).
