@@ -90,3 +90,21 @@ take the next untried one from the ignore message. Re-measure the death on the m
 (master moved SniperAim ENTER). Helpers stay gated to level+difficulty; real input only, no
 top-ups, never lower damage or health, never change guard code. Run the whole
 walkreal_07000008_live binary.
+
+### retune-nb-08-7 progress
+
+- Round 7: re-measured t21773 exact on the merged tree; the per-10-tick bullet diagnostic split
+  the death in two: the killer missile (w62, kind-98 radius 4.0, straight 1.0 u/tick) closed
+  30 -> 0.3 u while Bond RODE his own t585 rocket (the missile cam zeroes the whole input [M
+  scene.rs; Player_Update 0x193600 case 10] — the dodge is gated off during the ride), and the
+  aimed strafe wedges at the rim because Player_Move zeroes the forward axis while aiming [M
+  player.rs] — the same law made the walk-back's forward-1.0 a no-op forever. Shipped (all
+  d3-gated, sisters byte-exact): the aim-releasing diagonal dodge with the per-salvo latched
+  side and the miss<2.0 drive cap (a pass at miss >= 1.6 wall-detonates for 0.0 to -4.8 instead
+  of the contact -15.00), the walk-back pin while any w62 round is live, and the aim-releasing
+  full walk-back (0.35 u). Launch band -> the proven landing top cp[1] <= 13.7. The walk now
+  survives two salvos and reaches fight t~1500-2110 (tick 22649-23246, was 21773); the first
+  low-band launch fired at t2041 (missed — a state-2 fast pass). The wall is the entry health:
+  the dance costs ~4-9 + zaps per salvo from 20.0 hp; next lever = the idle-wait sweep before
+  the y-46 trio / #16 (+10-20 entry hp), then the wall-exit-aware dodge side and the
+  slow-pass launch gate. Only the walk file and docs changed; whole binary 6/0/1, 107.63 s.
