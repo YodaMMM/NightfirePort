@@ -214,3 +214,21 @@ Round 12 of the 08 whole-mission 00 Agent real-damage walk. Branch s/retune-nb-0
 origin/master (ccd79b5be) with origin/s/retune-nb-08-11 merged in (08-11 was not on master).
 Setup done; reading the round-11 report and the walk's ignore message next, then evaluating
 the next untried lever on its own real run. Report: docs/reports/retune-nb-08-12.md.
+
+## retune-nb-08-12 (2026-11-20)
+Round 12 of the 08 whole-mission 00 Agent real-damage walk. Branch s/retune-nb-08-12 from
+origin/master (ccd79b5be) with origin/s/retune-nb-08-11 merged in (08-11 was not on master).
+The reply-line lever landed as the SE pane-hole anchor (113.3, -179.3) + a d3 pre-fight anchor
+walk (the lever runs measured the fight's walk-back releasing the AIM and walking THROUGH the
+dive's launch window — the fine [08 gates] dump names every gate): rocket 1 launched mid-dive
+(fight t49) and LANDED -101.0 — the retune's first dive-window machine damage (round 11 died
+0.0/598) — and the round-11 -26.00 reply wall is down (the reply line crosses the west band
+through pane 2's shot-out centre, zero reply-blast rows). Still red: the hurt-volume zaps
+drained the whole 44.0 entry (22 x -2.00 rows; the standing capsule re-bridges onto the hole's
+rim at every spot on this latitude incl. the park), death t26276 (frame 26278), 454 ticks
+deeper, machine at 497/598. Tried and dead on their own runs: the north strip (launch line
+cannot open, second zap window) and the park-plate anchor (byte-identical round-11 reply
+death). Whole binary 6 passed / 0 failed / 1 ignored, 149.84 s [L the final-tree run]. The
+refreshed ledger + the next levers (the off-rim zap-free standing spot; the crouch-window
+plan; the reply-cadence live check) are in the ignore message. Report:
+docs/reports/retune-nb-08-12.md.
