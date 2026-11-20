@@ -203,3 +203,9 @@ Work Log:
   chips drained the 31.4 during the return leg. Still red.
 - Whole binaries on the final tree (knobs unset): walkreal_0700000d_live 3/0/1 (103.7 s),
   interactables_0700000d_live 11/0 (30.9 s). Report: docs/reports/retune-nb-0d-10.md.
+
+## retune-nb-0d-11 — 0d arrival-to-C5-door 00 Agent walk green again (round 11)
+Branch s/retune-nb-0d-11 from master ccd79b5be, 0d-10 merged (d64d868e2). Re-measuring the
+death point on the merged tree; taking the next untried lever from the ignore message of
+walk_arrival_to_the_c5_door_real_damage_00agent, skipping every ledger item marked measured
+dead. Work continues below.
