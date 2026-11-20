@@ -209,3 +209,17 @@ Branch s/retune-nb-0d-11 from master ccd79b5be, 0d-10 merged (d64d868e2). Re-mea
 death point on the merged tree; taking the next untried lever from the ignore message of
 walk_arrival_to_the_c5_door_real_damage_00agent, skipping every ledger item marked measured
 dead. Work continues below.
+- The round-11 lever implemented: the exact fire law (centre_gate: the predicted line x dir-128
+  intersecting any of the guard's part boxes via nf_game::damage::ray_box [M]) + the turn-loop
+  break fix (the gated acts stop burning the full 240 pre-phase ticks with the bit held) + the
+  composition (the sweep runs under the yard run with the health floor; the trench certain acts
+  take the run legs' drains #25/#26/#29/#1 before the return). Runs 11-a..11-f: the certain kill
+  PROVEN (g2 down at +58 ticks, one round [L run 11-d]) but the stand entry budget (~20.6) buys
+  exactly ONE kill (the pass cost 12.4 incl. the WIRE -4.56 AT THE STAND — the wire volume covers
+  the stand); the yard legs' new gate is #6-class back-fire (the C5-door corner); the trench acts
+  never ran (the rolls died before the trench). Still red. The round-12 lever (the wire-dodge
+  stand + the escape leg's cost + the north band) is in the ignore message item (12).
+- Whole binaries on the final tree (knobs unset): walkreal_0700000d_live 3/0/1 (107.2 s),
+  interactables_0700000d_live 11/0 (31.9 s). The suite.py background runner was killed between
+  tool calls (suite.out empty, the rounds-1-10 signature) and the four-crate build hit the rootfs
+  disk wall (9.9 GB); the stale build dirs pruned. Report: docs/reports/retune-nb-0d-11.md.
