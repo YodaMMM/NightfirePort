@@ -122,6 +122,10 @@ The three fallbacks in order (05:06-05:10 UTC 2026-11-20):
    output.
 3. wget: timed out — the command was killed at 60 s with no response line.
 
+A second round after the final tree (04:50 UTC): curl timed out again (20 s), and the
+urllib/wget attempts were killed at the 90 s tool cap with no response. All attempts failed —
+the same ntfy-unreachable signature as rounds 1-9.
+
 All three failed. The payload that would have been sent: `retune-nb-0d-9: walk still red but
 lever (a) PROVEN - the wire dodged (escape leg +70 ticks zero chips), the round-8 stall pinned
 (the walker return-fire answer), the bullet-dir law measured (the bullet flies the view pitch,
