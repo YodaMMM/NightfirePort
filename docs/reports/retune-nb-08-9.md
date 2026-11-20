@@ -46,9 +46,16 @@ pair's 28.0 bleed is structurally answered by the shipped lever.
    #15 at t5250 — 290 ticks faster than the baseline's t5540); **#16's bleed drops 28.0 in 5
    → 8.0 in 1** (the one walk-into hit at (153.6, −113.4) t5227); the walk crosses the
    mid-game at health 44.0 (the shipped tree crossed at 20.0, flat from t6331). The boarding
-   chunk then drains the gain through the armour (fight-entry armour 0.0 / health 20.0 — the
-   chunk's total exceeds the armour pool in this timeline) and the Hind fight ran ~2800 ticks
-   (was ~1100) before the terminal's −2.00 zap band + the world rows closed it at **t26803**.
+   chunk then drains the ARMOUR (100 → 0.0, health intact through t22616), and the terminal's
+   upper-floor hurt-volume band ZAPS THE PRE-FIGHT WALK-DOWN: −2.00 × 12 at (111.7, 13.5,
+   −179.2) t25666-25793 (feet y 13.5 — the round-4 ledger's upper-floor band; the lower floor
+   13.086 is zap-free) — the +24.0 mid-game gain is spent standing on the band before the
+   crouch drop, and the walk enters the fight (fight t0 = frame 26206 [L the fight log's own
+   t0 line]) at armour 0.0 / health 20.0 — the SAME entry health as the shipped tree. The
+   fight runs ~600 ticks and dies to the −2.33/−13.22/−4.45 world rows at (110.9-113.1, 13.5,
+   −178.8..−180.9) — death **t26803** (was t22649). The route's pre-fight phase is ~4700
+   ticks longer this run (the wobbled transits), so part of the death-tick gain is pace; the
+   ATTRIBUTABLE lever effect is the #16 saving (28.0 → 8.0) and the mid-game health 44.0.
 
 ## How it was verified
 
@@ -77,15 +84,15 @@ pair's 28.0 bleed is structurally answered by the shipped lever.
 
 ## What's left (the next window's levers, in priority order)
 
-1. **The Hind fight's stand-spot drift** — the first ~1700 fight ticks of the lever-3 run
-   read ZERO zaps; the −2.00 band opened when the spot sat (111.7, −179.2) — OUTSIDE the
-   round-7 measured pocket (x 112.6-113.1, z −179.0..−179.6) [L the run's zap rows
-   t25684-25793]. Clamp the fight's walk-back/stand spot INSIDE the pocket band.
-2. **The boarding chunk's post-armour health leak** — 24.0 of health between the last chunk
-   kill t22616 and the fight entry (the chunk's total exceeds the 100-armour pool in this
-   timeline): the same level_fights filter on the boarding fights' own legs (the lower level
-   east / gondola mouth legs' return-fire stands on the dy > 2 shooters), judged on its own
-   run.
+1. **The pre-fight walk-down zaps** — 12 × −2.00 on the upper-floor band at (111.7, −179.2)
+   t25666-25793, all BEFORE the crouch drop: the walk stands on the zap band during the
+   standoff/walk-down and the +24.0 mid-game gain is spent there. Shorten the standoff→drop
+   path (or drop from a spot out of the band) and the fight entry returns to the earned 44.0
+   — with a 44.0 entry the round-7 dance has the rounds to reach the low-band launch windows
+   (the round-7 finding: the low band arrives at fight t~1400-2100).
+2. **The fight's own world rows** — −2.33/−13.22/−4.45 in ~600 fight ticks at
+   (110.9-113.1, 13.5, −178.8..−180.9): judge the round-7 rim answer (the dodge/walk-back
+   package) from the pocket with a fuller entry.
 3. **The trio 36.0** — every deck-leg lever has now measured dead (the crouch sweep, the
    pull west); before spending another one, a live check for the STATION HALL MOUTH's
    (139.0, 49.5, −93.0) sight lines into the trio's placements (the mouth is ABOVE the deck,
@@ -98,10 +105,11 @@ pair's 28.0 bleed is structurally answered by the shipped lever.
   hit from the mouth (the hall floor is y 49.5, the deck y 46.0-46.1 — the height may clear
   the deck lip the pin wedges on)? If any lane reads clear from the mouth, the deck transit
   can pre-fight the trio from the hall side and the 36.0 never lands.
-- The Hind fight pocket: confirm the hurt-volume zap band's exact west edge between
-  x 111.7 and x 112.6 at (z −179.2, feet 13.47) — the lever-3 run's first ~1700 fight ticks
-  were zap-free and the zaps started when the spot drifted to (111.7, −179.2); the round-7
-  pocket probe measured (112.6-113.1, −179.0..−179.6) nearly zap-free.
+- The terminal's upper-floor hurt-volume band: the walk-down stood at (111.7, 13.5, −179.2)
+  and took 12 × −2.00 (t25666-25793) BEFORE the crouch drop, while the round-4/5 ledgers
+  measured the lower floor (feet 13.086) zap-free — confirm the band's exact footprint at
+  standing height (feet 13.47-13.52) between the gondola-mouth walk-down and the hole at
+  x ~111.99, so the next walk can route the standoff→drop path around it.
 
 ## Usage
 

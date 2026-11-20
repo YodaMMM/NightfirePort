@@ -144,7 +144,10 @@ level 08 + difficulty). Status: three levers judged on their own real runs. (1) 
   0xf]; the holds wobbled the rolls, death t18365 to #26 point-blank), reverted. SHIPPED: the
   pit fight's legs under level_fights (the existing ±2.0-y opt-in pick filter, this one call,
   d3-gated — sisters byte-exact): the blind below-level stands never open, #16 28.0/5 -> 8.0/1,
-  mid-game health 44.0 was 20.0, death t26803 was t22649 (4154 ticks deeper). Whole
+  mid-game health 44.0 was 20.0, death t26803 was t22649 (4154 ticks deeper; the boarding
+  chunk drains only the armour, and the +24.0 gain is re-spent on the pre-fight walk-down
+  zaps (12 x -2.00 at (111.7,-179.2) t25666-25793) before the crouch drop, so the fight
+  entry health is the same 20.0; the fight runs ~600 ticks from it). Whole
   walkreal_07000008_live binary 6 passed / 0 failed / 1 ignored, 151.76 s on the final tree;
   the full suite.py did not fit (the background runner killed by the sandbox between tool
   calls, the ~200-binary build does not fit the window); nf-game --lib 796/0, nf-formats 98/0
