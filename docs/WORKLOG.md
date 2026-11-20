@@ -144,3 +144,21 @@ Work Log:
   (0d-8 was not on master; the merge is clean). WORKLOG entry pushed at branch creation.
 - Sandbox reused from earlier rounds: repo present, no work/ no ISO no cargo — the setup steps
   (downloads, rust, p7z) are being redone this session. In progress.
+- Round-9 lever from the 0d-8 ignore message: skip the landing-spot sweep, take the proven-clear
+  stand (142, -291.5) FIRST, sweep from there (NF_0D_STAND_FIRST=1) + the audit.
+- Round-9 measured: THE WIRE IS DODGED (lever (a)'s core premise proven) — but the escape leg
+  needs the new opt-in walker flag skip_return_fire (walker_b2.rs, default false byte-identical,
+  this leg only): run 1 pinned the round-8 stall's mechanism (the walk_to return-fire answer
+  holds Bond ON the landing spot — the acts cannot land there — until the periodic wire fires,
+  death t22479 position unchanged); run 2 walked out at +70 ticks ZERO chips, the wire never
+  fired, the stand sweep killed g2 at +57 — then the g6 pass MISSED (the bullet-dir law: the
+  bullet flies bond.pitch x FRAC_PI_2 with an anim-posed muzzle; the cursor-y does not steer it)
+  and the pack's drain outraced the kills (death t22767). Run 3 = run 2 (the failed-memory can
+  not help a pass that outlives Bond); run 4: a GLOBAL aim lift re-rolled the early phases'
+  proven acts (death t1789 — the lift is now a stand-sweep-only parameter); run 5: the scoped
+  0.88 lift overshot high (the muzzle was 6.12 that shot), the pass burned 260 ticks for 25.2
+  health (death t22891). The refreshed ledger + the round-10 lever (the tap gate's Y-law must
+  match the bullet's own dir law — muzzle-pose access or a bond.pitch-driven pre-turn; the
+  fallback yard-south run variant) are in the ignore message item (10).
+- Whole binaries on the final tree (knobs unset): walkreal 3/0/1 (219.6 s), interactables 11/0
+  (32.7 s). Report: docs/reports/retune-nb-0d-9.md.
