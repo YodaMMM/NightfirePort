@@ -98,3 +98,17 @@ now survives the Hind's first TWO missile salvos and reaches fight t~1500-2110 (
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (ntfy.sh unreachable):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib: command timed out after 60 s (no response within the timeout)
+3. wget: `Connecting to ntfy.sh (ntfy.sh)|159.203.148.75|:443...` — connection timed out
+   (true exit code 124, i.e. killed by the 25 s timeout mid-connect)
+
+The notification text that could not be delivered:
+`retune-nb-08-7: still red but ~1500 ticks deeper — the aim-releasing missile dodge package
+shipped (survives 2 salvos, first low-band launch fired); ledger+next lever pushed`
+
