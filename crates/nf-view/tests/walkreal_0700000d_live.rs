@@ -3023,7 +3023,44 @@ re-aim turns; pre-turn the yaw before the walk or move the stand closer to the l
 inside the ray-clear band); (c) the trench certain acts still UNMEASURED — a roll that reaches
 the trench needs the yard legs' #6-class back-fire handled first (kill the north band
 (132.8..137.1, -273..-277) in the stand sweep's pass 2 — the budget needs the wire dodge first).
-Whole binaries knobs-unset: walkreal 3/0/1 (107.2 s), interactables 11/0 (31.9 s)."]
+Whole binaries knobs-unset: walkreal 3/0/1 (107.2 s), interactables 11/0 (31.9 s). (13) THE
+retune-nb-0d-12 LEDGER (five real runs 2026-11-20, each its own roll): THE LIVE WIRE IDENTIFIED —
+the level has NO 0xE4 hurt placements at all (the census probe hurt_census_0700000d: sim.hurts
+empty, folded_hurt admits nothing [D Level::parse]); the wire damage is the 0xE1 OIL-BARREL PAIR
+at (143.30, 4.01, -298.41) and (144.22, 4.01, -298.34) (a 0.92-u chain pair), health 20 (param 3),
+Destroy_Smash blast radius 5.0 (param 5 500 x0.01 [M 0x12c45c-0x12c470]) and damage 40 (the type
+byte 4 x10 [M 0x12bcd8-0x12bd0c]), ONE propagate per boom [M the 0x3A latch], falloff 40 x
+(1 - gap/5) with gap = d - 1.0576 [M explode.rs falloff]. Geometry [L the census + the runs]: the
+landing spot (141.22, 5.06, -296.08) sits at gap 2.23 (a boom 22.2), the escape corridor closest
+approach ~3.3-4.4 (~13 mid-walk), the committed stand (142, -291.5) ON the edge (gap 4.91 -> 0.7;
+run 11-d's -4.56 fully explained). The old ~1300-tick cadence was the strays' accumulation rate
+(11 x 1.8-chips kill a barrel), not a timer. (i) run 12-a (the far-west stand (139.5, -290.0),
+corridor 2): the RIDE died this roll (g18's 27.6 t21924 — the ride lottery, pre-ride); (ii) run
+12-b (far-west, corridor 1): the escape walk 217 ticks and 18.0 (the armed pack's 0x12 chips on
+open ground: #1 d 23.8, #2 d 10.6), the floor refused the sweep at 9.8, the run legs died t22738
+— THE STAND-MOVE LEVER DEAD: the walk exposure (~0.106/tick x 167-241 ticks = 18-23) dominates
+every boom cost (0.7-7.4, once); (iii) run 12-d (the nudge stand (141.3, -292.5) + PRETURN): the
+committed arrive 1.2 stopped the walk 1.2 SHORT into the band and THE PAIR BOOMED ON CAMERA
+(-4.40 + -0.00 from the world t22689) killing Bond mid-pass — while g2 STILL DIED AT +58 (the
+exact fire law's third confirmation: cd(snap) 0.342/0.420 at +58, hp -22); (iv) run 12-e (the
+nudge + arrive 0.5): the walk 241 ticks 18.0, arrived gap 5.79 (boom 2.11), the floor refused at
+9.8, died t22860; (v) run 12-c (the pre-turn + the committed stand): 170 ticks, cost 18.0 — the
+PRE-TURN LEVER NO-GAIN (the walk duration is the walker's nav steering + stuck mitigation, not
+the turn drag; run 2's 70 ticks was that roll's clean steering). THE ROUND-13 LEVER: (a) thread
+the escape walk with explicit mid-waypoints along the container's west face (the run-2-proven
+clean line) so the steering fights cannot stretch the walk — hold the 70-tick class EVERY roll;
+(b) shorten the 40-tick land_wait pinned INSIDE the barrel radius under the run variant (verify
+the landing burst still resolves); (c) with the walk cost held ~0-3 the entry budget (~20-27)
+affords the sweep's pass 0 (the certain g2 kill at +58) AND the north-band kill (the round-11
+lever (c), the #6-class back-fire at the C5-door corner (137.1, -275.5)) — then the run legs with
+the trench certain acts. This round's knobs: NF_0D_WIRE_STAND (the stand target x,z, arrive 0.5
+under the knob), NF_0D_PRETURN (the face_toward pre-turn) — both default byte-identical; the
+hurt_census_0700000d probe test (ignored). Whole binaries: THIS SANDBOX OOMs the single-process
+whole-binary runs (3 GB RAM, the walkreal process peaks ~2.9 GB anon, dmesg oom-kill; the
+interactables binary the same at 2 tests) — per-test evidence instead: walkreal 3/0 (+1 census
+ignored) and interactables 11/0, each test its own process; the four-crate suite build also
+exceeds the rootfs (2.8 GB free vs ~5.5 GB needed). The merged 0d-11 ignore message carried raw
+double quotes (the tree did not compile) — syntax-fixed this round, no test weakened."]
 fn walk_arrival_to_the_c5_door_real_damage_00agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(3, true));
 }

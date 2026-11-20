@@ -230,3 +230,20 @@ Task: round 12 of the 0d arrival-to-C5-door 00 Agent walk `walk_arrival_to_the_c
 Branched from origin/master ccd79b5be; merged origin/s/retune-nb-0d-11 (not on master) per the task
 message. Round-11 remaining bug and ledger live in docs/reports/retune-nb-0d-11.md and the ignore
 message; this round takes the next untried lever from the ledger, skipping levers marked measured dead.
+- Round-12 measured: THE "LIVE WIRE" IDENTIFIED — no 0xE4 hurt placements exist in 0700000d at all
+  (the census probe: sim.hurts empty, folded_hurt admits nothing); the wire damage is the 0xE1
+  oil-barrel pair at (143.30, 4.01, -298.41)/(144.22, 4.01, -298.34), health 20, Destroy_Smash
+  blast radius 5.0 (param 5 x0.01) + damage 40 (type byte x10), one propagate per boom, falloff
+  40 x (1 - gap/5), gap = d - 1.0576. The landing sits at gap 2.23 (a boom 22.2), the escape
+  corridor ~3.3-4.4 (~13), the committed stand ON the edge (gap 4.91 -> 0.7; run 11-d's -4.56
+  fully explained). Runs 12-a..12-e: the stand-move lever DEAD in all three variants (the far
+  west walk 217 ticks 18.0; the nudge-short stopped by arrive 1.2 INTO the band — THE PAIR
+  BOOMED ON CAMERA -4.40 at t22689 while g2 STILL died at +58, the fire law's third proof; the
+  nudge-full walk 241 ticks 18.0, boom cost 2.11 at gap 5.79); the pre-turn lever NO-GAIN (the
+  walk duration is nav/stuck steering, not the turn drag). THE BINDING CONSTRAINT IS NOW THE
+  ESCAPE WALK'S EXPOSURE (~0.106/tick x 167-241 ticks); the round-13 lever (the mid-waypoint
+  threading + the land_wait shortening + then the north-band kill) is in the ignore message
+  item (13). The merged 0d-11 ignore message carried raw quotes (did not compile) — syntax
+  fixed. Whole binaries: this sandbox OOMs the single-process runs (3 GB RAM, ~2.9 GB peak) —
+  per-test evidence instead: walkreal 3/0 (+1 census ignored), interactables 11/0, each test
+  its own process. Report: docs/reports/retune-nb-0d-12.md.
