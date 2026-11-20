@@ -80,3 +80,13 @@ the ignore message. Run the whole walkreal_07000008_live binary.
   rim (dodge arm / car-body cover), the upstream idle-wait sweep (the salvo takes 18.3; the
   tree entered at 20.0 vs master's 14.0), then the low-band launches. Whole binary 6/0/1,
   151.65 s. Only crates/nf-view/tests/walkreal_07000008_live.rs and docs/ changed.
+
+## retune-nb-08-7 (2026-11-20, s/retune-nb-08-7)
+
+Task: round 7 of the 08 whole-mission 00 Agent real-damage walk. Branch from origin/master,
+merge origin/s/retune-nb-08-6 in first (done: merged cleanly onto the 08-6 tree). Re-read the
+08-6 report and the walk's ignore message; skip every lever the ledger marks measured dead;
+take the next untried one from the ignore message. Re-measure the death on the merged tree
+(master moved SniperAim ENTER). Helpers stay gated to level+difficulty; real input only, no
+top-ups, never lower damage or health, never change guard code. Run the whole
+walkreal_07000008_live binary.
