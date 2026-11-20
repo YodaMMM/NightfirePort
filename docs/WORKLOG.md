@@ -117,3 +117,16 @@ walk_the_whole_mission_on_real_input_real_damage_00agent, skip levers marked mea
 try the next untried lever on its own real run; Operative-side rules unchanged (real input
 only, no top-ups, never lower damage or health, no guard-code changes, helpers stay gated to
 level 08 + difficulty). Status: setup; levers not started yet.
+  Round 8 result: the baseline re-measure reproduced the shipped state exactly (death t22649,
+  fight entry armour 5.0 health 20.0) and the NF_DMG_TRACE run attributed the whole 80.0
+  upstream bleed for the first time: the y-46 trio 36.0 at the wedged nav pin (149.6, 46.1,
+  −93.1) during the dry-pistol return-fire stands, #16 28.0 on the pit-excursion descent legs,
+  #9/#10/#4 16.0 later, world 20.0 in the Hind fight. Ledger lever (1) the idle-wait sweep was
+  executed as the crouch sweep on the two exposed legs (the shipped hall-crossing/briefcase
+  precedent): BOTH halves measured DEAD on their own real runs — the crouched deck nav wedged
+  the walk at the closed hall door for the 6000-tick cap (zero progress), the crouched
+  excursion descent dropped Bond's eye into the pit pair's line (death t6918 on the ramp, was
+  t22649) — both reverted with dead-lever notes at the sites; the ignore message carries the
+  full round-8 ledger and the next levers (the crossfire geometry, the pre-raised descent, the
+  armour-order swap). No src changes; whole walkreal_07000008_live binary 6 passed / 0 failed /
+  1 ignored, 152.57 s on the final tree.
