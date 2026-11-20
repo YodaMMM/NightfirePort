@@ -208,3 +208,9 @@ geometry lever (the launch chest clears the doorway gap only at z ≥ −178.35;
 0.67 short) are in the ignore message. Whole binary 6 passed / 0 failed / 1 ignored, 108.67 s
 [L the final-tree run]; the affected-binary set is walkreal_07000008_live alone (no src/ or
 common/ change). Report: docs/reports/retune-nb-08-11.md.
+
+## retune-nb-08-12 (2026-11-20)
+Round 12 of the 08 whole-mission 00 Agent real-damage walk. Branch s/retune-nb-08-12 from
+origin/master (ccd79b5be) with origin/s/retune-nb-08-11 merged in (08-11 was not on master).
+Setup done; reading the round-11 report and the walk's ignore message next, then evaluating
+the next untried lever on its own real run. Report: docs/reports/retune-nb-08-12.md.
