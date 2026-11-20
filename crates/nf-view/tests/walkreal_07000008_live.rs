@@ -400,7 +400,23 @@ fn reload_full(w: &mut Walker) {
 /// The game's own weapon cycle to the carried firearm holding the most rounds (clip + spare),
 /// launcher excluded — the 02 walk's `arm_fullest` verbatim (a player walking into a known
 /// shoot-out with a near-empty gun switches to his fullest gun first).
+/// retune-nb-08-11: `arm_fullest_at(.., direct_first = true)` reads the pick DIRECTLY from the
+/// inventory first (the same candidate law `switch_to_firearm` uses — owned firearm with clip
+/// or carried ammo > 0, fullest = max clip+carried). A player already holding his fullest gun
+/// does not cycle the whole loadout: the shipped 12-cycle scan burned 762 ticks on the end
+/// loadout's 6 weapons (f25309-26071 [L the 2026-11-20 baseline instrumentation run]) — most
+/// of the ~880-tick pane shoot-out. TAIL-ONLY: the mid-game fights (the east deck, the walkway
+/// pair) keep the shipped scan verbatim — the first lever run took the fast path there too and
+/// the mid-game timeline wobbled (death t24113 at the trio, the boarding drained HEALTH [L the
+/// 2026-11-20 first lever run]); those fights' guards fire during the shipped cycles and their
+/// shapes are the shipped tree's own pace. Measured on the tail: 5 cycles (the pick 0xa is 5
+/// presses out of the in-hand 0x2) — the arm phase 396 ticks with the reload, was ~853 [L the
+/// 2026-11-20 lever run].
 fn arm_fullest(w: &mut Walker, label: &str) {
+    arm_fullest_at(w, label, false);
+}
+
+fn arm_fullest_at(w: &mut Walker, label: &str, direct_first: bool) {
     let read = |w: &Walker| {
         let sim = w.scene.sim.as_ref().unwrap();
         (sim.gun.weapon, sim.gun.clip as i32 + sim.gun.spare as i32)
@@ -409,6 +425,36 @@ fn arm_fullest(w: &mut Walker, label: &str) {
         w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
         for _ in 0..60 { w.tick(Default::default(), false); }
     };
+    let best_direct = if direct_first {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let inv = &sim.drones.inventory;
+        (2u8..=0x47).filter(|k| *k != 0x2c)
+            .filter(|k| inv.owned.get(*k as usize).copied().unwrap_or(false))
+            .filter(|k| {
+                let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, *k as usize);
+                inv.clip.get(slot).copied().unwrap_or(0) > 0
+                    || inv.carried.get(sim.weapons.ammo_type(*k as usize)).copied().unwrap_or(0) > 0
+            })
+            .map(|k| {
+                let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, k as usize);
+                (k, inv.clip.get(slot).copied().unwrap_or(0) as i32
+                    + inv.carried.get(sim.weapons.ammo_type(k as usize)).copied().unwrap_or(0) as i32)
+            })
+            .max_by_key(|(_, n)| *n)
+    } else { None };
+    if let Some((best_id, best_n)) = best_direct {
+        if read(w).0 != best_id {
+            for _ in 0..12 {
+                if read(w).0 == best_id { break; }
+                cycle(w);
+            }
+        }
+        let (id, n) = read(w);
+        assert_eq!(id, best_id, "the fullest gun {best_id:#x} never landed in hand (in hand {id:#x})");
+        eprintln!("[08] {label}: armed the fullest gun {id:#x} ({n} rounds; the direct pick {best_id:#x} {best_n} rounds)");
+        reload_full(w);
+        return;
+    }
     let first = read(w);
     let mut seen = vec![first];
     for _ in 0..12 {
@@ -1634,6 +1680,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // cabin's east band x ≈ 113.6 [D the eye-ray stops], so the stand spot pushes
             // further east where the plate is wider than the standing capsule.
             let stand = [113.3f32, -179.25f32];
+            // retune-nb-08-11: the shipped walk WEDGED at the pit's northeast corner — the
+            // k-stamps parked at (113.08286, −179.23654) from k80 through k220, the (113.3,
+            // −179.25) target 0.22 u short of reachable [L the 2026-11-20 baseline
+            // instrumentation run] — ~140 of the drop block's 437 ticks pressing a wall. A
+            // player whose press stops moving him stops pressing: the walk breaks 30 ticks
+            // after its last progress (≥ 0.01 u), from the SAME spot the shipped run's k220
+            // exit parked at (the stamps: x/z frozen to 5 decimals k80-k220 [L the same run]).
+            let mut stuck_at: Option<[f32; 2]> = None;
+            let mut stuck_for = 0u32;
             for k in 0..220u32 {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let b = sim.bond.pos;
@@ -1641,6 +1696,11 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 let dx = stand[0] - b[0];
                 let dz = stand[1] - b[2];
                 if dx * dx + dz * dz < 0.12 * 0.12 { break; }
+                match stuck_at {
+                    Some(p) if (b[0] - p[0]).powi(2) + (b[2] - p[1]).powi(2) < 0.01 * 0.01 => { stuck_for += 1; }
+                    _ => { stuck_at = Some([b[0], b[2]]); stuck_for = 0; }
+                }
+                if stuck_for >= 30 { eprintln!("[08 standoff] wedged k{k} at ({:.5}, {:.5}) — the press stopped", b[0], b[2]); break; }
                 let want_yaw = dx.atan2(dz);
                 let yaw_err = walker::wrap_pi(want_yaw - sim.bond.yaw);
                 w.tick(Input { turn: yaw_err.clamp(-0.08, 0.08), forward: if yaw_err.abs() < 0.3 { 1.0 } else { 0.0 }, ..Default::default() }, false);
@@ -1705,10 +1765,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // the end-fight drops at his feet and arms the fullest gun before shooting glass. The
         // d1/d2 runs' green streams stay byte-identical.
         if difficulty >= 3 {
+            eprintln!("[08 tail] scoop starts f{}", w.scene.sim.as_ref().unwrap().drones.frame);
             scoop_drops(&mut w, "the panes", 3);
-            arm_fullest(&mut w, "the panes");
+            eprintln!("[08 tail] scoop ends f{}", w.scene.sim.as_ref().unwrap().drones.frame);
+            arm_fullest_at(&mut w, "the panes", true);
+            eprintln!("[08 tail] arm ends f{}", w.scene.sim.as_ref().unwrap().drones.frame);
         }
         switch_to_firearm(&mut w, "the panes");
+        eprintln!("[08 tail] switch ends f{}", w.scene.sim.as_ref().unwrap().drones.frame);
         // The shoot-out's rounds must be LIVE rounds (guard-repin-master): the cabin fights'
         // ammo drift decides the clip state here (the fights' shape moved with the guards'
         // per-goal arrival radii), and the measured red ran pane 1 dry (clip 0 spare 33) so
@@ -1717,6 +1781,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // shoot: the game's R held to a full clip [M Player_WeaponFiring's reload branch],
         // real input, no ammo writes (reload_full is the walker's additive R law).
         w.reload_full();
+        eprintln!("[08 tail] reload ends f{} clip {} spare {}", w.scene.sim.as_ref().unwrap().drones.frame, w.scene.sim.as_ref().unwrap().gun.clip, w.scene.sim.as_ref().unwrap().gun.spare);
         // A player shoots the glass he can see — the aim-ray-to-bounds-centre gate CANNOT work
         // here: the captured centre is the pane bounds' midpoint, which sits a hair short of the
         // sheet plane (the north pane's centre ray eye→centre reads OPEN while a perpendicular
@@ -1749,6 +1814,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             if pass > 0 { eprintln!("[08 panes] pass {pass}: a pane is still glazed — a player keeps shooting"); }
         for (k, c) in panes.iter().enumerate() {
             if pane_gone(&w.scene.sim.as_ref().unwrap(), *c) { continue; }
+            eprintln!("[08 tail] pane {k} window starts f{} at {:?}", w.scene.sim.as_ref().unwrap().drones.frame, c);
             let mut fired = 0u32;
             // The bracket (the #447 shoot_mine lesson, muzzle-repin-6): the round flies from the
             // camera along the view, its gravity arc and the camera-vs-head offset land it a
@@ -1775,6 +1841,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                         let yaw_err = walker::wrap_pi(to[0].atan2(to[2]) - sim.bond.yaw);
                         w.tick(Input { turn: yaw_err.clamp(-0.08, 0.08), strafe: if (s / 40) % 2 == 0 { 1.0 } else { -1.0 }, ..Default::default() }, false);
                     }
+                    eprintln!("[08 tail] pane {k}: blocked after {fired} — sidestep f{}-", w.scene.sim.as_ref().unwrap().drones.frame);
                     eprintln!("[08 panes] pane {k}: the line was blocked — sidestepped, fresh window");
                     aim = *c; best = None; prev_b = 0; fixes = 0; fired = 0; blocked = false;
                 }
@@ -1793,7 +1860,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                     // (0.9-1.2 u across, ~0.1 thick [L the rows' bounds]) and an off-aim round
                     // misses it (the health 1.0 dies to one contact [D params [2,1,0]]).
                     let fire = t % 12 == 0 && yaw_err.abs() < 0.01 && pitch_err.abs() < 0.02 && fired < 12;
-                    if fire { fired += 1; w.tick_fire(input); } else { w.tick(input, false); }
+                    if fire { fired += 1; eprintln!("[08 tail] pane {k} fire {} f{} yaw_err {yaw_err:.4} pitch_err {pitch_err:.4}", fired, w.scene.sim.as_ref().unwrap().drones.frame); w.tick_fire(input); } else { w.tick(input, false); }
                     {
                         let sim = w.scene.sim.as_ref().unwrap();
                         for b in &sim.drones.player_bullets {
@@ -1818,6 +1885,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 }
             }
             let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[08 tail] pane {k} window ends f{} (fired {fired})", sim.drones.frame);
             eprintln!("[08 panes] pane {k} at {c:?}: {} after {fired} rounds, clip {} spare {}",
                 if pane_gone(sim, *c) { "SHOT OUT" } else { "STILL GLAZED" }, sim.gun.clip, sim.gun.spare);
         }
@@ -2259,7 +2327,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 let along = (rel[0] * bu.dir[0] + rel[1] * bu.dir[1] + rel[2] * bu.dir[2]) / (d * vm);
                 if along <= 0.0 { return false; }
                 let miss = d * (1.0 - along * along).max(0.0).sqrt();
-                miss < 2.0
+                // retune-nb-08-11 (d3): the band widens to 4.0. The compressed fight's first
+                // salvo passed at miss ~3.4 — outside the shipped 2.0 band — and its detonation
+                // at the launch chest's west-band corner (110.4, 14.1, −181.0) d 3.4 cost the
+                // full −26.00 falloff on a stationary Bond, killing the walk with 24.0 left
+                // [L the 2026-11-20 lever run: rocket 1 launched t36 dist 49.9, the 10 dense
+                // zaps t25702-25807, the −26.00 at t25822]. A 2.0-4.0 pass detonates ~5.5 u
+                // off a strafed Bond (−7-class) instead of 3.4 off a parked one (−26.0).
+                // D3-GATED: the d2 sister's band stays byte-exact.
+                miss < if difficulty >= 3 { 4.0 } else { 2.0 }
             })
         } else { false };
         // real-health-00agent-08-bleed-4 (d3): the fight anchor — the ride-end spot every green
@@ -2345,7 +2421,11 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 if along <= 0.0 { continue; }
                 let miss = d * (1.0 - along * along).max(0.0).sqrt();
                 if miss < 3.0 { live = true; }
-                if miss < 2.0 { close = true; }
+                // retune-nb-08-11 (d3): the drive's close band widens with the dodge gate above
+                // (the same 3.4-miss round: salvo_close false at 2.0 → the drive never strafed
+                // even with dodge_hold latched [L the same run]). d3-only by construction (the
+                // whole salvo block is difficulty >= 3).
+                if miss < 4.0 { close = true; }
             }
             (live, close)
         } else { (false, false) };
