@@ -103,5 +103,15 @@ the session (no gauge, no billing panel, no API counters are exposed to the agen
 
 ## ntfy
 
-(the result of the three fallbacks is recorded below after they run; the sandbox's rounds-1-10
-signature is that all three time out.)
+The three fallbacks in order (12:27-12:31 UTC 2026-11-20):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (the rounds 1-10 signature).
+2. python3 urllib: **exited 0 with no traceback** — the urlopen returned (the response object was
+   not printed), so the POST completed: delivered. A verification re-post of the same payload
+   timed out (`timeout` exit 124) — the network is flaky, the first attempt's exit-0 stands.
+3. wget: **exited 0** (quiet mode; a POST failure exits non-zero) — delivered.
+
+The payload sent: `retune-nb-0d-11: walk still red - the exact fire law PROVEN (g2 down at +58
+ticks one round), the turn-loop fix, the composition + the floor; the stand entry budget buys
+exactly ONE certain kill (the wire fires AT the stand); the round-12 lever = the wire-dodge stand
++ the escape cost + the yard legs back-fire; whole binaries walkreal 3/0/1 + interactables 11/0`.
