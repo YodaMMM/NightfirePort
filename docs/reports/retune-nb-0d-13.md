@@ -109,4 +109,18 @@ the session (no gauge, no billing panel, no API counters are exposed to the agen
 
 ## ntfy
 
-(to be filled after the finish steps)
+The three fallbacks in order (20:55-20:57 UTC 2026-11-20) — all failed this round, the same
+signature as round-12:
+
+1. curl: `curl: (28) Connection timed out after 20001 milliseconds` (exit 28).
+2. python3 urllib: killed by the 30 s wrapper timeout (exit 124) — the urlopen never returned
+   within its 20 s (the round-11 exit-0 delivery did not repeat; the network path to ntfy.sh
+   is down today, while github.com and the game-file host both worked all session).
+3. wget: exit 124 (killed at 30 s, no output — the POST never completed).
+
+The curl payload attempted (identical in meaning in all three):
+`retune-nb-0d-13: walk still red - THE ESCAPE-WALK DRAG PINNED (the walker's d<2.2 arrival zone
+crawls 0.01 u/tick) and LIFTED (the fast-arrival leg: the escape walk 105 ticks cost 3.4, the
+stand at 31.4; the land_wait=10 keeps the landing 34.8); the thread lever worse, the north-band
+kill uneconomical; the new wall = the armed pack's steady chips vs the act costs; the round-14
+lever = the crouched stand acts; walkreal 3/0/2 + interactables 11/0 whole`.
