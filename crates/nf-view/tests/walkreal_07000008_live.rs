@@ -1954,6 +1954,38 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         let arrived = w.scene.sim.as_ref().unwrap().bond.pos;
         eprintln!("[08 slit] bond {:?} -> {:?} (target x {:.2} z {:.2})", start, arrived, slit[0], slit[1]);
     }
+    // retune-nb-08-12: the d3 PRE-FIGHT anchor walk. The lever-1 run measured the fight loop's
+    // walk-back WALKING THROUGH the dive's launch window: the anchor moved 1.14 u north
+    // ((113.08, −179.02) → (113.08, −178.1)), the walk-back fired at the loop's first ticks
+    // (dist 1.14 > 0.35), and the walk-back RELEASES THE AIM ([M player.rs Player_Move's aim
+    // branch — the same law the walk-back's own comment cites]) — aim_yaw_err ran −0.78 →
+    // −2.44 through fight t10-60 while the machine flew its dive (f25710-25830, y 12.84-13.93
+    // [L the round-10 approach dump; the byte-exact flight rows in the same run]), and by t70
+    // (yaw re-converged 0.004) the machine had climbed past the cp[1] <= 13.7 band — ZERO
+    // launches in ~2000 fight ticks, damage 0.0/598 [L the lever-1 run's [08 gates] dump].
+    // A player walks to his fighting spot BEFORE the fight opens: this bounded walk (the d2
+    // slit walk's own pattern, real input only) runs after the shoot-out and before the fight
+    // loop — the loop OPENS at the anchor (the walk-back's 0.35 threshold then holds Bond
+    // there — no walk-back during the dive) with the aim free to converge on the machine from
+    // the loop's first ticks (the lever-1 run's t0 row: ONE gate from launch — line_ok false
+    // on the t0.936 sag stop alone, slit/eye/lane all true). The walk costs ~25-40 ticks: the
+    // loop opens ~f25740, still inside the dive (to f25830). D3-GATED: the sisters' timelines
+    // stay byte-exact.
+    if difficulty >= 3 {
+        let anchor_target = [113.3f32, -179.3f32];
+        for _ in 0..120 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let b = sim.bond.pos;
+            let dx = anchor_target[0] - b[0];
+            let dz = anchor_target[1] - b[2];
+            if dx * dx + dz * dz < 0.3 * 0.3 { break; }
+            let want_yaw = dx.atan2(dz);
+            let yaw_err = walker::wrap_pi(want_yaw - sim.bond.yaw);
+            w.tick(Input { turn: yaw_err.clamp(-0.08, 0.08), forward: if yaw_err.abs() < 0.3 { 1.0 } else { 0.0 }, ..Default::default() }, false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[08 anchorwalk] bond {:?} crouched {} f{}", sim.bond.pos, sim.bond.crouched, sim.drones.frame);
+    }
     // retune-nb-08-10: the d3 anchor walk + the drop press + the crouch drop + the stand-off
     // walk + the stand press moved ABOVE the pane shoot-out (right after the bottom-of-mountain
     // cinematic) — the drop must land the zap-free plate before the hurt volume arms with the
@@ -2376,7 +2408,41 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // circuit brings the low launch band around (the round-7 finding: the low band arrives
         // at fight t~1400-2100). The north strip and the corners stay rejected (the round-7
         // ledger). The d2 anchor stays byte-exact. difficulty < 2 never reads the anchor.
-        let ANCHOR: [f32; 2] = if difficulty >= 3 { [113.08, -179.02] }
+        // retune-nb-08-12: the d3 anchor moves SOUTH-EAST to (113.3, −179.3) — the pane-hole
+        // reply lever, judged on its own run. The round-11 dive-window death t25822 was the
+        // machine's reply missile detonating ON the west band at (110.4, 14.1, −181.0) d 3.4
+        // for −26.00 MID-RIDE: the reply's line crossed the band's x-plane 110.4 at z −181.24
+        // — the MULLION between the two shot-out end panes ((110.36, −180.70) and (110.61,
+        // −181.63) [L the round-11 shoot-out rows]). Both the launch line and the dive reply
+        // run chest↔machine (the reply's dir is fixed at ITS spawn through the chest [L the
+        // diagnostic runs]), so ONE chest fixes both crossings: from (113.3, −179.3) each line
+        // crosses x 110.4 at z ≈ −181.6 — pane 2's SHOT-OUT CENTRE, ~0.4 u clear of the
+        // mullions on both sides (the round-11 catch was 0.1-0.2 off the −181.0 mullion).
+        // MEASURED on the lever run [L the 2026-11-20 SE-anchor run]: rocket 1 LAUNCHED
+        // mid-dive (fight t49, machine y 13.41 ≤ 13.7) and LANDED −101.0 — the first
+        // dive-window machine damage of the retune (round 11 died with 0.0/598) — and ZERO
+        // reply-blast rows: the round-11 −26.00 wall is down. The remaining killer is the
+        // hurt-volume zaps: the standing capsule re-bridges onto the hole's rim at this
+        // latitude (feet 13.470367 everywhere — at the park spot too, the lever-4 run), and
+        // 22 × −2.00 rows (the approach burst f25702-25801 + a sustained burst f26198-26278)
+        // drained the WHOLE 44.0 entry — death t26276 at (113.0, −179.3), 454 ticks deeper
+        // than round 11, clip 3 rockets still in hand, the machine at 497/598. The anchors
+        // within 0.35 of the stand press's re-bridge resting spot (113.08, −179.02) hold Bond
+        // THERE (the walk-back's own threshold) and re-measure the round-11 reply death [L
+        // the lever-5 run: −26.00 at t25824 on the same mullion] — the SE spot sits 0.356 u
+        // out, so the walk-back walks, and the pre-fight walk below covers it. The north
+        // strip (113.08, −178.1) is MEASURED DEAD on its own run [L the 2026-11-20 lever-1/2
+        // runs]: the reply blast did land 0-damage there (explosion (110.3, 14.3, −177.8)
+        // d 4.3 outside the 4.0 falloff), but the launch line CANNOT open — the crossing
+        // z −180.3..−180.5 rides the doorway gap's south jamb (launch_line_clear +
+        // machine_lane_clear false every dive tick, zero launches in ~2000 fight ticks,
+        // damage 0.0/598), and the north spot sits in a SECOND dense zap window (12 −2.00
+        // rows f26657-26871). The park spot, the wedge break, the shoot-out and the drop
+        // block stay byte-identical (the dive catch is measured — the fight loop opens
+        // ~f25714 inside the dive). The next lever: a zap-free standing spot OFF the hole's
+        // rim (the round-6 note's (111.99, −179.51) class) or the crouch-window plan.
+        // D3-GATED: the d2 anchor stays byte-exact. difficulty < 2 never reads the anchor.
+        let ANCHOR: [f32; 2] = if difficulty >= 3 { [113.3, -179.3] }
             else if difficulty == 2 { [110.98, -179.31] }
             else { [111.09, -179.72] };
         // The zap detector: the newest player_hit is a world hit (owner past the drone list)
@@ -2736,6 +2802,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // machine under the crosshair (0.2) fires the finisher. D3-GATED.
         let ready = ready || (difficulty >= 3 && rockets >= 6 && rocket.is_none() && sim.missile_cam.is_none()
             && sim.gun.clip > 0 && l >= 10.0 && yaw_err.abs() < 0.2 && pitch_err.abs() < 0.2);
+        // retune-nb-08-12: the launch-gate fine dump — every 10 ticks for the first 200 fight
+        // ticks (the dive window f25710-25830 sits inside fight t0-116, BETWEEN the t%100
+        // samples that left it a blind spot in the lever-1 run: zero launches in ~2000 fight
+        // ticks and 21/21 sampled line_ok false, with NO sample inside the dive). eprintln
+        // only, no sim tick — the timeline stays byte-exact (the round-10/11 diagnostics
+        // pattern). Names every `ready` gate's state at the tick.
+        if difficulty >= 3 && t < 200 && t % 10 == 0 {
+            eprintln!("[08 gates] t{t} f{} l {l:.1} yaw_err {yaw_err:.3} pitch_err {pitch_err:.3} dh {dodge_hold} line_ok {line_ok} slit {slit_clear} eye_sees {eye_sees} lane {machine_lane_clear} cp ({:.2},{:.2},{:.2}) cam {} clip {} riding {}",
+                w.total_ticks, cp[0], cp[1], cp[2], sim.missile_cam.is_some(), sim.gun.clip, rocket.is_some());
+        }
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 100 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
