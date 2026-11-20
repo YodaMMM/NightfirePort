@@ -106,3 +106,18 @@ walker (read-only use — no helper changed, so no other binary is affected by c
 
 not visible to me — this environment shows no token, credit, cost or context-window figures for
 the session (no gauge, no billing panel, no API counters are exposed to the agent).
+
+## ntfy
+
+The three fallbacks in order (17:47-17:49 UTC 2026-11-20) — all failed this round:
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (exit 28).
+2. python3 urllib: killed by the 25 s wrapper timeout (exit 124) — the urlopen never returned
+   within 20 s (the round-11 exit-0 delivery did not repeat; the network path is down today).
+3. wget: exit 124 (killed at 25 s, no output — the POST never completed).
+
+The payload attempted (identical in all three): `retune-nb-0d-12: walk still red - THE LIVE WIRE
+IDENTIFIED (the oil-barrel pair radius 5 dmg 40 boomed ON CAMERA -4.40 t22689, g2 still died at
++58); the stand-move and pre-turn levers measured dead (the escape walk exposure dominates); the
+round-13 lever = the walk threading + the land_wait + the north-band kill; per-test evidence
+walkreal 3/0 + interactables 11/0 (the sandbox OOMs whole-binary runs at 3 GB RAM)`.
