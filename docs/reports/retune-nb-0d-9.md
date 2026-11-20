@@ -98,4 +98,15 @@ the session (no gauge, no billing panel, no API counters are exposed to the agen
 
 ## ntfy
 
-(filled after the send attempt below)
+The three fallbacks in order (05:06-05:10 UTC 2026-11-20):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (the rounds 1-9 signature).
+2. python3 urllib: no response within 25 s; the command was killed by the tool timeout with no
+   output.
+3. wget: timed out — the command was killed at 60 s with no response line.
+
+All three failed. The payload that would have been sent: `retune-nb-0d-9: walk still red but
+lever (a) PROVEN - the wire dodged (escape leg +70 ticks zero chips), the round-8 stall pinned
+(the walker return-fire answer), the bullet-dir law measured (the bullet flies the view pitch,
+cursor-y ignored, anim-posed muzzle); the round-10 lever in the ignore message; whole binaries
+walkreal 3/0/1 + interactables 11/0`.
