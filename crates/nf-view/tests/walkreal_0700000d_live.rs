@@ -2619,7 +2619,19 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             // boxes), so re-picking the same guard bleeds the margin; the next-nearest clear
             // guard (a standing pose) takes its place. The committed path re-picks (unchanged).
             let mut failed: Vec<usize> = Vec::new();
-            if !yard_run { for pass in 0..sweep_passes {
+            // retune-nb-0d-11, THE COMPOSITION (the round-11 lever): the run variant no longer
+            // skips the stand sweep — the box-centre gate (centre_gate true below, the composed
+            // shape only) makes each pass a CERTAIN one-round kill (~1 shot per ~110-tick
+            // fire-script cycle [L run 10-e], the drain falls per kill), thinning the pack
+            // BEFORE the yard run legs. The thinning rides a health floor (the run legs need
+            // margin: run 10-f reached the trench at 31.4 and died on the return) —
+            // NF_0D_SWEEP_FLOOR (default 12.0) breaks the sweep and hands over to the run. The
+            // committed path (yard_run unset) is byte-identical: the condition is
+            // `!yard_run || stand_first` (true whenever yard_run is 0), and centre_gate is
+            // false there (the body-span measure as committed). The run-10-f shape (yard_run
+            // without stand_first) still skips.
+            let sweep_floor = std::env::var("NF_0D_SWEEP_FLOOR").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(12.0);
+            if !yard_run || stand_first { for pass in 0..sweep_passes {
                 let pick = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let mut best: Option<(f32, usize)> = None;
@@ -2649,9 +2661,16 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                         sim.gun.clip, sim.gun.spare, sim.drones.health.health, sim.drones.health.armour);
                 }
                 if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
-                let down = shoot_far_aim(&mut w, di, "the container stand sweep (the second pass, the lifted aim)", 260, -1.0, true, stand_lift, true);
+                let down = shoot_far_aim(&mut w, di, "the container stand sweep (the second pass, the lifted aim)", 260, -1.0, true, stand_lift, true, yard_run && stand_first);
                 if land_audit { eprintln!("[0d:stand-audit] pass {pass}: the act returned {down}"); }
                 if stand_first && !down { failed.push(di); }
+                if yard_run {
+                    let h = w.scene.sim.as_ref().unwrap().drones.health.health;
+                    if h < sweep_floor {
+                        eprintln!("[0d] the stand sweep: the floor {sweep_floor} reached at health {h:.1} after pass {pass} — the run legs take over");
+                        break;
+                    }
+                }
             } }
         } else {
         let mut failed: Vec<usize> = Vec::new();
@@ -2718,6 +2737,19 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     if !yard_run {
     let _ = kill_guard_at_present(&mut w, [134.5, -325.7], [4.0, 4.0], "the trench grunt #25 (asleep, from the display trench)", 300);
     let _ = kill_guard_at_present(&mut w, [129.6, -325.6], [4.0, 4.0], "the trench grunt #26 (asleep, from the display trench)", 300);
+    }
+    // retune-nb-0d-11, THE RUN LEGS' DRAINS (the round-11 lever's second piece): the run-10-f
+    // death measured the return leg's killers — the roof shooter above the trench (the ledger:
+    // (138.9, 9.0, -325.3) d 18.2, 6 chips 10.8) and the yard-east armed 0x12 cadence (16.0 in
+    // 9 hits) — plus the trench sleepers the gunfire wakes (the run-4 ledger: #25 16 hits 10.2
+    // across the trench/plate phases). The certain box acts (the box-centre gate) from the
+    // trench take them BEFORE the return. Gated to the run variant (unset = byte-identical);
+    // each act's world gate holds fire on a blocked line and the cap bounds the exposure.
+    if yard_run {
+        let _ = kill_guard_certain_at(&mut w, [134.5, -325.7], [4.0, 4.0], 8.0, "the trench sleeper #25 (the certain box act, the run legs' drain)", 300);
+        let _ = kill_guard_certain_at(&mut w, [129.6, -325.6], [4.0, 4.0], 8.0, "the trench sleeper #26 (the certain box act)", 300);
+        let _ = kill_guard_certain_at(&mut w, [138.9, -325.3], [3.5, 3.5], 11.0, "the roof shooter above the trench (the certain box act, the run-10-f roof drain)", 300);
+        let _ = kill_guard_certain_at(&mut w, [154.0, -291.0], [6.0, 6.0], 8.0, "the yard-east armed (the certain box act, the #1 0x12 cadence)", 300);
     }
     {
         let sim = w.scene.sim.as_mut().unwrap();
@@ -2912,6 +2944,23 @@ fn kill_guard_at(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str) -> bo
 /// the enabled-gated box found nothing and the whole point of the leg (killing #10 BEFORE the
 /// ladder) was lost. Bullets hit present drones regardless of the AI gate; the AI gate only
 /// decides whether the guard shoots BACK.
+/// retune-nb-0d-11: the CERTAIN box act at a spot — the same closest-live-guard pick as
+/// `kill_guard_at_present` (plus a `y_max` so the roof shooters stay pickable) but firing
+/// `shoot_far_aim` with the BOX aim + the aim-drain skip + the BOX-CENTRE gate (the round-11
+/// lever's certain one-round kill: the predicted line must ride the aimed box centre before
+/// the trigger fires). Test-local, called from the run-variant branch only.
+fn kill_guard_certain_at(w: &mut Walker, at: [f32; 2], tol: [f32; 2], y_max: f32, label: &str, cap: u32) -> bool {
+    let di = w.scene.sim.as_ref().unwrap().drones.list.iter().enumerate()
+        .filter(|(_, d)| d.enabled && d.present && !d.corpse && d.health > 0.0 && d.pos[1] < y_max
+            && (d.pos[0] - at[0]).abs() < tol[0] && (d.pos[2] - at[1]).abs() < tol[1])
+        .min_by_key(|(_, d)| ((d.pos[0] - at[0]).powi(2) + (d.pos[2] - at[1]).powi(2)) as u32)
+        .map(|(i, _)| i);
+    match di {
+        Some(i) => shoot_far_aim(w, i, label, cap, -1.0, true, 0.0, true, true),
+        None => { eprintln!("[0d] {label}: no live guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
+    }
+}
+
 fn kill_guard_at_present(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str, cap: u32) -> bool {
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -2973,7 +3022,7 @@ fn kill_guard_at_present_fast(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label
             let d = &w.scene.sim.as_ref().unwrap().drones.list[i];
             eprintln!("[0d:box] {label}: g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) state {:#x}",
                 d.skin, d.pos[0], d.pos[1], d.pos[2], d.state);
-            shoot_far_aim(w, i, label, cap, 0.3, true, 0.0, false)
+            shoot_far_aim(w, i, label, cap, 0.3, true, 0.0, false, false)
         }
         None => { eprintln!("[0d] {label}: no PRESENT guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
     }
@@ -3072,14 +3121,14 @@ fn kill_guard_at_cap(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str, c
 /// nothing, while the aimed `shoot_at` path lands static kills at d 25 (the C5 door)). The
 /// real fire path end to end (the gun, the bullets, the hit boxes), reload pulses on empty.
 fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, 0.3, false, 0.0, false)
+    shoot_far_aim(w, di, label, cap, 0.3, false, 0.0, false, false)
 }
 
 /// The HEAD aim variant (level-0d-real-health-crossfire-5): the same aimed act with the aim
 /// point and the world-ray gate raised to the head box (pos + `aim_dy`) — the height-asymmetric
 /// slab law makes head lines clear where chest lines die [probe_0d_roof_rays].
 fn shoot_far_head(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, 0.9, false, 0.0, false)
+    shoot_far_aim(w, di, label, cap, 0.9, false, 0.0, false, false)
 }
 
 /// The BOX aim variant (level-0d-real-health-crossfire-5): the aim point is a REAL clear hit-box
@@ -3087,7 +3136,7 @@ fn shoot_far_head(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
 /// +0.9 head guess fired clear-ray rounds that passed under the head box; a box point the
 /// port's own law returns is on a box the bullet reaches.
 fn shoot_far_box(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, -1.0, false, 0.0, false)
+    shoot_far_aim(w, di, label, cap, -1.0, false, 0.0, false, false)
 }
 
 /// The NO-DRAIN box act (level-0d-c5-door-fall): the 160-tick aim-off drain exists to reset
@@ -3098,7 +3147,7 @@ fn shoot_far_box(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
 /// ~36 ticks; the Operative stream's same act kills at +222 WITH the drain, so the drained
 /// path stays the default and the Agent's direct leg alone runs fast).
 fn shoot_far_box_fast(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, -1.0, true, 0.0, false)
+    shoot_far_aim(w, di, label, cap, -1.0, true, 0.0, false, false)
 }
 
 /// THE RIM ACT (retune-nb-0d-3): the ride-fire tap law on a STATIC stand. The shared act's
@@ -3356,7 +3405,7 @@ fn audit_clear() {
     AUDIT_LAST.with(|last| last.borrow_mut().clear());
 }
 
-fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, skip_drain: bool, lift: f32, bullet_gate: bool) -> bool {
+fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, skip_drain: bool, lift: f32, bullet_gate: bool, centre_gate: bool) -> bool {
     let audit = std::env::var_os("NF_0D_AUDIT").is_some();
     // retune-nb-0d-9, THE AIM-LIFT PARAMETER (the stand sweep passes the measured 0.88; every
     // other call site passes 0.0 = the exact committed aim — run 4 measured a GLOBAL lift
@@ -3487,9 +3536,28 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, 
                         let (cx, cy, cz) = (ps.from[0] + s * ps.dir[0], ps.from[1] + s * ps.dir[1], ps.from[2] + s * ps.dir[2]);
                         let dy = cy - dp[1];
                         let lat = ((dp[0] - cx).powi(2) + (dp[2] - cz).powi(2)).sqrt();
-                        if audit { eprintln!("[0d:plan] {label} +{} from ({:.2},{:.2},{:.2}) snap ({:.2},{:.2},{:.2}) cross ({:.2},{:.2},{:.2}) dy(feet) {dy:.3} lat {lat:.3} lift {lift:.3}",
-                            w.total_ticks - start, ps.from[0], ps.from[1], ps.from[2], ps.aim[0], ps.aim[1], ps.aim[2], cx, cy, cz); }
-                        dy > 0.1 && dy < 1.55 && lat < 0.3
+                        // retune-nb-0d-11, THE BOX-CENTRE GATE (the round-11 lever, `centre_gate`
+                        // TRUE at the composed stand sweep and the run legs' certain acts ONLY
+                        // — the committed call sites keep the body-span measure byte-identical):
+                        // the fire measure is the predicted crossing vs THIS tick's aimed box
+                        // centre (the clear_box_aim centre + lift — the lever's evidence says
+                        // the aim rides the BOX, lift 0, NOT the runs 6-7 -0.22 that compensated
+                        // the snap-miss branch), a ~0.2 u sphere (0.25 covers the posed centre
+                        // offset) — OR the snap point `ps.aim` (the exact point the bullet
+                        // passes through, [L run 10-e's [0d:plan]/[audit] pair: the crossing =
+                        // the aim = the planned line EXACTLY]) within the sphere. Either says
+                        // the predicted line rides the box, and the snap-hit law carries the
+                        // bullet THROUGH the aimed box → the part hit. The run 10-e miss
+                        // measured the body-span gate firing on a line whose snap fell 0.02
+                        // below the head box (part None) — the sphere refuses it; a short snap
+                        // (world geometry before the guard) still reads a blocked eye→centre
+                        // segment in the world-clear check below, so the OR cannot fire a dead
+                        // line.
+                        let cd = |p: [f32; 3]| ((p[0] - aim_pt[0]).powi(2) + (p[1] - aim_pt[1]).powi(2) + (p[2] - aim_pt[2]).powi(2)).sqrt();
+                        let (cdc, cda) = (cd([cx, cy, cz]), cd(ps.aim));
+                        if audit { eprintln!("[0d:plan] {label} +{} from ({:.2},{:.2},{:.2}) snap ({:.2},{:.2},{:.2}) cross ({:.2},{:.2},{:.2}) dy(feet) {dy:.3} lat {lat:.3} cd(cross) {cdc:.3} cd(snap) {cda:.3} aim ({:.2},{:.2},{:.2}) lift {lift:.3}",
+                            w.total_ticks - start, ps.from[0], ps.from[1], ps.from[2], ps.aim[0], ps.aim[1], ps.aim[2], cx, cy, cz, aim_pt[0], aim_pt[1], aim_pt[2]); }
+                        if centre_gate { cdc < 0.25 || cda < 0.25 } else { dy > 0.1 && dy < 1.55 && lat < 0.3 }
                     }
                     _ => false,
                 }
