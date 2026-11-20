@@ -90,3 +90,16 @@ Task ID: 1 (whole round)
 Agent: main worker (NightfirePort sandbox)
 Work Log:
 - Fresh sandbox; cloned repo, branch s/retune-nb-14-7 from origin/master (ccd79b5be), merged origin/s/retune-nb-14-6 (not on master) — entry opened, checkpoint pushed.
+- Round 7 body: the round-6 ignore message's ordered first step RAN (the NF_KIKO_PROBE read-only
+  grid pass at the corridor-hold entry, tick 26224) and measured lever 1 DEAD — #20's boxes read
+  exposed with infinite world-stop margin from the hold spot itself and ~30 grid spots (the sight
+  gate was never the blocker; the rounds die on a real-flight asymmetry the gate cannot see). The
+  lever-1 pocket-line hold (the east lane's west lip, 900 ticks) died the same way (t26386, #20's
+  post shot −1.93 at d 3.1, his hp 10 full). The Kiko-corridor armour fetch is measured blocked
+  (the north band wedges at (−46.82,1.06,42.38), head_bump, 6000-tick cap, twice). Lever 3 is REAL:
+  the round-4 census's untried loop-mouth armour (32.26,0.87,31.14) — the take LANDED on real
+  input at the descent foot (d3-gated, r(0.9)), +50 banked, the door-face arrival went 17.5 → ~87.6
+  health (the bullets absorb [M Player_HandlePain 0x1902c8]); the walk now dies at the pocket with
+  the armour drained (#20's −5.00/hit ×13, health 50.3 → 0.0 at t25389, 41 hits for 100.0). The
+  ignore message carries the refreshed ledger + the round-8 levers (the server-room armour, the
+  door-face drain law, the live checks). Test still #[ignore]d.

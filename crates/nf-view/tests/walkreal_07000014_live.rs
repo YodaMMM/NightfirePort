@@ -889,6 +889,20 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
             }
             eprintln!("[014] the low floor west reached {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
         }
+        // retune-nb-14-7 round 7, lever 3 (the round-4 census's untried loop-mouth armour — the
+        // ledger's "(32.26,0.87,31.14) d 7.2 from the loop mouth, the only one west of the 0x85
+        // door"): the walk arrives at the door face with health 1.9 and armour 0.0, and the
+        // whole back half of the bill is 0x14 BULLETS (the 12.5 rifle trios, the pocket #20's
+        // 1.93) that the armour pool absorbs FIRST — bullet pain (type 0) is the ONLY pain type
+        // whose armour fraction lets armour absorb [M Player_HandlePain 0x1902c8:84-104; apply():
+        // absorbed = (d·frac).min(armour)]; the trace's one health-drain explosion is #33's
+        // weapon-0x0 grenade −15.57 [L the NF_DMG_TRACE runs]. The armour sits ~2 u south of
+        // this measured low-floor spot — a real-input detour, the take on contact, no teleport.
+        // d3 real-damage only: the sisters and the tops-up walks keep the shipped route
+        // byte-identical.
+        if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+            w.walk_to(Wp::new(32.26, 0.9, 31.14).r(0.9), "the loop-mouth armour fetch");
+        }
         the_machine_room_to_the_corridor(&mut w);
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor north to the leg-2 spot");
         {
@@ -1394,7 +1408,7 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// lip), or the fights' creep law opens the line; (2) then the Kiko-corridor armour fetch
 /// (−41.29,1.53,36.48) — +50 armour banks the pool for Rook's-wake legs.
 #[test]
-#[ignore = "nb-scan-all round 6 (retune-nb-14-6): RE-MEASURED on this tree (merged master ccd79b5be + s/retune-nb-14-5) 2026-11-20 [L NF_DMG_TRACE run]: the SAME t26979 (−48.91,1.13,34.28) death, 34 hits for 100.0, 26 fights — the round-5 ledger stands verbatim (the two new master commits — the laser-watch drain and the pose pool — did not re-roll this stream), top billers #33 15.6 in 1 hit (the 0x14 BLAST on the crossing leg, (−49.6,40.9)) then the 12.5/12.5/12.5 rifle trios. The round-5 ledger below stands: WHAT STANDS (the round-5 door-face law, each piece its own measured run): (a) switch_on_first_blood, (b) the west-face leg's return-fire MUTE + the r(0.3) line park, (c) the door-face scans' weaker-first rank + the 4-tick slide-off fights + the SECOND extension (EYE-true candidates, the Kiko fast taps) — the death moved t25036 → t25939 → t26979 [L runs 5-6]; the Kiko hold's #20 (0x5000090, 0x14, hp 10, post (−51.0,1.0,32.6)) took ZERO rounds across FOUR fights (the fast taps at d 6.5, clips burned dry — the rounds die on the corridor's own geometry between z 39.2 and his post — BOTH directions blocked: his point-blank 1.93 (d 2.7) finished the 1.9-health walk). NEXT: (1) a hold/stand spot whose ray to (−51.0, 32.6) clears (the corridor's west lane or the south leg's own lip — MEASURE the ray from candidate spots first, a probe pass) or the fights' creep law opens the line; (2) then the Kiko-corridor armour fetch (−41.29,1.53,36.48) — see the doc comment. MEASURED CANDIDATES from this round's Operative d1 fix (the same fight-law family, each opt-in): fire_through_disabled (a dormant guard held the d1 wake stand's line its whole 300-tick cap — the game's own collide drops Enable(0) objects [M Collide_PickObj 0x1eae80]) and hurting_first (the cooled-guard pick silenced the d1 response ~600 ticks) — neither is in this walk's ledger shape (the d3 fights FIRED), but both are cheap opt-ins to carry if a stand goes silent"]
+#[ignore = "nb-scan-all round 7 (retune-nb-14-7): RE- MEASURED on this tree (master ccd79b5be + s/retune-nb-14-6 merged) 2026-11-20 [L NF_DMG_TRACE runs]. THE ROUND-6 LEDGER'S LEVER 1 IS MEASURED DEAD, by the ordered probe pass itself: the NF_KIKO_PROBE hook at the corridor-hold entry (tick 26224, bond (−50.23,1.05,38.81), health 1.9) read #20 (0x5000090, 0x14, hp 10, post (−51.33,1.00,32.42), d 6.49) EXPOSED with infinite world-stop margin from the hold spot itself and ~30 grid spots across x −53..−49, z 30..40 (both standing heights) — the sight gate was NEVER the blocker; the round-5 \"rounds die on the corridor's own geometry\" shape is a real-round-flight asymmetry the gate cannot see (the walk's own fight law is the bullet pass, GLASS_SIGHT off, so the probe traced segment_bullet_scoped — the same query the gate runs). Lever 1's lever-1 run (the pocket-line hold at the east lane's west lip (−48,34), 900 ticks) died the SAME way: t26386, bond (−48.9,1.2,34.8), #20's post shot −1.93 at d 3.1 with his hp 10 FULL — the fights' rounds did not land from the lip either [L]. Lever 2 (the Kiko-corridor armour fetch (−41.29,1.53,36.48)) is MEASURED BLOCKED: the north band east of the corridor mouth wedges at (−46.82,1.06,42.38) (head_bump=true, segment_to_target 0.099, cel 42) and burns the 6000-tick cap on BOTH attempts [L]. LEVER 3 IS REAL AND BANKED (this round's tree): the round-4 census's UNTRIED loop-mouth armour (32.26,0.87,31.14) — ~2 u south of the measured low-floor spot (32.58,1.35,33.08) — the take LANDED on real input at the descent foot (no teleport, d3-gated walk_to r(0.9)), +50 armour; the door-face arrival went from health 17.5 (rounds 5-6) to health ~87.6 (the trace's −17.19 #33 grenade at t24066 left 70.3 — every 0x14 bullet before it absorbed) [M Player_HandlePain 0x1902c8:84-104: bullet pain (type 0) is the only armour-absorbing type; the trace's one health drain is the weapon-0x0 grenade]. The walk NOW dies at the pocket with the armour DRAINED: the v4 run's bill t25236-25389, #20 (post (−51.1,1.0,32.6), hp 8) −5.00 per hit ×10 then −2.50 ×3, health 50.3 → 0.0, armour 0.0, 41 hits for 100.0, 24 fights — the door-face stands + the 4-fight loop chewed the 50 armour dry before the crossing (the mute legs and the scans eat his bursts while parked). MEASURED: #20's per-hit damage is 5.00 (the round-5/6 "1.93" was the final partial); his rounds land at d 2.5-6.5 while Bond's taps burn dry at the same ranges from the corridor AND the lip (the asymmetry is in the round flight, not the gate). NEXT LEVERS, in order: (1) the SERVER-ROOM armour (−27.29,0.87,30.96) — the census's 4th, untried, ~4.5 u NE of the escape touch (−33.1,26.8): +50 more covers the door-face-stands + loop + pocket bullet bill (the v4 math: the bill from the door face to the pocket ≈ 100 total, the loop-mouth 50 covers half); fetch it on the west corridor BEFORE the door face if a pass point reads clear — MIND the escape touch's 0x4A cut-scene timing (the touch is a cut-scene trigger; a fetch that crosses its volume fires it early — probe the approach with the NF_KIKO_PROBE idiom first, a read-only grid pass at the ascent-base/escape-room mouth), or find a mid-route pass point on the server-room west corridor (nav nodes 94-97/150/591-600 [D]); (2) the door-face legs' armour DRAIN law — the mute legs + scans stand in the door squad's bursts ~2000 ticks (the drain measured ~45 armour); a shorter stand shape (the slide-off fights' own law, fewer re-parks) banks more of the 50 for the pocket; (3) live checks for the main agent: trace Bond's fired-round stops vs #20's incoming-round stops in the corridor at t25200-25400 (the asymmetry's blocker has no static gate shadow — gdbwatch the Bullet_update flight paths, the muzzle offsets, and the gravity bit of the 0x14 record (+0x6C 0xa00) both directions). The shipped lane crossing + the aimed pass stand restored this round (the v2 fetch legs removed — they wedged); the probe hook stays env-gated read-only (NF_KIKO_PROBE, byte-identical when unset)."]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
@@ -1609,7 +1623,111 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     // player holds the corridor end first: 600 ticks answering the nearest visible guard in short
     // stands and stepping away from any live grenade (the 15 door[51] pattern). Measured: death
     // t27134 (node 4) -> t27517 at (-35.17, 26.39), 2 u from the touch (1200 ticks: t26998).
-    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+    // retune-nb-14-7: the round-6 ignore message's lever-1 PROBE PASS (read-only, env-gated
+    // NF_KIKO_PROBE, byte-identical when unset — this branch runs ONCE between two input ticks
+    // and writes nothing to the sim). At the Kiko-hold entry it measures, for a grid of
+    // candidate hold spots, whether the walk's own sight law (the bullet pass — this walk's
+    // GLASS_SIGHT is off, so `exposed_part_gun_rays` traces segment_bullet_scoped) clears to
+    // each alive corridor guard's hit boxes, and with how much world-stop margin, so the
+    // round-7 lever parks on a MEASURED spot instead of a guessed lane.
+    if std::env::var_os("NF_KIKO_PROBE").is_some() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let data = nf_game::drone::Data {
+            tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+            world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+            skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+            hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+            surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+            ai_points: &sim.ai_points,
+        };
+        let bp = sim.bond.pos;
+        eprintln!("[probe] tick {} bond ({:.2},{:.2},{:.2}) yaw {:.2} health {:.1}", w.total_ticks,
+            bp[0], bp[1], bp[2], sim.bond.yaw, sim.drones.health.health);
+        let squad: Vec<(usize, [f32; 3], u32, f32, u32)> = (0..sim.drones.list.len()).filter(|&i| {
+            let d = &sim.drones.list[i];
+            d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && dxz(d.pos, bp) < 25.0
+        }).map(|i| { let d = &sim.drones.list[i]; (i, d.pos, d.weapon, d.health, d.skin) }).collect();
+        for &(i, dp, wpn, hp, skin) in &squad {
+            eprintln!("[probe] guard #{i} skin {skin:#x} weapon {wpn:#x} hp {hp:.1} pos ({:.2},{:.2},{:.2}) d {:.2}",
+                dp[0], dp[1], dp[2], dxz(dp, bp));
+        }
+        // The blocker map: every alive guard's chest line from the hold-area spot, with the
+        // world stop's position — the round-5 shape (the rounds die between z 39.2 and 32.6)
+        // mapped onto the geometry.
+        for &(di, dp, _, _, _) in &squad {
+            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            let at = [dp[0], dp[1] + 1.2, dp[2]];
+            let stop = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, at);
+            match stop {
+                Some(t) => {
+                    let sx = eye[0] + t * (at[0] - eye[0]);
+                    let sy = eye[1] + t * (at[1] - eye[1]);
+                    let sz = eye[2] + t * (at[2] - eye[2]);
+                    eprintln!("[probe] line bond->#{di} chest stops t {t:.3} at ({sx:.2},{sy:.2},{sz:.2})");
+                }
+                None => eprintln!("[probe] line bond->#{di} chest CLEAR from the hold-area spot"),
+            }
+        }
+        // The candidate grid: the corridor's west lane, the south leg's own lip, the east lane
+        // above the pocket line, and the armour spot's east ground, both standing heights
+        // (the corridor's measured walk y ~1.13 and a crouched 0.13).
+        let eye_h = sim.bond.eye - sim.bond.crouch_drop;
+        for gy in [0.13f32, 1.13f32] {
+            for gx in -53i32..=-41 {
+                for gz in 30i32..=40 {
+                    let (ox, oy, oz) = (gx as f32, gy, gz as f32);
+                    let mut seen: Vec<String> = Vec::new();
+                    for &(di, dp, wpn, hp, _) in &squad {
+                        // face the guard (the walk's own yaw law: forward = (sin, cos)), so the
+                        // gun stand-ins sit where a real stand would carry them.
+                        let yaw = (dp[0] - ox).atan2(dp[2] - oz);
+                        let eye = [ox, oy + eye_h, oz];
+                        let (fy, cy) = (yaw.sin(), yaw.cos());
+                        let right = [cy, 0.0, -fy];
+                        let gun_spots = [eye,
+                            [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+                            [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]];
+                        let mut best: Option<f32> = None;
+                        for b in sim.drones.list[di].hit_boxes(&data) {
+                            let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+                            let mut worst: Option<f32> = None;
+                            for g in gun_spots {
+                                let ray = [c[0] - g[0], c[1] - g[1], c[2] - g[2]];
+                                match nf_game::damage::ray_box(g, ray, &b) {
+                                    Some(t_box) => {
+                                        let m = sim.world.segment_bullet_scoped(sim.world.find_cel(g), g, c)
+                                            .map_or(f32::INFINITY, |tw| tw - t_box);
+                                        if m <= 0.0 { worst = None; break; }
+                                        worst = Some(worst.map_or(m, |w: f32| w.min(m)));
+                                    }
+                                    None => { worst = None; break; }
+                                }
+                            }
+                            if let Some(m) = worst {
+                                if best.map_or(true, |bm: f32| m > bm) { best = Some(m); }
+                            }
+                        }
+                        if let Some(m) = best {
+                            seen.push(format!("#{di}(w {wpn:#x} hp {hp:.0} d {:.1}) margin {m:.2}", dxz(dp, [ox, oy, oz])));
+                        }
+                    }
+                    if !seen.is_empty() {
+                        eprintln!("[probe] spot ({ox:.0},{oy:.2},{oz:.0}): {}", seen.join(" | "));
+                    }
+                }
+            }
+        }
+        eprintln!("[probe] done (the walk continues unchanged)");
+    }
+    // retune-nb-14-7: the corridor-end hold stays for the non-dodge d3 stream. The round_dodge
+    // stream (the 00agent walk) skips it — the round-7 probe measured the corridor-end hold's
+    // exchange DEAD: the gate ray to #20 was NEVER the blocker (the NF_KIKO_PROBE pass at the
+    // hold entry, tick 26224, read #20's boxes exposed with infinite world-stop margin from the
+    // hold spot itself and ~30 grid spots — the round-5 "rounds die on the corridor's own
+    // geometry" shape is a real-round-flight death the sight gate cannot see), so 600 idle
+    // ticks there only spend the clock. The round_dodge stream holds the POCKET line instead
+    // (the block below).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() && !w.round_dodge {
         kiko_hold(&mut w, 600, "the Kiko hold");
     }
     // With round_dodge on (the Kiko hold now ends at 52.5) the second hold costs more than it
@@ -1630,16 +1748,19 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     // east along the north side instead (the north lane measured 0 #20 hits on the landing-2
     // runs) and rejoins the nav route east of the pocket line.
     if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() && w.round_dodge {
-        // The corridor's north band east of the hold spot floats (the level's hover cells:
-        // grounded=false at (-48.12, 1.14, 38.02) on the first run) — the leg is lenient: the
-        // fights along it kill the pocket #20 from outside his 3.0 u auto-hit band (2.5 vs the
-        // shipped 20.0), a wedge gives the leg up and the nav route carries on with the pocket
-        // empty. (Two other lanes measured WORSE and are recorded so they stay closed: the
-        // two-leg route keeping d >= 4.5 from the pocket let the z 35 stand at x -49 be chewed
-        // by the south-side squad (#29/#62 0x5000093, d 5.8-7.7) — death t32831; the z 33.5
-        // endpoint walked INTO the south squad's line (#23 3 x 2.5 at d 3.6, #29's explosive
-        // -10.0 at d 2.6, #22's last -25.0 at d 3.5) — death t37624. The measured lane is this
-        // one.)
+        // retune-nb-14-7 round 7: the round-6 ignore message's lever 1 is MEASURED DEAD — the
+        // NF_KIKO_PROBE pass at the hold entry (tick 26224) read #20's hit boxes exposed with
+        // infinite world-stop margin from the hold spot itself and ~30 grid spots (the sight
+        // gate was NEVER the blocker), and the lever-1 pocket-line hold died the same way
+        // (t26386, #20's post shot −1.93 at d 3.1, his hp 10 FULL — the fights' rounds did not
+        // land from the lip either) [L both runs 2026-11-20]. The lever-2 Kiko-corridor armour
+        // fetch (−41.29,1.53,36.48) is MEASURED BLOCKED: the north band east of the corridor
+        // mouth wedges at (−46.82,1.06,42.38) (head_bump, segment_to_target 0.099, the
+        // 6000-tick cap) on BOTH this round's attempts [L]. So the round_dodge stream keeps the
+        // shipped lane crossing — the loop-mouth armour banked earlier (the lever-3 fetch at
+        // the descent foot) now covers its bullet bill: the pocket #20's 1.93-5.0 post shots
+        // and #30's 2.5s absorb into the armour instead of the health pool [M Player_HandlePain
+        // 0x1902c8:84-104 — bullet pain (type 0) absorbs into armour first].
         w.lenient = true;
         w.walk_to(Wp::new(-44.5, 0.9, 34.0).r(1.2), "the east lane above the pocket line");
         w.lenient = false;
