@@ -1774,6 +1774,43 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         // SAME shipped route node-by-node (one nav_route read from cur_pos, the same r(1.3)
         // legs [L the d3 branch's byte-exact note]) with the delta_approach_scan after node 21;
         // the d3 chain measured the every-node scans NET NEGATIVE, so node 21 only.
+        // retune-nb-14-6 (the merged master re-rolled the d1 stream; the re-measure on THIS tree
+        // [L 2026-11-20, NF_DMG_TRACE run] hit the SAME t36801 death, 41 hits for 100.0, 23
+        // fights — the ledger stands): the fights' answer laws, the round-5 door-face family.
+        // (a) shoot_blockers: the re-measure's fight#28 opened MID-LEG at (−7.9,−23.1) — 16 u
+        //     west of the post — and its stand read `blocked true` for the whole 300-tick cap
+        //     (aim Some, err 0.000 from t60, clip 15 spare 12 UNTOUCHED — zero taps) while #28
+        //     converged 16 u → 4 u dealing −2.80 a round: the line held a live hostile (the
+        //     converging #29 off his (8.7,−21.5) post; corpses and dead drones are skipped by
+        //     the blocker scan). A player whose line a guard walks into shoots THAT guard. d1
+        //     wake legs only — every other walk keeps the hold.
+        // (b) switch_on_first_blood: the round-5 00agent door-face law (the ignore message's
+        //     named candidate) — the fight turns to a NEW shooter's first blood without the
+        //     30-tick cadence and the 3.0 margin.
+        // (c) retune-nb-14-6 run 2 [L 2026-11-20]: run 1 (a+b) was BYTE-IDENTICAL — no
+        //     retarget fired (the blocker is not a live ENABLED hostile) and no first-blood
+        //     switch fired — and the death stayed t36801. The traced baseline [L
+        //     NF_DMG_TRACE/NF_RF_TRACE] names the decisive hole: after the failed #28 response
+        //     (the 300-tick blocked stand + the 27-round determined pass, ONE landing, dry at
+        //     t36205) the leg's return-fire gate could NOT open a fight for ~600 ticks — the
+        //     plain pick returned the cooled #28 first (his 240-frame damage crossed the 15.0
+        //     lethality override) and the response bailed on the cooldown check while #29 (off
+        //     cooldown, hp 10, d 1.6) chewed UNANSWERED — 35.0 of health gone between the
+        //     responses, the guards converged d 16 → 1.1-1.7, and the guard grenade's blast
+        //     (world kind-52 explosion at (13.3,0,−21.2)) finished Bond at 3.8 health (it dealt
+        //     BOTH guards 83 — their ledger hp −81/−73 is the blast, not Bond's rounds).
+        //     hurting_first is the pick-side law for exactly this shape (the 07000008 d3
+        //     death's item 1): a cooled guard no longer silences the response.
+        // (d) fire_through_disabled: the run-1 no-retarget means the first stand's blocker
+        //     fails `enabled` (or team) — a dormant (WAIT_SWITCH) guard parked on the line is
+        //     the ledger's own shape ("the not-yet-enabled guard standing on the line held
+        //     every tap, killed false x5"). The game's own collide drops Enable(0) objects
+        //     [M Collide_PickObj 0x1eae80] so a disabled drone never stops a round; the hold
+        //     must not either.
+        w.dmg.hurting_first = true;
+        w.dmg.fire_through_disabled = true;
+        w.dmg.shoot_blockers = true;
+        w.dmg.switch_on_first_blood = true;
         w.dmg.finish_fights = true;
         let wake_pts = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -2326,8 +2363,36 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// node-by-node (one nav_route read from cur_pos, the same r(1.3) legs [L the d3 branch's
 /// byte-exact note]) with the delta_approach_scan after node 21 (the d3 chain's own law) and
 /// the d3 chain's loot pass keyed on the dry gun (clip+spare < 10) instead of a fixed node.
+///
+/// UN-IGNORED AGAIN (retune-nb-14-6): green on the merged master (ccd79b5be + s/retune-nb-14-5)
+/// on 2026-11-20 — walked out in 40206 ticks, stuck 0, falls 0, the exit hold drained and
+/// 07000015 loaded warm, health 40.0 into the Rook kill [L the --nocapture run]. The merged
+/// master re-rolled the wake legs' stream back to the retune-nb-14-3-era death: the traced
+/// re-measure (NF_DMG_TRACE/NF_RF_TRACE, run 0) hit t36801 at (5.05,1.13,−23.31), 41 hits for
+/// 100.0, 23 fights — the SAME ledger the round-5 ignore message recorded. The measured death
+/// shape [L run 0 + run 1]: (a) the #28 response's stand sat `blocked true` its whole 300-tick
+/// cap 16 u west of the post (aim Some, err 0.000 from t60, clip 15 spare 12 untouched — zero
+/// taps — a live-present drone that fails `enabled` held the line: with fire_through_disabled
+/// the stand FIRED and killed #28 in 52 ticks [L the green run's fight#28 at t35382 killed
+/// true] — the game's own collide drops Enable(0) objects [M Collide_PickObj 0x1eae80] so the
+/// dormant guard never stopped a round and must not stop the hold); (b) the response's
+/// determined pass burned clip 15+spare 12 into the corridor geometry (ONE landing, #28
+/// 10 → 2.5, "out of ammo at +572", killed false); (c) THE DECISIVE HOLE: after the failed
+/// response (t36205) the leg's return-fire gate could NOT open a fight for ~600 ticks — the
+/// plain pick returned the cooled #28 first (his 240-frame damage crossed the 15.0 lethality
+/// override) and the response bailed on the cooldown check while #29 (off cooldown, hp 10,
+/// d 1.6) chewed UNANSWERED — 35.0 of health gone between the responses, the guards converged
+/// d 16 → 1.1-1.7, and a guard grenade's world blast (kind-52 explosion at (13.3,0,−21.2))
+/// finished Bond at 3.8 health — it dealt BOTH guards 83 (their ledger hp −81/−73 is that
+/// blast, not Bond's rounds: the fights never once landed on them after the determined pass's
+/// single round). hurting_first is the pick-side law for exactly this shape (the 07000008 d3
+/// death's item 1: a cooled guard no longer silences the response) — the green run's fight#29
+/// opened at node 30 (t35705, killed true) instead of the 600-tick silence. The walk's own
+/// flags sit in the d1 real-damage wake-legs branch only (hurting_first, fire_through_disabled,
+/// shoot_blockers, switch_on_first_blood — the last two measured NO-OPs alone on run 1's
+/// byte-identical death): the earlier legs, the d2 agent walk and the tops-up walks stay
+/// byte-identical.
 #[test]
-#[ignore = "nb-scan-all (the merged master 434826a9b re-rolled the d1 stream): Bond dies t36801 at (5.05,1.13,-23.31) — the retune-nb-14-3-era death RE-MEASURED on the merged tree 2026-11-19 [L run: drones #28/#29 (0x1a) at ~4 u land 65.2 of the 100, the wake legs' posts]. s/retune-nb-14's laws stand shipped (the d3 wake walk + delta_approach_scan at node 21 + the dry-gun loot pass) but the SniperAim ENTER merge re-rolled their stream; the walk was green on s/retune-nb-14's own tree (master 73822d3a0). The round-5 00agent door-face law's measured pieces (switch_on_first_blood, the fast-tap slide-off fights) are the candidate laws for the wake legs' #28/#29 pair. NEXT: re-tune that pair on the merged tree, then un-ignore"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }
