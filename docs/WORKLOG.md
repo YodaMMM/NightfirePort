@@ -118,3 +118,10 @@ Lever 1 (round-7 ignore message): the SERVER-ROOM armour (−27.29,0.87,30.96).
 - v5: the Kiko-corridor armour take before the lane fired the resupply wander inside the leg (nav route swings south through the convergence zone) — death t30347, leg removed.
 - v6 (final tree): server-room fetch banked, death t28518 (world −30.51 live wire during the dry-gun resupply wander). Still red; ignore message refreshed with the round-8 ledger + next levers.
 - Whole-binary runs on the final tree: walkreal_07000014_live 9 passed / 0 failed / 1 ignored (172.24 s); interactables_07000014_live 10 passed / 0 failed (10.27 s). No crates/*/src changes; only walkreal_07000014_live.rs + docs touched.
+
+## retune-nb-14-9
+Branch s/retune-nb-14-9, from origin/master + merge of s/retune-nb-14-8 (fresh sandbox, round 9).
+
+### retune-nb-14-9 progress (2026-11-20, fresh sandbox)
+- Setup redone from the task message (clone into /tmp/my-project, work-slim + ISO downloads, rustup, ALSA user prefix, cargo fetch). Branch created and pushed with this WORKLOG entry at setup.
+- In progress: reading the round-8 ignore message ledger; next levers in order (1) Kiko-corridor armour ledge approach via NF_SRV_PROBE, (2) door-face armour drain law, (3) dry-gun law west of the door.
