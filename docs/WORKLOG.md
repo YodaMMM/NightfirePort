@@ -125,3 +125,12 @@ Work Log:
   (act variant over the measured patrol band), then NF_0D_RIDE_SHIFT=60 + the corridor take.
 - Master moved past the round-7 measurement (ccd79b5be pose pool / 434826a9b laser HUD) — the death
   re-measure on the merged tree comes first, per the round-7 procedure.
+- Round-8 measured: the lever's premise refuted by the census (g18 in the pit, the in-bay box empty
+  on BOTH timelines); the pit-kill from the corridor mouth dead (the ray blocked); the failed act's
+  draws re-rolled the ride to ZERO hits; NF_0D_TAP_CADENCE=14 lands the CLEAN container landing
+  (timer 63, 34.8 -> 34.8, armour 50 — the greenest landing in the ledger); the exit lands at 33.2
+  and the yard-floor fight is survivable but the PERIODIC live-wire hazard (~1300-tick cadence,
+  18.8-22.4) + the landing-spot sweep stall (~1345 ticks, zero kill prints) kill at t22495/22500.
+- The refreshed ledger + the round-9 lever (the proven-clear stand (142,-291.5) FIRST, then the
+  sweep; the stall audit) are in the ignore message item (9). Whole binaries: walkreal 3/0/1
+  (99.6 s), interactables 11/0 (20.3 s). Report: docs/reports/retune-nb-0d-8.md.
