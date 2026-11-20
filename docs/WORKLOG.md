@@ -153,3 +153,11 @@ level 08 + difficulty). Status: three levers judged on their own real runs. (1) 
   calls, the ~200-binary build does not fit the window); nf-game --lib 796/0, nf-formats 98/0
   except the allowed 3 slim-ISO disc_golden failures, nf-audio 35/0. Report:
   docs/reports/retune-nb-08-9.md.
+
+## retune-nb-08-10 (2026-11-20)
+Round 10 of the 08 whole-mission 00 Agent real-damage walk. Branch s/retune-nb-08-10 from
+origin/master with origin/s/retune-nb-08-9 merged (08-9 was not on master). Plan: read the
+08-9 report and the ignore message on walk_the_whole_mission_on_real_input_real_damage_00agent,
+skip levers the ledger marks measured dead, try the next untried lever on its own real run;
+rules unchanged (real input only, no top-ups, never lower damage or health, no guard-code
+changes, helpers gated to level 08 + difficulty). Status: started.
