@@ -661,7 +661,7 @@ impl Walker {
     /// line cannot eat minutes of the walk. Same loop, the caller's cap; false on give-up.
     /// (level-09-live-guards-walk; behaviour-identical for the 10800 callers.)
     pub fn shoot_bounded(&mut self, di: usize, label: &str, cap: u32) -> bool {
-        self.shoot_gated(di, label, cap, 0.02, 0.028)
+        self.shoot_gated(di, label, cap, 0.02, 0.028, 16, true)
     }
 
     /// `shoot_bounded` with the aim gate LOOSENED (±0.07 yaw / ±0.10 pitch ≈ the torso box at
@@ -669,10 +669,20 @@ impl Walker {
     /// sweeps ±0.1+ rad between ticks: the tight gate never settles and the taps stop (the
     /// first run's 15-dart miss at 1.8u). The loose gate trades spray for rate at close range.
     pub fn shoot_loose(&mut self, di: usize, label: &str, cap: u32) -> bool {
-        self.shoot_gated(di, label, cap, 0.07, 0.10)
+        self.shoot_gated(di, label, cap, 0.07, 0.10, 16, true)
     }
 
-    fn shoot_gated(&mut self, di: usize, label: &str, cap: u32, err_tol: f32, perr_tol: f32) -> bool {
+    /// retune-nb-14-5 (the 07000014 door-face scans only): the fights' 8-tick tap family at 4
+    /// (the sim's own refire clamps what the gun cannot do) and the REPOSITION SLIDE OFF — the
+    /// shipped slide's first-60-tick strafe dragged Bond 3 u off the corridor line into the
+    /// blocked geometry (the measured parks (−58.4, 36.6) put #32 0.23 u onto the #33 line) [L
+    /// the 2026-11-19 runs]. The door squad are STATIONARY posts: the aim settles, the park is
+    /// the law. Every other call site keeps the shipped 16 + slide.
+    pub fn shoot_bounded_fast(&mut self, di: usize, label: &str, cap: u32) -> bool {
+        self.shoot_gated(di, label, cap, 0.02, 0.028, 4, false)
+    }
+
+    fn shoot_gated(&mut self, di: usize, label: &str, cap: u32, err_tol: f32, perr_tol: f32, tap_spacing: u32, allow_slide: bool) -> bool {
         let mut hp0 = self.scene.sim.as_ref().unwrap().drones.list[di].health;
         let mut repositions = 0i32;
         let mut last_progress = 0u32;
@@ -695,7 +705,7 @@ impl Walker {
                 // Tap only when the view is ON the torso (the boxes are ~0.3 wide; the fixed-period
                 // taps sprayed ammo at a drifting aim). The caller's gate widths (the loose
                 // point-blank variant trades precision for rate on a moving close guard).
-                let on_target = err.abs() < err_tol && perr.abs() < perr_tol && t.saturating_sub(last_tap) > 15;
+                let on_target = err.abs() < err_tol && perr.abs() < perr_tol && t.saturating_sub(last_tap) > tap_spacing - 1;
                 let trigger = !clip_empty && on_target;
                 if trigger { last_tap = t; }
                 let input = Input {
@@ -703,7 +713,10 @@ impl Walker {
                     look: perr.clamp(-0.08, 0.08),
                     // Repositioning: slide sideways when the rounds are not landing (a column or a
                     // nook swallows the ray).
-                    strafe: if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
+                    // retune-nb-14-5 (door_face): the slide is the caller's opt-in — a
+                    // stationary-post fight holds the park (the slide's 60-tick strafe IS the
+                    // park wreck the door face measured).
+                    strafe: if !allow_slide { 0.0 } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
                     ..Default::default()
                 };
                 // replay-parity-walker-side-effects: the fight's step is a real walker-stepped
