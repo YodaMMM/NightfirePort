@@ -103,3 +103,7 @@ Work Log:
   the armour drained (#20's −5.00/hit ×13, health 50.3 → 0.0 at t25389, 41 hits for 100.0). The
   ignore message carries the refreshed ledger + the round-8 levers (the server-room armour, the
   door-face drain law, the live checks). Test still #[ignore]d.
+## retune-nb-14-8
+Branch s/retune-nb-14-8, from origin/master + merge of s/retune-nb-14-7 (fresh sandbox, round 8).
+Goal: walk_the_infiltration_to_the_delta_exit_real_damage_00agent green again.
+Ledger from round 7 report to be read next; next lever per ignore message TBD.
