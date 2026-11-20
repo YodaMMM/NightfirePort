@@ -223,3 +223,10 @@ dead. Work continues below.
   interactables_0700000d_live 11/0 (31.9 s). The suite.py background runner was killed between
   tool calls (suite.out empty, the rounds-1-10 signature) and the four-crate build hit the rootfs
   disk wall (9.9 GB); the stale build dirs pruned. Report: docs/reports/retune-nb-0d-11.md.
+
+## retune-nb-0d-12 (2026-11-20, s/retune-nb-0d-12)
+
+Task: round 12 of the 0d arrival-to-C5-door 00 Agent walk `walk_arrival_to_the_c5_door_real_damage_00agent`.
+Branched from origin/master ccd79b5be; merged origin/s/retune-nb-0d-11 (not on master) per the task
+message. Round-11 remaining bug and ledger live in docs/reports/retune-nb-0d-11.md and the ignore
+message; this round takes the next untried lever from the ledger, skipping levers marked measured dead.
