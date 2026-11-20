@@ -177,3 +177,29 @@ Work Log:
   flies bond.pitch x FRAC_PI_2 from the anim-posed muzzle, no cursor-y), so the g6-class passes
   land and the runs 6-7 kill race closes at ~10 health margin. Fallback: the yard-south run
   variant (skip the sweep, skip_return_fire through the plate legs). Work continues below.
+- The round-10 lever (the ignore message item (10)) implemented: Sim::planned_shot (scene.rs,
+  read-only — the spawn arm's own law [M Player_WeaponInitBullet 0x1a4bf0:226-245]: the head or
+  the head↔datum-0 midpoint start, the aim snapped by Collide_RayIntersect mask 0x20a/0x208,
+  dir = Normalise(aim − start)) + the stand sweep's bullet-line gate (a bullet_gate param, true
+  at the stand sweep call site ONLY): fire when the predicted line's crossing of the guard's
+  plane lands inside the body box, the trigger tick carrying turn 0 / look 0 so the ease
+  prediction is exact. Runs: 10-a (no corridor env — the roll was lost at the landing burst,
+  2.4 at the stand), 10-b (corridor without the pit-kill dwell — g18's stable 17.8+17.0 killed
+  the ride), 10-c (the full round-9 shape + the first gate: the closed-loop lift OSCILLATED —
+  the aim snap slides along the ground behind the guard as the lift shifts, dy swung
+  −1.27..+1.43, no shot fired, drained dry at the stand), 10-d (the body-box gate, fixed lift
+  −0.22: g2 down one round +57, g0 down ONE TORSO HIT at d 17.4 part Some(4,0.113) — the gate
+  LANDS the far kills — but the waits cost 5.8 + 21.6 of armed-pack drain, death in pass 2 at
+  4.0), 10-e (the prediction replacing the ray gate: one shot per ~110-tick fire-script cycle
+  — the +54 shot missed g2's head box by 0.02 (the lift −0.22 aimed 0.22 below the box; the
+  snap-hit law carries the bullet THROUGH the aim point) — 31.4 → 0 in 164 ticks). MEASURED:
+  the fight math is unwinnable (one 0x1e shot per ~110 ticks vs the armed 0x12 drain
+  ~0.19-0.28/tick and 4-5 guards).
+- The ledger's own fallback implemented: NF_0D_YARD_RUN=1 (default 0 = byte-identical; rides
+  NF_0D_STAND_FIRST=1) — skip the stand sweep, keep the zero-cost escape walk, run the yard
+  legs with skip_return_fire, skip the en-route fight acts (the trench grunts, the gunner #8).
+  Run 10-f: the plate + the trench reached (t23384 — the deepest death this family has
+  measured), then the roof shooter #29 (138.9, 9.0, −325.3, d 18.2) + the armed yard's 0x12
+  chips drained the 31.4 during the return leg. Still red.
+- Whole binaries on the final tree (knobs unset): walkreal_0700000d_live 3/0/1 (103.7 s),
+  interactables_0700000d_live 11/0 (30.9 s). Report: docs/reports/retune-nb-0d-10.md.

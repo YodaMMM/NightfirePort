@@ -97,6 +97,18 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // drop-then-sweep's flat-yard rays engage the garrison from the floor (the container-top
     // stands measured dead: the sweep's passes burned under #1's -1.8 cadence at 6.8 u).
     let container_drop = real_damage && difficulty == 3;
+    // retune-nb-0d-10, THE YARD-SOUTH RUN VARIANT (the ledger item (10)'s own fallback):
+    // runs 10-c/10-d/10-e measured the stand sweep's fight math UNWINNABLE on this shape —
+    // the bullet-line gate LANDED both far kills (g2 one round, g0 one torso hit at d 17.4,
+    // part Some(4,0.113) [L run 10-d]) but the 0x1e's one-shot-per-~110-tick fire-script
+    // cycle (the aim-bit flap law [M 0x1a24c8/0x1a2e38]) against the armed pack's 0x12 drain
+    // (~0.19-0.28/tick [L run 10-e: 31.4 -> 0 in 164 ticks with ONE shot fired]) leaves a
+    // budget of ~1 kill vs the 4-5 guards the sweep must kill. The fallback: skip the sweep
+    // entirely, keep the proven zero-cost escape walk (the wire dodge), and RUN the yard
+    // legs with the walker's return-fire answer skipped (the d2 sister's proven route
+    // phases) — the objectives (the ST-3 plate, the photograph, the C5 door) need no guard
+    // kill. NF_0D_YARD_RUN=1 arms it (rides NF_0D_STAND_FIRST=1; unset = byte-identical).
+    let yard_run = std::env::var("NF_0D_YARD_RUN").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
     // The warm carry: 0c's record-11 channels ride the save [M 0x182270:92-95].
     let cold = if difficulty == 1 {
         nf_view::load_with_carry(&iso, "0700000d.bin", false, None).expect("load cold")
@@ -2496,6 +2508,19 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             // the d1/d2 sisters already prove navigable. NF_0D_STAND_FIRST=1 arms it
             // (container roll only; unset = the committed path byte-identical).
             let stand_first = std::env::var("NF_0D_STAND_FIRST").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+            // retune-nb-0d-10, THE YARD-SOUTH RUN VARIANT (the ledger item (10)'s own fallback):
+            // runs 10-c/10-d/10-e measured the stand sweep's fight math UNWINNABLE on this
+            // shape — the bullet-line gate LANDED both far kills (g2 one round, g0 one torso
+            // hit at d 17.4, part Some(4,0.113) [L run 10-d]) but the 0x1e's one-shot-per-
+            // ~110-tick fire-script cycle (the aim-bit flap law [M 0x1a24c8/0x1a2e38]) against
+            // the armed pack's 0x12 drain (~0.19-0.28/tick [L run 10-e: 31.4 -> 0 in 164 ticks
+            // with ONE shot fired]) leaves a budget of ~1 kill vs the 4-5 guards the sweep
+            // must kill. The fallback: skip the sweep entirely, keep the proven zero-cost
+            // escape walk (the wire dodge), and RUN the yard legs with the walker's return-fire
+            // answer skipped (the d2 sister's proven route phases) — the objectives (the ST-3
+            // plate, the photograph, the C5 door) need no guard kill. NF_0D_YARD_RUN=1 arms it
+            // (rides NF_0D_STAND_FIRST=1; unset = byte-identical) — defined at the function
+            // head, above container_drop, because the yard legs' kill gates read it too.
             // retune-nb-0d-9, LEVER (b): the stall audit — per-pass pick/clip/health prints
             // (env NF_0D_AUDIT, prints only, no sim state) that pin the sweep-stall mechanism
             // (NO pick = the blocked-ray law; pick + no kill = the act's ray/round law).
@@ -2580,7 +2605,10 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             // so the fight never resolves and the wire's ~1300-tick cadence outruns it.
             w.skip_return_fire = stand_first;
             let _ = w.try_walk_to(Wp { at: [142.0, 5.0, -291.5], act: Act::None, arrive: 1.2 }, "the clear stand north-west of the container");
-            w.skip_return_fire = false;
+            // retune-nb-0d-10: under the run variant the answer stays skipped through the yard
+            // legs (the runs dodge the armed pack's drain; the escape leg measured ZERO cost
+            // [L run 2]); the committed path restores it here as before.
+            w.skip_return_fire = yard_run;
             eprintln!("[0d] the exit stand: {:?} health {}", bond_pos(&w), w.scene.sim.as_ref().unwrap().drones.health.health);
             if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
             // retune-nb-0d-9: under the stand-first lever the stand sweep carries a FAILED-GUARD
@@ -2591,7 +2619,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             // boxes), so re-picking the same guard bleeds the margin; the next-nearest clear
             // guard (a standing pose) takes its place. The committed path re-picks (unchanged).
             let mut failed: Vec<usize> = Vec::new();
-            for pass in 0..sweep_passes {
+            if !yard_run { for pass in 0..sweep_passes {
                 let pick = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let mut best: Option<(f32, usize)> = None;
@@ -2621,10 +2649,10 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                         sim.gun.clip, sim.gun.spare, sim.drones.health.health, sim.drones.health.armour);
                 }
                 if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
-                let down = shoot_far_aim(&mut w, di, "the container stand sweep (the second pass, the lifted aim)", 260, -1.0, true, stand_lift);
+                let down = shoot_far_aim(&mut w, di, "the container stand sweep (the second pass, the lifted aim)", 260, -1.0, true, stand_lift, true);
                 if land_audit { eprintln!("[0d:stand-audit] pass {pass}: the act returned {down}"); }
                 if stand_first && !down { failed.push(di); }
-            }
+            } }
         } else {
         let mut failed: Vec<usize> = Vec::new();
         for _ in 0..12 {
@@ -2685,8 +2713,12 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // The trench pair (level-0d-real-health-crossfire-5): #25/#26 sleep at (134.5/129.6,
     // −325.6) [census] — the run-4 ledger: #25 fired 16 hits for 10.2 across the trench/plate
     // phases. The camera switch below ends the gun legs, so the grunt dies first. Log-only.
+    // retune-nb-0d-10: the run variant skips the trench kills (the fights ARE the drain the
+    // run dodges; the photograph's shoot_at needs no guard down).
+    if !yard_run {
     let _ = kill_guard_at_present(&mut w, [134.5, -325.7], [4.0, 4.0], "the trench grunt #25 (asleep, from the display trench)", 300);
     let _ = kill_guard_at_present(&mut w, [129.6, -325.6], [4.0, 4.0], "the trench grunt #26 (asleep, from the display trench)", 300);
+    }
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.gun.switch_request = 0x54;
@@ -2720,12 +2752,14 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // The camera leg left the camera up: back to the rifle (the holster takes ~110 ticks).
         w.scene.sim.as_mut().unwrap().gun.switch_request = 0x1e;
         for _ in 0..300 { if w.scene.sim.as_ref().unwrap().gun.weapon == 0x1e { break; } w.wait(1); }
-        for _ in 0..3 {
+        // retune-nb-0d-10: the run variant skips the gunner kill (the door kill's mounted
+        // laser out-ranges his chip cadence; the fights are the drain the run dodges).
+        if !yard_run { for _ in 0..3 {
             let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| d.present && !d.corpse && d.health > 0.0
                 && (d.pos[0] - bc[0]).abs() < bt[0] && (d.pos[2] - bc[1]).abs() < bt[1] && d.pos[1] < 8.0);
             if !live { break; }
             let _ = kill_guard_at_present(&mut w, bc, bt, "the yard-east gunner #8 (from the shooting stand)", 400);
-        }
+        } }
     }
     w.top_up_health = true;
     // The weapon: the level's own MOUNTED LASER 0x67 (the catwalk gun, GunImp #225 [D; the disc's
@@ -2939,7 +2973,7 @@ fn kill_guard_at_present_fast(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label
             let d = &w.scene.sim.as_ref().unwrap().drones.list[i];
             eprintln!("[0d:box] {label}: g{i} skin {:#x} pos ({:.2},{:.2},{:.2}) state {:#x}",
                 d.skin, d.pos[0], d.pos[1], d.pos[2], d.state);
-            shoot_far_aim(w, i, label, cap, 0.3, true, 0.0)
+            shoot_far_aim(w, i, label, cap, 0.3, true, 0.0, false)
         }
         None => { eprintln!("[0d] {label}: no PRESENT guard near ({:.1},{:.1}) — already down", at[0], at[1]); false }
     }
@@ -3038,14 +3072,14 @@ fn kill_guard_at_cap(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str, c
 /// nothing, while the aimed `shoot_at` path lands static kills at d 25 (the C5 door)). The
 /// real fire path end to end (the gun, the bullets, the hit boxes), reload pulses on empty.
 fn shoot_far(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, 0.3, false, 0.0)
+    shoot_far_aim(w, di, label, cap, 0.3, false, 0.0, false)
 }
 
 /// The HEAD aim variant (level-0d-real-health-crossfire-5): the same aimed act with the aim
 /// point and the world-ray gate raised to the head box (pos + `aim_dy`) — the height-asymmetric
 /// slab law makes head lines clear where chest lines die [probe_0d_roof_rays].
 fn shoot_far_head(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, 0.9, false, 0.0)
+    shoot_far_aim(w, di, label, cap, 0.9, false, 0.0, false)
 }
 
 /// The BOX aim variant (level-0d-real-health-crossfire-5): the aim point is a REAL clear hit-box
@@ -3053,7 +3087,7 @@ fn shoot_far_head(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
 /// +0.9 head guess fired clear-ray rounds that passed under the head box; a box point the
 /// port's own law returns is on a box the bullet reaches.
 fn shoot_far_box(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, -1.0, false, 0.0)
+    shoot_far_aim(w, di, label, cap, -1.0, false, 0.0, false)
 }
 
 /// The NO-DRAIN box act (level-0d-c5-door-fall): the 160-tick aim-off drain exists to reset
@@ -3064,7 +3098,7 @@ fn shoot_far_box(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
 /// ~36 ticks; the Operative stream's same act kills at +222 WITH the drain, so the drained
 /// path stays the default and the Agent's direct leg alone runs fast).
 fn shoot_far_box_fast(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
-    shoot_far_aim(w, di, label, cap, -1.0, true, 0.0)
+    shoot_far_aim(w, di, label, cap, -1.0, true, 0.0, false)
 }
 
 /// THE RIM ACT (retune-nb-0d-3): the ride-fire tap law on a STATIC stand. The shared act's
@@ -3322,7 +3356,7 @@ fn audit_clear() {
     AUDIT_LAST.with(|last| last.borrow_mut().clear());
 }
 
-fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, skip_drain: bool, lift: f32) -> bool {
+fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, skip_drain: bool, lift: f32, bullet_gate: bool) -> bool {
     let audit = std::env::var_os("NF_0D_AUDIT").is_some();
     // retune-nb-0d-9, THE AIM-LIFT PARAMETER (the stand sweep passes the measured 0.88; every
     // other call site passes 0.0 = the exact committed aim — run 4 measured a GLOBAL lift
@@ -3333,6 +3367,20 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, 
     // vs the eye ~6.48 at the stand). The lift raises the aim by the measured gap so the
     // bullet crosses the aimed box itself. [S] unverified as a general law; the audit prints
     // the part hit either way.
+    // retune-nb-0d-10, THE BULLET-LINE GATE (item (10) of the ledger; `bullet_gate` true at the
+    // stand sweep ONLY — every other call site passes false = byte-identical): the fixed lift
+    // compensates the ANIM-POSED spawn origin on AVERAGE (runs 6-7's -0.22 landed the far kills
+    // but the last ~5-7 health still outran the passes — the pose drifts ±0.3 per pass [L run 2
+    // muzzle 5.60 vs run 5 6.12 at the same stand]). The precise law is the spawn's own [M
+    // Player_WeaponInitBullet 0x1a4bf0:226-245]: the bullet flies from the head (or the head↔
+    // datum-0 midpoint) toward the SNAPPED aim point — the port spawns exactly that, so
+    // `planned_shot()` (scene.rs, read-only) predicts the NEXT trigger tick's line, and this
+    // gate (a) fires only when the predicted line's crossing of the target's vertical plane
+    // sits inside the aimed box (the vertical miss <= 0.18 u, the lateral <= 0.25 u), and (b)
+    // adapts the lift CLOSED-LOOP: the measured vertical miss shifts the aim each tick until
+    // the predicted crossing sits in the box (the fixed lift was this loop's steady state,
+    // measured once; the loop measures it live per pass). The trigger tick's input carries
+    // turn: 0 / look: 0 (the planner's ease prediction is exact only for a no-move tick).
     if audit { audit_clear(); }
     let mut hp0 = w.scene.sim.as_ref().unwrap().drones.list[di].health;
     let mut last_tap = 0u32;
@@ -3417,6 +3465,35 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, 
                 ([dp[0], dp[1] + aim_dy, dp[2]], None)
             };
             let aim_pt = [aim_pt[0], aim_pt[1] + lift, aim_pt[2]];
+            // retune-nb-0d-10: the planned line's crossing of the GUARD's vertical plane (through
+            // dp, perpendicular to the line's xz) — the fire gate reads the BODY box (the feet +
+            // 0.1..+1.55 span, the lateral 0.3 u), NOT the aim point: run 10-c's first gate
+            // measured the crossing against the aim and adapted the lift closed-loop, but the
+            // aim snap SLIDES along the ground behind the guard as the lift shifts (the
+            // [0d:plan] prints: dy swung -1.27..+1.43, the lift slammed -1.2..+1.2, no shot
+            // fired, Bond drained dry in the crossfire) — the crossing-vs-aim response is
+            // amplified by the snap distance, not the 1:1 the loop assumed. The fix: the aim
+            // (the ray's convergence) stays the runs 6-7-proven box+fixed-lift; the gate fires
+            // only on the ticks whose predicted crossing lands INSIDE the guard's body span —
+            // the anim-posed spawn origin + the cursor ease move the line tick to tick, and the
+            // gate shoots the good ticks. The first gate's prints: the crossing at lift -0.22
+            // sat at the guard's feet +1.36 (a chest hit) while dy-vs-aim read -1.13 — the body
+            // box is the measure that matches the [audit] part-hit law.
+            let planned_hit = if bullet_gate {
+                match sim.planned_shot(true) {
+                    Some(ps) if ps.dir[0] * ps.dir[0] + ps.dir[2] * ps.dir[2] > 1e-9 => {
+                        let den = ps.dir[0] * ps.dir[0] + ps.dir[2] * ps.dir[2];
+                        let s = ((dp[0] - ps.from[0]) * ps.dir[0] + (dp[2] - ps.from[2]) * ps.dir[2]) / den;
+                        let (cx, cy, cz) = (ps.from[0] + s * ps.dir[0], ps.from[1] + s * ps.dir[1], ps.from[2] + s * ps.dir[2]);
+                        let dy = cy - dp[1];
+                        let lat = ((dp[0] - cx).powi(2) + (dp[2] - cz).powi(2)).sqrt();
+                        if audit { eprintln!("[0d:plan] {label} +{} from ({:.2},{:.2},{:.2}) snap ({:.2},{:.2},{:.2}) cross ({:.2},{:.2},{:.2}) dy(feet) {dy:.3} lat {lat:.3} lift {lift:.3}",
+                            w.total_ticks - start, ps.from[0], ps.from[1], ps.from[2], ps.aim[0], ps.aim[1], ps.aim[2], cx, cy, cz); }
+                        dy > 0.1 && dy < 1.55 && lat < 0.3
+                    }
+                    _ => false,
+                }
+            } else { true };
             let (dx, dy, dz) = (dp[0] - eye[0], aim_pt[1] - eye[1], dp[2] - eye[2]);
             let err = walker::wrap_pi(dx.atan2(dz) - ray[0].atan2(ray[2]));
             let perr = dy.atan2((dx * dx + dz * dz).sqrt().max(0.5)) - ray[1].asin();
@@ -3459,17 +3536,32 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, 
             // 0x1a2e38 case 0xf]); the plain replay (no_topup_env() false at d1) and the d2
             // twin keep their byte-identical gates.
             let op_real = walker::no_topup_env() && sim.drones.difficulty == 1;
-            let trigger = !clip_empty && on_target && world_clear && (sim.aiming || (!agent_fast && !op_real));
+            // retune-nb-0d-10: at the gated site the PREDICTION replaces the ray-convergence
+            // requirement (run 10-d: both passes landed — g2 one round, g0 one torso hit at
+            // d 17.4 part Some(4,0.113) — but the waits cost 5.8 + 21.6 of armed-pack drain:
+            // the ray gate held fire while the plan already said the bullet lands in the body).
+            // The prediction is the spawn's own law per tick [M], so it is the tighter gate;
+            // the ungated sites keep the proven ray gate untouched.
+            let ray_gate = if bullet_gate { planned_hit } else { on_target };
+            let trigger = !clip_empty && ray_gate && world_clear && (sim.aiming || (!agent_fast && !op_real))
+                && (!bullet_gate || planned_hit);
             if trigger { last_tap = t; }
             // The stick drives the RAY ~1:1 (turn: the cursor's angular response is
             // 0.76966·(T/0.76966) = T; look: 0.57724·(L·π/2/0.57724) = L·π/2 — the overflow
             // beyond the ±0.4 window carries the view the same direction), so the same
             // convergence as the plain walker works on the ray.
-            let input = nf_game::player::Input {
-                turn: (err * 1.0).clamp(-0.08, 0.08),
-                look: (perr * 2.0 / std::f32::consts::PI).clamp(-0.08, 0.08),
-                aiming: true,
-                ..Default::default()
+            // The gated site fires on a NO-MOVE tick (turn: 0, look: 0): the planner's ease
+            // prediction is exact only there, and a correction on the fire tick would move the
+            // cursor before the spawn reads it. The ungated sites keep the converged-drive input.
+            let input = if bullet_gate && trigger {
+                nf_game::player::Input { aiming: true, ..Default::default() }
+            } else {
+                nf_game::player::Input {
+                    turn: (err * 1.0).clamp(-0.08, 0.08),
+                    look: (perr * 2.0 / std::f32::consts::PI).clamp(-0.08, 0.08),
+                    aiming: true,
+                    ..Default::default()
+                }
             };
             w.scene.sim.as_mut().unwrap().step_bond(input, trigger, clip_empty && t % 20 == 0, false);
         }
