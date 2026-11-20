@@ -108,11 +108,15 @@ the session (no gauge, no billing panel, no API counters are exposed to the agen
 
 ## ntfy
 
-The three fallbacks in order (09:1x UTC 2026-11-20) — attempted after the finish step; the
-result is recorded there (the rounds 1-9 signature is curl timing out at 20 s, urllib and wget
-killed at the tool cap with no response line). If all three failed, the payload that would have
-been sent: `retune-nb-0d-10: walk still red - the Y-law gate LANDS the far kills (g0 one torso
-hit d 17.4), the snap-hit law measured (the bullet passes through the snapped aim), the fight
-budget law measured (one shot per ~110-tick cycle vs the armed drain - unwinnable as a fight),
-the yard run reached the trench (t23384, the deepest yet); the round-11 lever composes the
-gate + the run; whole binaries walkreal 3/0/1 + interactables 11/0`.
+The three fallbacks in order (09:10-09:13 UTC 2026-11-20):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (the rounds 1-9 signature).
+2. python3 urllib: no output within 25 s (the timeout wrapper reaped it with no response line).
+3. wget: no output within 30 s (no response line).
+
+All three failed — the same ntfy-unreachable signature as rounds 1-9. The payload that would
+have been sent: `retune-nb-0d-10: walk still red - the Y-law gate LANDS the far kills (g0 one
+torso hit d 17.4), the snap-hit law measured (the bullet passes through the snapped aim), the
+fight budget law measured (one shot per ~110-tick cycle vs the armed drain - unwinnable as a
+fight), the yard run reached the trench (t23384, the deepest yet); the round-11 lever composes
+the gate + the run; whole binaries walkreal 3/0/1 + interactables 11/0`.
