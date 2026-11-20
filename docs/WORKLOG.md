@@ -180,4 +180,8 @@ changes, helpers gated to level 08 + difficulty). Status: two levers shipped, ea
   proven launchable window (the machine's LOW approach dive, frames ~25620-26320) ran UNDER the
   shoot-out + the moved drop block. The next levers are in the ignore message. Whole binary
   6 passed / 0 failed / 1 ignored, 111.74 s [L the final-tree run]; the affected-binary set is
-  walkreal_07000008_live alone (no src/ or common/ changes). Report: docs/reports/retune-nb-08-10.md.
+  walkreal_07000008_live alone (no src/ or common/ changes). Two eprintln-only diagnostics also
+  shipped (the timeline byte-exact): the approach-flight dump (the machine's launchable dive is
+  MEASURED at f25710-25800, y 12.84-13.61, dist ~49 SW — the fight loop opens f26248, ~450 ticks
+  late) and the tail stamps (the drop block f24872-25309, 437 ticks with ~140 wedged in the east
+  walk; the shoot-out f25309-26196, 887 ticks for one pane round). Report: docs/reports/retune-nb-08-10.md.

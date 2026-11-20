@@ -49,9 +49,13 @@ and the round-9 ledger's priority lever (the pre-fight walk-down zaps) is struct
    INTO the launchable band at frames ~25710-25800 (path t 424-470) — y 13.61 (f25710) → 13.08
    (f25740) → 12.84 (f25770) → 13.07 (f25800) → 13.93 (f25830) — at x 69-93, z −214..−219,
    dist ~49 southwest of the stand spot (the round-4 launch distance class 45-48). The fight
-   loop opens f26248 — ~450 ticks AFTER the dive ends. The 2000 observed fight ticks never saw
-   the machine below y 18.4, so the low band does NOT recur inside the fight window (the
-   round-7 "low band arrives at fight t~1400-2100" was that tree's fight window).
+   loop opens f26248 — ~450 ticks AFTER the dive ends. **The tail is now MEASURED** [L the tail
+   stamps shipped this window, eprintln-only]: the drop block runs f24872-25309 (437 ticks —
+   ~140 of them the stand-off east walk WEDGING at k80, the (113.3, −179.25) target 0.22 u short
+   of reachable), the shoot-out runs f25309-26196 (887 ticks for ONE pane round), the fight loop
+   opens ~26248. The 2000 observed fight ticks never saw the machine below y 18.4, so the low
+   band does NOT recur inside the fight window (the round-7 "low band arrives at fight
+   t~1400-2100" was that tree's fight window).
 
 ## How it was verified
 
@@ -80,12 +84,12 @@ and the round-9 ledger's priority lever (the pre-fight walk-down zaps) is struct
 
 ## What's left (the next window's levers, in priority order)
 
-1. **Instrument the pre-fight tail, then compress it** — the tail (the recorder installs ~24900
-   at the gate opening; the drop block + the shoot-out, measured stage costs ~250 + ~200) took
-   ~1350 ticks to reach the fight loop at 26248 — ~870 unaccounted. Tick-stamp the stages (the
-   drop block's start/end, the shoot-out's start/end), locate the sink, then compress the tail
-   so the fight loop opens ≤f25710 — INSIDE the dive — with the panes shot and Bond at the
-   stand spot.
+1. **Instrument the shoot-out's internal stages, then compress the tail** — the tail is now
+   measured (437 + 887 + ~52 = the fight loop at 26248): the shoot-out's 887 ticks for one pane
+   round need the internal split (the convergence ticks, the %12 fire boundary, the 120-tick
+   sidestep retries), and the east walk's 140 wedged ticks free with a shorter target. Compress
+   so the fight loop opens ≤f25710 — INSIDE the dive (f25710-25800) — with the panes shot and
+   Bond at the stand spot; the compression budget is ~540 ticks.
 2. **The east-pane bearing** — a stand spot a few tenths south (z −179.3..−179.5, still
    rim-height zap-free per this window's zap map) swings the machine's southeast circuit bearings
    into the east pane pair's windows (113.37-113.62, −180.7..−181.6).
