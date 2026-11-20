@@ -121,8 +121,16 @@ on the final tree.
 not visible to me — this environment shows no token, credit, cost or context-window figures for the
 session (no gauge, no billing panel, no API counters are exposed to the agent).
 
-## ntfy failed
+## ntfy
 
-The three fallbacks will be attempted after this report is committed; their outcomes are recorded in
-the WORKLOG entry if the message fails again (the rounds 1-7 signature is a sandbox-wide network
-timeout to ntfy.sh).
+The three fallbacks in order (01:56 UTC 2026-11-20):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (the rounds 1-7 signature).
+2. python3 urllib: hung past the 20 s socket timeout; the tool killed the command at 30 s.
+3. wget: **exit 0** — the connection SUCCEEDED this time (the rounds 1-7 runs timed out), so the
+   notification was most likely delivered; the quiet flag suppressed the response body.
+
+The payload: `retune-nb-0d-8: the walk stays red but the death moved t19772->t22495 - the lever
+premise refuted by census (g18 in the pit), cadence-14 lands the CLEAN container landing
+(34.8+armour50, zero cost), the periodic live-wire + the landing-spot sweep stall are the last
+killers; the round-9 lever is in the ignore message; whole binaries 3/0/1 + 11/0`
