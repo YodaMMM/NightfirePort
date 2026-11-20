@@ -108,3 +108,12 @@ walkreal_07000008_live binary.
   the dance costs ~4-9 + zaps per salvo from 20.0 hp; next lever = the idle-wait sweep before
   the y-46 trio / #16 (+10-20 entry hp), then the wall-exit-aware dodge side and the
   slow-pass launch gate. Only the walk file and docs changed; whole binary 6/0/1, 107.63 s.
+
+## retune-nb-08-8 (2026-11-20)
+Round 8 of the 08 whole-mission 00 Agent real-damage walk. Branch s/retune-nb-08-8 from
+origin/master with origin/s/retune-nb-08-7 merged (walk test + reports only, no src changes).
+Plan: read the 08-7 ledger and the ignore message on
+walk_the_whole_mission_on_real_input_real_damage_00agent, skip levers marked measured dead,
+try the next untried lever on its own real run; Operative-side rules unchanged (real input
+only, no top-ups, never lower damage or health, no guard-code changes, helpers stay gated to
+level 08 + difficulty). Status: setup; levers not started yet.
