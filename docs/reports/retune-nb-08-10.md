@@ -43,11 +43,15 @@ and the round-9 ledger's priority lever (the pre-fight walk-down zaps) is struct
    y 16-22) and the HIGH overhead passes (y 24-29 at dist 15-27). From the stand spot the
    southeast bearings exit through the south-east corner post (the ray to (135.8, 16.5, −209.5)
    crosses z −182.18 at x ~115.4, ~1.8 u east of the shot-out south pane's east edge 113.62) and
-   the high passes stop on the lintel. The proven launchable window — the machine's LOW approach
-   dive, y 12.8-13.7 [L the round-4 landings] — falls somewhere in the machine's approach; its
-   exact frames are [S] unverified (the flight dumps start at the fight loop, f26250), and the
-   2000 observed fight ticks never saw the machine below y 18.4 — the low band did NOT arrive at
-   fight t~1400-2100 in this window (the round-7 finding was that tree's fight window).
+   the high passes stop on the lintel. **The dive is now MEASURED** [L the approach dump shipped
+   this window — the pre_fight buffer printed at the fight loop's start, an eprintln-only
+   d3-gated diagnostic]: the machine spawns f~24873 (path t 0, ch5's gate) and its approach dips
+   INTO the launchable band at frames ~25710-25800 (path t 424-470) — y 13.61 (f25710) → 13.08
+   (f25740) → 12.84 (f25770) → 13.07 (f25800) → 13.93 (f25830) — at x 69-93, z −214..−219,
+   dist ~49 southwest of the stand spot (the round-4 launch distance class 45-48). The fight
+   loop opens f26248 — ~450 ticks AFTER the dive ends. The 2000 observed fight ticks never saw
+   the machine below y 18.4, so the low band does NOT recur inside the fight window (the
+   round-7 "low band arrives at fight t~1400-2100" was that tree's fight window).
 
 ## How it was verified
 
@@ -76,10 +80,12 @@ and the round-9 ledger's priority lever (the pre-fight walk-down zaps) is struct
 
 ## What's left (the next window's levers, in priority order)
 
-1. **Dump the machine's approach flight first** — the pre-fight frames ~25620-26250: the
-   `pre_fight` recorder already captures (pos, state, path, t) every 30 ticks; print the buffer
-   and find the dive's true frame window before spending a start-tick lever (the fight loop
-   currently opens 26248 with the machine's approach nearly done, path t ~630).
+1. **Instrument the pre-fight tail, then compress it** — the tail (the recorder installs ~24900
+   at the gate opening; the drop block + the shoot-out, measured stage costs ~250 + ~200) took
+   ~1350 ticks to reach the fight loop at 26248 — ~870 unaccounted. Tick-stamp the stages (the
+   drop block's start/end, the shoot-out's start/end), locate the sink, then compress the tail
+   so the fight loop opens ≤f25710 — INSIDE the dive — with the panes shot and Bond at the
+   stand spot.
 2. **The east-pane bearing** — a stand spot a few tenths south (z −179.3..−179.5, still
    rim-height zap-free per this window's zap map) swings the machine's southeast circuit bearings
    into the east pane pair's windows (113.37-113.62, −180.7..−181.6).
