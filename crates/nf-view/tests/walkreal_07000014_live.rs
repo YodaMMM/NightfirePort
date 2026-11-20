@@ -1107,6 +1107,52 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
                 w.follow_nav_route([-48.7, 0.9, 33.2], "the south loop to the west corridor");
             }
         }
+        // retune-nb-14-8 lever 1 (the round-7 ignore message's next lever, the round-4 census's
+        // SERVER-ROOM armour (−27.29,0.87,30.96)): the [srv-probe] nav dump [L 2026-11-20] found
+        // a per-path route from THIS spot to the armour (11 nodes, the z 27.3-27.8 east lane)
+        // whose middle node (−33.13,27.33) sits d 0.53 from the escape touch #456 (−33.1,26.8) —
+        // the cut-scene trigger the ledger orders the fetch to MIND. The legs below bypass it
+        // north ((−33.1, 28.6), d_touch 1.8), take the armour on contact (the lever-3 loop-mouth
+        // fetch's own take law: walk_to r(0.9), no teleport), and walk back to the corridor end
+        // so the shipped north leg proceeds unchanged; descent_stationary_fights is still tied
+        // here, so the fights' stands cannot shove Bond off the bypass line. try_walk_to on the
+        // unknown-floor legs (panic-safe: a blocked spot costs a cap, not the run); the take leg
+        // is the real walk_to. +50 here banks the door-face-stands + loop + pocket bullet bill
+        // the v4 math measured (≈100 total, the loop-mouth 50 covers half) [M Player_HandlePain
+        // 0x1902c8:84-104 — bullet pain (type 0) absorbs into armour first].
+        {
+            w.try_walk_to(Wp::new(-45.92, 0.4, 27.33).r(1.0), "the server-room fetch: down to the z-27.3 lane");
+            w.try_walk_to(Wp::new(-43.22, 0.4, 27.77).r(1.0), "the server-room fetch: the z-27.7 lane east");
+            w.try_walk_to(Wp::new(-39.55, 0.4, 27.77).r(1.0), "the server-room fetch: past #19's post lane");
+            w.try_walk_to(Wp::new(-36.33, 0.4, 27.33).r(1.0), "the server-room fetch: the corridor mouth (d_touch 3.3)");
+            w.try_walk_to(Wp::new(-33.1, 0.9, 28.6).r(0.6), "the server-room fetch: the escape-touch bypass north (d_touch 1.8)");
+            w.try_walk_to(Wp::new(-29.92, 0.4, 29.39).r(1.0), "the server-room fetch: the room's east floor");
+            w.try_walk_to(Wp::new(-29.93, 0.4, 31.61).r(1.0), "the server-room fetch: the room's north floor");
+            // The v1 run wedged the direct east cut (bond (−29.12,30.95) → target (−27.29,30.96),
+            // segment_to_target 0.35, the 6000-tick cap): the pocket is entered from the nav
+            // route's own north node (−28.00,1.20,33.21) — the route the game's web builds for
+            // this exact destination (the [srv-probe] dump's last two nodes) — then straight
+            // south. The (−30.6,29.9) door stays shut (ch_open 0, pos01 0.00 — the v10 ledger's
+            // door), so no west-line approach exists [L both runs 2026-11-20].
+            w.try_walk_to(Wp::new(-29.24, 0.9, 33.20).r(1.0), "the server-room fetch: the pocket's west node");
+            w.try_walk_to(Wp::new(-28.00, 1.2, 33.21).r(0.8), "the server-room fetch: the pocket's north node");
+            w.walk_to(Wp::new(-27.29, 0.9, 30.96).r(0.9), "the server-room armour take");
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                assert!(!sim.drones.channels.on(0x4a) && !sim.drones.channels.on(0x0c),
+                    "the server-room fetch must NOT fire the escape touch #456 early (the ledger's cut-scene warning) [D placement 456]");
+                eprintln!("[014] server-room armour fetched: armour {:.1} health {:.1} at {:?}",
+                    sim.drones.health.armour, sim.drones.health.health, sim.bond.pos);
+            }
+            w.try_walk_to(Wp::new(-28.00, 1.2, 33.21).r(0.8), "the server-room fetch: back to the pocket's north node");
+            w.try_walk_to(Wp::new(-29.93, 0.4, 31.61).r(1.0), "the server-room fetch: back south");
+            w.try_walk_to(Wp::new(-29.93, 0.4, 29.39).r(1.0), "the server-room fetch: back west");
+            w.try_walk_to(Wp::new(-33.1, 0.9, 28.6).r(0.6), "the server-room fetch: the bypass back");
+            w.try_walk_to(Wp::new(-36.33, 0.4, 27.33).r(1.0), "the server-room fetch: the corridor mouth back");
+            w.try_walk_to(Wp::new(-39.55, 0.4, 27.77).r(1.0), "the server-room fetch: the z-27.7 lane back");
+            w.try_walk_to(Wp::new(-45.92, 0.4, 27.33).r(1.0), "the server-room fetch: up to the corridor end");
+            w.walk_to(Wp::new(-48.7, 0.9, 33.2).r(1.3), "back to the west corridor end");
+        }
         w.dmg.descent_stationary_fights = false;
     } else {
         w.follow_nav_route([-48.7, 0.9, 33.2], "the south loop to the west corridor");
@@ -1475,6 +1521,62 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         // (it wounded #12 in the v0 fight), only the point-blank band was the killer.
         w.dmg.back_off = Some(4.0);
         w.dmg.finish_fights = true;
+    }
+    // retune-nb-14-8 lever 1 probe (the round-7 ignore message's next lever: the SERVER-ROOM
+    // armour (−27.29,0.87,30.96), the census's 4th, untried): a READ-ONLY, env-gated nav dump
+    // (NF_SRV_PROBE) — the pass-point question ("fetch it on the west corridor BEFORE the door
+    // face if a pass point reads clear ... or find a mid-route pass point on the server-room
+    // west corridor [D nav]") answered from the sim's own nav web + the live pickup records
+    // BEFORE any walk leg is spent on it. Byte-identical when unset; `NF_SRV_PROBE=quick`
+    // exits after the dump (probe-only mode, never a real run).
+    if std::env::var_os("NF_SRV_PROBE").is_some() && difficulty >= 3 && !w.tops_up() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[srv-probe] start health {:.1} armour {:.1}", sim.drones.health.health, sim.drones.health.armour);
+        let armour = [-27.29f32, 0.87, 30.96];
+        let touch = [-33.1f32, 0.9, 26.8];
+        for p in &sim.drones.pickups {
+            if p.gone || p.hidden { continue; }
+            let pos = [p.m[3][0], p.m[3][1], p.m[3][2]];
+            if p.kind == 3 || walker::dxz(pos, armour) < 3.0 {
+                eprintln!("[srv-probe] pickup kind {} weapon {:#x} rounds {} at ({:.2},{:.2},{:.2}) d_armour {:.2}",
+                    p.kind, p.weapon, p.rounds, pos[0], pos[1], pos[2], walker::dxz(pos, armour));
+            }
+        }
+        for (label, from) in [
+            ("west-corridor end", [-48.7f32, 0.9, 33.2]),
+            ("mid west corridor", [-56.0, 0.9, 28.0]),
+            ("ascent top", [-30.34, 0.9, 22.93]),
+            ("escape touch", [-33.1, 0.9, 26.8]),
+            ("descent leg-2 spot", [30.09, 0.65, 38.73]),
+        ] {
+            for (how, r) in [
+                ("per-path", walker::nav_route(sim, from, armour)),
+            ] {
+                match r {
+                    Some(pts) => {
+                        eprintln!("[srv-probe] nav {how} {label} -> armour: {} nodes", pts.len());
+                        for q in &pts {
+                            eprintln!("  ({:.2},{:.2},{:.2}) d_touch {:.2}", q[0], q[1], q[2], walker::dxz(*q, touch));
+                        }
+                    }
+                    None => eprintln!("[srv-probe] nav {how} {label} -> armour: NO ROUTE"),
+                }
+            }
+        }
+        for d in &sim.drones.list {
+            if d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 {
+                let dd = walker::dxz(d.pos, armour);
+                if dd < 25.0 {
+                    eprintln!("[srv-probe] guard skin {:#x} weapon {:#x} hp {:.0} at ({:.2},{:.2},{:.2}) d_armour {:.1}",
+                        d.skin, d.weapon, d.health, d.pos[0], d.pos[1], d.pos[2], dd);
+                }
+            }
+        }
+        if std::env::var("NF_SRV_PROBE").as_deref() == Ok("quick") {
+            eprintln!("[srv-probe] quick mode: exiting before the walk");
+            std::process::exit(0);
+        }
+        eprintln!("[srv-probe] done (the walk continues unchanged)");
     }
     walk_infiltration_to_handback(&mut w);
     walk_the_west_route_to_the_switch_band(&mut w);

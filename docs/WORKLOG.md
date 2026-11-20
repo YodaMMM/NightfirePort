@@ -107,3 +107,9 @@ Work Log:
 Branch s/retune-nb-14-8, from origin/master + merge of s/retune-nb-14-7 (fresh sandbox, round 8).
 Goal: walk_the_infiltration_to_the_delta_exit_real_damage_00agent green again.
 Ledger from round 7 report to be read next; next lever per ignore message TBD.
+### retune-nb-14-8 progress (2026-11-20, fresh sandbox)
+Setup redone from scratch (clone, work-slim, ISO 369823203 verified, rustup, user-prefix ALSA).
+Lever 1 (round-7 ignore message): the SERVER-ROOM armour (−27.29,0.87,30.96).
+- [srv-probe] NF_SRV_PROBE read-only dump: the pickup is kind-3 live at the spot; a per-path nav route exists from the west-corridor end (−48.7,33.2) → armour (11 nodes, the z 27.3-27.8 lane); its middle node (−33.13,27.33) sits d 0.53 from the escape touch #456 — the legs bypass north (−33.1, 28.6).
+- v1 run: the west-line take wedged on the (−30.6,29.9) door (ch_open 0, pos01 0.00 — the v10 ledger's door); the pocket is entered from the nav route's north node (−28.00,1.20,33.21) instead [L].
+- v2 run: THE TAKE LANDED (armour 35.0 health 87.5 at t~14600 after the loop+fetch fights chewed 65). The bank carried the door face (health 87.5 at the Kiko corridor east — round 7 entered at 17.5) and the pocket #20 died (killed true t27930). Death moved t25389 → t28518: the gun ran DRY and the lane fights' resupply wander dragged Bond into #29/#23 convergence. Next: the wake-legs drop-scoop law re-arms the gun before the lane crossing.
