@@ -270,6 +270,56 @@ pub struct DriveWeapons {
     pub cycle: bool,
 }
 
+/// One hostile model's palette slots: the model loaded once per slot (as the traffic cars are),
+/// so up to `slots.len()` live elements of that model draw at once.
+pub struct HostilePool {
+    /// The model file stem (`data\car\model\<stem>.crp`).
+    pub model: String,
+    pub slots: Vec<u32>,
+    /// Where the drawn model sits on the body: the body position minus `rot·centre` (the player
+    /// car's rule: the model's lowest vertex at the body's rest contact) [S]; 0 for a helicopter.
+    pub centre: [f32; 3],
+}
+
+/// The mission's enemy vehicles (nf_game::driving::hostiles::HostileWorld, docs/systems/driving-ai.md
+/// §13): spawned from the track's `AIEl` elements, stepped every tick against the player car,
+/// commanded by the mission script's AI events, drawn from their own car files, their hits booked
+/// on the player car's health.
+pub struct DriveHostiles {
+    pub world: nf_game::driving::hostiles::HostileWorld,
+    /// The driving generator (`ai::DriveRng`, `FUN_001feda0`'s reset). The view's traffic cars each
+    /// keep their own copy, so this instance is the hostiles' and the damage calls' only.
+    pub rng: nf_game::driving::ai::DriveRng,
+    /// The track's ground for heights when the view runs no land pass (`DrivingState::land` is None).
+    pub surface: Option<nf_game::driving::CollisionGround>,
+    pub pools: Vec<HostilePool>,
+    /// `(element, pool, slot)` held while the element lives.
+    pub assigned: Vec<(usize, usize, u32)>,
+    /// The player car's damage words (`FUN_001862c0`, category 0) the hits go through.
+    pub player_damage: nf_game::driving::damage::CarDamage,
+    /// The script's AI events not applied yet (applied at the start of the next hostile step).
+    pub pending: Vec<nf_game::driving::script::Effect>,
+    /// The last step's outcome (actions, hits, events).
+    pub last: nf_game::driving::hostiles::StepOut,
+    /// Gun shots drawn for a few ticks: `(from, to, ticks left)`.
+    pub tracers: Vec<([f32; 3], [f32; 3], u32)>,
+    /// Hit points the hostile hits took off the player car (sum of the health drops).
+    pub damage_dealt: f32,
+    /// Live elements that had no free palette slot of their model this tick (not drawn).
+    pub undrawn: usize,
+    /// Script AI events applied so far: activate, deactivate, command (resolved to an element).
+    pub applied: [usize; 3],
+}
+
+/// The record index an `sr` reference names when it is `CARP::<<Map>>::{<chunk>}::<offset>`
+/// with the chunk's record stride [D driveai.rs `MapAi::element_index` / `command_index`].
+fn map_ref_index(r: &nf_game::driving::script::Ref, chunk: &str, stride: usize) -> Option<usize> {
+    match nf_formats::driveai::MapRef::parse(&r.path) {
+        nf_formats::driveai::MapRef::Chunk { chunk: c, offset } if c == chunk && offset % stride == 0 => Some(offset / stride),
+        _ => None,
+    }
+}
+
 /// Live driving mission simulation state.
 pub struct DrivingState {
     pub viv: String,
@@ -317,6 +367,8 @@ pub struct DrivingState {
     /// The scripted control and camera layer (nf_game::driving::intro, docs/systems/driving-intros.md):
     /// the race countdown hold, scripted splines, letterbox. Fed by the mission script's events.
     pub intro: Option<(nf_game::driving::intro::IntroState, nf_formats::drivepath::MapPaths)>,
+    /// The enemy vehicles; `None` when the track has no `AIEl` vehicles.
+    pub hostiles: Option<DriveHostiles>,
 }
 
 const IDENT_MAT: Mat4 = [
@@ -394,6 +446,105 @@ impl DrivingState {
         self.step_weapons();
         self.step_engine(input.throttle);
         self.step_ai(&input);
+        self.step_hostiles();
+    }
+
+    /// The hostile vehicles for one tick: the script's AI events from the last drain
+    /// (`EActivateAIElement` / `EDeactivateAIElement` / `EAICommand`), then `HostileWorld::step`
+    /// with the player car, the rail stand-in as the drive ground and the track as the height
+    /// surface (docs/reports/s-drive-hostile-runtime.md), the sight ray on the collision grid;
+    /// each hit on the player goes through `damage::inflict` into the HUD's health block.
+    fn step_hostiles(&mut self) {
+        use nf_game::driving::script::Effect;
+        let Some(h) = self.hostiles.as_mut() else { return };
+        // The road network borrows the track bytes, so it is read per tick (as the traffic step does).
+        let crp = Crp::parse(&self.crp_bytes).ok();
+        let net = crp.as_ref().and_then(|c| RoadNet::parse_crp(c).ok());
+        for e in std::mem::take(&mut h.pending) {
+            let el = |r: &Option<nf_game::driving::script::Ref>| r.as_ref().and_then(|r| map_ref_index(r, "AIEl", nf_formats::driveai::AIEL_RECORD));
+            match &e {
+                Effect::AiActivate { element, .. } => {
+                    if let Some(i) = el(element) { h.world.activate(i); h.applied[0] += 1; }
+                }
+                Effect::AiDeactivate { element } => {
+                    if let Some(i) = el(element) { let _ = h.world.deactivate(i); h.applied[1] += 1; }
+                }
+                Effect::AiCommand { command, element, .. } => {
+                    let c = command.as_ref().and_then(|r| map_ref_index(r, "AICo", nf_formats::driveai::AICO_RECORD));
+                    if let (Some(i), Some(c)) = (el(element), c) { let _ = h.world.command(i, c, net.as_ref()); h.applied[2] += 1; }
+                }
+                _ => {}
+            }
+        }
+        let player = nf_game::driving::hostiles::PlayerState { pos: self.car.pos, vel: self.car.vel, fwd: self.car.rot[2], box_z: self.car.params.half_extents[2] };
+        let grid = &self.collision;
+        let surface: Option<&dyn nf_game::driving::Ground> = match (&self.land, &h.surface) {
+            (Some(g), _) => Some(g),
+            (None, Some(g)) => Some(g),
+            _ => None,
+        };
+        let out = h.world.step(net.as_ref(), &self.world, surface, &player, &mut h.rng, &mut |a, b| grid.segment_hit(a, b).is_some() as u32);
+        // The hits: kind-2 damage calls on the player car (`FUN_00189598`) [M]. The box point
+        // (`FUN_002d3950`, where the at→from segment meets the car box) is the hit point taken
+        // into car space and clamped to the box [S].
+        let now = self.ticks as i32;
+        if let Some(hud) = self.hud.as_mut() {
+            let he = self.car.params.half_extents;
+            let r = self.car.rot;
+            for hh in &out.hits {
+                let d = [0, 1, 2].map(|k| hh.hit.at[k] - self.car.pos[k]);
+                let local = [0, 1, 2].map(|i| (d[0] * r[i][0] + d[1] * r[i][1] + d[2] * r[i][2]).clamp(-he[i], he[i]));
+                let cx = nf_game::driving::damage::HitContext {
+                    now,
+                    box_point: Some(local),
+                    box_y_offset: 0.0,
+                    box_min: [-he[0], -he[1], -he[2]],
+                    box_max: he,
+                    mission_350: false,
+                    tyre_d2: [f32::MAX; 4],
+                    tyre_side: [false; 4],
+                    wheel_radius: self.car.params.wheel_radius,
+                    spread_level: 0.0,
+                };
+                let before = hud.health.health;
+                let rng = &mut h.rng;
+                let _ = nf_game::driving::damage::inflict(&mut h.player_damage, &mut hud.health, &hh.hit, &cx, &mut || rng.next());
+                h.damage_dealt += (before - hud.health.health).max(0.0);
+            }
+        }
+        // Gun shots: a short tracer from the muzzle (to the player when it struck, else 60 along
+        // the shot) [S: the game's shell is a model with its own trail].
+        h.tracers.retain_mut(|t| { t.2 = t.2.saturating_sub(1); t.2 > 0 });
+        for e in &out.events {
+            if let nf_game::driving::hostiles::HostileEvent::Shot { from, dir, hit, .. } = e {
+                let to = if *hit { self.car.pos } else { [0, 1, 2].map(|k| from[k] + dir[k] * 60.0) };
+                h.tracers.push((*from, to, 4));
+            }
+        }
+        h.last = out;
+        // Palette slots: an element keeps its slot while it lives; a new one takes a free slot of
+        // its model's pool.
+        let draws = h.world.draw_list();
+        h.assigned.retain(|(e, _, _)| draws.iter().any(|d| d.element == *e));
+        h.undrawn = 0;
+        for d in &draws {
+            if h.assigned.iter().any(|(e, _, _)| *e == d.element) { continue; }
+            let Some(pi) = h.pools.iter().position(|p| p.model.eq_ignore_ascii_case(&d.model)) else { h.undrawn += 1; continue };
+            let free = h.pools[pi].slots.iter().copied().find(|s| !h.assigned.iter().any(|(_, _, t)| t == s));
+            match free {
+                Some(s) => h.assigned.push((d.element, pi, s)),
+                None => h.undrawn += 1,
+            }
+        }
+    }
+
+    /// Each live hostile drawn this tick: its draw record and the palette slot of its model.
+    pub fn hostile_draws(&self) -> Vec<(nf_game::driving::hostiles::VehicleDraw, u32)> {
+        let Some(h) = self.hostiles.as_ref() else { return Vec::new() };
+        h.world.draw_list().into_iter().filter_map(|d| {
+            let s = h.assigned.iter().find(|(e, _, _)| *e == d.element)?.2;
+            Some((d, s))
+        }).collect()
     }
 
     /// The player car's effect emitters for this tick, then the pool steps [M FUN_001ee4a0,
@@ -428,7 +579,12 @@ impl DrivingState {
         let car_pos = self.car.pos;
         let fwd = self.car.rot[2];
         let speed = (self.car.vel[0].powi(2) + self.car.vel[1].powi(2) + self.car.vel[2].powi(2)).sqrt();
-        let ai: Vec<([f32; 3], [f32; 3])> = self.ai_cars.iter().map(|(d, _)| (d.car.pos, d.car.vel)).collect();
+        let mut ai: Vec<([f32; 3], [f32; 3])> = self.ai_cars.iter().map(|(d, _)| (d.car.pos, d.car.vel)).collect();
+        let n_traffic = ai.len();
+        // The live hostiles are targets too; their hits go to `HostileWorld::damage` (the actor's
+        // hit points, AIEl +0x4c [M 0x12cb08]).
+        let hostile_ids: Vec<usize> = self.hostiles.as_ref().map(|h| h.world.live.iter().map(|v| { ai.push((v.pos(), v.vel())); v.element }).collect()).unwrap_or_default();
+        let mut hostile_hits: Vec<(usize, f32)> = Vec::new();
         let Some(wp) = self.weapons.as_mut() else { return };
         if std::mem::take(&mut wp.cycle) { wp.sys.select(true, now, 60, false); }
         if std::mem::take(&mut wp.fire) {
@@ -441,7 +597,7 @@ impl DrivingState {
                 }
             }
         }
-        if wp.ai_damage.len() != ai.len() { wp.ai_damage.resize(ai.len(), 0.0); }
+        if wp.ai_damage.len() != n_traffic { wp.ai_damage.resize(n_traffic, 0.0); }
         let mut keep = Vec::new();
         for mut sh in std::mem::take(&mut wp.shots) {
             let target = ai.iter().filter(|(p, _)| {
@@ -455,13 +611,16 @@ impl DrivingState {
             sh.step(target, now, DT, 60);
             let hit = ai.iter().position(|(p, _)| (p[0] - sh.pos[0]).powi(2) + (p[1] - sh.pos[1]).powi(2) + (p[2] - sh.pos[2]).powi(2) < 4.0);
             if let Some(i) = hit {
-                wp.ai_damage[i] += sh.p.damage.max(1.0);
+                if i < n_traffic { wp.ai_damage[i] += sh.p.damage.max(1.0); } else { hostile_hits.push((hostile_ids[i - n_traffic], sh.p.damage.max(1.0))); }
                 continue;
             }
             if sh.detonate || now - sh.born > sh.p.life.max(60) { continue; }
             keep.push(sh);
         }
         wp.shots = keep;
+        if let Some(h) = self.hostiles.as_mut() {
+            for (e, a) in hostile_hits { h.world.damage(e, a); }
+        }
     }
 
     /// Opens the audio output for the engine sound (the window app calls this; nothing else does).
@@ -583,6 +742,26 @@ impl DrivingState {
                 let q = |p: [f32; 3]| Vertex { pos: p, uv: [0.0, 0.0], rgba: [255, 180, 80, 128], nrm: [0; 4] };
                 let (a, b, cc, d) = (q(c(-1.0, 1.0)), q(c(1.0, 1.0)), q(c(1.0, -1.0)), q(c(-1.0, -1.0)));
                 v.extend_from_slice(&[a, b, cc, a, cc, d]);
+            }
+            shine.push((None, true, v));
+        }
+        // The hostiles' rockets / missiles in flight and their gun tracers: the same additive glow
+        // [S: the projectile models and trails (driving::projectile_gfx) are not wired here].
+        if let Some(h) = self.hostiles.as_ref().filter(|h| !h.world.projectiles.is_empty() || !h.tracers.is_empty()) {
+            let mut v = Vec::new();
+            let mut glow = |p: [f32; 3], hs: f32, rgba: [u8; 4]| {
+                let c = |sx: f32, sy: f32| [0, 1, 2].map(|k| p[k] + right[k] * hs * sx + up[k] * hs * sy);
+                let q = |p: [f32; 3]| Vertex { pos: p, uv: [0.0, 0.0], rgba, nrm: [0; 4] };
+                let (a, b, cc, d) = (q(c(-1.0, 1.0)), q(c(1.0, 1.0)), q(c(1.0, -1.0)), q(c(-1.0, -1.0)));
+                v.extend_from_slice(&[a, b, cc, a, cc, d]);
+            };
+            for pr in &h.world.projectiles { glow(pr.p.pos, 0.45, [255, 120, 60, 128]); }
+            for (a, b, _) in &h.tracers {
+                glow(*a, 0.3, [255, 230, 150, 128]);
+                for k in 1..=6 {
+                    let t = k as f32 / 6.0;
+                    glow([0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t), 0.12, [255, 210, 120, 96]);
+                }
             }
             shine.push((None, true, v));
         }
@@ -758,11 +937,22 @@ impl DrivingState {
             };
             let _ = snap;
             self.mission.step_facts(&facts);
+            // The script's AI events go to the hostile runtime (applied on its next step).
+            if let (Some(sc), Some(h)) = (self.mission.script.as_mut(), self.hostiles.as_mut()) {
+                if self.intro.is_none() {
+                    for o in sc.take_output() {
+                        if let nf_game::driving::script::Output::Effect { effect, .. } = o { h.pending.push(effect); }
+                    }
+                }
+            }
             if let (Some(sc), Some((i, paths))) = (self.mission.script.as_mut(), self.intro.as_mut()) {
                 for o in sc.take_output() {
                     match o {
                         nf_game::driving::script::Output::StartMission { .. } => i.start_mission(),
-                        nf_game::driving::script::Output::Effect { action, .. } => i.apply(&action, &sc.map, paths),
+                        nf_game::driving::script::Output::Effect { action, effect, .. } => {
+                            if let Some(h) = self.hostiles.as_mut() { h.pending.push(effect.clone()); }
+                            i.apply(&action, &sc.map, paths)
+                        }
                         _ => {}
                     }
                 }
@@ -818,6 +1008,25 @@ impl DrivingState {
         for (drv, slot) in &self.ai_cars {
             if let Some(m) = pal.get_mut(attach_base + *slot as usize) {
                 *m = yaw_pos_mat(drv.car.pos, drv.car.yaw);
+            }
+        }
+        // The hostiles: each live element's world matrix on its slot; every free slot folds away.
+        if let Some(h) = &self.hostiles {
+            let draws = h.world.draw_list();
+            for (pi, p) in h.pools.iter().enumerate() {
+                for &s in &p.slots {
+                    let Some(m) = pal.get_mut(attach_base + s as usize) else { continue };
+                    let d = h.assigned.iter().find(|(_, q, t)| *q == pi && *t == s).and_then(|(e, _, _)| draws.iter().find(|d| d.element == *e));
+                    *m = match d {
+                        Some(d) => {
+                            let mut w = d.matrix;
+                            let c = p.centre;
+                            for k in 0..3 { w[3][k] -= w[0][k] * c[0] + w[1][k] * c[1] + w[2][k] * c[2]; }
+                            w
+                        }
+                        None => [[0.0; 4]; 4],
+                    };
+                }
             }
         }
     }
@@ -1501,6 +1710,66 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     };
     let mission_state = mission.state;
 
+    // The enemy vehicles (nf_game::driving::hostiles, docs/systems/driving-ai.md §13): the track's
+    // `AIEl` / `AICo` set, each vehicle's own pvehicle `.atr`, the world `.atr` slot budgets; every
+    // model `models_needed` names is loaded into palette slots the way the traffic cars are.
+    let read_entry = |pred: &dyn Fn(&str) -> bool| -> Vec<(String, Vec<u8>)> {
+        bigf.entries.iter().filter(|e| pred(&e.name.to_ascii_lowercase()))
+            .filter_map(|e| Some((e.name.to_ascii_lowercase(), maybe_decompress(&iso.read_bytes(viv_base + e.offset as u64, e.size as u64).ok()?).ok()?)))
+            .collect()
+    };
+    let mut hostile_pools: Vec<HostilePool> = Vec::new();
+    let hostile_world = (|| {
+        let ai = nf_formats::driveai::MapAi::from_crp(&crp).ok()?;
+        if !ai.elements.iter().any(|e| e.kind == nf_formats::driveai::TYPE_VEHICLE) { return None; }
+        let atrs: Vec<(String, String)> = read_entry(&|n| n.contains("\\pvehicle\\") && n.ends_with(".atr"))
+            .into_iter()
+            .map(|(n, b)| (n.rsplit('\\').next().unwrap_or("").trim_end_matches(".atr").to_string(), String::from_utf8_lossy(&b).into_owned()))
+            .collect();
+        let set: Vec<nf_game::driving::hostiles::VehicleAttrs> = ai.vehicle_set().iter()
+            .filter_map(|n| atrs.iter().find(|(a, _)| a.eq_ignore_ascii_case(n)).map(|(a, x)| nf_game::driving::hostiles::VehicleAttrs::parse(a, x)))
+            .collect();
+        let world_atr = read_entry(&|n| n.contains("\\world\\") && n.ends_with(".atr") && !n.ends_with("default.atr"))
+            .into_iter().next().map(|(_, b)| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        let wattr = nf_game::driving::hostile::WorldAttr::parse(&world_atr);
+        // The difficulty health factor (`FUN_002084a8`: MSet f32 +0x2c4 / +0x2c8 / +0x2cc for
+        // difficulty 0 / 1 / 2) [M per hostile.rs]; the view runs difficulty 1 (as its HUD does).
+        let difficulty = 1u32;
+        let health_factor = mset_bytes
+            .and_then(|m| m.get(0x2c4 + 4 * difficulty as usize..0x2c8 + 4 * difficulty as usize))
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .filter(|f| f.is_finite() && *f > 0.0)
+            .unwrap_or(1.0);
+        // Each model gets as many slots as elements name it, capped by the slot budget it draws
+        // from (vehicles or helicopters).
+        let slots = wattr.slots();
+        for need in nf_game::driving::hostiles::models_needed(&ai, &set) {
+            if hostile_pools.iter().any(|p| p.model.eq_ignore_ascii_case(&need.model)) { continue; }
+            let Some((c, s)) = find_car_entry(&need.model.to_ascii_lowercase()) else { continue };
+            let users: Vec<&nf_formats::driveai::AiElement> = ai.elements.iter()
+                .filter(|e| e.kind == nf_formats::driveai::TYPE_VEHICLE)
+                .filter(|e| set.iter().find(|a| a.name.eq_ignore_ascii_case(&e.name)).map(|a| a.model()).unwrap_or_else(|| e.name.clone()).eq_ignore_ascii_case(&need.model))
+                .collect();
+            let heli = set.iter().find(|a| a.name.eq_ignore_ascii_case(&need.vehicle)).is_some_and(|a| a.is_heli);
+            let cap = if heli { slots[2] } else { slots[1] }.max(1) as usize;
+            let n = users.len().clamp(1, cap.min(8));
+            let mut pool = HostilePool { model: need.model.clone(), slots: Vec::new(), centre: [0.0; 3] };
+            for _ in 0..n {
+                let Some(slot) = load_car_into_scene(&iso, viv_base, &need.model, c, s, &mut vertices, &mut char_verts, &mut indices, &mut materials, &mut textures, &mut attachments, car_light_ref, None) else { break };
+                pool.slots.push(slot);
+            }
+            if let Some(&s0) = pool.slots.first() {
+                if !heli {
+                    let p = set.iter().find(|a| a.name.eq_ignore_ascii_case(&need.vehicle)).map(|a| a.params.clone()).unwrap_or_else(CarParams::game_defaults);
+                    if let Some(v) = scene_char_min_y(&char_verts, s0) { pool.centre = [0.0, v + p.half_extents[1] + p.spring_rest, 0.0]; }
+                }
+                hostile_pools.push(pool);
+            }
+        }
+        let net = RoadNet::parse_crp(&crp).ok();
+        Some(nf_game::driving::hostiles::HostileWorld::new(&ai, set, &wattr, difficulty, health_factor, 1.0, net.as_ref()))
+    })();
+
     // Extract `Map` `Trgr` checkpoint triggers and emit subtle translucent ground beacon rings
     // (spaced >=35m apart, capped at 16, using normal alpha blend so they never blow out the scene).
     let triggers = crp.extract_map_triggers().unwrap_or_default();
@@ -1795,7 +2064,27 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         let loc = nf_formats::loc::Loc::parse(&read_any("IDL_ENG.loc")?).ok()?;
         Some(DriveHud { layout, draw: nf_game::driving_hud_draw::DriveHudDraw::new(), sheets, health, last_tick: 0, font, loc })
     })();
+    let hostiles = hostile_world.map(|world| {
+        let p_atr = read_entry(&|n| n == format!("data\\sim\\attrib\\pvehicle\\{p_stem}.atr"))
+            .into_iter().next().map(|(_, b)| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        let dattrs = nf_game::driving::damage::VehicleDamageAttrs::parse_atr(&p_atr);
+        DriveHostiles {
+            world,
+            rng: nf_game::driving::ai::DriveRng::game_reset(),
+            surface: land.is_none().then(|| nf_game::driving::CollisionGround::new(col_tris.clone())),
+            pools: hostile_pools,
+            assigned: Vec::new(),
+            player_damage: nf_game::driving::damage::CarDamage::new(0, &dattrs),
+            pending: Vec::new(),
+            last: Default::default(),
+            tracers: Vec::new(),
+            damage_dealt: 0.0,
+            undrawn: 0,
+            applied: [0; 3],
+        }
+    });
     let state = DrivingState {
+        hostiles,
         fx,
         reset,
         hud,
@@ -1899,6 +2188,7 @@ mod tests {
             weapons: None,
             sub: None,
             intro: None,
+            hostiles: None,
         };
         state.step(1.0, 0.0, 0.0, false);
         assert_eq!(state.progress, 1);
