@@ -10,6 +10,11 @@ driving action, and what the game itself does to a digital input on the way**. C
 [driving-input.md §11], so the shipped key bindings are unknown and the PC table below is the
 port's design onto the game's own actions.
 
+> Update: the shipped configs are decoded from the full image (driving-input.md §13). The
+> table in §3 below is the port's own design and differs from the shipped pad layout (shipped:
+> ✕ gas, □ brake, ○ handbrake, R1 fire = FIRESECONDARY, L1 gadget, △ camera, L2 look back). The
+> front end that follows the shipped routing is `nf_game::input::driving_cfg::ShippedDrivingInput`.
+
 ## 1. The steering ramp — the answer to "how does the game ramp a d-pad steer"
 
 **There is no ramp in the input path** [M-negative, driving-input.md §8: no accumulator exists in

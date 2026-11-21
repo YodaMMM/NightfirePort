@@ -16,6 +16,10 @@ mod styles_gen;
 /// the pure PollDevice/binding port; the driving levels stay unwired.
 pub mod driving;
 
+/// The shipped driving control configs (data\Control\*.def) as binding sets + a keyboard front end
+/// (G-004) [M/D docs/systems/driving-input.md §13].
+pub mod driving_cfg;
+
 /// One dead-zoned axis byte's tSlot offset [M docs/systems/input.md §2, WORKLOG 0006].
 pub const AX_RX: u16 = 0x128;
 pub const AX_RY: u16 = 0x129;
