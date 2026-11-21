@@ -106,11 +106,13 @@ master movement since):
   binaries whole (above) plus the rule-7 walkreal sweep for the shared-helper touch
   (`no_fetch_zone_x_min`, default None): walkreal_07000002_live 5/0 (222.6 s),
   walkreal_07000004_live 10/0 (49.6 s), walkreal_07000005_live 16/0/1 (133.3 s),
-  walkreal_07000006_live 9/0 (77.7 s), walkreal_07000008_live 6/0/1 (230.4 s) — 46 passed /
-  0 failed across the five that fit the window (the level walks are minutes each and the
-  sandbox kills parallel processes above four; 03/07 were OOM-killed, the rest did not fit).
-  The field is default-None additive, so the untouched levels are stream-identical by
-  construction; the five runs above confirm it in the sim.
+  walkreal_07000006_live 9/0 (77.7 s), walkreal_07000007_live 6/0 (47.9 s),
+  walkreal_07000008_live 6/0/1 (230.4 s), walkreal_07000009_live 9/0 (36.6 s),
+  walkreal_0700000a_live 13/0/2 (86.6 s), walkreal_0700000b_live 8/0 (86.7 s) — **82 passed /
+  0 failed across the nine level walks that fit the window** (the walks are minutes each; the
+  sandbox's memory killed parallel runs above four and 03/0d could not complete even
+  sequentially under the OOM pressure — the field is default-None additive, so the untouched
+  levels are stream-identical by construction, and the nine runs above confirm it in the sim).
 - The scratch probe block was removed before commit (the probe's facts are recorded in the
   code comments and this report).
 
