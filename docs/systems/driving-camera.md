@@ -1,7 +1,8 @@
 # Driving: the player chase camera
 
-Port: `crates/nf-game/src/driving/camera.rs` (`ChaseCamera`, `HeliParams`, `ArmParams`, `CarPose`).
-Disc check: `crates/nf-view/tests/driving_camera_ini_live.rs`.
+Port: `crates/nf-game/src/driving/camera.rs` (`ChaseCamera`, `HeliParams`, `ArmParams`, `CarPose`,
+`CamWorld`, `Obstacle`, `push_out`).
+Disc checks: `crates/nf-view/tests/driving_camera_ini_live.rs`, `crates/nf-view/tests/drive_cam_collide_disc.rs`.
 
 Tags: [M] DRIVING.ELF decompile/disassembly, [D] disc data. Nothing here is a live capture.
 
@@ -88,14 +89,94 @@ against triangle (eye, cast end, o) (`FUN_001b9020`, projected on the axis of th
 largest signed component, `FUN_001b8f80`): inside adds 1, outside takes 1. Then
 eye += up * counter * -0.0125 (down to 1.0 lower at 80).
 
-On RACE (car at z 168.8 facing -z, barrier 4.2-5.0 behind) the target eye is z 173.8, at the
-barrier's back face; with the barrier in the cast set the casts hit it about 4.2 back and the
-eye lands near z 172.7, in front of it.
+Last, `FUN_001b8ae0` pushes the eye out of bodies (below).
+
+## What the casts see [M]
+
+The camera keeps a collision gatherer at +0x35c (`FUN_002117e8`, flags 0xc, radius
+|eye - car| * 0.9125 around car + (eye - car) * 0.5375). It is gathered again when
+`FUN_002126d0` finds the new sphere (radius (|d| * 1.075 + 0.5) / 2) no longer inside it.
+
+- Gathering (`FUN_00211ed0`): flag 8 runs `FUN_00217588(.., 1)`, flag 4 runs
+  `FUN_00217588(.., 0)` then `FUN_00219a50`. `FUN_00217588` boxes the sphere on the `CGrd` grid
+  (`DAT_0033a5c8`, `FUN_0021cf30` / `FUN_0021cf80`) and `FUN_00217228` walks each cell's
+  **kind-0** entries: the cell's u16 index list (byte +4 count, u16 +8 offset) and its linked
+  nodes whose kind word is 0. Every entry indexes the `ci` item array (world +8, 0x40-byte
+  items), deduplicated by the +0x10 stamp and kept when the 2-D distance to the centre is under
+  radius + item +0x3c. Kind 1 entries are triggers (`FUN_0022cad8` moves trigger entries with
+  `FUN_0021cad0(.., 1, index)`), not collision.
+- Flag 8 keeps the items' `ca` triangle groups (`FUN_00216ec0`). Flag 4 keeps their `ca` wall
+  edges (`ca` u16 +4 count, u16 +2 offset, 0x20-byte entries: two end points and 1/length; a 2-D
+  distance and a height window; class byte +0xd against the world +0x2c mask).
+- The cast (`FUN_002166f8`): the edges first (`FUN_0021a248` -> `FUN_00219328`, horizontal hit
+  normal), then the triangles (`FUN_00232180` / `FUN_00232638` -> `FUN_00214c08`: per group a
+  centre/radius test against the segment, then `FUN_00213d68` on the strip in a frame built from
+  the segment, both windings accepted, a triangle whose class byte +0x2d meets the world's +0x2c
+  mask skipped). `FUN_00216d30` keeps the nearer of the two hits.
+
+So the camera ray meets `CDat` collision only, walls included (there is no slope filter). It
+does not see scene objects (`RSceneObj` props are not `ci` items), smackables, or cars.
+
+Bodies are handled after the casts, by `FUN_001b8ae0` -> `FUN_001b8d08`:
+
+- each vehicle in the sim list `DAT_00339f5c..60` except the camera's target (+0x118), gated by
+  |eye - pos|^2 <= |size|^2 * kCameraObjectSphereRad, half-extents size * kCameraObjectRadiusEx
+  (size = the vehicle's +0x5c object's +0x4c0 vector; the code does not name it);
+- each live body of the 0x60-slot physics table (`0x339190`, `DAT_003394c0`) whose type byte
+  +0x1c is 8, gated by |eye - pos|^2 <= radius * kCameraObjectSphereRad (radius +0x2c, compared
+  unsquared), half-extents kCameraObjectRadiusEx * radius.
+
+`FUN_001b8d08` takes the eye into the body's frame (its rows). When the eye is inside the
+ellipsoid (every |local| under its half-extent and the normalised sum under 1) it sets local y
+to sqrt((1 - x^2/rx^2 - z^2/rz^2) * ry^2), goes back to world, makes the world offset's y
+positive and adds the position: the eye goes over the top. camera.ini `[Global]`:
+kCameraObjectRadiusEx 1.5 / 1.5 / 1.5, kCameraObjectSphereRad 2.598 [D]; loader defaults 1.675 /
+1.925 / 1.325 and 2.875 [M FUN_001a49e0 :801-804].
+
+Near plane: the `RCamera` ctor `FUN_001d40f0` sets near 0.17 (+0x20) and far 3000 (+0x2c), and
+`FUN_001d4878` builds the projection from them (`FUN_00295910`). No write that changes the near
+plane while driving was found (`FUN_001d4db0` can, but no caller of it was found). There is no
+step that pushes the eye off a surface by the near distance: the only limits are the 2.5 minimum
+distance and the 1.1 ignore radius above.
+
+## The RACE start [M + D]
+
+- The start trigger (Trgr 212, at the car's start) holds `EStartMission`, `EForceCarStop`,
+  `EChangeStage` and two `EStreamEvent`s (creator table 0x36fda0 -> constructor -> vtable ->
+  type name). Trigger 216 beside it holds `EChangeStage`, `ESetTimer`, `EStartTimer` and
+  `ECallStage`. Neither holds a camera event (`EPlayCameraAnim`, `EPlayCameraSpline`,
+  `ECinematicCamera`, `ESetAutoDriveCamOn`, `EChangeCarCameraView`); RACE's only camera events
+  sit on triggers 218, 224 and 225, hundreds of units from the start. So, as far as the
+  triggers go, the start view is the chase camera. What the stages run (the `EChangeStage` /
+  `ECallStage` targets) is not traced.
+- The four `POS2_Cautionguard` rails behind the start (items 3166-3169) are scene objects, not
+  `CDat` items [D: no collision triangle inside their boxes]. The game's casts cannot meet them,
+  and nothing in the camera code moves the eye off them.
+- In the port, at rest after 240 ticks, the eye is at (-2.65, 0.76, 173.78). It is outside every
+  scene object's box, level with rail 3168 and about 0.05 behind its back face (local depth 0.29
+  against a half depth of 0.25); the rail's far face is about 0.55 in front of the eye. The
+  traced camera code puts the eye there for this car pose, so the full-screen rail is not a
+  camera collision miss.
+
+What that rail should look like from there is a draw question and is not settled here. With
+the game's 0.17 near plane the back face (0.05 away) is partly clipped, and whether the game
+culls the rail's back-facing inner faces is not traced (the port draws every face). The car's
+rest height also moves the eye: the game spawns the car at ground + 1.0 (`FUN_001fee68`), while
+the port settles the car origin on the ground (-0.39 here). The game's settled body height is
+not traced.
 
 ## Not ported / unproven
 
-- `FUN_001b8ae0`: the eye is also pushed out of other vehicles' spheres
-  (kCameraObjectSphereRad 2.598); not ported.
+- The `ca` wall edges the cast also tests: `CamWorld` holds triangles only (the port does not
+  extract the edge list from the disc). The exact along-segment window of `FUN_00213d68` (its
+  -1.0 floor and the +0.5 its caller adds) is not reproduced; `CamWorld::cast` is the plain
+  nearest segment-triangle hit, gathered on a 16-unit grid instead of the game's sphere.
+- `CamWorld` is not wired into the driving view yet. The view's ray still uses its ground grid,
+  which drops every triangle with |n.y| < 0.25 and every class-4 triangle, so walls do not stop
+  the eye there. The hook-up is to build a `CamWorld` from all `CDat` triangles and pass its
+  `cast` as the ray.
+- The view does not feed `update_full` any obstacles: other cars' size vectors (+0x4c0) are not
+  traced, and the type-8 bodies are not identified.
 - The rigid arm (`rigidArm = 1`: vanquishsub, missile cam), the noise term, mode transitions
   (+0x12c / +0x27c / `armTransition`), the +0x134 fixed rate 0.1, look-back's release rules and
   the other camera types (Bumper, Dashboard, Tumble, Spline, AutoDrive) are not ported.
@@ -111,3 +192,4 @@ eye lands near z 172.7, in front of it.
   traced past `FUN_002166f8`. The RACE POS2_Cautionguard rails are smackable scene objects that
   nothing hides at the start (docs/formats/trackobj.md §2); whether the cast sees scene objects is
   unproven.
+- The world +0x2c class mask's value (runtime state; `CamWorld::class_mask` defaults to 0).
