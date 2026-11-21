@@ -1453,8 +1453,37 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// spot whose ray to (−51.0, 32.6) clears (the corridor's west lane or the south leg's own
 /// lip), or the fights' creep law opens the line; (2) then the Kiko-corridor armour fetch
 /// (−41.29,1.53,36.48) — +50 armour banks the pool for Rook's-wake legs.
+///
+/// GREEN (retune-nb-14-14, round 14, un-ignored 2026-11-21): the POCKET AMBUSH — the round-14
+/// lever 1(a)'s fourth form — walks the whole route. The lever's first three forms measured
+/// dead on their own real runs (v1: the shipped went-silent pass-break broke every pre-empt
+/// fight at +0 — a pre-empt's target is bloodless BY DESIGN, and the round-9 law's 240-frame
+/// window always holds another shooter's blood; the 3-attempt budget burned with the walk
+/// ALIVE at 17.7; v2: the fight ran but the plain shoot_bounded's slide law dragged Bond 4.4 u
+/// east off the break pocket into #53's point-blank line (d 1.8, −7.0), death t38939; v3: the
+/// slide-off pocket hold parked Bond while #53 — alive because the break skipped his nav-9
+/// fight — advanced and burst −21.2 in 6 hits, death t38781). The v4 discovery: the break
+/// spot IS the blind pocket (the v5 round-13 census's law), and fighting the NEAREST exposed
+/// guard from it (the GL provably kills hp-10 guards at ≤ 10 u — the chase's own kills) both
+/// keeps the v0 nav-9 free kill of #53 and clears the room: v4 killed #53 AND Rook himself
+/// (the walked gun path, d 9.9, t38973) but left #57 (hp 2, the Rook-fight splash) alive at
+/// d 14-18 beyond the 12-u band and his two retreat volleys ate the 7.2 pool (death t39216).
+/// The shipped v5 form: the sight-open break (walker_b2's `preempt_on`, read-only ray tests,
+/// d3-gated — the sisters never set it) parks Bond at the pocket; the ambush loop then fights
+/// the nearest guard whose boxes expose within 20 u with `shoot_bounded_fast` (the slide OFF,
+/// the park held) and, when nothing exposes but a hostile still lives within 20 u, steps ONE
+/// nav leg toward the nearest (the leg's own fights — the unseen fallback's creep — open the
+/// line); the went-silent pass-break is scoped OFF for the ambush scope only. Measured chain
+/// [L the v5 run]: the break at nav 8 +31 ((27.25,−10.13)), #53 killed t38854 (d 4.0), Rook
+/// killed t38973 (d 9.9 — the kill the round-13 forms could never take), #57 killed t39013
+/// (d 14.2, ZERO pool cost), #58 killed t39201 (d 17.2, ZERO pool cost — his −7.0 burst never
+/// fired), pool 7.2 held through the delta legs, walked out in 40649 ticks, stuck 0, falls 0,
+/// the exit hold drained and 07000015 loaded warm (arrival (94.50,41.37,0.0019)). The v1 run
+/// also revised the round-14 ledger's premise: the v0 trace's fight counter (48) exceeds its
+/// printed fights (47) by the fight that opened ON #58 only AT his own burst — Bond died
+/// inside it; and #58 STARTS the chase at (28.47,1.0,43.15) — the far guards MIGRATE with the
+/// chase (the drone index is the identity, the resolve's asserts pin the skin).
 #[test]
-#[ignore = "nb-scan-all round 13 (retune-nb-14-13): re-measured on this tree (master 502f62fae + s/retune-nb-14-12 merged) 2026-11-21 [L NF_DMG_TRACE runs v0-v7]. THE V0 BASELINE REPRODUCED THE ROUND-12 DEATH TICK-EXACTLY (t38906 at (26.99,1.13,-8.62), Rook's first 0x6e volley -10.70 at d 9.8 into the 10.7-hp pool, 58 hits for 100.0, 48 return-fire fights) — the stream carried over the merge clean; the attempt-loop aim prints read Rook at hp 30 [L the v4/v5/v7 aim +0 lines; the round-12 ledger's 22 was its own stream's value], and the loadout dump holds: the crossbow 0x11 rides the save at c2+0 dmg60.0 — TWO bolts, no spare. ROUND-13 LEVER 1(b) (the crossbow switch at the room position, the round-9 'a switch that does not stand Bond' design question) MEASURED DEAD SEVEN WAYS, each on its own real run, the tree reverted to the shipped state after each: v1 (the press AFTER the shipped close-on) — the close-on's own stretch is the death's home: the walk died at t38906 tick-exact BEFORE the press ran, and a press BEFORE/DURING the chase hands the armed crossbow to the fights ([M switch_to_armed keeps an armed gun at every fight start]) — the bolts die on the escorts, the lever's own law; v2 (the stand-off gate on the route SNAPSHOT) — Rook runs south THROUGH the route (his volley fired from (27.6,1.2) while the snapshot target stood far north), the stale gate never broke, tick-exact vs v0; v3 (the LIVE gate at 14.0, the press at the stop) — the aim broke at +0: the went-silent pass-break (walker_b2.rs:754, opt-in on switch_on_first_blood && finish_fights, both set by this walk) reads Rook bloodless in the 240-frame window while #53's t38595 volley is still inside it — a law built for the legs' determined pass, fatal to a first-volley aim — and the stand sat in #57's line ((28.1,2.7), a guard v0's moving Bond never drew): FOUR standing-target volleys while Rook crossed his ~9.8 bubble ~94 ticks after the stop; the draw (~90, the shipped switch blocks' budget) + the aim lost the race, death t38881; v4 (a 2-tick press) — the switch did NOT take (the aim opened with the GL, clip 5 spare 79): the switch needs the HELD input (the shipped switch blocks' own idiom); v5 (the LIVE gate at 10.0, the HELD press) — THE PRESS WORKS (the aim opened with the crossbow, clip 2 spare 0) but BOTH BOLTS MISSED (out of ammo at +144, Rook untouched at hp 30): the 0.02-rad tap gate is ±0.22 m at d 10.9 vs the ~0.3 m hit boxes — AND THE GOLD: the stop spot was a BLIND POCKET — the pre-clear census read EVERY guard eyefalse/gunfalse (Rook at d 9.9 included) — NOBODY shot during the whole aim and the pool held 21.2; v6 (the gate at 6.5, to shrink the miss band) walked INTO the ~9.8 volley bubble and died at t38906 tick-exact vs v0 — the bubble is real and distance-shaped; v7 (the POCKET GL BOMBARDMENT, no switch at all, the grenade blast covering the ±0.22 band) — the aim from THAT pocket spot was BLOCKED (aim None — the ray to Rook's boxes clips the room's geometry; the clearance flips on Rook's live pos: v5's spot cleared, v7's did not) and the blocked stand's own slide law dragged Bond east into the eyes — death t39025; the fights still answered (Rook died hp −22, #53 hp −27) but the pool ran out first. ROUND-14 LEVERS, in order: (1) THE POOL at Rook's first volley (the deficit 0.1-7.0): (a) #58's pre-emption (his −7.0 burst at d 15.7, t38808/38812 — the chase's fights never reached him; the round-13 lever 1(c) carried over), (b) #57's pre-emption (the v3 discovery — his standing-target volleys eat any stop in his line, the shoot-stage stand included), (c) THE BLIND-POCKET BOMBARDMENT COMPLETION — at the LIVE-10.0 stand-off break, read exposed_aim(rook) BEFORE standing (a read-only visibility check, zero draws): bombard with the GL where the aim is Some (the blast covers the ±0.22 tap band; the v5 pocket measured blind and quiet, pool 21.2), step ONE more nav leg and re-read where None (v7's spot was blocked; never STAND in a blocked spot — the slide law walks Bond into the eyes); (2) the second kind-27 trap's trigger — a live check for the main agent (gdbwatch the script that writes the (−4.4,−25.3) blast; the round-12 v1 fast crossing never triggered it while inside, the v2 linger did at t37634): answer the trigger (a fuse off the same door? a proximity volume?) and ONE-SHOT vs CYCLICAL; (3) the round-9 levers 2/3 (the door-face bank drain, the lane-crossing wedge walk_nav_to) stand untried, lower priority. The shipped node-0 scan stays in (stream-neutral); the node-24 no-op scan stays (the pass-break holds it on this stream — a future upstream re-roll could wake it: if it ever FIGHTS, the round-12 v2 double-damage is the measured expectation); the #51 node-23 pre-emption stays REMOVED (the round-12 v3 verdict: the re-roll drew #55's eight unanswered volleys, death t37542). The pass-break stays (measured +950 ticks, +24.7 health at node 1); the NF_SRV_PROBE and NF_DELTA_PROBE hooks stay env-gated read-only. Whole-binary evidence on the final tree (the reverted/shipped state): walkreal_07000014_live 9 passed / 0 failed / 1 ignored (179.07 s), interactables_07000014_live 10 passed / 0 failed (13.17 s) — the sisters and the other walks stay byte-identical."]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
@@ -2223,14 +2252,122 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         }
     }
     let mut dead = false;
+    // retune-nb-14-14 lever (a) v5 — THE POCKET AMBUSH (the round-14 ledger's first lever,
+    // shipped form), d3-only. The v4 form's band was 12 u; the shipped v5 widens it to 20 u
+    // and adds the one-nav-leg step toward a living hostile the sight cannot reach (see the
+    // match's None arm). The v0 baseline: the pool at Rook's first 0x6e volley (t38906,
+    // −10.70, d 9.8) is 10.7 — 0.1 short — and the −7.0 that would have covered it is the far
+    // guard #58's burst (skin 0x0500008c, hp 10, t38808/38812 [L the v0 trace]); the v0 fight
+    // counter (48) exceeds its printed fights (47) by the fight that opened ON #58 only AT his
+    // own burst — Bond died inside it. The sight-open break parks Bond at the chase's blind
+    // pocket ((27.25,−10.13), measured in v1: the pool held 17.7 for 210+ ticks with nobody
+    // shooting) and the ambush then fights the NEAREST guard whose boxes expose within 12 u —
+    // the GL provably kills hp-10 guards at that range (the chase's own kills: #50/#46/#47/#53
+    // all fell to GL fights at ≤ 10 u [L the v0 trace]) — with the slide OFF (v2's plain fight
+    // slid Bond 4.4 u east into #53's point-blank line, death t38939) and the went-silent
+    // pass-break scoped off (v1's trap: a pre-empt's target is bloodless BY DESIGN, the
+    // round-9 law broke every fight at +0). The v0 nav-9 fight killed #53 for ZERO pool cost
+    // — the ambush keeps that free kill and adds #58 when he closes. Real input only; the
+    // sisters never set the flag. The form shipped GREEN (the run above); the three dead
+ // forms stay recorded in the ledger comment so the measurement is not lost.
+    let g58_i = if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() && w.round_dodge {
+        // The far guard is the trace's drone #58 on this tree (the indices are
+        // load-deterministic [L the v0 trace's "drone #58 skin 0x0500008c weapon 0x1a at
+        // (29.1,1.0,7.0) hp 10"]); the guards MIGRATE during the chase (he starts at
+        // (28.47,1.0,43.15) [L the v1 run's resolve print]), so the index is the identity.
+        // The asserts pin the skin and liveness so a future list drift fails loudly.
+        let g = 58usize;
+        let d = &w.scene.sim.as_ref().unwrap().drones.list[g];
+        assert_eq!(d.skin, 0x0500_008c, "drone #58 is the far 0x0500008c guard [L the v0 trace]");
+        assert!(d.present && !d.corpse && d.health > 0.0, "drone #58 is live at the chase start");
+        eprintln!("[014] the chase pre-empt: the far guard is drone #{g} at {:?} (hp {:.1}, enabled {})",
+            d.pos, d.health, d.enabled);
+        Some(g)
+    } else { None };
     for attempt in 0..3 {
         // Close in first: from the wake touch Rook stands ~67 u off, past the hand gun's useful
         // spread (the walk emptied both clips at that range and then wedged its resupply legs).
         let rp = w.scene.sim.as_ref().unwrap().drones.list[rook_i].pos;
-        if dxz(w.scene.sim.as_ref().unwrap().bond.pos, rp) > 10.0 { w.walk_nav_to(rp, &format!("close on Rook {attempt}"), 8.0); }
-        if w.shoot(rook_i, "Rook") { dead = true; break; }
-        assert!(w.resupply(&format!("Rook attempt {attempt}")), "no ammo for the Rook kill");
+        if dxz(w.scene.sim.as_ref().unwrap().bond.pos, rp) > 10.0 {
+            w.preempt_on = g58_i.map(|g| (g, 20.0));
+            w.walk_nav_to(rp, &format!("close on Rook {attempt}"), 8.0);
+            w.preempt_on = None;
+            // The break hands the fight over: from the quiet pocket, fight the nearest guard
+            // whose boxes expose within 20 u (the flag is OFF — the fight's own taps run;
+            // finish_fights' pass-break is scoped off for the ambush — a pre-empt's target
+            // is bloodless BY DESIGN; v1 measured the shipped law breaking every such fight
+            // at +0).
+            if g58_i.is_some() {
+                let finish0 = w.dmg.finish_fights;
+                w.dmg.finish_fights = false;
+                let ambush_start = w.total_ticks;
+                for round in 0..8 {
+                    if w.total_ticks - ambush_start > 2400 {
+                        eprintln!("[014] the pocket ambush: the 2400-tick budget ran out at tick {}", w.total_ticks);
+                        break;
+                    }
+                    let pick = {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let bp = sim.bond.pos;
+                        let mut best: Option<(f32, usize)> = None;
+                        for (i, d) in sim.drones.list.iter().enumerate() {
+                            if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                            let dist = ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt();
+                            if dist > 20.0 { continue; }
+                            if walker::DamageLog::exposed_part(sim, i).is_none() { continue; }
+                            if best.map_or(true, |(bd, _)| dist < bd) { best = Some((dist, i)); }
+                        }
+                        best.map(|(_, i)| i)
+                    };
+                    match pick {
+                        Some(tgt) => {
+                            let killed = w.shoot_bounded_fast(tgt, "the pocket ambush", 600);
+                            eprintln!("[014] the pocket ambush round {round}: drone #{tgt} killed {killed} at tick {}, health {:.1}",
+                                w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+                            if !killed { break; }
+                        }
+                        // v4's measured gap (2026-11-21 [L]): the ambush cleared #53 AND killed
+                        // Rook himself (the walked gun path, d 9.9, t38973 — the deepest push
+                        // of rounds 4-14) but left #57 (hp 2, the Rook-fight splash) alive at
+                        // d 14-18 BEYOND the 12-u band, and his two retreat volleys (−3.50,
+                        // −3.70 at d 18.3) ate the 7.2 pool on the delta legs — death t39216.
+                        // A player clears the room before leaving it: when nothing exposes
+                        // within 20 u but a hostile still lives there, step ONE nav leg toward
+                        // the nearest — the leg's own fights (the unseen fallback's creep)
+                        // open the line and answer him.
+                        None => {
+                            let near = {
+                                let sim = w.scene.sim.as_ref().unwrap();
+                                let bp = sim.bond.pos;
+                                let mut best: Option<(f32, usize, [f32; 3])> = None;
+                                for (i, d) in sim.drones.list.iter().enumerate() {
+                                    if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                                    let dist = ((d.pos[0] - bp[0]).powi(2) + (d.pos[2] - bp[2]).powi(2)).sqrt();
+                                    if dist > 20.0 { continue; }
+                                    if best.map_or(true, |(bd, _, _)| dist < bd) { best = Some((dist, i, d.pos)); }
+                                }
+                                best
+                            };
+                            let Some((_, ni, npos)) = near else { break };
+                            eprintln!("[014] the pocket ambush round {round}: nothing exposed — stepping toward drone #{ni} at {:?} (d {:.1})", npos, dxz(npos, w.cur_pos()));
+                            w.walk_nav_to(npos, "the ambush step", 6.0);
+                        }
+                    }
+                }
+                w.dmg.finish_fights = finish0;
+            }
+        }
+        // d3 pre-empt only: a mid-chase break leaves Rook > 10 u off — a player resumes the
+        // chase instead of tapping at him across the room (the stand taps at that range miss;
+        // the v5 crossbow lesson) — so the Rook shoot waits for the close. The sisters
+        // (g58_i None) run the shipped unconditional shoot byte-exactly.
+        let still_far = dxz(w.scene.sim.as_ref().unwrap().bond.pos, rp) > 10.0;
+        if g58_i.is_none() || !still_far {
+            if w.shoot(rook_i, "Rook") { dead = true; break; }
+            assert!(w.resupply(&format!("Rook attempt {attempt}")), "no ammo for the Rook kill");
+        }
     }
+    w.preempt_on = None;
     assert!(dead, "Rook must die to the walked gun path");
     // The death channel's delivery [M 0x13e660 via the death DSTATEs: Death_Anim 0x1637f8 and
     // DeathByExplosion 0x163a80, case 2 = the state EXIT] waits for the end of the fall; only

@@ -190,6 +190,22 @@ pub struct Walker {
     /// fresh load replaying this Vec is tick-for-tick identical. `None` (default): no recording,
     /// and the step is exactly the old direct `step_bond`.
     pub record_inputs: Option<Vec<nf_view::replay::TickInput>>,
+    /// Opt-in pre-empt sight break for `walk_to` (retune-nb-14-14, the 07000014 00 Agent chase,
+    /// d3 only): `Some((di, range))` makes the %10 loop head return early the moment guard `di`
+    /// is live (present + enabled + hp > 0) within `range` AND exposes a hit box to Bond's eye
+    /// (`DamageLog::exposed_part`'s own rule — the game's bullet enters the box before the
+    /// world's first solid contact [M 0x1ea398:216-229]). The chase's plain fights answer the
+    /// NEAREST shooter first, so the room's far guard's first burst lands while the nearer
+    /// fights still run: the v0 trace's fight counter (48) exceeds its printed fights (47) by
+    /// the fight that opened ON that guard only AT his own burst — Bond died inside it, ~96
+    /// ticks before Rook's first volley. A player who spots the far guard answers him before
+    /// the burst. `preempt_hit` carries the stop to `walk_nav_to` (its `walk_to` returns are
+    /// ignored); the caller runs the fight and resumes the nav. Read-only ray tests, no RNG,
+    /// no sim call; `None` everywhere else — no other walk changes.
+    pub preempt_on: Option<(usize, f32)>,
+    /// The pre-empt break's signal (see `preempt_on`): set by walk_to's %10 gate, consumed and
+    /// cleared by walk_nav_to between the legs. Private; dead while `preempt_on` is None.
+    preempt_hit: bool,
     /// replay-parity (opt-in): the per-tick state the parity test compares — Bond pos/yaw,
     /// health, the drone frame and the mission_end latch, captured right after each recorded
     /// step. One entry per recorded tick, same order as `record_inputs`.
@@ -242,6 +258,7 @@ impl Walker {
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
+            preempt_on: None, preempt_hit: false,
             // The stuck-ladder decay + the ride/grab scope resets are OPT-IN (see the field's
             // doc): default off keeps every walk master-timed (walker-sidestep-decay-2). The
             // opt-in walks (the 07000012 d1 crossing, the 0700000c real-damage tree) set it
@@ -914,6 +931,7 @@ impl Walker {
     /// the direct steer wedges on walls between them). `final_arrive`: the last leg's radius.
     pub fn walk_nav_to(&mut self, target: V3, label: &str, final_arrive: f32) {
         self.lenient = true;
+        self.preempt_hit = false;
         let pts = {
             let sim = self.scene.sim.as_ref().unwrap();
             leg(sim, self.pos, target)
@@ -921,6 +939,9 @@ impl Walker {
         for (k, p) in pts.iter().enumerate().skip(1) {
             // A wedged nav node is SKIPPED (the next node re-aims); the route continues.
             let _ = self.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("{label} nav {k}"));
+            // The pre-empt sight opened (see `preempt_on`): stop the WHOLE nav — the caller
+            // fights the sighted guard and resumes the chase (the break is not a wedge).
+            if self.preempt_hit { self.lenient = false; return; }
         }
         self.walk_to(Wp { at: target, act: Act::None, arrive: final_arrive }, label);
         self.lenient = false;
@@ -973,6 +994,23 @@ impl Walker {
             // after the #282 grab.
             if !riding && !ladder && self.total_ticks % 10 == 0
                 && !STRIP_NO_FIGHTS.with(|c| c.get()) {
+                // preempt_on (OPT-IN, the 07000014 00 Agent chase): the named far guard just
+                // exposed a box inside range — break the leg so the caller fights him BEFORE
+                // his own first burst (the field doc). Read-only sight test, no draws.
+                if let Some((di, range)) = self.preempt_on {
+                    let open = {
+                        let sim = self.scene.sim.as_ref().unwrap();
+                        let d = &sim.drones.list[di];
+                        d.present && d.enabled && !d.corpse && d.health > 0.0
+                            && dxz(d.pos, sim.bond.pos) < range
+                    } && DamageLog::exposed_part(self.scene.sim.as_ref().unwrap(), di).is_some();
+                    if open {
+                        eprintln!("[walk] {label}: the pre-empt sight on drone #{di} is open — breaking the leg at +{} ticks (bond ({:.2},{:.2},{:.2}))",
+                            self.total_ticks - start_ticks, self.pos[0], self.pos[1], self.pos[2]);
+                        self.preempt_hit = true;
+                        return u32::MAX - 1;
+                    }
+                }
                 let t0 = self.total_ticks;
                 if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }
