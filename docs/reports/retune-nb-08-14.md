@@ -95,3 +95,18 @@
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (ntfy.sh unreachable — the same failure as rounds
+5-13; each attempt at 2026-11-21 ~08:50-08:52 UTC):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (rc 28)
+2. python3 urllib: killed by the outer 30 s timeout (rc 124) — no response within the 20 s
+   urlopen timeout, no traceback, nothing written
+3. wget: killed by the outer 30 s timeout mid-connect (rc 124, quiet mode, no output)
+
+The notification text that could not be delivered:
+`retune-nb-08-14: the trench-pinned standing dodge shipped (first killer salvo survived
+standing, miss 0.58 -> 2.41, falloff -6.00 -> -3.98), death t29801 -> t29924 (+123) still red
+to the second salvo's lip wedge; whole binary 6/1`
