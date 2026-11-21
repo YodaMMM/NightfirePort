@@ -202,6 +202,47 @@ pub const HEAD_ON_CULL_ON: bool = false;
 /// `capsule_tri_contact` print every applied push (and every head-on-cull skip) as one
 /// `eprintln` line — the per-tick capsule contact/push log the walk diagnoses run on. Off by
 /// default; the hot path reads a `OnceLock` bool.
+/// The decompiled `Intersect_CylGeom` push tail (`NF_CYL_TAIL=1`, or [`set_cyl_tail`]; OFF by
+/// default — it moves every walk and is not yet measured on the other levels' batteries).
+///
+/// The fact it rests on [M disasm]: both `ASH_vecutil_Dist2Tri` 0x109770 calls in
+/// `Intersect_CylGeom` pass `addiu t2, s1, 0x50` (0x10a2fc and 0x10a4f0, s1 = the HITTEST
+/// copy) as the 7th argument — Dist2Tri's `param_7` out-pointer, which it fills with the
+/// closest triangle point (0x109770 tail `if (param_7 != 0) *param_7 = q`) unless it returns
+/// the behind-plane flags 99. So the tail's `v = p − HITTEST+0x50` [M 0x109da0 push tail] is
+/// `p − q` against the triangle the loop is testing: an ordinary capsule-vs-triangle push
+/// `(r − |v|)·v̂`, gated by `dot(v, n) > 0` and `|v| < r`. The copy's +0x50 is the real +0x50
+/// transformed in by `Collide_Intersect` 0x1ebaa8 (`amemcpy` 0xa0 then the RotPreTransVec of
+/// +0x50), so the real field IS the lifetime DeltaP sum the [L] reads saw — but the push
+/// never reads it: Dist2Tri overwrites the copy before the tail runs. The port's radial ref
+/// arm (`ref_v` = `Bond.pick_ref`) and its fallbacks model a reference the game never uses.
+/// The tail as decoded:
+/// - the head-on cull uses the RAW spine `B − A` (sp+0x100, stored unnormalised at 0x109fa0,
+///   reloaded for the denominator at 0x10a1d0; the normalised copy at sp+0x30 feeds only the
+///   pick-bit block 0x10a640/0x10a6f4): `(denom > 0.999 ∧ f > 0.5) ∨ (denom < −0.999 ∧ f < 0.5)`
+///   — inert for the walk spine (|B − A| = 0.7597);
+/// - |denom| > 0.0002: p = A + f·(B − A), Dist2Tri(p) (flags 99 → skip, 0x10a33c), and on an
+///   edge/vertex region p re-projects onto the spine nearest q (0x10a344-0x10a3e8);
+/// - |denom| ≤ 0.0002 (a vertical face for the upright spine): p = the spine point nearest the
+///   triangle centroid and Dist2Tri(p) with NO re-projection (0x10a3f0-0x10a504 falls straight
+///   to the tail at 0x10a508) — so an edge above/below p gives the push a vertical part;
+/// - Dist2Tri's own region test ([`dist2tri_game`]), not an exact closest point.
+fn cyl_tail() -> bool {
+    match CYL_TAIL.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let on = std::env::var("NF_CYL_TAIL").is_ok();
+            CYL_TAIL.store(if on { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+            on
+        }
+    }
+}
+static CYL_TAIL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+/// Turn the decompiled push tail on or off process-wide (see `cyl_tail`). For the measuring
+/// test binaries; the default stays the env read.
+pub fn set_cyl_tail(on: bool) { CYL_TAIL.store(if on { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed); }
+
 fn caps_log() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("NF_CAPS_LOG").is_ok())
@@ -941,7 +982,8 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // old |n·y| > 0.7 + top-end-side rule culled in the 0.70-0.763 band (≈45-77° slopes above the
     // capsule) are TESTED here, exactly as the game tests them.
     // The previous one-sided rule stays in force until the game's cull is on (HEAD_ON_CULL_ON).
-    if !HEAD_ON_CULL_ON && n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
+    let game_tail = cyl_tail();
+    if !game_tail && !HEAD_ON_CULL_ON && n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
     let ab = sub(*b, *a);
     let denom = dot(n, ab);
     let mut f = 0.0f32;
@@ -989,6 +1031,29 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // bisect proved (the second Dist2Tri call's flags-99 gate) is REAL [M] but cannot land on
     // the substitute tail without the walk's vertical coming from the game's own feet-band
     // mechanism — see docs/reports/level-0a-band-settle-6-c.md for the live-check list.
+    if game_tail {
+        // The decompiled tail (see `cyl_tail` for the citations).
+        if denom.abs() > 0.0002 && ((denom > 0.999 && f > 0.5) || (denom < -0.999 && f < 0.5)) { return false; }
+        let Some((q, flags)) = dist2tri_game(p, t, n) else { return false; };
+        if flags != 0 && denom.abs() > 0.0002 { p = closest_on_segment(*a, *b, q); }
+        let on_edge = flags != 0;
+        let v = sub(p, q);
+        let dist = dot(v, v).sqrt();
+        if dist >= r { return false; }
+        let contact_walk = n[1] > 0.7 && q[1] < b[1];
+        if contact_walk { *walkable = true; }
+        if n[1] > 0.7 { *pick = true; }
+        if !(dot(v, n) > 0.0) { return true; }
+        let push = if dist > 0.0 { let k = (r - dist) / dist; [v[0] * k, v[1] * k, v[2] * k] } else { [0.0; 3] };
+        if caps_log() {
+            eprintln!("[cap] GPUSH cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge}",
+                (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
+                q[0], q[1], q[2], push[0], push[1], push[2], n[0], n[1], n[2]);
+        }
+        for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
+        let _ = (ref_v, walk_flat_hold);
+        return true;
+    }
     if on_edge { p = closest_on_segment(*a, *b, q); }
     // The game's push-tail guard [M Intersect_CylGeom 0x109da0 push tail: `v = q − A`,
     // `if (0.0 < dot(v, B − A))` gates the whole `dist < r` push]: a triangle whose closest
@@ -3734,6 +3799,44 @@ fn closest_on_segment(a: V3, b: V3, p: V3) -> V3 {
 /// 0x1e92d8:222 drives), `vecutil_Dist2Tri` 0x1dfca8 (the portal/cyl-tri one) and the VU0
 /// fixed-point `ASH_vecutil_Dist2Tri` 0x109770 (`Intersect_CylGeom` 0x109da0:331,416's actor
 /// push) [M — the same edge-bit mask (face / edge / vertex) and plane-projection shape].
+/// `ASH_vecutil_Dist2Tri` 0x109770 [M]: `None` = flags 99 (p strictly behind the plane, the
+/// out-pointer left unwritten); else the region flags and the point it writes. Bit i is set when
+/// p lies outside the edge ending at vertex i (edges v2→v0, v0→v1, v1→v2, the test
+/// `dot(p − v_i, (v_i − v_prev) × n) > 0`), and the loop stops once bit 1 is set, so bit 2 is
+/// never tested then (flags 6/7 cannot occur). 0 → the plane projection; 1/2/4 → the clamped edge
+/// v0-v2 / v1-v0 / v2-v1; 3 → v0; 5 → v2. The port's normal is the winding cross (the triangle
+/// list is wound to the stored plane, collision.rs).
+fn dist2tri_game(p: V3, t: &[V3; 3], n: V3) -> Option<(V3, u32)> {
+    if dot(sub(p, t[0]), n) < 0.0 { return None; }
+    let mut flags = 0u32;
+    let mut prev = t[2];
+    for i in 0..3 {
+        let cur = t[i];
+        let c = cross(sub(cur, prev), n);
+        if dot(sub(p, cur), c) > 0.0 { flags |= 1 << i; }
+        prev = cur;
+        if i == 1 && flags >= 2 { break; }
+    }
+    // Each edge arm: the segment from `base` toward `to`, degenerate → base, past `to` → to,
+    // before `base` → base [M 0x109770 cases 1/2/4, the case-2/4 fall-throughs to 3/6].
+    let seg = |base: V3, to: V3| -> V3 {
+        let e = sub(to, base);
+        let l = dot(e, e);
+        if l.abs() <= 1e-20 { return base; }
+        let u = dot(sub(p, base), e) / l;
+        if u > 1.0 { to } else if u < 0.0 { base } else { [base[0] + e[0] * u, base[1] + e[1] * u, base[2] + e[2] * u] }
+    };
+    let q = match flags {
+        1 => seg(t[0], t[2]),
+        2 => seg(t[1], t[0]),
+        3 => t[0],
+        4 => seg(t[2], t[1]),
+        5 => t[2],
+        _ => { let d = dot(sub(p, t[0]), n); [p[0] - n[0] * d, p[1] - n[1] * d, p[2] - n[2] * d] }
+    };
+    Some((q, flags))
+}
+
 fn closest_on_triangle(p: V3, t: &[V3; 3]) -> (V3, bool) {
     let (a, b, c) = (t[0], t[1], t[2]);
     let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
