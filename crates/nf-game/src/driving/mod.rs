@@ -10,6 +10,8 @@ pub mod join;
 pub mod audio;
 // The hostile AI and the AI element lifecycle (AIEl/AICo, FUN_0012bec8 and the chase arms).
 pub mod hostile;
+// The hostile runtime the driving view owns: spawns, chase brains, cars, riders, helicopters, shots.
+pub mod hostiles;
 // The per-pattern chase steering, avoidance, turret, world cap, helicopter leaf rules (§11).
 pub mod patterns;
 // The AI helicopter controller (FUN_00138fa8 / FUN_00139be8 / FUN_00139380 / FUN_0013b4f8, §12).
