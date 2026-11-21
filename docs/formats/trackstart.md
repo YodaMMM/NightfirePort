@@ -35,6 +35,24 @@ direction constant (0, 0, 1, 0) at 0x376db0 (`FUN_001ff850`). The `EStartMission
 during "Init World", before that spawn, so it moves the car afterwards; the queue's dispatch loop
 is not traced. The restart path `FUN_001566b0` re-spawns at (0, 0, 0).
 
+The query in detail, as ported in `trackstart::game_ground` [M]:
+
+1. Gather (`FUN_00217588` → `FUN_00217228`, radius 0, planar): a `CDat ci` item is kept when
+   `max(|dx|, |dz|) + min(|dx|, |dz|)/4` from its centre `(−t·r0, −t·r2)` (`FUN_00212da8`) to the
+   point is below its `+0x3c` radius, and (`FUN_00216ec0`) when one of its `ca` groups has its
+   centre within `+0x0c u16 / 16` of the local point in xz and holds a triangle whose centroid is
+   within that triangle's own `+0x2e u16 / 16`.
+2. Per kept item (`FUN_00214338`): the point in the item frame (`FUN_00212ed0` + `FUN_0025b890`)
+   must lie within the `+0x0c` / `+0x2c` half extents. Per kept group, only the **first**
+   triangle of the strip that holds the point in plan view counts (`FUN_002138b0`). Distance =
+   `(local y + 0.5) − lowest corner`, or with item flag bit 0 `lowest corner − (local y − 0.5)`.
+   The smallest distance > 0 over all items wins (`FUN_002324e8`).
+3. Height = the world plane of that triangle at (x, z), normal `(v1 − v0) × (v0 − v2)` turned up,
+   n.y capped at 0.9999 (`FUN_002151b8`, `FUN_00231a90`).
+
+`track_spawn` uses it. On all 8 tracks it gives the same ground as the older all-triangle
+reading (test `the_traced_ground_query_agrees_at_every_start_and_each_tracks_sky_is_listed`).
+
 ## 2. On the disc [D]
 
 The trigger `+0x18` word is `0x656c` (`el`) + an index into the `Map` window's `el  #N` records,
@@ -57,8 +75,15 @@ car as well. MIS13C's trigger 0 (the previous stand-in) lies 43 units from the s
 ## 3. Not proven
 
 - The order "event queued at Init World, run after Spawn player car" (the dispatch loop is not read).
-- `ground_height` tests every collision triangle instead of the grid cells `FUN_00217588`
-  gathers, and ignores the instance flag bit 0 that makes the query measure upward.
-- MIS13B's marker sits at y −16.9 while the ground found under it is 169 units lower (−185.8):
-  the code puts the car on that ground; whether the ultralight then behaves differently is not traced.
+- `game_ground` tests every `ci` item instead of only those listed in the grid cells
+  (`FUN_0021cf30`), and takes the world's class mask (`DAT_0033a540 + 0x2c`) as 0.
+- MIS13B: the marker sits at y −16.9. Nothing lies near it: the only surface under it, in both the
+  collision world and the render geometry, is the valley terrain `Vol_foothillE` at −185.8, and
+  the traced query puts the car there (+1.0). A trigger 1.2 units from the marker (a sphere of
+  radius 2.5 at y −17.6) holds the intro actions `EControlToSpline` (202), `EPlayCameraAnim` (63),
+  `ELetterBoxOn` (104), `ESetAutoDriveCamOn` (77). A car standing on the valley floor 168 units
+  below would never enter that sphere, so the start as traced cannot be the whole story. Open:
+  whether `Vol_foothillE`'s collision is live at that moment (the gather skips items whose `+0x1c`
+  pointer is 0), the event dispatch order, and what `EControlToSpline` does with the car. Only a
+  live read of the car position in the first frames of MIS13B can settle this.
 - The meaning of the argument beyond "× car `+0x4c` = start speed" (the `+0x4c` field is not named).

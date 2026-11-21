@@ -317,9 +317,155 @@ pub fn ground_height(tris: &[CollisionTri], x: f32, y: f32, z: f32) -> Option<f3
     best.map(|(_, h)| h)
 }
 
+/// What the game's ground query found.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroundHit {
+    /// The plane height of the hit triangle at the probe's (x, z) [M 0x2151b8 / 0x231a90].
+    pub height: f32,
+    /// The `ci` item and its article.
+    pub item: usize,
+    pub article: String,
+    /// The world corners of the hit triangle.
+    pub tri: [[f32; 3]; 3],
+    /// The query's distance measure: `(local y + 0.5) − lowest local corner y` (bit 0 of the item
+    /// flags: `lowest corner − (local y − 0.5)`).
+    pub distance: f32,
+}
+
+/// The game's ground query (`FUN_002151b8` → `FUN_002322c8` → `FUN_00217588` gather →
+/// `FUN_002324e8` → `FUN_00214338`) over the `ci` items, as traced [M]:
+/// 1. gather: items whose centre `(−t·r0, −t·r2)` [M 0x212da8] is within their `+0x3c` radius of
+///    (x, z) by the measure `max(|dx|, |dz|) + min(|dx|, |dz|) / 4` [M 0x217228, radius 0 from
+///    0x2322c8]; per item, the groups whose centre is within `+0x0c u16 / 16` of the local point
+///    in xz and which hold a triangle whose centroid is within its own `+0x2e u16 / 16` [M 0x216ec0
+///    with the planar flag]. An item with no such group is dropped [M 0x217228 `iStack_cc == 0`];
+/// 2. per item: the point in the item's local frame must lie within the `+0x0c` / `+0x2c` half
+///    extents in x / z [M 0x214338]; per kept group, the FIRST triangle of its strip that holds
+///    the point in plan view (winding rule of 0x2138b0, class bit 0x04 skipped) [M 0x2138b0];
+///    distance `(ly + 0.5) − min corner y`, or with flags bit 0 `min corner y − (ly − 0.5)`; the
+///    smallest distance > 0 wins, items compared by the same local measure [M 0x214338, 0x2324e8];
+/// 3. the height is the hit triangle's world plane at (x, z): normal = (v1 − v0) × (v0 − v2),
+///    flipped up, n.y capped at 0.9999 [M 0x2151b8, 0x231a90].
+/// Not ported: the grid cells that feed the gather (`FUN_0021cf30`; every item is tested here),
+/// and the world's class mask at `DAT_0033a540 + 0x2c` (taken as 0).
+pub fn game_ground(insts: &[crate::crp_mesh::CollisionInstance], p: [f32; 3]) -> Option<GroundHit> {
+    let f = |d: &[u8], o: usize| -> Option<f32> { Some(f32::from_le_bytes(d.get(o..o + 4)?.try_into().ok()?)) };
+    let w = |d: &[u8], o: usize| -> Option<u32> { Some(u32::from_le_bytes(d.get(o..o + 4)?.try_into().ok()?)) };
+    let h16 = |d: &[u8], o: usize| -> Option<f32> { Some(u16::from_le_bytes(d.get(o..o + 2)?.try_into().ok()?) as f32 * 0.0625) };
+    let mut best: Option<(f32, usize, [[f32; 3]; 3])> = None;
+    for (ii, inst) in insts.iter().enumerate() {
+        let (cx, cz) = inst.centre_xz();
+        let (ax, az) = ((cx - p[0]).abs(), (cz - p[2]).abs());
+        let m = if az < ax { ax + az * 0.25 } else { az + ax * 0.25 };
+        if !(m < inst.radius()) {
+            continue;
+        }
+        let l = inst.to_local(p);
+        let ca = &inst.ca;
+        let groups = ca.get(0..2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]) as usize);
+        let vert = |o: usize| -> Option<[f32; 3]> { Some([f(ca, o)?, f(ca, o + 4)?, f(ca, o + 8)?]) };
+        // 1. the planar group prefilter [M 0x216ec0].
+        let mut kept = Vec::new();
+        for g in 0..groups {
+            let gh = 0x20 + g * 0x10;
+            let (Some(c), Some(r)) = (vert(gh), h16(ca, gh + 0x0c)) else { continue };
+            let (dx, dz) = (c[0] - l[0], c[2] - l[2]);
+            if !(dx * dx + dz * dz < r * r) {
+                continue;
+            }
+            let Some(off) = ca.get(gh + 0x0e..gh + 0x10).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize) else { continue };
+            let base = 0x20 + off;
+            let Some(n) = w(ca, base + 0x0c) else { continue };
+            let hit = (0..(n as usize).saturating_sub(2)).any(|k| {
+                let o = base + k * 0x10;
+                let (Some(a), Some(b), Some(c), Some(rad)) = (vert(o), vert(o + 0x10), vert(o + 0x20), h16(ca, o + 0x2e)) else { return false };
+                let (mx, mz) = ((a[0] + b[0] + c[0]) * 0.333_333_34 - l[0], (a[2] + b[2] + c[2]) * 0.333_333_34 - l[2]);
+                mx * mx + mz * mz < rad * rad
+            });
+            if hit {
+                kept.push(base);
+            }
+        }
+        if kept.is_empty() {
+            continue;
+        }
+        // 2. extents, first containing triangle per strip, distance [M 0x214338 / 0x2138b0].
+        let (hx, hz) = inst.half_extents();
+        if hx < l[0] || l[0] < -hx || hz < l[2] || l[2] < -hz {
+            continue;
+        }
+        let up = inst.flags() & 1 != 0;
+        let mut ibest: Option<(f32, [[f32; 3]; 3])> = None;
+        for base in kept {
+            let Some(n) = w(ca, base + 0x0c) else { continue };
+            let Some(sf) = w(ca, base + 0x1c) else { continue };
+            let both = sf & 2 != 0;
+            let mut par = sf & 1;
+            for k in 0..(n as usize).saturating_sub(2) {
+                let o = base + k * 0x10;
+                let (Some(a), Some(b), Some(c)) = (vert(o), vert(o + 0x10), vert(o + 0x20)) else { break };
+                let class = ca.get(o + 0x2d).copied().unwrap_or(0);
+                let e = |u: [f32; 3], v: [f32; 3]| (u[0] - v[0]) * (l[2] - v[2]) - (l[0] - v[0]) * (u[2] - v[2]);
+                let (e1, e2, e3) = (e(a, b), e(b, c), e(c, a));
+                let le = e1 <= 0.0 && e2 <= 0.0 && e3 <= 0.0;
+                let ge = e1 >= 0.0 && e2 >= 0.0 && e3 >= 0.0;
+                let inside = class & 4 == 0 && if both { le || ge } else if par == 0 { ge } else { le };
+                if inside {
+                    let lo = a[1].min(b[1]).min(c[1]);
+                    let d = if up { lo - (l[1] - GROUND_SLACK) } else { (l[1] + GROUND_SLACK) - lo };
+                    if d > 0.0 && ibest.map_or(true, |(bd, _)| d < bd) {
+                        ibest = Some((d, [a, b, c]));
+                    }
+                    break;
+                }
+                if !both {
+                    par ^= 1;
+                }
+            }
+        }
+        if let Some((d, t)) = ibest {
+            if best.map_or(true, |(bd, ..)| d < bd) {
+                best = Some((d, ii, t));
+            }
+        }
+    }
+    let (distance, ii, lt) = best?;
+    let inst = &insts[ii];
+    let t = [inst.to_world(lt[0]).ok()?, inst.to_world(lt[1]).ok()?, inst.to_world(lt[2]).ok()?];
+    Some(GroundHit { height: plane_height(&t, p[0], p[2]), item: inst.index, article: inst.article.clone(), tri: t, distance })
+}
+
+/// `FUN_002151b8`'s plane: normal = (v1 − v0) × (v0 − v2) normalised, negated when n.y < 0, n.y
+/// capped at 0.9999; height = `v0.y − (n.x (x − v0.x) + n.z (z − v0.z)) / n.y` (`FUN_00231a90`;
+/// n.y = 0 returns v0.y) [M].
+pub fn plane_height(t: &[[f32; 3]; 3], x: f32, z: f32) -> f32 {
+    let [v0, v1, v2] = *t;
+    let a = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+    let b = [v0[0] - v2[0], v0[1] - v2[1], v0[2] - v2[2]];
+    let c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let mut n = if c == [0.0; 3] {
+        [0.0, 1.0, 0.0]
+    } else {
+        let s = 1.0 / (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+        [c[0] * s, c[1] * s, c[2] * s]
+    };
+    if n[1] < 0.0 {
+        n = [-n[0], -n[1], -n[2]];
+    }
+    if n[1] >= 0.9999 {
+        n[1] = 0.9999;
+    }
+    if n[1] == 0.0 {
+        return v0[1];
+    }
+    v0[1] - (n[0] * (x - v0[0]) + n[2] * (z - v0[2])) / n[1]
+}
+
 /// The player start of a track `.crp`: the (last, as `FUN_0022cd30` fires them in index order)
 /// trigger holding an `EStartMission` action, placed as `FUN_001fee68` places the car.
-/// `tris` = the track's collision triangles (`Crp::extract_collision_tris`).
+/// The ground comes from [`game_ground`] over the `CDat` items; `tris` (the track's collision
+/// triangles, `Crp::extract_collision_tris`) is used only when the items fail to load. On all 8
+/// tracks both give the same start height [D, `geoprim_disc`].
 pub fn track_spawn(crp: &Crp<'_>, tris: &[CollisionTri]) -> Result<TrackSpawn> {
     let trig = map_triggers(crp)?;
     let t = trig
@@ -329,7 +475,11 @@ pub fn track_spawn(crp: &Crp<'_>, tris: &[CollisionTri]) -> Result<TrackSpawn> {
         .ok_or_else(|| FormatError::Invalid("no Trgr record carries an EStartMission (0x16) action".into()))?;
     let a = t.actions.iter().find(|a| a.id == ACTION_START_MISSION).unwrap();
     let speed_factor = f32_at(&a.args, 4)?;
-    let ground = ground_height(tris, t.pos[0], t.pos[1], t.pos[2]);
+    // The traced query over the `ci` items; the flat-triangle reading only when they do not load.
+    let ground = match crp.collision_instances() {
+        Ok(insts) => game_ground(&insts, t.pos).map(|h| h.height),
+        Err(_) => ground_height(tris, t.pos[0], t.pos[1], t.pos[2]),
+    };
     let n = (t.dir[0] * t.dir[0] + t.dir[1] * t.dir[1] + t.dir[2] * t.dir[2]).sqrt();
     if !(n > 0.0) {
         return invalid(format!("trigger {}: zero start direction", t.index));
@@ -366,5 +516,75 @@ mod tests {
         // A slope: the plane height at the point, chosen by its lowest corner.
         let slope = tri([[0.0, 0.0, 0.0], [10.0, 10.0, 0.0], [0.0, 0.0, 10.0]], 0);
         assert!((ground_height(&[slope], 5.0, 20.0, 1.0).unwrap() - 5.0).abs() < 1e-5);
+    }
+
+    /// A one-item collision world: identity rotation, translation `t`, flags, half extents 20, radius
+    /// 100, one group holding one strip of `verts` (strip flags word `sf`, every triangle radius 100).
+    fn world(verts: &[[f32; 3]], sf: u32, flags: u32, t: [f32; 3]) -> Vec<crate::crp_mesh::CollisionInstance> {
+        let mut ca = vec![0u8; 0x30];
+        ca[0] = 1;
+        ca[0x2c..0x2e].copy_from_slice(&1600u16.to_le_bytes()); // group radius 100
+        ca[0x2e..0x30].copy_from_slice(&0x10u16.to_le_bytes()); // strip at +0x20 + 0x10
+        for (k, v) in verts.iter().enumerate() {
+            for c in v {
+                ca.extend_from_slice(&c.to_le_bytes());
+            }
+            let word = match k {
+                0 => verts.len() as u32,
+                1 => sf,
+                _ => 1600 << 16,
+            };
+            ca.extend_from_slice(&word.to_le_bytes());
+        }
+        let mut item = [0u8; 64];
+        let mut put = |o: usize, v: f32| item[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        put(0x00, 1.0);
+        put(0x28, 1.0);
+        put(0x0c, 20.0);
+        put(0x2c, 20.0);
+        put(0x3c, 100.0);
+        put(0x30, t[0]);
+        put(0x34, t[1]);
+        put(0x38, t[2]);
+        item[0x18..0x1c].copy_from_slice(&flags.to_le_bytes());
+        vec![crate::crp_mesh::CollisionInstance { index: 0, article: "a".into(), item, ca }]
+    }
+
+    #[test]
+    fn the_game_query_takes_the_first_triangle_of_a_strip_not_the_nearest() {
+        // Triangle 0 (v0..v2) is a slope from -6 up to -1; triangle 1 (v1..v3) is flat at -1. Both
+        // hold (0, 0) in plan view. Nearest-corner over all triangles picks the flat one (-1); the
+        // game stops at the first triangle of the strip that holds the point [M 0x2138b0].
+        let v = [[-10.0, -6.0, -10.0], [10.0, -1.0, -10.0], [0.0, -1.0, 10.0], [-12.0, -1.0, 8.0]];
+        let w = world(&v, 2, 0, [0.0; 3]);
+        let h = game_ground(&w, [0.0, 0.0, 0.0]).unwrap();
+        let want = plane_height(&[v[0], v[1], v[2]], 0.0, 0.0);
+        assert!((h.height - want).abs() < 1e-4 && (want + 1.0).abs() > 0.5, "{} vs {want}", h.height);
+        assert!((h.distance - 6.5).abs() < 1e-5);
+        let flat: Vec<CollisionTri> = (0..2).map(|k| tri([v[k], v[k + 1], v[k + 2]], 0)).collect();
+        assert_eq!(ground_height(&flat, 0.0, 0.0, 0.0), Some(-1.0), "the all-triangle reading differs");
+    }
+
+    #[test]
+    fn the_game_query_works_in_the_items_frame_with_its_extents_and_up_flag() {
+        let v = [[-10.0, 5.0, -10.0], [10.0, 5.0, -10.0], [0.0, 5.0, 10.0]];
+        // Translation +5 in y: local y 5 is world y 0 (local = world + t).
+        let w = world(&v, 2, 0, [0.0, 5.0, 0.0]);
+        assert_eq!(game_ground(&w, [0.0, 0.2, 0.0]).map(|h| h.height), Some(0.0));
+        // Above the probe + 0.5: not ground.
+        assert_eq!(game_ground(&w, [0.0, -2.0, 0.0]), None);
+        // Flag bit 0: the query measures upward, so the floor 2 m above is found.
+        let up = world(&v, 2, 1, [0.0, 5.0, 0.0]);
+        assert_eq!(game_ground(&up, [0.0, -2.0, 0.0]).map(|h| h.height), Some(0.0));
+        assert_eq!(game_ground(&up, [0.0, 1.0, 0.0]).map(|h| h.height), None);
+        // Outside the +0x0c x half extent (20) the item is not tested, though its triangle is under.
+        let wide = world(&[[-40.0, 5.0, -10.0], [40.0, 5.0, -10.0], [0.0, 5.0, 30.0]], 2, 0, [0.0, 5.0, 0.0]);
+        assert!(game_ground(&wide, [19.0, 0.2, 0.0]).is_some());
+        assert_eq!(game_ground(&wide, [21.0, 0.2, 0.0]), None);
+        // One-sided strip: start winding 0 accepts the (all edges >= 0) order only.
+        let cw = world(&v, 0, 0, [0.0, 5.0, 0.0]);
+        let ccw = world(&[v[0], v[2], v[1]], 0, 0, [0.0, 5.0, 0.0]);
+        assert_eq!(cw.len() + ccw.len(), 2);
+        assert_ne!(game_ground(&cw, [0.0, 0.2, 0.0]).is_some(), game_ground(&ccw, [0.0, 0.2, 0.0]).is_some());
     }
 }

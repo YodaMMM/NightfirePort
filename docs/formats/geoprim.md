@@ -78,11 +78,11 @@ empty). Which batch an entry draws, and its colours, is in §4b.
 | `V4-8` ×1, one to three | strip-end list: bytes in order, 0-terminated, each = 3 × the first vertex of a new strip; the last strip ends at the count |
 | `V3-16` usn | position = (u16 − 0x8000) / 256 |
 | `V3-32` (masked; mask leaves x/y/z as data) | position as floats (sky, water, some windows and lights) |
-| `V4-32` unmasked at VU 0x36, num = the count | position as floats (x, y, z, w = 1.0f): MIS11's `AnthWater`, `Siloroom1Water`, `Tanker_Ocean1`/`1b`/`1c`/`2b`/`3` — the slot the `EndCoast_Ocean_*` water fills with `V3-16` (colours at VU 0x7a in both, no UVs in either) |
+| `V4-32` unmasked at VU 0x36, num = the count | position as floats (x, y, z, w = 1.0f): MIS11's `AnthWater`, `Siloroom1Water`, `Tanker_Ocean*` — the slot the `EndCoast_Ocean_*` water fills with `V3-16` (colours at VU 0x7a in both; no UVs on the disc: the microcode makes them, §4d) |
 | `V2-16` usn / `V2-32` | UV, same rule / floats |
 | `V3-8` masked, usn | per-vertex colour R, G, B (§4b) |
 | `V4-32` (other addresses), second `V3`/`V2` sets | not decoded (layout depends on the microcode) |
-| `V4-32` at VU 0x10 after strip lists at 0x0d..0x0f | not decoded: also (x, y, z, 1.0) positions, but the strip-list bytes are not multiples of 3 (`Rock_Collapse`: 14, 30, 40 … for 54 vertices), so that layout's strip unit is unknown (`Rock_Collapse`, `JA_SAL`, `JB_SAL`, `LookOutTowerExplosion`: 22 chains on MIS11/13A/13B/3) |
+| `V4-32` at VU 0x10 after strip lists at 0x0d..0x0f, `V4-8` at VU 0x80 | the `BondGouraud` layout (§4c): positions (x, y, z, 1.0), RGBA colours, no UVs, strip list in units of **2** |
 
 Proof of the rules: the /256 rule reproduces each article's `Base` box to 1/256 (e.g.
 `S12_RiverBnk_n_Road_00` −14.0078..14.207 × −3.5..4.5 × −30.0078..30.0078); every strip-list byte
@@ -92,11 +92,11 @@ strips span v = 0..1. With the placements of §2 and the draw chains of §4b (te
 | track | placements (unresolved) | strips | triangles | road nodes | surface within 1 m (own-batch reading) |
 |---|---|---|---|---|---|
 | MIS01 paris | 2552 (86) | 60,327 | 257,412 | 880 | 806 (772) |
-| MIS11 underwater | 1958 (107) | 40,307 | 281,672 | 136 | 0 (3) (open water) |
+| MIS11 underwater | 1958 (107) | 40,365 | 281,898 | 136 | 0 (3) (open water) |
 | MIS13A | 3021 (76) | 55,963 | 325,807 | 88 | 88 (78) |
 | MIS13B | 1412 (24) | 22,347 | 121,974 | 56 | 50 (46) |
 | MIS13C | 371 (21) | 5,657 | 32,086 | 0 | — |
-| MIS3 snow1a | 3689 (65) | 61,842 | 283,733 | 348 | 336 (307) |
+| MIS3 snow1a | 3689 (65) | 61,862 | 283,773 | 348 | 336 (307) |
 | MIS4 snow2a | 3331 (45) | 43,977 | 184,494 | 440 | 419 (272) |
 | RACE snow2a | 3314 (45) | 43,421 | 180,393 | 345 | 332 (198) |
 
@@ -137,11 +137,11 @@ stored in 0x36858 itself (60 vertices) is called by the next entry's list. Proof
 | track | `Colours` lists | match chain counts | match own counts | models with a box | chain inside box | own inside box |
 |---|---|---|---|---|---|---|
 | MIS01 | 1357 | 1357 | 81 | 1890 | 1871 | 394 |
-| MIS11 | 314 | 304 | 0 | 727 | 716 | 254 |
+| MIS11 | 314 | 309 | 0 | 727 | 715 | 251 |
 | MIS13A | 743 | 743 | 24 | 1283 | 1232 | 424 |
 | MIS13B | 851 | 851 | 86 | 2105 | 1834 | 472 |
 | MIS13C | 237 | 237 | 36 | 709 | 616 | 244 |
-| MIS3 | 762 | 744 | 8 | 1823 | 1750 | 754 |
+| MIS3 | 762 | 752 | 8 | 1823 | 1748 | 751 |
 | MIS4 | 1142 | 1136 | 94 | 1889 | 1792 | 452 |
 | RACE | 1142 | 1136 | 106 | 1886 | 1789 | 448 |
 
@@ -165,20 +165,73 @@ descriptor labelled `pb01_10`). The sheet name is the descriptor's +4 word (≤ 
 equals the `TEX0::` tail on every `{T0@…}` descriptor, while the per-part `{T0|…}` descriptors'
 tails are export labels (`pb01_1` → sheet `pb02`) [D].
 
+## 4c. Untextured Gouraud batches: strip unit 2 [M + D]
+
+The strip-list unit is the microcode's output size per vertex, not a fixed 3. Every track
+microcode except one writes ST, RGBAQ, XYZ2 (3 quadwords); `BondGouraud0__EAGLMicroCode`
+(`MISC.VIV` `data\render\bondrm.o`, 125 instructions, disassembled with `tools/vu1dis.py`)
+writes RGBA + XYZ (2 quadwords) per vertex from VU 0xf1, reading positions at VU 0x10 and RGBA at
+VU 0x80, and sets the ADC bit at `0xf2 + b` and `0xf4 + b` for each strip-list byte b of VU
+0x0d..0x0f. So `b = 2 × vertex index`. Its render lists carry the state `texture=off`.
+
+The microcode in force is the render list's op 1 word (relocated against
+`<method>0__EAGLMicroCode`, `ModelIndex::entry_microcode`); a list without op 1 keeps the
+previous one. Over all 8 tracks [D, `gouraud_and_water_batches_decode_as_their_microcode_draws_them`]:
+exactly 22 entries load `BondGouraud0` and they are exactly the `V4-32`-at-0x10 batches; every
+one of their lists fits 2 per vertex and none fits 3; every other entry's list fits 3. The
+colour upload sits in the part's colour call (before the positions) or in the batch. Decoding
+them adds 58 strips to MIS11 (`Rock_Collapse`, fish, shark, bubbles) and 20 to MIS3
+(`LookOutTowerExplosion`, `PBED_Entrance_Wall`, `NOED_s1shack02`); JA_SAL / JB_SAL / JB_FOD are
+not placed through `in#0`. The `Colours` lists confirm the counts (MIS11 304 → 309 matching, MIS3
+744 → 752).
+
+## 4d. Water UVs: made by the microcode [M]
+
+The water articles (MIS11: `AnthWater`, `BomberWater`, `Siloroom1Water`, `Tanker_Ocean*`,
+`EndCoast_Ocean_Suf*`, 54 entries, 89 placed strips) load `MatBondWater0` (float positions) or
+`MatBondWaterPacked0` (16-bit positions, converted on VU1 as raw/256 − 128, the /256 rule). Their
+render lists name four textures (`wat4`, then three more of `wat1..wat4`) and upload
+`gpModelViewProjectionMatrix` (VU 1), `gpModelMatrix` (5), the four texture register sets
+(9, 0x10, 0x17, 0x1e), `WaterRotToSun` (0x25), `SimStep` (0x29), `UVScale1..4` (0x2a..0x2d),
+`UVScroll1..4` (0x2e..0x31), `CameraPos` (0x32), state `name=watermap`.
+
+The microcode draws the batch four times. Pass i kicks texture set i, then for each vertex:
+
+    w    = position · gpModelMatrix            (world position; T = the matrix translation)
+    base = (w.x·S.x − trunc(T.x·S.x),  w.z·S.y − trunc(T.z·S.y))     S = UVScale_i
+    uv   = base + frac(Scroll_i · SimStep.x),  ST = uv · Q
+
+The whole part taken off `base` only keeps the numbers small. The game side
+[`FUN_001a8930` resolves the names; `FUN_001f03e0` sets the values]: `UVScale_i` = (0.01, 0.01)
+for all four layers; `UVScroll` = (0.01, 0.01), (−0.01, 0.01), (−0.01, −0.01), (0.01, −0.01);
+`SimStep.x` = `DAT_00334000` = the integer counter `DAT_00339f54` as a float (`FUN_001d1ef8`).
+The water object's update method is empty, so scale and scroll stay at these values; only the
+debug tuners "Water scale X/Y", "Water scroll U/V" change them. Exposed as
+`geoprim::WaterLayers` (`uv(layer, world, origin, sim_step)`, `WATER_UV_SCALE`,
+`WATER_UV_SCROLL`). `track_geometry` fills each water strip's `uvs` with layer 0 at SimStep 0.
+
+Not traced: the counter's rate (so scroll per second), how the four passes blend (alpha, colours,
+the `WaterRotToSun` / `CameraPos` terms), and the `MatBondScrollTexture*` methods other articles
+use.
+
 ## 5. Sky and ground [D]
 
 - **Ground** has no separate system: terrain, road and river banks are placed articles like any
   other (`PTSR2_*`, `MountainHill`, `River_Gorge1a`, `S12_*`, `T_s4s_*`).
-- **Sky**: the `sky*` articles (`sky01`/`sky02`, `sky01_G`/`sky02_G`, `sky01_snow2`/`sky04_snow2cloud`,
-  `skycloudlayer`) are placed through `in#0` too, with uniform scales 0.0136 (paris), 3.6-3.8
+- **Sky**: the `sky*` articles are placed through `in#0` too. Per track [D,
+  `the_traced_ground_query_agrees_at_every_start_and_each_tracks_sky_is_listed`]: MIS01 `sky01`,
+  `sky02`; MIS11 none; MIS13A `sky01`, `sky02`, `skycloudlayer`; MIS13B and MIS13C `sky01`,
+  `skycloudlayer`; MIS3 `sky01_G`, `sky02_G`; MIS4 and RACE `sky01_snow2`, `sky04_snow2cloud`.
+  They with uniform scales 0.0136 (paris), 3.6-3.8
   (jungle) and 1 (snow), and use `V3-32` positions. Placed as data says, paris's dome is ±30 units
   around (120, −7.5, 0): it is presumably drawn camera-relative by a separate pass ("Sky blend" /
   "Sky bright" strings in DRIVING.ELF), which is not traced.
 
 ## 6. Open
 
-1. The VU1 microcode (eaglrm.o) was not disassembled; the /256 scale, the strip-list unit and the
-   colour pass-through are data-proven only.
+1. The strip-list unit and the water UVs are read from the `bondrm.o` microcode (§4c, §4d); the
+   /256 scale is read from `MatBondWaterPacked0` only; the colour pass-through of the textured
+   methods is still data-proven only.
 2. MIS4/RACE coverage: with the chain reading 419/440 and 332/345 road nodes have a surface within
    1 m (was 272 and 198). The remaining gap is not examined.
 3. The sky draw rule; the texture carry-over between entries; the second UV/position sets and
