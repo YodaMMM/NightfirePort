@@ -27,3 +27,12 @@
   the 01 spawn-to-exit-with-the-contact real-damage walks; ledger + next levers are in the
   ignore messages of walkreal_07000001_live.rs, report of round 1 at docs/reports/retune-nb-01.md.
 - Setup in progress: work-slim + ISO downloads, queue worktree, build tools.
+- d1 WON: the plate-lane pocket fight re-shaped on the clear-0 probe (all east stands walled;
+  #17's head exposes from the corridor's NORTH edge (-28..-29, 15.5-16.5); the pocket-edge
+  transit crosses the guards' advanced spots — parks vary per run, the transit was the v5-v9
+  killer). The north-edge band-checked stand + the converged tap loop killed #17 in ONE head
+  tap (zero damage), the walled #2/#4 left to the plate walk (the return fire killed #4 in
+  590 ticks [L the v2 run]), exit to 07000002 at t29163, end health 46.8 [L the v3 run].
+  The v2 lesson: a lure grind on the walled guards drew them onto the unattended contact —
+  he died mid-grind and the exit fired as the escort-fail restart; the windows are gone
+  (walled = left at once).
