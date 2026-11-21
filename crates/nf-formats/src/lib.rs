@@ -16,6 +16,7 @@ pub mod gal;
 pub mod geoprim;
 pub mod disc;
 pub mod drivefx;
+pub mod driveproj;
 pub mod drive_script;
 pub mod drive_vehicle;
 pub mod driveai;
