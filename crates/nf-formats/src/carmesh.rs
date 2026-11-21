@@ -400,6 +400,11 @@ pub struct CarPart {
     pub origin: [f32; 3],
     /// The referenced `as#N`.
     pub set: u16,
+    /// `as +0x08`: the animation reference `FUN_001a30c0` tests before it plays a keyframe track
+    /// for a kind below 100 (0 = none). The file word is an `an  #N` short tag (0x616e_NNNN) on
+    /// most sets [D]; the `an` payload is 16-byte entries opening with a `qa  #N` reference. No
+    /// item on the disc has a kind below 100, so the keyframe branch never reads it [D].
+    pub anim: u32,
     /// `as +0x1d`: 2 = drawn in the car pass, other values are queued for a later pass
     /// [M FUN_001ad498] (e.g. the vanquish glass, pass 1).
     pub pass: u8,
@@ -514,6 +519,9 @@ pub fn decode_item(item: &[u8]) -> Result<([[f32; 3]; 3], [f32; 3], u8, u8, u16,
     let link = u16::from_le_bytes([item[0x0e], item[0x0f]]);
     Ok(([v(0)?, v(1)?, v(2)?], v(3)?, item[0x0c], item[0x0d], link, r as u16))
 }
+
+/// The `+0x08` word of an `as` payload: its animation reference (0 = none) [M FUN_001a30c0].
+pub fn set_anim(p: &[u8]) -> Result<u32> { u32_at(p, 8) }
 
 /// The LOD set of one `as` payload: `(pass, [(distance, sr index)])` [M FUN_001ad2e0]. A model
 /// reference that is not an `sr` short tag yields `None` for that LOD.
@@ -1362,6 +1370,7 @@ pub fn car_mesh(crp_bytes: &[u8]) -> Result<CarMesh> {
     let mut mesh = CarMesh::default();
     let mut sr: HashMap<u16, String> = HashMap::new();
     let mut sets: HashMap<u16, (u8, Vec<(f32, Option<u16>)>)> = HashMap::new();
+    let mut anims: HashMap<u16, u32> = HashMap::new();
     let mut items: Option<Record> = None;
     for r in window(&crp, &arti)? {
         let code = r.tag_code();
@@ -1386,7 +1395,9 @@ pub fn car_mesh(crp_bytes: &[u8]) -> Result<CarMesh> {
         } else if code == TAG_SR {
             sr.insert(r.instance().unwrap_or(0), cstr(crp.payload(&r)?));
         } else if code == TAG_AS {
-            sets.insert(r.instance().unwrap_or(0), decode_set(crp.payload(&r)?)?);
+            let p = crp.payload(&r)?;
+            sets.insert(r.instance().unwrap_or(0), decode_set(p)?);
+            anims.insert(r.instance().unwrap_or(0), set_anim(p)?);
         } else if code == TAG_VD {
             let p = crp.payload(&r)?;
             let n = r.count.max(0) as usize;
@@ -1428,7 +1439,8 @@ pub fn car_mesh(crp_bytes: &[u8]) -> Result<CarMesh> {
             0xfe => Attach::Skel(link.wrapping_sub(1)),
             k => Attach::Other(k, link),
         };
-        mesh.parts.push(CarPart { index: i, flags, attach, axes, origin, set, pass, lods, strips });
+        let anim = anims.get(&set).copied().unwrap_or(0);
+        mesh.parts.push(CarPart { index: i, flags, attach, axes, origin, set, pass, anim, lods, strips });
     }
     Ok(mesh)
 }
@@ -1663,7 +1675,7 @@ mod tests {
         assert_eq!((axes, origin, flags, kind, link, set), (id, [-0.75, 0.353, 1.409], 0, 0xfe, 3, 0x18));
         let (_, _, f2, _, _, s2) = decode_item(&item(mir, [0.75, 0.353, 1.409], 0x80, 0xfe, 7, 0x18)).unwrap();
         assert_eq!((f2, s2), (0x80, 0x18));
-        let part = |axes, origin, flags| CarPart { index: 0, flags, attach: Attach::Skel(2), axes, origin, set: 0x18, pass: 2, lods: vec![], strips: vec![] };
+        let part = |axes, origin, flags| CarPart { index: 0, flags, attach: Attach::Skel(2), axes, origin, set: 0x18, pass: 2, anim: 0, lods: vec![], strips: vec![] };
         let l = part(id, [-0.75, 0.353, 1.409], 0);
         let r = part(mir, [0.75, 0.353, 1.409], 0x80);
         assert_eq!(l.apply([0.1, 0.0, 0.0]), [-0.65, 0.353, 1.409]);
@@ -1686,7 +1698,7 @@ mod tests {
     #[test]
     fn the_drawn_set_follows_the_selected_draw_list() {
         let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-        let part = |index, flags| CarPart { index, flags, attach: Attach::Fixed, axes: id, origin: [0.0; 3], set: 0, pass: 2, lods: vec![], strips: vec![] };
+        let part = |index, flags| CarPart { index, flags, attach: Attach::Fixed, axes: id, origin: [0.0; 3], set: 0, pass: 2, anim: 0, lods: vec![], strips: vec![] };
         let m = CarMesh { parts: vec![part(0, 0), part(1, 1), part(2, 0)], draw_lists: vec![(1, vec![2, 1])], ..Default::default() };
         assert_eq!(m.drawn(None).iter().map(|p| p.index).collect::<Vec<_>>(), vec![0, 2]);
         assert_eq!(m.drawn(Some(1)).iter().map(|p| p.index).collect::<Vec<_>>(), vec![2]);
