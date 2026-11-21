@@ -1996,6 +1996,16 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     if let Some(a) = model_box {
         car_params.half_extents = [0, 1, 2].map(|k| (a.bbox_max[k] - a.bbox_min[k]) * 0.5);
     }
+    // The model's hull points (pass C's contact list, VU0 micro 0x1a0 [M]; drive-physics.md §12):
+    // with them a tipped car keeps steady hull contacts, so the 30-tick righting reset
+    // (FUN_00188200 +0x3e8 [M]) fires instead of the car lying on its side.
+    if let Some(h) = find_car_entry(p_stem)
+        .and_then(|((o, n), _)| iso.read_bytes(viv_base + o as u64, n as u64).ok())
+        .and_then(|raw| maybe_decompress(&raw).ok())
+        .and_then(|b| nf_formats::carmesh::hull_points(&b).ok())
+    {
+        car_params.hull = h;
+    }
     // Where the drawn model sits on that body [S: the game's render offset is not traced]: its
     // lowest vertex at the body's rest contact (`pos.y − rest height`), so the tyres touch the
     // road when the springs rest.
