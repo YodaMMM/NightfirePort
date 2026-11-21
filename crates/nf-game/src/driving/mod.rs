@@ -62,6 +62,8 @@ pub mod reset;
 pub mod sub_collide;
 // The weapon table, ammo/reload, projectiles and hit damage (FUN_0020f2b8 + the WeaponMan).
 pub mod weapons;
+// What a projectile, its explosion and the gun's bullet streaks draw (model, ribbon, lights).
+pub mod projectile_gfx;
 // The 3-D listener, pan law, impacts, landings, horns, traffic engine (DRIVING.ELF audio).
 pub mod sound_events;
 // Script streams (music / speech / NIS), the speech-ambience fader and the mix events.
