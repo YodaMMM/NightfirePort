@@ -61,3 +61,13 @@ Round 3 on the 01 spawn-to-exit-with-the-contact 00 Agent real-damage walk. Bran
 origin/master (d57c3fdac), merged origin/s/retune-nb-01-2 (af1a1dbf6) — one doc-comment conflict
 in walkreal_07000001_live.rs resolved keeping both sides' notes. Next: read retune-nb-01-2.md
 and the ignore message on walk_..._real_damage_00agent, then real-run levers.
+
+## retune-nb-01-3 (2026-11-21, end of round)
+
+The round-2 ledger's levers landed for d3 and were measured on their own real runs:
+flank_point_x_min + fight_hold_west_of + shield_boxes for d3 (the endgame walk posture), the tap
+loop joins d3 (plate-lane + pre-stairwell pocket fights), the #11 window burn cap. The d3 death
+moved t80171 -> t78420 -> t33826 -> t7568 and the refreshed ledger + next levers are in the ignore
+message. d2 green; d1 red on the merged tree by the contact-protection race (tick-identical to the
+merged base — every lever is d3-gated; the lever to extend it to the sisters is named). Report:
+docs/reports/retune-nb-01-3.md.
