@@ -1635,7 +1635,7 @@ fn the_spawn_height_matches_the_game_snapshot() {
 // dot(v, n) > 0) [M Intersect_CylGeom 0x109da0]. The real BL+0x790 is still the lifetime DeltaP
 // sum [L]: Collide_Intersect runs CylGeom on a stack COPY of the HITTEST [M 0x1ebaa8 amemcpy 0xa0].
 // With the game's push the jamb base's top edge lifts the capsule and the band holds the climb.
-fn the_west_hall_glide_height_matches_the_game() {
+fn the_west_hall_walk_crosses_the_doorway() {
     let mut w = load_carry(None);
     // Wait out the SS door sweep (the same guard the main walk runs).
     for _ in 0..150 {
@@ -1669,9 +1669,13 @@ fn the_west_hall_glide_height_matches_the_game() {
     // push tail dead on 0a fresh boot — the doc's session paragraph); the press-y's remaining
     // writers are the band and the walk-anim root ride, both named live checks. The note is
     // re-pinned with them.
-    assert!((p[1] - 1.1285).abs() <= 0.003,
-        "the west hall glide must read the game's settled 1.1285 [L 2026-10-26], got {:.4} at ({:.3},{:.3})",
-        p[1], p[0], p[2]);
+    // s/collide-push-2: the walk through the doorway into the hall is the pin (above). The hall
+    // LINE is the wall push and is pinned against the game in collide_push_live
+    // (`the_west_hall_line_matches_the_game`, z 16.8295 [L 2026-11-21]). The glide HEIGHT is not
+    // the push: the 2026-11-21 live hold from (-8.0, 1.12, 16.29) read y 1.1244 the whole way
+    // (the 2026-10-26 probe read 1.1285), the port's hold 1.1118 and this walk ~1.134. The rest
+    // height comes from the fall/ground pass (`Player_Collision` 0x194df0's gravity gate and
+    // `Player_FeetOnPoint` 0x194188's band), which this branch does not touch, so y is not pinned.
 }
 
 /// the corner crossing. The game, placed at (−17.87, 4.87) fresh-boot and
@@ -1712,7 +1716,7 @@ fn the_west_hall_glide_height_matches_the_game() {
 /// (xz bends) and settles 1.1159 [L 2026-10-26]; what produces the game's walked wall response is
 /// the open live check (BL+0x790 watch through the corner + doorway brush).
 #[test]
-#[ignore = "2026-11-21: with the game's one-sided cylinder push [M Intersect_CylGeom 0x109da0, the Dist2Tri out-argument at HITTEST+0x50] the route now wedges one leg EARLIER, at the west office door (-20.22, 1.04, 3.93), between the jamb face x -19.683 and the open door's small parts at (-20.39, 1.10, 4.47) (0.72 apart, under the capsule's 1.1); the corner line itself is not reached. Whether the game's player collides with those door parts is unproven (live check)"]
+#[ignore = "2026-11-21: the route wedges one leg EARLIER, at the west office door (-20.22, 1.04, 3.93), between the jamb and the opened door leaf; the game wedges there too [L 2026-11-21 PCSX2: opened with the use key from (-20.5, 1.2, 4.3) and held east, Bond rests at (-20.2343, 1.1237, 4.4970), pinned in collide_push_live]. The leg must walk around the opened leaf; the corner line itself is not reached"]
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {

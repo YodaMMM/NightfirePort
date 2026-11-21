@@ -60,6 +60,16 @@ impl Moving {
     /// there too]; a DynObject's live hide bit (obj+0xF0 bit 0x10, the 0x1af618:58/0x1db808:27
     /// hide writers) rides the id as `SIGHT_THROUGH_PART`. RB_Create writes obj+0xD8 directly
     /// [M 0x1d6bf0:52] and never links through Control_SetGList, so a rigid body's word is 0.
+    /// The body (cylinder) query's gate for dynamic part `n`: `None` = never picked (glist bit
+    /// 0x20 [M Collide_PickObj 0x1eae80:72-82 with the walk's HITTEST+0x98 = 0]), `Some(nopush)`
+    /// = picked, with the obj+0xF0 bit-0x40 no-push flag [M Collide_Intersect 0x1ebaa8:44-50 →
+    /// HITDATA+0x51 |= 2, Intersect_CylGeom 0x10a530-0x10a538].
+    fn body_gate(&self, n: usize) -> Option<bool> {
+        let fl = self.flags.get(n).copied().unwrap_or(0);
+        if !pick_admits(QUERY_BODY, fl) { return None; }
+        Some(fl & 0x40 != 0)
+    }
+
     fn pick_pair(&self, n: usize) -> (u32, u8) {
         let Some(&(id, _, _)) = self.last_objects.get(n) else { return (0, 0) };
         let glist = if id & 0x800_0000_0000 != 0 { 0 }
@@ -255,6 +265,10 @@ struct Geo {
     /// surface byte 0x40 exactly, e.g. 0700000c's `ventblocker_01`). Those faces stop a body only
     /// from their front side — see `body_mat`.
     oneway: Vec<bool>,
+    /// Per triangle: the game's STORED plane record (world space: n, d with n·x + d = 0), the
+    /// plane `Intersect_CylGeom` 0x109da0 hands `ASH_vecutil_Dist2Tri` 0x109770 (the record at the
+    /// leaf words + plane·2 [M disasm 0x10a1d8-0x10a1e8]). Empty / NaN = the winding plane.
+    planes: Vec<[f32; 4]>,
     objects: Vec<Object>,
     /// Static only (`chunk`): bounds over runs of consecutive `objects` (`tris` = an object index range), so a query
     /// skips whole runs. Empty = test every object.
@@ -467,6 +481,7 @@ impl Geo {
         let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
         for (w, m) in tris {
             for p in &w { for k in 0..3 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); } }
+            self.planes.push(winding_plane(&w));
             self.tris.push(w);
             self.mats.push(m);
             self.pass.push(node_pass);
@@ -493,6 +508,19 @@ impl Geo {
     /// `capsule_tri_contact` treats as one-way [M Dist2Tri 0x109770: a query point behind the
     /// face's plane returns code 99, and Intersect_CylGeom 0x109da0 skips the face].
     fn body_mat(&self, k: usize) -> u8 { if self.oneway.get(k).copied().unwrap_or(false) { 0xC0 } else { self.mats[k] } }
+
+    /// The plane the body push tests triangle `k` against: the stored record, else the winding.
+    fn plane(&self, k: usize) -> [f32; 4] {
+        match self.planes.get(k) { Some(p) if !p[3].is_nan() => *p, _ => winding_plane(&self.tris[k]) }
+    }
+
+    /// Overwrites the planes of the last `planes.len()` pushed triangles (the stored records,
+    /// already in world space).
+    fn set_tail_planes(&mut self, planes: &[[f32; 4]]) {
+        let n = self.planes.len();
+        if planes.len() > n { return; }
+        self.planes[n - planes.len()..].copy_from_slice(planes);
+    }
 
     fn bullet_pass(&self, k: usize) -> bool { self.pass[k] || self.mats[k] & 0x40 != 0 }
 
@@ -615,6 +643,8 @@ pub struct CollisionWorld {
     /// Collision triangles (object space) of every hashed glist object, for `set_dynamic`.
     shapes: std::collections::HashMap<u32, Vec<[V3; 3]>>,
     shape_mats: std::collections::HashMap<u32, Vec<u8>>,
+    /// Each shape's stored plane records (object space), keyed like `shapes`.
+    shape_planes: std::collections::HashMap<u32, Vec<[f32; 4]>>,
     /// `WldGravity.y` (0x2d8894): -9.8, or 0 on a level whose player start has param 3 == 2 [M
     /// Player_Init 0x1910f8:152-172 `Vec_Zero(&WldGravity)`]. The disc's one such start is
     /// 0700001b's.
@@ -890,28 +920,115 @@ fn cyl_game() -> bool {
 ///   no second Dist2Tri on that arm];
 /// - push only when `dot(v, n) > 0` and |v| < r, along v̂ by r − |v| (|v| = 0 → the zero vector
 ///   [M 0x10a5bc]); the spine moves before the next triangle.
+/// The winding plane of `t` (unit normal, d = −n·v0): the stand-in where no record exists.
+fn winding_plane(t: &[V3; 3]) -> [f32; 4] {
+    let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+    let l = dot(n, n).sqrt();
+    if l < 1e-12 { return [0.0, 0.0, 0.0, f32::NAN]; }
+    let n = [n[0] / l, n[1] / l, n[2] / l];
+    [n[0], n[1], n[2], -dot(n, t[0])]
+}
+
+/// An object-space plane record (n, d) moved into world space by the rigid placement `m` (rows =
+/// the basis, row 3 = the translation, the `transform` convention): n' = R·n, d' = d − n'·T.
+/// A NaN record (degenerate) stays NaN.
+fn plane_world(m: &[[f32; 4]; 4], n: V3, d: f32) -> [f32; 4] {
+    let mut o = [0f32; 3];
+    for k in 0..3 { for c in 0..3 { o[c] += n[k] * m[k][c]; } }
+    [o[0], o[1], o[2], d - (o[0] * m[3][0] + o[1] * m[3][1] + o[2] * m[3][2])]
+}
+
+/// `ASH_vecutil_Dist2Tri` 0x109770 [M]: the distance from `p` to triangle `t` against the stored
+/// plane `pl`, the closest point, and the region flags.
+/// - s = n·p + d (n raw, |n| ≈ 1 from the s16·2⁻¹⁴ record); s < 0 → flags 99, returns s.
+/// - edge k (k = 0, 1, 2) runs v[k−1] → v[k]; `(p − v[k])·(e × n) > 0` sets bit k (the VU
+///   `vopmula`/`vopmsub` pair = e × n). The loop stops once the flags reach 2 after an edge
+///   (the `do … while (k + 1 < 3 && flags < 2)` exit), so edge 2 is tested only when the first
+///   two left flags 0 or 1.
+/// - flags 0: q = p − n·s (the projection on the STORED plane); 1: closest on v0→v2; 2: closest
+///   on v1→v0 (t > 1 falls through to v0); 3: v0; 4: closest on v2→v1 (t > 1 falls through to
+///   v1); 5: v2. Each segment arm clamps t < 0 to its start, |e|² ≤ 1e-20 → its start.
+/// - returns |q − p|.
+fn game_dist2tri(p: V3, t: &[V3; 3], pl: [f32; 4]) -> (f32, V3, u16) {
+    let n = [pl[0], pl[1], pl[2]];
+    let s = dot(n, p) + pl[3];
+    if s < 0.0 { return (s, p, 99); }
+    let mut flags: u16 = 0;
+    for k in 0..3 {
+        let e = sub(t[k], t[(k + 2) % 3]);
+        let c = cross(e, n);
+        if dot(sub(p, t[k]), c) > 0.0 { flags |= 1 << k; }
+        if k < 2 && flags >= 2 { break; }
+    }
+    let seg = |from: V3, to: V3, past: V3| -> V3 {
+        let e = sub(to, from);
+        let l2 = dot(e, e);
+        if l2.abs() <= 1e-20 { return from; }
+        let u = dot(e, sub(p, from)) / l2;
+        if u > 1.0 { past } else if u < 0.0 { from } else { [from[0] + e[0] * u, from[1] + e[1] * u, from[2] + e[2] * u] }
+    };
+    let q = match flags {
+        1 => seg(t[0], t[2], t[2]),
+        2 => seg(t[1], t[0], t[0]),
+        3 => t[0],
+        4 => seg(t[2], t[1], t[1]),
+        5 => t[2],
+        6 => t[1],
+        _ => [p[0] - n[0] * s, p[1] - n[1] * s, p[2] - n[2] * s],
+    };
+    let v = sub(q, p);
+    (dot(v, v).sqrt(), q, flags)
+}
+
+/// The game's per-triangle cylinder push, [M Intersect_CylGeom 0x109da0] read with the
+/// closest-point out-argument Ghidra drops: both `ASH_vecutil_Dist2Tri` 0x109770 calls pass
+/// `t2 = HITTEST + 0x50` (disasm 0x10a2fc / 0x10a4f0 `addiu t2,s1,0x50`, s1 = the HITTEST
+/// copy), and Dist2Tri stores its closest triangle point there (0x109aa0-0x109aa4
+/// `bnel t2,zero` / `sqc2 vf3,0(t2)`). So the push arm's `v = p − HITTEST+0x50` [M
+/// 0x10a53c-0x10a548] is spine point minus the fresh closest point.
+/// - the plane is the triangle's STORED record `pl` (n raw, d), never the winding: the head-on
+///   denominator n·(B − A) (:290-302), the crossing fraction −(n·A + d)/denom (:303-320), the
+///   behind test and the interior projection inside Dist2Tri (`game_dist2tri`), and the
+///   `dot(v, n) > 0` gate (:422-431) all read it. [L 07000006, Bond held north into the post at
+///   (36.0, 46.2): he rests at z −62.6835, the record plane (n.z −0.99994, d −62.1297) plus
+///   0.55; the vertices' own plane gives −62.6792.]
+/// - query p: the spine/plane crossing clamped to [0,1] when |denom| > 0.0002, else the centroid
+///   projected onto the spine; the raw-denominator head-on cull [M :321-322];
+/// - Dist2Tri flags 99 → skip [M 0x10a33c / 0x10a528]; flags not 0 (an edge or vertex point)
+///   re-project p onto the spine on the crossing arm [M 0x10a344-0x10a3e8];
+/// - `nopush`: the node's HITDATA+0x51 bit 2 (cel+0x94 / obj+0xF0 bit 0x40, `Collide_Intersect`
+///   0x1ebaa8 disasm 0x1ebaec-0x1ebb04) routes the contact past the push arm [M 0x10a530-0x10a538
+///   `andi v0,v0,6` / `bnez → 0x10a738`]: the hit is recorded, nothing moves.
+/// - push only when `dot(v, n) > 0` and |v| < r, along v̂ by r − |v| (|v| = 0 → the zero vector
+///   [M 0x10a5bc]); the spine moves before the next triangle.
 #[allow(clippy::too_many_arguments)]
-fn cyl_game_contact(t: &[V3; 3], n: V3, a: &mut V3, b: &mut V3, r: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool) -> bool {
+fn cyl_game_contact(t: &[V3; 3], pl: [f32; 4], a: &mut V3, b: &mut V3, r: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, nopush: bool) -> bool {
+    let n = [pl[0], pl[1], pl[2]];
     let ab = sub(*b, *a);
     let denom = dot(n, ab);
-    let mut p = if denom.abs() > 0.0002 {
-        let f = (-(dot(n, sub(*a, t[0]))) / denom).clamp(0.0, 1.0);
+    let (p, dist, q, flags) = if denom.abs() > 0.0002 {
+        let s = dot(n, *a) + pl[3];
+        let f = -s / denom;
+        let f = if f >= 0.0 { if f <= 1.0 { f } else { 1.0 } } else { 0.0 };
         if (denom > 0.999 && f > 0.5) || (denom < -0.999 && f < 0.5) { return false; }
-        [a[0] + ab[0] * f, a[1] + ab[1] * f, a[2] + ab[2] * f]
+        let p0 = [a[0] + ab[0] * f, a[1] + ab[1] * f, a[2] + ab[2] * f];
+        let (dist, q, flags) = game_dist2tri(p0, t, pl);
+        let p = if flags != 0 && flags != 99 { closest_on_segment(*a, *b, q) } else { p0 };
+        (p, dist, q, flags)
     } else {
-        let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.0);
-        closest_on_segment(*a, *b, c)
+        let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) * 0.333_333_34);
+        let p = closest_on_segment(*a, *b, c);
+        let (dist, q, flags) = game_dist2tri(p, t, pl);
+        (p, dist, q, flags)
     };
-    if dot(sub(p, t[0]), n) < 0.0 { return false; }
-    let (q, on_edge) = closest_on_triangle(p, t);
-    if on_edge && denom.abs() > 0.0002 { p = closest_on_segment(*a, *b, q); }
+    if !(dist >= 0.0) || flags == 99 || nopush { return false; }
     let v = sub(p, q);
     if dot(v, n) <= 0.0 { return false; }
     let dist = dot(v, v).sqrt();
     if dist >= r { return false; }
     let push = if dist > 0.0 { let s = (r - dist) / dist; [v[0] * s, v[1] * s, v[2] * s] } else { [0.0; 3] };
     if caps_log() {
-        eprintln!("[cap] GAME cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge}",
+        eprintln!("[cap] GAME cent=({:.3},{:.3},{:.3}) q=({:.4},{:.4},{:.4}) p=({:.4},{:.4},{:.4}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) flags={flags}",
             (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
             q[0], q[1], q[2], p[0], p[1], p[2], push[0], push[1], push[2], n[0], n[1], n[2]);
     }
@@ -921,7 +1038,13 @@ fn cyl_game_contact(t: &[V3; 3], n: V3, a: &mut V3, b: &mut V3, r: f32, total: &
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, walk_flat_hold: bool, ref_v: V3) -> bool {
+    capsule_tri_contact_p(t, mat, a, b, r, grow, total, walkable, pick, top_guard, walk_flat_hold, ref_v, None, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capsule_tri_contact_p(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, walk_flat_hold: bool, ref_v: V3, plane: Option<[f32; 4]>, nopush: bool) -> bool {
     let tl = [0, 1, 2].map(|k| t[0][k].min(t[1][k]).min(t[2][k]));
     let th = [0, 1, 2].map(|k| t[0][k].max(t[1][k]).max(t[2][k]));
     let (sl, sh) = ([0, 1, 2].map(|k| a[k].min(b[k]) - grow), [0, 1, 2].map(|k| a[k].max(b[k]) + grow));
@@ -970,7 +1093,10 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // through from below; the same face crossed in the BOTTOM half (f > 0.5) is solid. Faces the
     // old |n·y| > 0.7 + top-end-side rule culled in the 0.70-0.763 band (≈45-77° slopes above the
     // capsule) are TESTED here, exactly as the game tests them.
-    if cyl_game() { return cyl_game_contact(t, n, a, b, r, total, walkable, pick); }
+    if cyl_game() {
+        let pl = match plane { Some(p) if !p[3].is_nan() => p, _ => [n[0], n[1], n[2], -dot(n, t[0])] };
+        return cyl_game_contact(t, pl, a, b, r, total, walkable, pick, nopush);
+    }
     // The previous one-sided rule stays in force until the game's cull is on (HEAD_ON_CULL_ON).
     if !HEAD_ON_CULL_ON && n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
     let ab = sub(*b, *a);
@@ -1391,6 +1517,7 @@ impl CollisionWorld {
             stat_aim_pick.push(inst.placement.flags & 0x8000 != 0);
             let pushed = stat_aim_pick.len() - 1;
             stat.push_kept(c.triangles_with_material().into_iter().map(|(t, m)| (t.map(|p| transform(&inst.matrix, p)), m)), node_pass);
+            stat.set_tail_planes(&c.triangles_with_planes().into_iter().map(|(_, _, n, d)| plane_world(&inst.matrix, n, d)).collect::<Vec<_>>());
             // The folded hurt planes' object-hit pairs (level-05-basin-floor-4): the sim
             // delivers these when the capsule contacts the run (`Level::folded_hurt` is the
             // static fold's own filter — one source, no drift).
@@ -1406,6 +1533,7 @@ impl CollisionWorld {
         // objects naturally; the key only restores that reachability in the port's hash index.
         let mut shapes: HashMap<u32, Vec<[V3; 3]>> = HashMap::new();
         let mut shape_mats: HashMap<u32, Vec<u8>> = HashMap::new();
+        let mut shape_planes: HashMap<u32, Vec<[f32; 4]>> = HashMap::new();
         let mut shape_flags: HashMap<u32, u32> = HashMap::new();
         let mut glist_flags: HashMap<u32, u32> = HashMap::new();
         for (&h, &(m, o)) in &level.by_hash {
@@ -1414,6 +1542,7 @@ impl CollisionWorld {
                 shapes.insert(h, c.triangles());
                 shape_flags.insert(h, level.maps[m].objects[o].flags);
                 shape_mats.insert(h, c.triangles_with_material().into_iter().map(|t| t.1).collect());
+                shape_planes.insert(h, c.triangles_with_planes().into_iter().map(|(_, _, n, d)| [n[0], n[1], n[2], d]).collect());
             }
         }
         // Also index by (map, object) for the anonymous (hashcode == MAX) objects — the doors the
@@ -1427,6 +1556,7 @@ impl CollisionWorld {
                         shapes.insert(key, c.triangles());
                         shape_flags.insert(key, obj.flags);
                         shape_mats.insert(key, c.triangles_with_material().into_iter().map(|t| t.1).collect());
+                        shape_planes.insert(key, c.triangles_with_planes().into_iter().map(|(_, _, n, d)| [n[0], n[1], n[2], d]).collect());
                     }
                 }
             }
@@ -1448,7 +1578,7 @@ impl CollisionWorld {
         });
         let gravity_y = if level.main_map().is_some_and(|m| level.maps[m].placements.iter()
             .any(|p| p.flags & 0xff == 0x24 && p.params.iter().any(|&(k, v)| k == 3 && v == 2))) { 0.0 } else { -9.8 };
-        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, gravity_y, shape_flags, glist_flags, scope, aim_pick: stat_aim_pick, hurt_parts: Default::default(), stat_hurts, hurt_hits: Default::default() }
+        CollisionWorld { stat, missile, dynamic: Default::default(), shapes, shape_mats, shape_planes, gravity_y, shape_flags, glist_flags, scope, aim_pick: stat_aim_pick, hurt_parts: Default::default(), stat_hurts, hurt_hits: Default::default() }
     }
 
     /// The glist flags word (celglist+0x44) of the object a hash resolves to — the port's
@@ -1617,7 +1747,7 @@ impl CollisionWorld {
     pub fn from_triangles(tris: Vec<[V3; 3]>) -> CollisionWorld {
         let mut stat = Geo::default();
         stat.push(tris.into_iter().map(|t| (t, 0)));
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new(), hurt_parts: Default::default(), stat_hurts: Default::default(), hurt_hits: Default::default() }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), shape_planes: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new(), hurt_parts: Default::default(), stat_hurts: Default::default(), hurt_hits: Default::default() }
     }
 
     /// One object holding these world-space triangles with surface bytes and per-triangle
@@ -1627,7 +1757,7 @@ impl CollisionWorld {
         let pass = tris.iter().map(|(_, _, p)| *p).collect::<Vec<_>>();
         stat.push_flags(tris.into_iter().map(|(t, m, _)| (t, m)), false);
         for (k, p) in pass.into_iter().enumerate() { stat.pass[k] = p; }
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new(), hurt_parts: Default::default(), stat_hurts: Default::default(), hurt_hits: Default::default() }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), shape_planes: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new(), hurt_parts: Default::default(), stat_hurts: Default::default(), hurt_hits: Default::default() }
     }
 
     /// `WldGravity.y`, see the field.
@@ -1694,12 +1824,19 @@ impl CollisionWorld {
                 let (start, end) = (po.tris.start, po.tris.end);
                 geo.tris.extend_from_slice(&d.geo.tris[start..end]);
                 geo.mats.extend_from_slice(&d.geo.mats[start..end]);
+                geo.planes.extend_from_slice(&d.geo.planes[start..end]);
                 geo.pass.extend(std::iter::repeat(pane_part).take(end - start));
                 geo.oneway.extend_from_slice(&d.geo.oneway[start..end.min(d.geo.oneway.len())]);
                 geo.oneway.resize(geo.tris.len(), false);
                 geo.objects.push(Object { lo: po.lo, hi: po.hi, tris: geo.tris.len() - (end - start)..geo.tris.len() });
             } else {
+                let before = geo.tris.len();
                 geo.push_flags(t.iter().enumerate().map(|(k, t)| (t.map(|p| transform(&m, p)), mats.and_then(|v| v.get(k).copied()).unwrap_or(0))), pane_part);
+                if let Some(pl) = self.shape_planes.get(&h) {
+                    if geo.tris.len() - before == pl.len() {
+                        geo.set_tail_planes(&pl.iter().map(|q| plane_world(&m, [q[0], q[1], q[2]], q[3])).collect::<Vec<_>>());
+                    }
+                }
             }
             if geo.objects.len() > n { movers.push((id, d.last.get(&id).copied().unwrap_or(m), m)); last_objects.push((id, h, m)); flags.push(self.shape_flags.get(&h).copied().unwrap_or(0)); }
         }
@@ -1779,11 +1916,22 @@ impl CollisionWorld {
     /// The actor-capsule neighbourhood: static geometry MINUS the 0x1000 missile cage (the game's
     /// actor queries skip those nodes [M Collide_Pick 0x1eb320:0x1eb480-0x1eb49c]), dynamic objects included.
     fn near_actor(&self, lo: V3, hi: V3, mut f: impl FnMut(&[V3; 3], u8)) {
+        self.near_actor_p(lo, hi, |t, m, _, _| f(t, m));
+    }
+
+    /// `near_actor` with each triangle's stored plane and the node's no-push flag (static: the
+    /// placement's glist bit 0x40 = cel+0x94; dynamic: `Moving::body_gate`, which also drops the
+    /// never-picked bit-0x20 parts).
+    fn near_actor_p(&self, lo: V3, hi: V3, mut f: impl FnMut(&[V3; 3], u8, [f32; 4], bool)) {
         let dynamic = self.dynamic.read().unwrap();
-        for g in [&self.stat, &dynamic.geo] {
-            for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { f(&g.tris[k], g.body_mat(k)); }
-            }
+        for o in overlapping(&self.stat, lo, hi) {
+            for k in o.tris.clone() { f(&self.stat.tris[k], self.stat.body_mat(k), self.stat.plane(k), self.stat.pass[k]); }
+        }
+        let g = &dynamic.geo;
+        for (oi, o) in g.objects.iter().enumerate() {
+            if (0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) { continue; }
+            let Some(nopush) = dynamic.body_gate(oi) else { continue };
+            for k in o.tris.clone() { f(&g.tris[k], g.body_mat(k), g.plane(k), nopush); }
         }
     }
 
@@ -2068,14 +2216,14 @@ impl CollisionWorld {
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
         let stat = &self.stat;
-        let mut test = |t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, total: &mut V3, walkable: &mut bool, pick: &mut bool| {
-                capsule_tri_contact(t, mat, a, b, r, grow, total, walkable, pick, top_guard, walk_flat_hold, ref_v);
+        let mut test = |t: &[V3; 3], mat: u8, pl: [f32; 4], nopush: bool, a: &mut V3, b: &mut V3, total: &mut V3, walkable: &mut bool, pick: &mut bool| {
+                capsule_tri_contact_p(t, mat, a, b, r, grow, total, walkable, pick, top_guard, walk_flat_hold, ref_v, Some(pl), nopush);
         };
         for r in runs {
             let o = &stat.objects[r as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
                 let before = total;
-                for k in o.tris.clone() { test(&stat.tris[k], stat.body_mat(k), &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
+                for k in o.tris.clone() { test(&stat.tris[k], stat.body_mat(k), stat.plane(k), stat.pass[k], &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
                 // The object-hit log (level-05-basin-floor-4): a run whose contact moved the
                 // push accumulator is the collide pass's hit — the folded hurt planes deliver
                 // their damage through it (the sim maps the push ordinal via `stat_hurts`).
@@ -2094,8 +2242,9 @@ impl CollisionWorld {
         for (oi, o) in dynamic.geo.objects.iter().enumerate() {
             if (0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) { continue; }
             let id = dynamic.movers[oi].0;
+            let Some(nopush) = dynamic.body_gate(oi) else { continue };
             let before = total;
-            for k in o.tris.clone() { test(&dynamic.geo.tris[k], dynamic.geo.body_mat(k), &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
+            for k in o.tris.clone() { test(&dynamic.geo.tris[k], dynamic.geo.body_mat(k), dynamic.geo.plane(k), nopush, &mut a, &mut b, &mut total, &mut walkable, &mut pick); }
             if id & HURT_PART != 0 && total != before { self.hurt_hits.lock().unwrap().push(id); }
         }
         (total, walkable)
@@ -2147,7 +2296,7 @@ impl CollisionWorld {
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.body_mat(k), &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact_p(&stat.tris[k], stat.body_mat(k), &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v, Some(stat.plane(k)), stat.pass[k]); }
             }
         }
         total
@@ -2188,12 +2337,15 @@ impl CollisionWorld {
         for run in runs {
             let o = &stat.objects[run as usize];
             if !(0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) {
-                for k in o.tris.clone() { capsule_tri_contact(&stat.tris[k], stat.body_mat(k), &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v); }
+                for k in o.tris.clone() { capsule_tri_contact_p(&stat.tris[k], stat.body_mat(k), &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v, Some(stat.plane(k)), stat.pass[k]); }
             }
         }
-        for g in [&dynamic.geo] {
-            for o in overlapping(g, lo, hi) {
-                for k in o.tris.clone() { capsule_tri_contact(&g.tris[k], g.body_mat(k), &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v); }
+        {
+            let g = &dynamic.geo;
+            for (oi, o) in g.objects.iter().enumerate() {
+                if (0..3).any(|k| o.hi[k] < lo[k] || o.lo[k] > hi[k]) { continue; }
+                let Some(nopush) = dynamic.body_gate(oi) else { continue };
+                for k in o.tris.clone() { capsule_tri_contact_p(&g.tris[k], g.body_mat(k), &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v, Some(g.plane(k)), nopush); }
             }
         }
         // dot2 pass-global [M 0x10a66c-0x10a6a0; the collapse argument in the doc above]: the
@@ -2212,8 +2364,8 @@ impl CollisionWorld {
         let mut lo = [0f32; 3];
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
-        self.near_actor(lo, hi, |t, mat| {
-            capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v);
+        self.near_actor_p(lo, hi, |t, mat, pl, nopush| {
+            capsule_tri_contact_p(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, false, false, ref_v, Some(pl), nopush);
         });
         pick && pick_ref_y < b_pre_y
     }
@@ -3222,8 +3374,8 @@ impl CollisionWorld {
         let mut lo = [0f32; 3];
         let mut hi = [0f32; 3];
         for k in 0..3 { lo[k] = a[k].min(b[k]) - grow; hi[k] = a[k].max(b[k]) + grow; }
-        self.near_actor(lo, hi, |t, mat| {
-                capsule_tri_contact(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, walk_flat_hold, ref_v);
+        self.near_actor_p(lo, hi, |t, mat, pl, nopush| {
+                capsule_tri_contact_p(t, mat, &mut a, &mut b, r, grow, &mut total, &mut walkable, &mut pick, top_guard, walk_flat_hold, ref_v, Some(pl), nopush);
         });
         (total, walkable)
     }
@@ -3729,6 +3881,61 @@ fn closest_on_triangle(p: V3, t: &[V3; 3]) -> (V3, bool) {
 mod tests {
     use super::*;
 
+    /// `ASH_vecutil_Dist2Tri` 0x109770's region choice is not the exact closest point [M]: the edge
+    /// tests run v2→v0, v0→v1, v1→v2 against `e × n`, and a point outside the first two edges gets
+    /// flags 3 = vertex v0 outright (the `switch` case 3), whatever the angle there. With an
+    /// obtuse v0 the true closest point lies on the v0-v2 edge; the game takes v0.
+    #[test]
+    fn dist2tri_takes_the_vertex_on_flags_3_like_the_game() {
+        let t = [[0.0, 0.0, 0.0], [-2.0, 0.0, 0.5], [2.0, 0.0, 0.5]];
+        let pl = winding_plane(&t);
+        assert!(pl[1] > 0.99, "the triangle faces +y");
+        let p = [1.0, 0.1, -0.5];
+        let (d, q, flags) = game_dist2tri(p, &t, pl);
+        assert_eq!(flags, 3, "outside the v2→v0 and v0→v1 edges");
+        assert_eq!(q, t[0], "case 3 takes v0");
+        assert!((d - (1.0f32 + 0.01 + 0.25).sqrt()).abs() < 1e-6);
+        let (exact, _) = closest_on_triangle(p, &t);
+        assert!(sub(exact, t[0]).iter().any(|c| c.abs() > 0.1), "the exact closest point is on the edge, not v0: {exact:?}");
+        // Behind the stored plane: flags 99 and the signed plane distance.
+        let (s, _, f) = game_dist2tri([0.0, -0.2, 0.3], &t, pl);
+        assert_eq!(f, 99);
+        assert!((s + 0.2).abs() < 1e-6);
+    }
+
+    /// The node's no-push bit [M Collide_Intersect 0x1ebaa8 disasm 0x1ebaec-0x1ebb04: cel+0x94 /
+    /// obj+0xF0 bit 0x40 → HITDATA+0x51 |= 2; Intersect_CylGeom 0x10a530-0x10a538 `andi 6` → the
+    /// hit is recorded past the push arm]: the same contact pushes without the bit and not with it.
+    #[test]
+    fn a_pass_flagged_node_never_pushes_the_cylinder() {
+        let wall = [[-2.0, -1.0, 0.0], [2.0, -1.0, 0.0], [0.0, 3.0, 0.0]];
+        let pl = winding_plane(&wall);
+        let push = |nopush: bool| {
+            let (mut a, mut b) = ([0.0, 0.275, 0.3], [0.0, -0.55, 0.3]);
+            let (mut total, mut walkable, mut pick) = ([0f32; 3], false, false);
+            cyl_game_contact(&wall, pl, &mut a, &mut b, 0.55, &mut total, &mut walkable, &mut pick, nopush);
+            total
+        };
+        assert!((push(false)[2] - 0.25).abs() < 1e-5, "an ordinary node pushes out to r");
+        assert_eq!(push(true), [0.0; 3], "a bit-0x40 node records the hit and pushes nothing");
+    }
+
+    /// The push reads the triangle's STORED plane, not its vertices' plane [L 07000006 post: the
+    /// game rests Bond on the record plane + r, see collide_push_live]. A record 0.0043 in front
+    /// of the vertices moves the rest point out by the same 0.0043.
+    #[test]
+    fn the_push_rests_on_the_stored_plane() {
+        let wall = [[-2.0, -1.0, 0.0], [2.0, -1.0, 0.0], [0.0, 3.0, 0.0]];
+        let rest = |pl: [f32; 4]| {
+            let (mut a, mut b) = ([0.0, 0.275, 0.3], [0.0, -0.55, 0.3]);
+            let (mut total, mut walkable, mut pick) = ([0f32; 3], false, false);
+            cyl_game_contact(&wall, pl, &mut a, &mut b, 0.55, &mut total, &mut walkable, &mut pick, false);
+            a[2]
+        };
+        assert!((rest([0.0, 0.0, 1.0, 0.0]) - 0.55).abs() < 1e-6);
+        assert!((rest([0.0, 0.0, 1.0, -0.0043]) - 0.5543).abs() < 1e-6, "the record plane sits at z 0.0043");
+    }
+
     /// The game's cylinder push is one-sided [M Intersect_CylGeom 0x109da0: Dist2Tri 0x109770
     /// flags 99 for a query point behind the plane → skip (0x10a33c / 0x10a528), and the push arm
     /// needs `dot(p − closest, n) > 0` (0x10a548-0x10a570) with the closest point the Dist2Tri
@@ -3824,9 +4031,9 @@ mod tests {
 
     fn world(tris: Vec<[V3; 3]>) -> CollisionWorld {
         let n = tris.len();
-        let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], oneway: vec![false; n], groups: Vec::new(), owners: Vec::new(), grid: None,
+        let stat = Geo { mats: vec![0; n], tris, objects: vec![Object { lo: [-10.0; 3], hi: [10.0; 3], tris: 0..n }], oneway: vec![false; n], planes: Vec::new(), groups: Vec::new(), owners: Vec::new(), grid: None,
             pass: vec![false; n] };
-        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new(), hurt_parts: Default::default(), stat_hurts: Default::default(), hurt_hits: Default::default() }
+        CollisionWorld { stat, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), shape_planes: Default::default(), gravity_y: -9.8, shape_flags: Default::default(), glist_flags: Default::default(), scope: None, aim_pick: Vec::new(), hurt_parts: Default::default(), stat_hurts: Default::default(), hurt_hits: Default::default() }
     }
 
     /// fix-safe08b: the straddle walk. A wall assigned to an exterior cell with NO portal from the
@@ -3865,8 +4072,8 @@ mod tests {
             }
         }
         let mk = |graph: ScopeGraph, cells: Vec<Vec<u32>>| CollisionWorld {
-            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), oneway: stat.oneway.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
-            missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
+            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), oneway: stat.oneway.clone(), planes: stat.planes.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
+            missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), shape_planes: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
             aim_pick: Vec::new(),
             hurt_parts: Default::default(),
@@ -3897,7 +4104,7 @@ mod tests {
         for t in tri { stat2.push(std::iter::once((t, 0xd))); }
         stat2.chunk(16);
         let w3 = CollisionWorld {
-            stat: stat2, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
+            stat: stat2, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), shape_planes: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph: ScopeGraph { cells: vec![([-8.0; 3], [8.0; 3])], portals: Vec::new(), room: vec![true] }, cells: vec![vec![0]], always: Vec::new() }),
             aim_pick: Vec::new(),
             hurt_parts: Default::default(),
@@ -3941,8 +4148,8 @@ mod tests {
             }
         }
         let mk = |graph: ScopeGraph, cells: Vec<Vec<u32>>| CollisionWorld {
-            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), oneway: stat.oneway.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
-            missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
+            stat: Geo { tris: stat.tris.clone(), mats: stat.mats.clone(), oneway: stat.oneway.clone(), planes: stat.planes.clone(), objects: stat.objects.clone(), groups: Vec::new(), owners: Vec::new(), grid: None, pass: stat.pass.clone() },
+            missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), shape_planes: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph, cells, always: always.clone() }),
             aim_pick: Vec::new(),
             hurt_parts: Default::default(),
@@ -3970,7 +4177,7 @@ mod tests {
         for t in card { stat3.push(std::iter::once((t, 0x0au8))); }
         stat3.chunk(16);
         let w3 = CollisionWorld {
-            stat: stat3, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
+            stat: stat3, missile: Geo::default(), dynamic: Default::default(), shapes: Default::default(), shape_mats: Default::default(), shape_planes: Default::default(), gravity_y: -9.8, shape_flags: Default::default(),
             scope: Some(ScopeData { graph: ScopeGraph { cells: vec![([-8.0; 3], [8.0; 3])], portals: Vec::new(), room: vec![true] }, cells: vec![vec![0, 1]], always: Vec::new() }),
             aim_pick: Vec::new(),
             hurt_parts: Default::default(),
