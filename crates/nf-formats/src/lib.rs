@@ -44,6 +44,7 @@ pub mod sha256;
 pub mod symfile;
 pub mod texture;
 pub mod vag;
+pub mod trackstart;
 pub mod tuning;
 pub mod vif;
 pub mod weapon;

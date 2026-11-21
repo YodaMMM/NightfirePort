@@ -19,7 +19,7 @@ use nf_formats::iso9660::IsoImage;
 /// MIS01/MIS3/MIS4/RACE — §4b).
 const COUNTS: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
     ("MIS01", 2552, 86, 60327, 257412, 880, 806),
-    ("MIS11", 1958, 107, 40275, 281548, 136, 0),
+    ("MIS11", 1958, 107, 40307, 281672, 136, 0),
     ("MIS13A", 3021, 76, 55963, 325807, 88, 88),
     ("MIS13B", 1412, 24, 22347, 121974, 56, 50),
     ("MIS13C", 371, 21, 5657, 32086, 0, 0),
@@ -301,7 +301,7 @@ fn every_texture_a_track_names_is_in_its_sheets() {
 /// batches, models whose chain lies in the box, models whose own batches do, coloured strips).
 const CHAIN: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
     ("MIS01", 1357, 1357, 81, 1871, 394, 59950),
-    ("MIS11", 314, 304, 0, 716, 266, 40738),
+    ("MIS11", 314, 304, 0, 716, 254, 40802),
     ("MIS13A", 743, 743, 24, 1232, 424, 27314),
     ("MIS13B", 851, 851, 86, 1834, 472, 28578),
     ("MIS13C", 237, 237, 36, 616, 244, 12124),
@@ -368,4 +368,114 @@ fn the_draw_chain_not_the_entry_object_holds_each_models_geometry_and_colours() 
         got.push((viv, lists, chain_ok, own_ok, box_chain, box_own, coloured));
     }
     assert_eq!(got, CHAIN.to_vec());
+}
+
+/// MIS11's seven water articles whose draw chains carry their positions as unmasked `V4-32` floats
+/// (x, y, z, w = 1.0) at VU 0x36 — the slot the `EndCoast_Ocean_*` water fills with `V3-16`, colours
+/// at VU 0x7a in both [D]. Before the `V4-32` position rule they decoded to no strips at all. Pinned:
+/// (article, strips of its first placement, texture); every vertex lies in the article's `Base` box.
+const MIS11_WATER: &[(&str, usize, &str)] = &[
+    ("AnthWater", 3, "wat4"),
+    ("Siloroom1Water", 3, "wat4"),
+    ("Tanker_Ocean1", 3, "wat4"),
+    ("Tanker_Ocean1b", 5, "wat4"),
+    ("Tanker_Ocean1c", 4, "wat4"),
+    ("Tanker_Ocean2b", 7, "wat4"),
+    ("Tanker_Ocean3", 7, "wat4"),
+];
+
+#[test]
+fn mis11_float_position_water_decodes_inside_its_base_box() {
+    use nf_formats::crp_mesh::TrackModule;
+    use nf_formats::geoprim::{map_placements, part_models, ModelIndex};
+    let Ok(path) = std::env::var("NF_ISO") else { eprintln!("skip: NF_ISO not set"); return };
+    let iso = IsoImage::open(&path).expect("open NF_ISO");
+    let Some(dec) = track_crp(&iso, "MIS11") else { eprintln!("skip: no /DRIVING/ extents in this image"); return };
+    let crp = Crp::parse(&dec).unwrap();
+    let g = track_geometry(&dec).unwrap();
+    let module = TrackModule::load(&crp).unwrap();
+    let ix = ModelIndex::new(&module).unwrap();
+    let parts = part_models(&crp).unwrap();
+    let placements = map_placements(&crp).unwrap();
+    let boxes: HashMap<String, ([f32; 3], [f32; 3])> =
+        crp.track_articles().unwrap().into_iter().map(|a| (a.name, (a.bbox_min, a.bbox_max))).collect();
+    let mut got = Vec::new();
+    for &(article, ..) in MIS11_WATER {
+        let p = placements.iter().find(|p| p.article == article).unwrap_or_else(|| panic!("{article}: not placed"));
+        let strips: Vec<&WorldStrip> = g.strips.iter().filter(|s| s.placement == p.index).collect();
+        let sym = ix.model_symbol(&parts[&(p.article.clone(), p.part)]).unwrap();
+        let local = ix.model_strips(sym).unwrap();
+        let (lo, hi) = boxes[article];
+        let inside = local.iter().flat_map(|s| s.positions.iter()).all(|v| (0..3).all(|k| v[k] >= lo[k] - 1.0 / 128.0 && v[k] <= hi[k] + 1.0 / 128.0));
+        let verts: usize = local.iter().map(|s| s.positions.len()).sum();
+        let coloured = local.iter().all(|s| s.colors.len() == s.positions.len());
+        eprintln!("{article}: {} strips, {verts} vertices, inside box {inside}, coloured {coloured}, tex {:?}, box {lo:?}..{hi:?}", strips.len(), strips.first().and_then(|s| s.texture.clone()));
+        assert!(inside && coloured && verts > 0, "{article}");
+        got.push((article, strips.len(), strips.first().and_then(|s| s.texture.clone()).unwrap_or_default()));
+    }
+    let want: Vec<_> = MIS11_WATER.iter().map(|&(a, n, t)| (a, n, t.to_string())).collect();
+    assert_eq!(got, want);
+}
+
+/// The player start [M DRIVING.ELF, nf_formats::trackstart]: the one `Trgr` trigger per track that
+/// carries the `EStartMission` (0x16) action; the car goes to its x/z at the ground + 1.0, facing
+/// its `+0x30` direction. Pinned per track: (trigger index, ground height under the marker,
+/// yaw in degrees). The checks are independent data: the collision world (`CDat`) and the decoded
+/// render geometry both have a surface just under the start.
+const SPAWN: &[(&str, usize, f32, f32)] = &[
+    ("MIS01", 684, -7.601536, -46.0),
+    ("MIS11", 29, 1.1834754, 25.0),
+    ("MIS13A", 28, 0.00078201294, 0.0),
+    ("MIS13B", 67, -185.80664, 137.0),
+    ("MIS13C", 16, -588.21674, 59.0),
+    ("MIS3", 214, 10.612198, 62.0),
+    ("MIS4", 252, -0.9653802, 180.0),
+    ("RACE", 212, -0.3942541, 178.0),
+];
+
+#[test]
+fn every_track_starts_on_a_surface_at_its_start_mission_trigger() {
+    use nf_formats::trackstart::{map_triggers, track_spawn, ACTION_START_MISSION};
+    let Ok(path) = std::env::var("NF_ISO") else { eprintln!("skip: NF_ISO not set"); return };
+    let iso = IsoImage::open(&path).expect("open NF_ISO");
+    if track_crp(&iso, "MIS01").is_none() {
+        eprintln!("skip: no /DRIVING/ extents in this image");
+        return;
+    }
+    let mut got = Vec::new();
+    for &(viv, ..) in COUNTS {
+        let dec = track_crp(&iso, viv).unwrap();
+        let crp = Crp::parse(&dec).unwrap();
+        let tris = crp.extract_collision_tris().unwrap();
+        let trig = map_triggers(&crp).unwrap();
+        let starts = trig.iter().filter(|t| t.actions.iter().any(|a| a.id == ACTION_START_MISSION)).count();
+        let s = track_spawn(&crp, &tris).unwrap();
+        let g = track_geometry(&dec).unwrap();
+        let grid = Grid::new(&g.strips);
+        let render: Vec<f32> = grid.heights(s.pos[0], s.pos[2]).into_iter().filter(|h| *h <= s.pos[1] + 0.5).collect();
+        let render_top = render.iter().copied().fold(f32::MIN, f32::max);
+        let arts: Vec<&str> = g.strips.iter().filter(|w| w.triangles().any(|t| {
+            let d = (t[1][2] - t[2][2]) * (t[0][0] - t[2][0]) + (t[2][0] - t[1][0]) * (t[0][2] - t[2][2]);
+            if d.abs() < 1e-9 { return false; }
+            let l1 = ((t[1][2] - t[2][2]) * (s.pos[0] - t[2][0]) + (t[2][0] - t[1][0]) * (s.pos[2] - t[2][2])) / d;
+            let l2 = ((t[2][2] - t[0][2]) * (s.pos[0] - t[2][0]) + (t[0][0] - t[2][0]) * (s.pos[2] - t[2][2])) / d;
+            l1 >= 0.0 && l2 >= 0.0 && l1 + l2 <= 1.0
+        })).map(|w| w.article.as_str()).collect();
+        eprintln!("{viv}: {} triggers, {starts} with EStartMission | trigger {} marker {:?} ground {:?} pos {:?} yaw {:.1} speed {} | render surface top under {:.2} {:?}",
+            trig.len(), s.trigger, s.marker, s.ground, s.pos, s.yaw.to_degrees(), s.speed_factor, render_top, arts);
+        // Exactly one start trigger; the car sits 1.0 over the collision ground [M 0x1fee68]; the
+        // decoded render surface is there too, within 2 units under the car.
+        assert_eq!(starts, 1, "{viv}");
+        let ground = s.ground.unwrap_or_else(|| panic!("{viv}: no ground under the start"));
+        assert!((s.pos[1] - ground - 1.0).abs() < 1e-4, "{viv}");
+        assert!(render_top <= s.pos[1] && render_top >= s.pos[1] - 2.0, "{viv}: render surface {render_top} vs car y {}", s.pos[1]);
+        // The old rule on the track without a road network (the first trigger) is not the start.
+        if viv == "MIS13C" {
+            let t0 = &trig[0];
+            assert_ne!(t0.index, s.trigger);
+            eprintln!("{viv}: old start (trigger 0) {:?}, {:.0} units from the real one", t0.pos, ((t0.pos[0] - s.pos[0]).powi(2) + (t0.pos[2] - s.pos[2]).powi(2)).sqrt());
+        }
+        got.push((viv, s.trigger, ground, (s.yaw.to_degrees() * 10.0).round() / 10.0));
+    }
+    assert_eq!(got, SPAWN.to_vec());
 }

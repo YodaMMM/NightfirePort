@@ -77,9 +77,11 @@ empty). Which batch an entry draws, and its colours, is in §4b.
 | `V4-8` ×1, one to three | strip-end list: bytes in order, 0-terminated, each = 3 × the first vertex of a new strip; the last strip ends at the count |
 | `V3-16` usn | position = (u16 − 0x8000) / 256 |
 | `V3-32` (masked; mask leaves x/y/z as data) | position as floats (sky, water, some windows and lights) |
+| `V4-32` unmasked at VU 0x36, num = the count | position as floats (x, y, z, w = 1.0f): MIS11's `AnthWater`, `Siloroom1Water`, `Tanker_Ocean1`/`1b`/`1c`/`2b`/`3` — the slot the `EndCoast_Ocean_*` water fills with `V3-16` (colours at VU 0x7a in both, no UVs in either) |
 | `V2-16` usn / `V2-32` | UV, same rule / floats |
 | `V3-8` masked, usn | per-vertex colour R, G, B (§4b) |
 | `V4-32` (other addresses), second `V3`/`V2` sets | not decoded (layout depends on the microcode) |
+| `V4-32` at VU 0x10 after strip lists at 0x0d..0x0f | not decoded: also (x, y, z, 1.0) positions, but the strip-list bytes are not multiples of 3 (`Rock_Collapse`: 14, 30, 40 … for 54 vertices), so that layout's strip unit is unknown (`Rock_Collapse`, `JA_SAL`, `JB_SAL`, `LookOutTowerExplosion`: 22 chains on MIS11/13A/13B/3) |
 
 Proof of the rules: the /256 rule reproduces each article's `Base` box to 1/256 (e.g.
 `S12_RiverBnk_n_Road_00` −14.0078..14.207 × −3.5..4.5 × −30.0078..30.0078); every strip-list byte
@@ -89,7 +91,7 @@ strips span v = 0..1. With the placements of §2 and the draw chains of §4b (te
 | track | placements (unresolved) | strips | triangles | road nodes | surface within 1 m (own-batch reading) |
 |---|---|---|---|---|---|
 | MIS01 paris | 2552 (86) | 60,327 | 257,412 | 880 | 806 (772) |
-| MIS11 underwater | 1958 (107) | 40,275 | 281,548 | 136 | 0 (3) (open water) |
+| MIS11 underwater | 1958 (107) | 40,307 | 281,672 | 136 | 0 (3) (open water) |
 | MIS13A | 3021 (76) | 55,963 | 325,807 | 88 | 88 (78) |
 | MIS13B | 1412 (24) | 22,347 | 121,974 | 56 | 50 (46) |
 | MIS13C | 371 (21) | 5,657 | 32,086 | 0 | — |
@@ -134,7 +136,7 @@ stored in 0x36858 itself (60 vertices) is called by the next entry's list. Proof
 | track | `Colours` lists | match chain counts | match own counts | models with a box | chain inside box | own inside box |
 |---|---|---|---|---|---|---|
 | MIS01 | 1357 | 1357 | 81 | 1890 | 1871 | 394 |
-| MIS11 | 314 | 304 | 0 | 727 | 716 | 266 |
+| MIS11 | 314 | 304 | 0 | 727 | 716 | 254 |
 | MIS13A | 743 | 743 | 24 | 1283 | 1232 | 424 |
 | MIS13B | 851 | 851 | 86 | 2105 | 1834 | 472 |
 | MIS13C | 237 | 237 | 36 | 709 | 616 | 244 |
@@ -181,7 +183,7 @@ tails are export labels (`pb01_1` → sheet `pb02`) [D].
 3. The sky draw rule; the texture carry-over between entries; the second UV/position sets and
    `V4-32` blocks some layouts carry; the role of the `+0xbc` block and of `FUN_00285ca8` (run when
    model `+0xd0` ≠ 0, before the part index is set).
-4. The car start used by the tests is the first `rn` node (the PR #5 rule), not a traced game rule.
+4. The car start: traced, see docs/formats/trackstart.md (`nf_formats::trackstart::track_spawn`).
 5. How the `Lighting` tuning (§7) combines with the per-vertex colours.
 
 ## 7. Render tuning: fog and lighting (`crates/nf-formats/src/rendertun.rs`)
