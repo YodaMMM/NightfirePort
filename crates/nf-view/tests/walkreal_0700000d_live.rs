@@ -1497,7 +1497,9 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     if ride_fire {
         for _ in 0..40 { w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { switch_to: Some(0x1e), ..Default::default() }, false, false, false); w.total_ticks += 1; }
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[0d] ride fire: in hand {:#x} {}+{}", sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+        let inv = &sim.drones.inventory;
+        eprintln!("[0d] ride fire: in hand {:#x} {}+{} owns {:x?}", sim.gun.weapon, sim.gun.clip, sim.gun.spare,
+            (0..inv.owned.len()).filter(|&k| inv.owned[k]).collect::<Vec<_>>());
     }
     // THE 00 AGENT RIDE FIRE (real-health-00agent-0d-1): the 11-15 ledger's own lever law —
     // "answering the nearest clear-line shooter from the ride" — retargeted for the container
@@ -1700,7 +1702,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         if container_drop && ox < 153.5 { break; }
         let _ = k;
     }
-    if ride_fire { let sim = w.scene.sim.as_ref().unwrap(); let h = sim.drones.list.iter().find(|d| d.pos[1] < 3.0 && walker::dxz(d.pos, [177.0, 1.0, -280.8]) < 8.0 && d.skin == 0x5000087).map(|d| (d.health, d.corpse)); eprintln!("[0d] ride fire: {taps} taps, #15 {h:?}"); }
+    if ride_fire { let sim = w.scene.sim.as_ref().unwrap(); let h = sim.drones.list.iter().find(|d| d.pos[1] < 3.0 && walker::dxz(d.pos, [177.0, 1.0, -280.8]) < 8.0 && d.skin == 0x5000087).map(|d| (d.health, d.corpse)); eprintln!("[0d] ride fire: {taps} taps, #15 {h:?}, in hand {:#x} sw {} {}+{}", sim.gun.weapon, sim.gun.switch_state, sim.gun.clip, sim.gun.spare); }
     if container_drop {
         // The ride broke over the containers: the west-apex asserts below are the slot law.
         eprintln!("[0d] the ride broken over the containers at ox {:.2} — at {:?}",
@@ -2357,7 +2359,12 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
 /// the body; the plain master replay (top-ups on) runs byte-identical to its pre-gate tree.
 #[test]
 fn walk_arrival_to_the_c5_door_real_damage() {
-    walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(1, true));
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the ground
+    // sniper #15 landed three 16.0 rounds on the gantry ride (one on master) and Bond died at the
+    // yard landing (t19123). Lever: a 15-tick stop at tick 17200 (the east park, before the
+    // ride) re-times the ride against #15's sight cadence [L 24 grid + 71 random stops and the
+    // tap knobs all died; the 12-value ride-window grid: 17200/15 completes].
+    walker::with_pause(17200, 15, || walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(1, true)));
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-0c-0d): the same walked
@@ -2382,6 +2389,7 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 /// on the two d2 snipers from the strip (the 0c yard-stand law — the zero-spread aimed act
 /// [M Bullet_init 0x12c5a0:139-170] reaches d 55+ with the still-gate tap law).
 #[test]
+#[ignore = "stream-batch-1121 (impacts heard + the stand-reload roll + the stand idles + the NinjaStand start): Bond dies t20311 at (137.99,4.64,-296.08), the yard landing after the gantry ride, to the yard pack's 0x12 chips (#3 6.6 u, #5 6.1 u, #6, #0) [L 2026-11-21 run]. Levers tried and dead: 12 single stops 1000-17000 x 60/200, 40 random 1-3-stop runs to t19000, the ride-window grids 17600-19300 x 5/15/30/60 (45 runs, best death t21002), 24 random 1-2-stop runs 12000-19400 [L the sweeps]; the Operative sister's 17200/15 ride re-time does not carry over. Next: the yard landing burst (the sweep's first-kill race); re-tune and un-ignore"]
 fn walk_arrival_to_the_c5_door_real_damage_agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true));
 }

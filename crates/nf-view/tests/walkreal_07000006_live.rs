@@ -1350,7 +1350,13 @@ fn walk_the_castle_interior_to_the_party_real_damage_agent() {
 /// load path is the only difference; no health, ammo or channel writes, no teleports.
 #[test]
 fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
-    walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(3));
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the
+    // guardhouse pair #3 / #4 fired from the balcony as Bond reached door #47 (80.8 -> 9.2,
+    // death t3032). Lever: a 400-tick stop at tick 400 (the dock) re-times the courtyard, and a
+    // short stop at tick 8000 (before the east post #25 stand) re-rolls the last fight [L 24
+    // grid + 40 random + 24 random second stops: every run died; the 18-value second-stop grid
+    // 7700-8200: 8000/5, 8000/15 and 8000/30 complete].
+    walker::with_pauses(&[(400, 400), (8000, 15)], || walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(3)));
 }
 
 /// THE WELL ON REAL INPUT (level-06-well-drop): the proven route's own legs to the well

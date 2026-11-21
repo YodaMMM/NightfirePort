@@ -19,8 +19,9 @@ puffs (wall-offset puffs skipped on |normal.y| > 0.3 [M 0x1ce990]), then the dec
 normal, (0,1,0) @0x2d6210, (1,0,0) @0x2d6220)` 0x1df2a8, `pos = hit + normal·0.01` [M 0x1ce9f0],
 `hashtable_set_sub_object_to_entity_gfx(node, EffectInfo+4)` 0x1ce9c8. The node rides the host's
 sub-object list (static hits the cel, dynamic the obj — matrix made object-local via
-`Mat_Inverse(obj+0x90)` [M 0x1ce8a8:166-186]; the port keeps only the world-space result — no marks on
-moving hosts yet). A node never moves: with no free node the oldest in-use node is unlinked and
+`Mat_Inverse(obj+0x90)` [M 0x1ce8a8:166-186]; the port's `DecalHost::Object` keeps the
+object-local matrix and `Effects::follow_hosts` re-poses it from the host's live matrix every tick,
+freeing the holes when the host goes, `Effect_RemoveSObjs` 0x1cf360). A node never moves: with no free node the oldest in-use node is unlinked and
 taken again [M 0x1cea20..0x1cea58], so a live hole keeps its node until that node is reused. The
 port's draw slot IS the node (`Effects::decal_in_node`: the k-th hole ever made sits in node
 k mod 200), and the window's tick blend (G-043) snaps a reused node (`Effects::
@@ -150,9 +151,40 @@ placement emitters keep their counter-hash stand-in (the fix-world-fx discipline
 - ~~`Effect_Create`'s material-0x80 `Rand_Rand(0x3f)` penetration roll and the flags & 0x20 emitter
   arm are not ported~~ — BOTH ported by fix-impact-remainder (the two sections above); the roll
   draws in the game's point of the frame, the impact emitter consumes the shared stream on its own
-  update ticks. Remaining unported: `Effect_Body` 0x1cf400 / `Effect_Player` 0x1cec48 /
-  `Effect_Laser` 0x1cef38 and the bullet trails (`Bullet_trail_effect_smoke` 0x12cba8 /
-  `Bullet_DoTrails` 0x12d890) are not ported.
+  update ticks. ~~`Effect_Body` / `Effect_Player` / `Effect_Laser` and the trails are not
+  ported~~, all are (checked 2026-11-20): `Effect_Body` 0x1cf400 (the body sound at half
+  weight, drone.rs's body-op arm and death.rs), `Effect_Player` 0x1cec48 (footstep sound + the
+  foot decals, drone.rs's `NisFootstep` and script-footstep arms), `Effect_Laser` 0x1cef38
+  (drone.rs's laser burn puff), `Bullet_trail_effect_smoke` 0x12cba8 (gas.rs
+  `init_trail_smoke` / `init_trail_big_puff`) and `Bullet_DoTrails` 0x12d890 (bullet.rs: the
+  fly-by whiz, the satchel fuse and beeps).
+
+## g041-effects (2026-11-20)
+
+- **Glass debris direction** [M]: `Effect_Create` 0x1ce688:68-72 negates `HITDATA+0x10` IN PLACE
+  on material 0x10 and restores it only at :90-94, so the emitter (:80-82) and `Debris_Create`
+  0x1aaa00's `half · normal` velocity term (:40-49) both read the NEGATED normal, the shards fly
+  on through the pane. The port negated only the basis, so glass shards flew back toward the
+  shooter. Fixed (`effect::tests::glass_debris_flies_through_the_pane`). Same draws in the same
+  order: no shared-stream change.
+- **The debris-count gate** [M 0x1ce688:84-85, 0x1aaa00:19]: the `Rand_Rand(+0x83)` count is drawn
+  on the +0x82 enable byte alone; a 0 mesh stops `Debris_Create` before its own draws. The port
+  also required the mesh before the count draw. No shipped row has enable set with mesh 0 [D
+  EffectInfo 0x3037c0], so this only makes the port exact; no change on disc data.
+- **The impact sound is heard** [M `Effect_Bullet` 0x1ce8a8:86-90, `Sound_Play3D` 0x1dd548:27-52,
+  :96-98]: the default-radius `Sound_Play3D` enters `SFXOutputData[id]`'s radii and FULL weight
+  in the node list `Sound_Alertness` 0x1ddc48 sums for every drone; `Effect_Bullet` does not lower
+  it (`Effect_Body` does, ×0.5). [D] the 21 impact rows weigh 20..50, outer 15..30 u, none looped.
+  The port played every bullet impact (Bond's, the guards', the glass sheets') on the audio pool
+  only; `Drones::play_impact` now also pushes the hearing entry (`g041_impact_heard_live`). A
+  round landing beside an unaware guard raises his alertness as in the game. This moves the
+  shared random stream (the extra hearing changes the AI's draws).
+- **Open, recorded only (not changed)**: `Effect_Create` runs the `Effect_Bullet` / `Player` /
+  `Laser` / `Body` dispatch only when `MPSettings+0x180 == 0` [M 0x1ce688:90], in a multiplayer
+  match the game makes NO bullet hole, NO gas puff and NO impact sound (the emitter and debris
+  arm above the gate still run). The port's MP path (`nf-view/src/mpfx.rs` bot shots, and the
+  remote cosmetic bullets through the SP collision) makes all three. Removing them is a visible
+  MP change that needs a two-instance check, so it is left open.
 
 Measured data [D disc / probe]: 07000005 resolves the decal hashes 0x02000122 (GlassBulletHole),
 0x02000126 (DefaultBulletHole), 0x02000127 (MetalBulletHole), 0x02000128 (WoodBulletHole),

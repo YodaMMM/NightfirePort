@@ -139,8 +139,9 @@ flicker seed (`Rand_Rand(0)`) — one or two draws per part, in creation order (
   clamp inst+0x14±half; polar += 0.15·AngleDiff(obj+0x50, −atan2f(dy−1,√(dx²+dz²))), clamp
   mid±half; then the shared block.
 - **shared block** (states 0, 1, and any state ≥ 4 — unreachable) :186-353 — mount copy; then the
-  spot only: ray `Collide_RayIntersect(head+0x30, head+100·aim, obj cel, self, flags 0x18)` (the
-  pick mask does not exclude the player — the spot lands on Bond); hit → spot pos/angles +
+  spot only: ray `Collide_RayIntersect(head+0x30, head+100·aim, obj cel, self, flags 0x18)` (mask
+  bit 0x10 skips the dynamic-object walk — static geometry only, Bond included in the skip; see the
+  spot-ray comment in searchlight.rs); hit → spot pos/angles +
   DrawInAllViews, miss → NoViews; arm/lost test `Vec_Dist3D(spot, player) ≤ 2.0` (0→1 with spot
   inst+4 = 0; state 1 counts inst+4, ≥ FRAME_RATE·15 → back to 0); then beam matrix; then corona.
 - **2 broken** :373-393 — every 7th drawn frame `Gas_Init` smoke (dir (0,0,Rand_FRand(π)), 0.05,
@@ -167,22 +168,31 @@ flicker seed (`Rand_Rand(0)`) — one or two draws per part, in creation order (
 2. **Break path model swap [FIXED in the same pass]** — the break's deletion set was already
    correct (links[2..4] individually, mount untouched [M :438-453]); the missing half was the
    `Control_NextLOD` swap [M :454] — now pinned as `Part::lod_next` in `bullet_check`.
-3. **Break gate** — game breaks only when the contact entry's damage float > 0.0
+3. **[FIXED, U-041] Break gate** — game breaks only when the contact entry's damage float > 0.0
    (`if (fVar16 < *(float *)(aiStack_d0[0] + 8))` 001cb900:417); the port's
    `for &(from, to) in bullets { … seg_box … }` (searchlight.rs:418-419) has no damage value — any
    segment hit breaks.
-4. **Relight tick** — game: state 3 + on-channel → state 0, sound, `goto` the contact walk (no
+4. **[FIXED, s/g033-searchlights] Relight tick** — game: state 3 + on-channel → state 0, sound, `goto` the contact walk (no
    sweep, no part updates, no visibility restore that tick) [M 001cb900:399-403]; port sets
    `parts_now = true` and force-redraws all links (searchlight.rs:264-271) — one tick early.
-5. **Corona LOS origin** — game: `Collide_LineOfSight(glb_viewer+0xc0, corona+0x30, …, 8)` — the
+   Now the relight only writes state 0 and the sound, then the walk [M disasm 0x1cbd40-0x1cbd8c
+   `b 0x1cc1d4`]; `channels_and_tracking_behave` pins the dark beam/unmoved spot on that tick.
+5. **Corona LOS origin (open, draw-side)** — game: `Collide_LineOfSight(glb_viewer+0xc0, corona+0x30, …, 8)` — the
    **camera** position [M 001cb900:338-340]; port: `d.world.line_of_sight(player.eye, corona_pos)`
    (searchlight.rs:390). Visual difference when the camera and Bond's eye diverge.
-6. **Alarm write not gated** — game `if (inst+0x36 != 0) switch_channels[inst+0x36] = 1;`
+6. **[FIXED] Alarm write not gated** — game `if (inst+0x36 != 0) switch_channels[inst+0x36] = 1;`
    [M 001cb900:142-144]; port `channels.set(self.parts[head].alarm as u32, 1, frame)`
    (searchlight.rs:238) unconditional. No behavioural difference today: `Channels::set` ignores
    channel 0 (triggers.rs:82) — but the game never writes switch_channels[0] here.
-7. **Kill-tick tail** — game still runs the contact walk after the kill block; port
-   `return sounds;` before `bullet_check` (searchlight.rs:222). One-tick, inert.
+7. **[FIXED, s/g033-searchlights] Kill-tick tail** — game still runs the contact walk after the
+   kill block [M disasm 0x1cba20-0x1cba5c falls into the state dispatch; the state-3 arm's zeroed
+   on-byte branches to 0x1cc1d0]; the port now runs `bullet_check` after `off_kill`
+   (`a_bullet_on_the_kill_tick_still_breaks_the_head`).
+11. **[FIXED, s/g033-searchlights] State-2 smoke count** — the port scanned every broken head on
+   every head's dispatch (N puffs per broken head on an N-head level, 4× on 07000006) and caught
+   the break tick; the game's arm smokes its own head only, before the tail walk writes state 2
+   [M 0x1cb900:373-385, 406-418]. Now requested by the arm (`Searchlights::smoke`)
+   (`a_broken_head_smokes_once_per_seventh_frame`: 3 puffs in 21 ticks, was 12).
 8. **(−π,π] normalisation is decompile-invisible** — the port's `sweep()` normalises both angles
    (searchlight.rs:96-99); the C shows no such code (removed block 0x1cbc74) but live heads prove
    the game does it [L: −1.838/−1.4748]. Correct, but unverifiable against the C — keep the [L]

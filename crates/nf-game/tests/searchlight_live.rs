@@ -212,12 +212,16 @@ fn channels_and_tracking_behave() {
     let evs = s.update(&d, &far_away, &mut channels, hd, &[], &mut rrng, 3);
     assert_eq!(s.parts[hd].state, 0);
     assert_eq!(evs, vec![(0xe5, s.parts[hd].pos)]);
-    assert!(s.parts[s.parts[hd].links[3].unwrap()].drawn, "the beam re-lights");
-    // Its spot ray repositions it from −10000 onto the world (the turn-on tick aims at the create-time
-    // pitch 0; the first sweep tick then moves it to the sweep cone, where the light actually points).
+    // The relight tick jumps straight to the contact walk [M disasm 0x1cbd40-0x1cbd8c, `b 0x1cc1d4`]:
+    // no part update — the beam stays dark and the spot stays below the world this tick.
     let sp = s.parts[hd].links[2].unwrap();
-    assert!(s.parts[sp].pos[1] > -9000.0, "the spot moved to its ray hit: {:?}", s.parts[sp].pos);
+    assert!(!s.parts[s.parts[hd].links[3].unwrap()].drawn, "no beam draw on the relight tick");
+    assert!(s.parts[sp].pos[1] < -9000.0, "no spot ray on the relight tick: {:?}", s.parts[sp].pos);
+    // The first state-0 tick re-lights the beam and the spot ray repositions the spot from −10000
+    // onto the world [M 0x1cb900:196-281].
     s.update(&d, &far_away, &mut channels, hd, &[], &mut rrng, 4);
+    assert!(s.parts[s.parts[hd].links[3].unwrap()].drawn, "the beam re-lights");
+    assert!(s.parts[sp].pos[1] > -9000.0, "the spot moved to its ray hit: {:?}", s.parts[sp].pos);
     // Bond inside the circle arms the light; the head holds its alarm channel while tracking. The spot
     // crawls ≤ 0.1 units per sweep tick, so Bond stands where it just landed.
     let at_spot = bond_at(s.parts[sp].pos);
@@ -266,4 +270,71 @@ fn the_beam_passes_through_bond_and_a_zero_alarm_writes_nothing() {
         assert!(!channels.on(0), "alarm 0 leaves channel 0 alone");
     }
     assert!(checked > 0, "a head with a long beam");
+}
+
+/// The head's posed world sphere (obj+0x80/0x8C) [M Control_BuildWorldSph 0x133070].
+fn posed(s: &Searchlights, h: usize) -> ([f32; 3], f32) {
+    let hp = &s.parts[h];
+    let m = &hp.matrix;
+    ([m[0][0] * hp.sph_centre[0] + m[0][1] * hp.sph_centre[1] + m[0][2] * hp.sph_centre[2] + m[3][0],
+      m[1][0] * hp.sph_centre[0] + m[1][1] * hp.sph_centre[1] + m[1][2] * hp.sph_centre[2] + m[3][1],
+      m[2][0] * hp.sph_centre[0] + m[2][1] * hp.sph_centre[1] + m[2][2] * hp.sph_centre[2] + m[3][2]], hp.sph_radius)
+}
+
+/// The off-channel kill falls through to the state dispatch and on into the contact walk [M disasm
+/// 0x1cba20-0x1cba5c, then 0x1cbd40 `beqz` (the on-byte the kill just zeroed) → 0x1cc1d0]: a
+/// damaging contact on the kill tick still breaks the head (state 2, the glass 0xE6). The old port
+/// returned before the walk (state 3, no sound).
+#[test]
+fn a_bullet_on_the_kill_tick_still_breaks_the_head() {
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let mut rng = Rng::new(3);
+    let mut s = parts(&l, &mut rng);
+    let mut channels = nf_game::triggers::Channels::default();
+    let far_away = bond_at([500.0, 100.0, 500.0]);
+    let mut rrng = Rng::new(11);
+    let h = s.parts.iter().position(|p| p.kind == 1 && p.on == 0).unwrap();
+    s.update(&d, &far_away, &mut channels, h, &[], &mut rrng, 1);
+    // Give the head a kill channel (07000005's heads carry none; 07000006's carry ch 57) and raise it.
+    s.parts[h].off = 57;
+    channels.set(57, 1, 2);
+    let (c, _) = posed(&s, h);
+    let shot = nf_game::searchlight::Shot { from: [c[0] - 5.0, c[1], c[2]], to: [c[0] + 5.0, c[1], c[2]], damage: 3.5, segment: true };
+    let evs = s.update(&d, &far_away, &mut channels, h, &[shot], &mut rrng, 2);
+    assert!(s.parts[h].killed, "the kill ran");
+    assert_eq!(s.parts[h].state, 2, "the kill-tick contact breaks the head [M 0x1cc1d0 walk]");
+    assert_eq!(evs, vec![(0xe6, s.parts[h].pos)], "one glass sound");
+}
+
+/// The broken head's smoke [M 0x1cb900:373-385]: requested by the state-2 arm only — so never on the
+/// break tick (the tail walk writes state 2 after the arm) — once per qualifying frame
+/// `(frame + created) % 7 == 0` while the head draws.
+#[test]
+fn the_broken_head_smokes_every_seventh_frame_from_the_tick_after_the_break() {
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let mut rng = Rng::new(3);
+    let mut s = parts(&l, &mut rng);
+    let mut channels = nf_game::triggers::Channels::default();
+    let far_away = bond_at([500.0, 100.0, 500.0]);
+    let mut rrng = Rng::new(11);
+    let h = s.parts.iter().position(|p| p.kind == 1 && p.on == 0).unwrap();
+    s.update(&d, &far_away, &mut channels, h, &[], &mut rrng, 6);
+    let (c, _) = posed(&s, h);
+    let shot = nf_game::searchlight::Shot { from: [c[0] - 5.0, c[1], c[2]], to: [c[0] + 5.0, c[1], c[2]], damage: 3.5, segment: true };
+    // Break on frame 7 (a smoke frame): no puff on the break tick.
+    s.update(&d, &far_away, &mut channels, h, &[shot], &mut rrng, 7);
+    assert_eq!(s.parts[h].state, 2);
+    assert!(s.smoke.is_empty(), "no smoke on the break tick");
+    let mut puffs = Vec::new();
+    for f in 8..=21 {
+        s.update(&d, &far_away, &mut channels, h, &[], &mut rrng, f);
+        for p in std::mem::take(&mut s.smoke) { puffs.push((f, p)); }
+    }
+    assert_eq!(puffs, vec![(14, s.parts[h].pos), (21, s.parts[h].pos)], "frames 14 and 21, at the head");
+    // Undrawn: no smoke (obj+0xFC gate).
+    s.parts[h].drawn = false;
+    s.update(&d, &far_away, &mut channels, h, &[], &mut rrng, 28);
+    assert!(s.smoke.is_empty(), "an undrawn head does not smoke");
 }

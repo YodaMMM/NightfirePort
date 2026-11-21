@@ -14,7 +14,9 @@ use crate::walker::Wp;
 /// A player who spots the shotgun man before the corridor does not hand him the opening
 /// blast: the stand runs only when the game's own exposed-part probe reads a reachable box
 /// from the leg end (d 2.0), and a kill there means the burst never exists.
-pub static PRE_CLEAR_SOUTH_CORRIDOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Per test thread, like every lever flag below (the sisters run in parallel in one binary; a
+// process-wide flag leaked the real-damage levers into the plain walk mid-run).
+thread_local! { pub static PRE_CLEAR_SOUTH_CORRIDOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// OPT-IN (set only by the 07000013 chain's d3 real-damage walk, checked at the one labeled leg
 /// below — no other caller sets it, so every other walk is byte-identical): at "the north lobby 2"
@@ -25,7 +27,7 @@ pub static PRE_CLEAR_SOUTH_CORRIDOR: std::sync::atomic::AtomicBool = std::sync::
 /// the tick-5914 death (level-13-warm-chain-margin ledger [L]). The pre-clear takes them from the
 /// leg end at d 4.6-8.2 before the north lobby 3 leg, the civ-unignore-2 law (the pre-clears
 /// stand at the leg ends and take the posted guards BEFORE the legs walk into them).
-pub static PRE_CLEAR_NORTH_LOBBY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+thread_local! { pub static PRE_CLEAR_NORTH_LOBBY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// OPT-IN (set only by the 07000013 chain's d3 real-damage walk, checked at the three east
 /// north-lobby legs below — no other caller sets it, so every other walk is byte-identical):
@@ -40,7 +42,7 @@ pub static PRE_CLEAR_NORTH_LOBBY: std::sync::atomic::AtomicBool = std::sync::ato
 /// lobby mouth (−18.64,15.93). `reanchor_north_lobby` walks exactly those points (each hop
 /// lenient: a wedged hop bails and the next hop re-aims), then the leg is re-walked from the
 /// lane — a player who fought his way off the lane walks back the way he came and continues.
-pub static REANCHOR_NORTH_LOBBY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+thread_local! { pub static REANCHOR_NORTH_LOBBY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// OPT-IN (set only by the 07000013 chain's d3 real-damage walk, checked at the one labeled leg
 /// below — no other caller sets it, so every other walk is byte-identical): the lobby-east
@@ -61,7 +63,7 @@ pub static REANCHOR_NORTH_LOBBY: std::sync::atomic::AtomicBool = std::sync::atom
 /// rays), #7 nearest (d ≈ 2.9, hp 12 — one fight), #6 from the flank after (d ≈ 3.3, hp 30).
 /// The rejected levers are NOT repeated: no pre-clear at 14-16 u, no bridge_and_retry, no
 /// in-place creep or longer stands (each measured dead in the margin-4 report).
-pub static FLANK_LOBBY_EAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+thread_local! { pub static FLANK_LOBBY_EAST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// OPT-IN (set only by the 07000011 chain's Agent and 00 Agent walks; the 07000012 and 07000013
 /// walks never set it, so their legs are unchanged): "the east wing" leg aims at the corridor's
@@ -407,7 +409,7 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
                     w.scene.sim.as_ref().unwrap().gun.weapon, w.total_ticks - t0);
             }
         }
-        if label == "the south-east bend 2" && PRE_CLEAR_SOUTH_CORRIDOR.load(std::sync::atomic::Ordering::Relaxed) {
+        if label == "the south-east bend 2" && PRE_CLEAR_SOUTH_CORRIDOR.with(|c| c.get()) {
             let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {
                 d.present && !d.corpse && d.health > 0.0 && d.team == 1
                     && crate::walker::dxz(d.pos, [19.7, 1.0, -14.0]) < 3.0
@@ -510,12 +512,12 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         // opens, the line-stand kills him from (−8.25, 19.0) d 8.7 as before, and the melt's
         // windows never exist. The replaced leg's own pre-clear skip is covered by the flank's
         // fights; "the north lobby 2" joins the skip list.
-        if label == "the north lobby" && FLANK_LOBBY_EAST.load(std::sync::atomic::Ordering::Relaxed) {
+        if label == "the north lobby" && FLANK_LOBBY_EAST.with(|c| c.get()) {
             flank_lobby_east(w);
             continue;
         }
         if matches!(label, "the north lobby 2" | "the north lobby 3" | "the north lobby east")
-            && FLANK_LOBBY_EAST.load(std::sync::atomic::Ordering::Relaxed) {
+            && FLANK_LOBBY_EAST.with(|c| c.get()) {
             continue;
         }
         // warm-chain-margin-4 (OPT-IN `REANCHOR_NORTH_LOBBY`, the d3 walk only): the east
@@ -524,7 +526,7 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         // the 6000-tick wedge of the margin-3 ledger), walk the proven re-anchor chain back to
         // the lane and re-walk the leg from there. Every other caller runs master's plain
         // walk_to byte-identical.
-        let reanchored = REANCHOR_NORTH_LOBBY.load(std::sync::atomic::Ordering::Relaxed)
+        let reanchored = REANCHOR_NORTH_LOBBY.with(|c| c.get())
             && matches!(label, "the north lobby 2" | "the north lobby 3" | "the north lobby east");
         if reanchored {
             let already = { let sim = w.scene.sim.as_ref().unwrap(); crate::walker::dxz(sim.bond.pos, [x, 1.1, z]) < 1.0 };
@@ -554,7 +556,7 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         // a 600-cap stand cannot finish one). The flag gates every line — no other caller
         // changes.
         if matches!(label, "the north lobby" | "the north lobby 2")
-            && PRE_CLEAR_NORTH_LOBBY.load(std::sync::atomic::Ordering::Relaxed) {
+            && PRE_CLEAR_NORTH_LOBBY.with(|c| c.get()) {
             for _ in 0..4 {
                 let (di, d) = {
                     let sim = w.scene.sim.as_ref().unwrap();

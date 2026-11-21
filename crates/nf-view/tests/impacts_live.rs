@@ -248,6 +248,10 @@ fn forty_rounds_default_caps_at_32_and_keeps_64_holds_the_rest() {
     // collide handler].
     let (max_alive, alive_at_40) = {
         let sim = scene.sim.as_mut().unwrap();
+        // Quiet start: the 40 impacts on the start wall are heard [M Effect_Bullet 0x1ce8a8:86-90
+        // → Sound_Play3D], so five guards alert and shoot back, and their own shells share the
+        // pool. This test pins Bond's casings alone: hold every drone off.
+        for d in sim.drones.list.iter_mut() { d.enabled = false; }
         sim.bond.yaw = 0.4;
         sim.bond.pitch = -0.05;
         sim.bond.eye = 0.0;

@@ -11,8 +11,8 @@
 //! the free-node order of `DList_Init` 0x1cc778 + `LList_Add` 0x1cca28).
 //!
 //! RNG discipline: every `Rand_*` the game draws at an impact is drawn here, in the game's order
-//! (the collision handler runs: the material-0x80 roll [not ported — the port's HITDATA carries no
-//! +0x51 second byte], then `Effect_Create`'s debris-count draw, then per-debris draws, then
+//! (the collision handler runs: the material-0x80 roll (`penetration_roll_node`), then
+//! `Effect_Create`'s debris-count draw, then per-debris draws, then
 //! `Effect_Bullet`'s `Rand_Rand(2)`, then the ricochet roll). `Gas_Init`'s own 5 draws per puff are
 //! NOT consumed — the merged deviation documented in gas.rs (G-033's discipline).
 
@@ -470,10 +470,16 @@ impl Effects {
         // Laser-flagged weapons (`+0x6c & 0x100` / `+0x70 & 0x1000`) pass flags 0x10 instead — the
         // port's laser/watch beams are hitscan stand-ins and do not route through here.
         let Some(rec) = Self::record(surfaces, material) else { return None };
-        // `Effect_Create` 0x1ce688: GLASS (material & 0x3f == 0x10) negates the normal for the debris
-        // basis [M 0x1ce728], restored before `Effect_Bullet`.
+        // `Effect_Create` 0x1ce688: GLASS (material & 0x3f == 0x10) negates HITDATA+0x10 in place
+        // [M 0x1ce688:68-72] BEFORE the basis, the emitter and the debris read it, and restores it
+        // only before the `Effect_Bullet` dispatch [M :90-94]. So on glass the emitter's normal
+        // (`Emitter_Create(…, hit+0x10, …)` [M :80-82]) and the debris velocity's `half · normal`
+        // term (`Debris_Create` 0x1aaa00 reads `param_1+0x10..0x18` [M 0x1aaa00:40-49]) are both the
+        // NEGATED normal, so the shards carry on through the pane, away from the shooter. The port
+        // negated only the basis (g041-effects).
         let glass = (material & 0x3f) == 0x10;
         let n = normal;
+        let n_create = if glass { [-n[0], -n[1], -n[2]] } else { n };
         if flags & 0x20 != 0 {
             // The emitter arm [M Effect_Create 0x1ce688:81-88, the flags & 0x20 block's FIRST
             // action]: `Emitter_Create(0, 0, EffectInfo+0x84, hit_pos, normal, 0, 0, 0)` 0x17ae00 —
@@ -483,17 +489,21 @@ impl Effects {
             // the draws come on the emitter's OWN update ticks (`Emitter_Update` 0x17b080, 4 ×
             // `Rand_FRandHalf(1.0)` per spawned particle — yaw, pitch, speed, life, that order).
             if rec.emitter != 0 {
-                fx.spawn_impact(rec.emitter, pos, n);
+                fx.spawn_impact(rec.emitter, pos, n_create);
             }
         }
-        if flags & 0x20 != 0 && rec.debris_enable != 0 && rec.debris_mesh != 0 {
-            // `Rand_Rand(EffectInfo+0x83)` → count [M 0x1ce7b0]; `Debris_Create` 0x1aaa00 per particle:
+        if flags & 0x20 != 0 && rec.debris_enable != 0 {
+            // `Rand_Rand(EffectInfo+0x83)` → count [M 0x1ce7b0], drawn on the +0x82 enable byte
+            // alone [M 0x1ce688:84-85]; `Debris_Create` 0x1aaa00 then returns before any draw
+            // when the +0x74 mesh is 0 [M 0x1aaa00:19] (no shipped row has enable set with mesh
+            // 0 [D EffectInfo 0x3037c0], so this matches the old gate on the disc data).
             let count = rng.rand(rec.debris_count as u32) + 1;
             if std::env::var_os("NF_RNGLOG").is_some() {
                 eprintln!("[rnglog] debris_count +1 (draw #{})", rng.draws);
             }
-            let basis = orthonormal_basis_sum(if glass { [-n[0], -n[1], -n[2]] } else { n });
-            for _ in 0..count {
+            let n = n_create;
+            let basis = orthonormal_basis_sum(n);
+            for _ in 0..if rec.debris_mesh != 0 { count } else { 0 } {
                 let scale = rng.frand(0.1) + 0.4;                       // data+0xe8 [M 0x1aaad8]
                 let life = (rec.debris_life >> 1) as u32 + rng.rand((rec.debris_life >> 1) as u32); // data+0x30 [M 0x1aaaf4]
                 let half = rec.debris_speed * 0.5;
@@ -784,6 +794,30 @@ mod tests {
     }
 
     fn fx() -> crate::world_fx::WorldFx { crate::world_fx::WorldFx::default() }
+
+    /// g041-effects: on GLASS (material 0x10) `Effect_Create` 0x1ce688 negates HITDATA+0x10 in
+    /// place [M :68-72] before `Debris_Create` 0x1aaa00 reads it for the `half · normal` velocity
+    /// term [M 0x1aaa00:40-49], so the shards fly on through the pane. With the shot face's normal
+    /// (0,0,1) the negated normal's basis sum is (1,1,0), so every piece's z speed is exactly
+    /// −speed/2 · REC. Sister: a non-glass row with the same data flies +z (the normal side).
+    #[test]
+    fn glass_debris_flies_through_the_pane() {
+        let r = rec(0x0200_0122, 0);
+        let table_at = |m: usize| SurfaceSounds { impact: vec![], footstep: vec![], body: vec![],
+            effects: (0..23).map(|k| if k == m { r } else { Default::default() }).collect(), ..Default::default() };
+        let mut gas = crate::gas::GasPool::default();
+        let mut e = Effects::new();
+        let mut rng = Rng::new(7);
+        e.bullet_impact(&mut rng, Some(&table_at(0x10)), &mut gas, &mut fx(), [0.0; 3], [0.0, 0.0, 1.0], 0x10, [0.0, 0.0, -1.0], 0x2, 0, true, 0, crate::gas::HostCel::default());
+        assert!(!e.debris.is_empty(), "the glass row spawns debris");
+        for d in &e.debris {
+            assert_eq!(d.vel[2], -(6.2f32 * 0.5) * REC, "glass: the negated normal's half-speed term, basis z 0");
+        }
+        let mut e2 = Effects::new();
+        let mut rng = Rng::new(7);
+        e2.bullet_impact(&mut rng, Some(&table_at(10)), &mut gas, &mut fx(), [0.0; 3], [0.0, 0.0, 1.0], 10, [0.0, 0.0, -1.0], 0x2, 0, true, 0, crate::gas::HostCel::default());
+        assert!(e2.debris.iter().all(|d| d.vel[2] > 0.0), "stone: the pieces leave on the shot side");
+    }
 
     /// G-041: a hit on a decal-carrying material leaves one decal at `hit + normal·0.01` with the
     /// material's mesh. Sister: material 0 (NONE) and flags without weapon bit 2 leave none.

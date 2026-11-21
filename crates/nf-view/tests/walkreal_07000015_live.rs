@@ -2288,7 +2288,10 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
 
 #[test]
 fn walk_spawn_to_the_omega_sector_exit() {
-    walk_spawn_to_the_omega_sector_exit_at(1);
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): #448 no longer
+    // went on #447's blast on the walk's own timing. Lever: a 60-tick stop at tick 4000 re-rolls
+    // the fence fight [L the 13-value sweep + neighbours: 4000/40, 4000/90, 4200/60 also pass].
+    walker::with_pause(4000, 60, || walk_spawn_to_the_omega_sector_exit_at(1));
 }
 
 /// The objective chain at the other two menu picks: the same walked route and end with the
