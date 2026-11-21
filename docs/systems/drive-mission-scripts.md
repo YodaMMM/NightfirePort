@@ -7,6 +7,14 @@ the `Map ` pool record's `Rule`/`MSet`/`Trgr` children. The headless state machi
 [M] code (function + address, DRIVING.ELF, EE = file offset + 0x107080), [D] disc bytes,
 [S] suggested. Nothing asserted from memory.
 
+> **Correction (2026-11-21, driving-mis01-opening.md):** the `MSet` per-index table is the
+> weapon loadout (`FUN_0020d378` writes the weapon manager's copy of the `FUN_0020f2b8` weapon
+> table), not objective channels — MIS01's "channels 2 and 26" are the Missile (30) and the
+> Sniper Rifle (24). A `Rule` entry's +0x0c is the event list the rule fires (an `el`
+> reference), not a name hash, and the group id is the stage `EChangeStage`/`ECallStage`
+> select. `Trgr` +0x18 is the trigger's event list. Decoders: `nf_formats::drive_script`.
+> The `Mission` model below still uses the old reading.
+
 ## 1. Where the data is
 
 - The mission archive opens by level key (`paris_mis01` → `MIS01.VIV` [M FUN_00175a28
