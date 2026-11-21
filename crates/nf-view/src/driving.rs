@@ -783,15 +783,13 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             }
         }
     }
-    // A track with no road network (MIS13C, the boat run) starts at its first Map checkpoint
-    // trigger, facing the second, instead of the geometry box's centre, which on MIS13C sits far
-    // from any track piece [S: the game's spawn for these tracks is not traced].
-    if road_nodes.is_empty() {
-        let tr = crp.extract_map_triggers().unwrap_or_default();
-        if let Some(t0) = tr.first() {
-            start_pos = t0.pos;
-            if let Some(t1) = tr.get(1) { start_yaw = (t1.pos[0] - t0.pos[0]).atan2(t1.pos[2] - t0.pos[2]); }
-        }
+    // The game's start: the one Map Trgr whose action list holds EStartMission (0x16), fired at
+    // world init [M DRIVING.ELF 0x22cd30, 0x15c920]; the car goes to its x/z at the ground under
+    // it + 1.0, facing its +0x30 direction [M 0x15c738, 0x1fee68] (nf_formats::trackstart).
+    // The road-node pick above stays only as the fallback when no such trigger decodes.
+    if let Ok(sp) = nf_formats::trackstart::track_spawn(&crp, &col_tris) {
+        start_pos = sp.pos;
+        start_yaw = sp.yaw;
     }
 
     let find_car_entry = |stem: &str| -> Option<((u32, u32), Option<(u32, u32)>)> {

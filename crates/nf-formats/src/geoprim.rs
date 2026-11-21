@@ -563,6 +563,30 @@ pub fn decode_vif(img: &[u8], ranges: &[(usize, usize)], label: usize) -> Result
                     let offset = |k: usize, v: u32| if mode == 1 { v.wrapping_add(row[k]) } else { v };
                     match (vn, vl) {
                         (3, 0) if num == 1 && addr == 0 && count.is_none() => count = Some(u32_at(data, 0)? as usize),
+                        // Positions as unmasked `V4-32` floats (x, y, z, 1.0) at VU 0x36: the first
+                        // unpack after the strip list, `num` = the header count, every w lane exactly
+                        // 1.0f [D: the MIS11 water `AnthWater`, `Siloroom1Water`, `Tanker_Ocean1`/`1b`/
+                        // `1c`/`2b`/`3` — the slot the sibling `EndCoast_Ocean_*` layout fills with
+                        // `V3-16`, colours at VU 0x7a in both; the decoded vertices lie in each
+                        // article's `Base` box]. The other `V4-32` position form (VU 0x10, after
+                        // strip lists at 0x0d..0x0f: `Rock_Collapse`, `JA_SAL`, `JB_SAL`,
+                        // `LookOutTowerExplosion`) is NOT decoded: its strip-list bytes are not
+                        // multiples of 3 (e.g. 14, 30, 40 for 54 vertices), so that layout's
+                        // strip-list unit differs and is not traced.
+                        (3, 0) if positions.is_none() && addr == 0x36 && count == Some(num) => {
+                            if masked {
+                                return invalid(format!("packet {po:#x}: V4-32 position unpack {code:#x} masked"));
+                            }
+                            let mut v = Vec::with_capacity(num);
+                            for i in 0..num {
+                                if u32_at(data, i * 16 + 12)? != 0x3f80_0000 {
+                                    return invalid(format!("packet {po:#x}: V4-32 position {i} has w {:#x}, not 1.0", u32_at(data, i * 16 + 12)?));
+                                }
+                                let c = |k: usize| -> Result<f32> { Ok(f32::from_bits(offset(k, u32_at(data, i * 16 + k * 4)?))) };
+                                v.push([c(0)?, c(1)?, c(2)?]);
+                            }
+                            positions = Some(v);
+                        }
                         (3, 2) if num == 1 && positions.is_none() => ends.extend_from_slice(&data[..4]),
                         (2, 1) | (2, 0) if positions.is_none() => {
                             if !(0..3).all(comp_is_data) || (vl == 1 && !usn) {
