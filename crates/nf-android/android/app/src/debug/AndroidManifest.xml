@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: sockets (even loopback) need INTERNET. The native side opens
+     127.0.0.1:9876/9877 only when launched with the nf_telemetry extra. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

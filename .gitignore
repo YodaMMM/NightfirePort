@@ -26,3 +26,22 @@ __pycache__/
 CLAUDE.local.md
 __pycache__/
 *.pyc
+
+# Android build / NDK / OBB / game archive outputs (never commit)
+crates/nf-android/android/.gradle/
+crates/nf-android/android/.kotlin/
+crates/nf-android/android/build/
+crates/nf-android/android/app/build/
+crates/nf-android/android/app/src/main/jniLibs/
+crates/nf-android/android/local.properties
+*.viv
+*.VIV
+*.crp
+*.CRP
+*.ssh
+*.SSH
+*.obb
+*.apk
+*.aab
+*.jks
+*.keystore
