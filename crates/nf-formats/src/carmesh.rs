@@ -75,6 +75,8 @@ pub const TAG_SR: u32 = 0x7372_2020;
 pub const TAG_VD: u32 = 0x7664_2020;
 /// `Skel` — the named part table [M FUN_001c9980].
 pub const TAG_SKEL: u32 = 0x536b_656c;
+/// `Base` — the article header every `as` payload's first word names [D] (docs/formats/car-model.md §11.4).
+pub const TAG_BASE: u32 = 0x4261_7365;
 /// The car UV rule: `(u16 − 0x8000) / 1024` [D; M every textured `MatCar*` microcode: `ITOF0`, then
 /// `× I (0x3a7ffff7 ≈ 1/1024) + (−32)`].
 pub const UV_SCALE: f32 = 1024.0;
@@ -221,9 +223,9 @@ pub enum Attach {
     /// 0xfe: own matrix × the run-time matrix of `Skel` part `n` (0-based; the item stores n + 1)
     /// [M FUN_001bf600 → FUN_001bef68(+0x0e − 1)].
     Skel(u16),
-    /// Any other byte: a run-time or animated transform the decoder does not supply (0xef →
-    /// FUN_001bf598, below 100 → animation FUN_001a30c0; others per the table). The own matrix is
-    /// what this decoder places the part with.
+    /// Any other byte, with the item's `+0x0e`: a run-time transform (0xfc / 0xfb spin, 0xef dial,
+    /// 0xf3 own matrix, 0xee camera-facing); `crate::carpose::part_matrix` evaluates them.
+    /// [`CarPart::apply`] places the part with its own matrix only.
     Other(u8, u16),
 }
 
@@ -288,6 +290,10 @@ pub struct CarMesh {
     pub parts: Vec<CarPart>,
     /// The `vd#N` draw lists: `(N, item indices)`.
     pub draw_lists: Vec<(u16, Vec<u16>)>,
+    /// The first 16 words of the `Base` payload as f32 (word 0 is the 0xffffffff placeholder;
+    /// words 4-6 / 8-10 the model's box min / max, word 14 the value the wheel rig subtracts from)
+    /// [D]; `None` when the article has no `Base` record.
+    pub base: Option<[f32; 16]>,
 }
 
 impl CarMesh {
@@ -311,6 +317,17 @@ impl CarMesh {
         }
         out
     }
+
+    /// The parts the game draws for this vehicle in `state`: the list `FUN_00188200` selects
+    /// ([`crate::carpose::selected_list`]) through [`CarMesh::drawn`] (a missing `vd` record draws
+    /// every item) [M FUN_00188200 0x1883b4-0x18844c, FUN_001d2618, FUN_001c8ba8, FUN_001d35d8].
+    pub fn list_for(&self, state: &crate::carpose::DrawState) -> Vec<&CarPart> { self.drawn(crate::carpose::selected_list(state)) }
+
+    /// `Base +0x38 − (Base +0x24 − Base +0x14)`: the constant `FUN_001d2648` subtracts from a wheel
+    /// item's origin y to get the wheel's rest offset [M 0x1d26a8-0x1d26d8, 0x1d27b4-0x1d27c0].
+    /// That `*(car+0xc)` is this `Base` payload is read off the data (item 0's `as` payload starts
+    /// with the `Base` tag on every car [D]), not traced through the loader.
+    pub fn wheel_ref_height(&self) -> Option<f32> { self.base.map(|b| b[14] - (b[9] - b[5])) }
 }
 
 fn u32_at(d: &[u8], o: usize) -> Result<u32> {
@@ -1119,6 +1136,15 @@ pub fn car_mesh(crp_bytes: &[u8]) -> Result<CarMesh> {
         let code = r.tag_code();
         if r.tag == tag::NAME {
             mesh.name = cstr(crp.payload(&r)?);
+        } else if r.tag == TAG_BASE {
+            let p = crp.payload(&r)?;
+            if p.len() >= 0x40 {
+                let mut b = [0f32; 16];
+                for (k, w) in b.iter_mut().enumerate() {
+                    *w = f32_at(p, 4 * k)?;
+                }
+                mesh.base = Some(b);
+            }
         } else if r.tag == TAG_SKEL {
             let p = crp.payload(&r)?;
             for i in 0..r.count.max(0) as usize {

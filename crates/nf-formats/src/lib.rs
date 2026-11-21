@@ -6,6 +6,7 @@ pub mod bigf;
 pub mod buf;
 pub mod carmesh;
 pub mod carmodel;
+pub mod carpose;
 pub mod character;
 pub mod collision;
 pub mod controldef;
