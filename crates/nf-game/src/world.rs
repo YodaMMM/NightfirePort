@@ -867,6 +867,60 @@ fn cross(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * 
 ///   own ride grounds on (the ray tolerance is exceeded at the skin-rest equilibrium on that
 ///   steep a face, so the pick arm must fire); confirming the gate is an
 ///   open live check.
+/// The game's one-sided cylinder push (`cyl_game_contact`) is the default; `NF_CYL_OLD=1` puts
+/// back the pre-2026-11-21 two-sided push with the accumulator-relative arm, for A/B measurement.
+fn cyl_game() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NF_CYL_OLD").is_none())
+}
+
+/// The game's per-triangle cylinder push, [M Intersect_CylGeom 0x109da0] read with the
+/// closest-point out-argument Ghidra drops: both `ASH_vecutil_Dist2Tri` 0x109770 calls pass
+/// `t2 = HITTEST + 0x50` (disasm 0x10a2fc / 0x10a4f0 `addiu t2,s1,0x50`, s1 = the HITTEST
+/// copy), and Dist2Tri stores its closest triangle point there (0x109aa0-0x109aa4
+/// `bnel t2,zero` / `sqc2 vf3,0(t2)`, vf3 = the chosen vertex/edge/interior point, the return
+/// = |vf3 − query|). So the push arm's `v = p − HITTEST+0x50` [M 0x10a53c-0x10a548 `vsub
+/// vf3,vf3,vf1`, vf3 = the spine query point sp+0x60, vf1 = 0x50(s1)] is spine point minus the
+/// fresh closest point, not a lifetime reference.
+/// - query p: the spine/plane crossing clamped to [0,1] when |n·(B−A)| > 0.0002 (raw B−A), else
+///   the centroid projected onto the spine; the raw-denominator head-on cull [M :321-322];
+/// - Dist2Tri flags 99 (p strictly behind the plane, 0x1097a8-0x1097c4) → skip [M 0x10a33c /
+///   0x10a528];
+/// - an edge/vertex closest point (flags not 0) re-projects p onto the spine [M 0x10a344-0x10a3e8,
+///   no second Dist2Tri on that arm];
+/// - push only when `dot(v, n) > 0` and |v| < r, along v̂ by r − |v| (|v| = 0 → the zero vector
+///   [M 0x10a5bc]); the spine moves before the next triangle.
+#[allow(clippy::too_many_arguments)]
+fn cyl_game_contact(t: &[V3; 3], n: V3, a: &mut V3, b: &mut V3, r: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool) -> bool {
+    let ab = sub(*b, *a);
+    let denom = dot(n, ab);
+    let mut p = if denom.abs() > 0.0002 {
+        let f = (-(dot(n, sub(*a, t[0]))) / denom).clamp(0.0, 1.0);
+        if (denom > 0.999 && f > 0.5) || (denom < -0.999 && f < 0.5) { return false; }
+        [a[0] + ab[0] * f, a[1] + ab[1] * f, a[2] + ab[2] * f]
+    } else {
+        let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.0);
+        closest_on_segment(*a, *b, c)
+    };
+    if dot(sub(p, t[0]), n) < 0.0 { return false; }
+    let (q, on_edge) = closest_on_triangle(p, t);
+    if on_edge && denom.abs() > 0.0002 { p = closest_on_segment(*a, *b, q); }
+    let v = sub(p, q);
+    if dot(v, n) <= 0.0 { return false; }
+    let dist = dot(v, v).sqrt();
+    if dist >= r { return false; }
+    let push = if dist > 0.0 { let s = (r - dist) / dist; [v[0] * s, v[1] * s, v[2] * s] } else { [0.0; 3] };
+    if caps_log() {
+        eprintln!("[cap] GAME cent=({:.3},{:.3},{:.3}) q=({:.3},{:.3},{:.3}) p=({:.3},{:.3},{:.3}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) edge={on_edge}",
+            (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
+            q[0], q[1], q[2], p[0], p[1], p[2], push[0], push[1], push[2], n[0], n[1], n[2]);
+    }
+    for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
+    if n[1] > 0.7 && q[1] < b[1] { *walkable = true; }
+    if n[1] > 0.7 { *pick = true; }
+    true
+}
+
 fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, grow: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, top_guard: bool, walk_flat_hold: bool, ref_v: V3) -> bool {
     let tl = [0, 1, 2].map(|k| t[0][k].min(t[1][k]).min(t[2][k]));
     let th = [0, 1, 2].map(|k| t[0][k].max(t[1][k]).max(t[2][k]));
@@ -916,6 +970,7 @@ fn capsule_tri_contact(t: &[V3; 3], mat: u8, a: &mut V3, b: &mut V3, r: f32, gro
     // through from below; the same face crossed in the BOTTOM half (f > 0.5) is solid. Faces the
     // old |n·y| > 0.7 + top-end-side rule culled in the 0.70-0.763 band (≈45-77° slopes above the
     // capsule) are TESTED here, exactly as the game tests them.
+    if cyl_game() { return cyl_game_contact(t, n, a, b, r, total, walkable, pick); }
     // The previous one-sided rule stays in force until the game's cull is on (HEAD_ON_CULL_ON).
     if !HEAD_ON_CULL_ON && n[1].abs() > 0.7 && dot(n, sub(*a, t[0])) < 0.0 { return false; }
     let ab = sub(*b, *a);
@@ -3673,6 +3728,28 @@ fn closest_on_triangle(p: V3, t: &[V3; 3]) -> (V3, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The game's cylinder push is one-sided [M Intersect_CylGeom 0x109da0: Dist2Tri 0x109770
+    /// flags 99 for a query point behind the plane → skip (0x10a33c / 0x10a528), and the push arm
+    /// needs `dot(p − closest, n) > 0` (0x10a548-0x10a570) with the closest point the Dist2Tri
+    /// out-argument at HITTEST+0x50 (0x10a2fc / 0x10a4f0 `addiu t2,s1,0x50`)]. A wall facing +z:
+    /// the spine 0.3 in front is pushed out to r along +z; the same spine 0.3 BEHIND the face
+    /// gets no push at all (the old port pushed it back through, two-sided).
+    #[test]
+    fn the_cylinder_push_is_one_sided_like_the_game() {
+        let wall = [[-2.0, -1.0, 0.0], [2.0, -1.0, 0.0], [0.0, 3.0, 0.0]];
+        assert!(dot(cross(sub(wall[1], wall[0]), sub(wall[2], wall[0])), [0.0, 0.0, 1.0]) > 0.0, "the wall faces +z");
+        let push = |z: f32| {
+            let (mut a, mut b) = ([0.0, 0.275, z], [0.0, -0.4847, z]);
+            let (mut total, mut walkable, mut pick) = ([0f32; 3], false, false);
+            capsule_tri_contact(&wall, 0, &mut a, &mut b, 0.55, 0.65, &mut total, &mut walkable, &mut pick, false, false, [0.0; 3]);
+            total
+        };
+        let front = push(0.3);
+        assert!((front[2] - 0.25).abs() < 1e-5 && front[0].abs() < 1e-6 && front[1].abs() < 1e-6, "front contact: out to r along +z, got {front:?}");
+        let behind = push(-0.3);
+        assert_eq!(behind, [0.0; 3], "a spine behind the face plane is never pushed [M flags 99]");
+    }
 
     /// perf-240e: the grid's object sequence equals the linear scan's for every query — random
     /// triangles of mixed sizes (incl. one spanning the whole set → `always`), random segments of
