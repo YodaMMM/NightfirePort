@@ -274,7 +274,8 @@ has a 0x80-byte block in `RReflection` private data `+0xa0`:
   reads its `.w` [M grep of the 12 `MatCar*` programs].
 
 The globals are `Sky bright` (u8 +0x00), `Sky blend` (u8 +0x02), `Desat` (+0x04, packed like
-FogColour), `Desat ?`, `Sky ?`, `Refl HEIGHT` and `Refl ANGLE`. Their consumers are not traced.
+FogColour), `Desat ?` (+0x08), `Sky ?` (+0x0c), `Refl HEIGHT` (+0x10) and `Refl ANGLE` (+0x14).
+Their consumers are the reflection-map pass (§10.6.3).
 `EAGL::EnvMapState2C` / `2G` (`FUN_001c1950`) hold GS `ALPHA` values: FIX = Paint / Glass
 Reflect × 255; mode `0x64` = (Cs − Cd)·FIX + Cd, or `0x68` = Cs·FIX + Cd when `DAT_00333e74` is set.
 No car file of the 8 archives references them [D, carshade_disc], so they do not set the car
@@ -301,8 +302,7 @@ The LightSources layout (block offsets of `FUN_001ae630`'s registrations):
 | 5 | `Ambient Ground` RGBA × shade |
 | 6 | `Ambient Sky` RGBA × shade |
 
-- Column 3 is written by `FUN_001aefb8`. `c` is the vector at `+0x20` of the current view object;
-  what that vector is has not been traced.
+- Column 3 is written by `FUN_001aefb8`. `c` is the camera's forward axis (§10.6.1).
 - **Angle convention** [M `FUN_001b0038`, `FUN_002d11c8`, `FUN_002d1920`]:
   dir = `(cos X · sin Y, −sin X, cos X · cos Y)`, with X = `Angle X` and Y = `Angle Y` in degrees.
   This is (0, 0, 1) rotated about +x by X, then about +y by Y, as a row vector. The tuner limits X
@@ -312,7 +312,14 @@ The LightSources layout (block offsets of `FUN_001ae630`'s registrations):
 - **shade** [M `FUN_001adea8` → `FUN_001af2d8`]: the car's `+0x1a` byte / 255 × `FUN_001af200`
   (= 1.0). Light 1, Ground and Sky RGB are multiplied by it before the copy. For the sky the
   factor is the value left in the first float argument register, which the call passes on
-  unchanged (inferred). Light 2 is not multiplied. What writes `+0x1a` is not traced.
+  unchanged (inferred). Light 2 is not multiplied.
+- **The shade byte's writer** [M `FUN_001adea8`, `FUN_001c8d70`]: when the drawn object has a
+  world object at `+0x24` whose `+0x30` and `+0x34` are set, `FUN_001adea8` itself rewrites `+0x1a`
+  = clamp(`FUN_001adce8(position, region)`, 0, 1) × 255 before using it. `FUN_001c8d70` writes it
+  the same way with the sample × 1.4. `FUN_001adce8` samples a 4-bit grid bilinearly
+  (`FUN_001ad808`) at the object's x/z, through the region table at `DAT_00333780`, and multiplies
+  by `lm + 0x2dc`. With no grid loaded (`DAT_003d1b28 == 0`) it returns 0.7 × `lm + 0x2dc`. Where
+  the grids come from is not traced.
 
 ### 10.5 The vertex formula [M, bondrm.o `MatCar*` microcode]
 
@@ -343,9 +350,10 @@ Per batch, in order:
 2. **Specular pass**: TexturePacked/Texture, Chrome, Glass[Packed], Gouraud[Packed] and Dash.
    - ST = 0.5 + SpecularSpot · ((n · W · SpecularMat).x, (… ).y), Q = 1.
    - RGB = Specular · C_w.
-   - Texture: `SpecularMap` (`GAME::SpecularMap` = `RReflection + 0xd0`). State: `EnvMapState`.
-   - SpecularMat is a basis built from `normalize(L1 − c)` and (0, 1, 0) by two cross products
-     (`FUN_001aefb8`). The exact signs are not followed.
+   - Texture: `SpecularMap` (`GAME::SpecularMap` = `RReflection + 0xd0` = `common.ssh` `carS`,
+     §10.6.2). State: `EnvMapState`.
+   - SpecularMat columns are b, c, a with a = normalize(L1 − f), b = normalize((0, 1, 0) × a),
+     c = normalize(a × b) (§10.6.1).
 3. **Reflection pass**: the specular materials except Dash.
    - v = ReflectionWarp · ((n + Fresnel · p) · W), where p = the (damaged) model position and W
      is the WorldMatrix rotation rows, unnormalised.
@@ -353,7 +361,7 @@ Per batch, in order:
    - RGB = min(Reflect · C_w, 100000 · max(0, v.y)): faces whose vector points down get no
      reflection.
    - Texture: `ReflectionMap2` (`GAME::ReflectionMap` = `RReflection + 0xbc`, a 256 × 256 texture
-     that `FUN_00291af0` binds to the reflection view; what that view draws is not traced).
+     that `FUN_00291af0` binds to the reflection view, drawn as in §10.6.3).
 
 The Dull family (TextureDull[Packed], GouraudDull[Packed], TextureSwitchPacked) runs only the base
 pass. This matches the tuning: `[Dull]` has no Specular/Reflect. TextureSwitchPacked uploads
@@ -364,19 +372,138 @@ gives L ≈ (1.17, 1.18, 1.20): 0.30 from Light 1, 0.31 from Light 2 and 0.57 fr
 vertex colour is then 149..153, which is above the GS's 128 = ×1.0 if the texture function is
 modulate.
 
-### 10.6 Unproven
+### 10.6 The passes on the GS side [M + D]
 
-- The GS side of each pass: TFX (modulate assumed above), and the alpha blend of the specular and
-  reflection passes. These come from the `GeoPrimState` strings (`modify=envmap`, `chromemap`,
-  `specmap`, `texalpha=…`), which EAGL turns into register values; that step is not traced.
-- What the view vector `c` is, and the SpecularMat cross-product signs.
-- Whether the `.tun` angles are in place before `FUN_001b0158` computes the directions. It runs
-  once, from the light manager's constructor, and no other caller exists.
-- What uploads VU1 0x40..0x48 (positional lights, and 0x48 used by the clip/fog block).
-- The consumers of Desat, Sky blend/bright, Refl HEIGHT/ANGLE, and the writer of the car's `+0x1a`
-  shade byte.
-- The glass-damage pass of `MatCarGlass[Packed]`, and `MatCarTextureSwitchPacked`'s `SwitchData`.
-- The damage pass in detail.
+Code: `carmesh::{GeoPrimState, GsBlend, CarMaterial::pass_slots, CarStrip::{states, slot_textures,
+passes, pass_vertices}, specular_vertex, reflection_vertex, entry_uploads}`,
+`rendertun::{specular_basis, CarRender::{reflection_steps, reflection_camera, sky_level}}`. Tests:
+the unit tests in `carmesh.rs` / `rendertun.rs` and `every_car_pass_finds_its_traced_state_and_textures`
+in `carshade_disc.rs`.
+
+#### 10.6.1 The SpecularMat basis [M `FUN_001aefb8`, disassembled]
+
+- a = normalize(L1 − f), with L1 the Light 1 direction (LightSources column 0) and f the vector
+  the caller passes. a is also stored as LightSources column 3.
+- b = normalize((0, 1, 0) × a) and c = normalize(a × b). Each cross product is a
+  `VOPMULA.xyz ACC, vf1, vf2` + `VOPMSUB.xyz vf3, vf2, vf1` pair, which gives vf1 × vf2; vf1 is
+  (0, 1, 0) then a.
+- The four rows stored at `+0x20` (= `SpecularMat`) are (b_i, c_i, a_i, 0) for i = x, y, z, then
+  (0, 0, 0, 1) (`PEXTLW` / `PEXTUW` / `PCPYLD` / `PCPYUD`). A row-vector normal therefore maps to
+  (n·b, n·c, n·a).
+- f is `camera + 0x20`. The camera is `**(DAT_00333760 + 4)`: the current view's `+0` object, a
+  0xb0-byte camera with its FOV at `+0xa4` (`FUN_001d40f0`, `FUN_001d4570`). When no view is
+  current it is the HUD manager's camera, `*DAT_00333ed8` (`FUN_001aec20`, `FUN_001adc68`).
+  `FUN_001d5700` writes `camera + 0x20` = normalize(look point − eye), so f points from the eye
+  into the scene. a is then the half vector between the light and the eye direction, and a
+  normal along a samples the map centre (0.5, 0.5).
+
+The microcode forms `M = W · SpecularMat · SpecularSpot` (W = the WorldMatrix rows, unnormalised)
+and computes ST = 0.5 + (n · M).xy from the model normal (0x1f4-0x229).
+
+#### 10.6.2 What each pass kicks [M bondrm.o + D]
+
+Each pass sends one GeoPrimState packet, one texture packet and the vertex buffer: an
+`IADDIU vi02, vi14, N` + `XGKICK vi02` pair for each. The render lists fill the slots with op 6
+(textures) and op 7 (states). The VU1 address of each upload is the `UNPACK` that ends the op's
+VIF words.
+
+| material | base | specular | reflection |
+|---|---|---|---|
+| TexturePacked, Chrome | 0x10f + 0x0a | 0x107 + 0x11 | 0x107 + 0x18 |
+| Texture | 0xfe + 0x0a | 0x106 + 0x11 | 0x106 + 0x18 |
+| Dash | 0xfe + 0x0a | 0x106 + 0x11 | none |
+| GlassPacked | 0xfd + 0x0a (after a 0xfd + 0x23 damage draw) | 0x105 + 0x11 | 0x105 + 0x18 |
+| TextureDull / DullPacked / SwitchPacked | 0xf0 / 0xf9 / 0xfb + 0x0a | none | none |
+| GouraudDull / DullPacked | 0x11e / 0xc6 | none | none |
+
+- Slot 0x11 always receives `__EAGL::TAR:::GAME::SpecularMap` and 0x18
+  `__EAGL::TAR:::GAME::ReflectionMap` (1,906 uploads each) [D].
+- `GAME::SpecularMap` is `RReflection + 0xd0`. The constructor fills it with
+  `FUN_001cf340(FUN_001d0420(0), 0x53726163)`, the entry `carS` of the sheet registered as key 0.
+  `FUN_001c4008` registers `data\render\` + `common.ssh` as key 0. `carS` is a 32 × 32 entry in
+  every archive's common.ssh [D].
+- `GAME::ReflectionMap` is `RReflection + 0xbc`, the 256 × 256 render target (§10.6.3).
+- GlassPacked's lists also upload a state to 0xf5, which its program never kicks. Its base draw
+  kicks the `name=glassdmgmap` state at 0xfd. The branches around the damage draw are not
+  followed.
+
+**The states** (`FUN_001ce158` builds the 0x80-byte GS packet: `+0x10` PRIM, `+0x30` TEST_1,
+`+0x40` ALPHA_1, then FRAME_1 / ZBUF_1 / FBA_1).
+
+The start values are:
+- PRIM = triangle | IIP | TME | FGE | ABE.
+- TEST = ZTE, ZTST GEQUAL, ATE, ATST GREATER, AREF 0xa0, AFAIL RGB_ONLY.
+- ALPHA = 0x44, i.e. (Cs − Cd)·As + Cd.
+
+The `key=value` handlers (table 0x333f58) run in order. Those that return non-zero run once more;
+only `modify=specmap` does. `carmesh::GeoPrimState::parse` lists every handler. The ones that
+decide the passes:
+
+- **`name=envmap`** (`FUN_001cda30`): the specular and reflection state of paint, chrome and glass
+  (every such strip, [D]).
+  - ALPHA = 0x48: **Cs·As + Cd**, additive and scaled by the source alpha.
+  - PRIM = IIP | TME | ABE (fog off).
+  - ATE on, but AFAIL = RGB_ONLY keeps the colour of failing pixels.
+- **`name=specmap`** (`FUN_001cdad0`): the dash specular state (every dash strip).
+  - ALPHA = 0x58: **Cs·Ad + Cd**, scaled by the frame buffer's alpha.
+  - The same PRIM; ATE off.
+- **The dash base** (`modify=…glaregen;modify=specmap;texalpha=…`): `glaregen` and `specmap`
+  clear ABE and ATE. The later `texalpha` acts only while ATE is set, so it does nothing. The base
+  draw is unblended, and the frame-buffer alpha it leaves is what the dash specular scales by.
+- **The paint and chrome base** (`modify=envmap|chromemap;alphatest=off;texalpha=…`):
+  `alphatest=off` clears ATE first, so `texalpha` is skipped and ABE stays on with ALPHA 0x44.
+- `texalpha`'s own `ALPHA = 0x44` write is guarded by the caller's `$s1`, which is the string
+  cursor of `FUN_001ce3b0` and never null. So that write never runs.
+
+**Vertex alpha**: 127 in every pass. The set-up loop fills `ColourSlot.w` with FTOI0(127.0), the
+base pass keeps it (`MOVEw`), and the overlay passes store `.xyz` only.
+
+**Colours** (FTOI0, i.e. truncated):
+- specular RGB = Specular · C_w;
+- reflection RGB = min(Reflect · C_w, 100000 · max(0, v.y));
+- C_w = 127 on an undamaged car.
+
+#### 10.6.3 The reflection map [M `FUN_001c1ec0`, `FUN_001c1b18`, `FUN_001c1560`, `FUN_001c1358`]
+
+Each frame (`FUN_001c5eb0` → `FUN_001c1ec0`) the reflection view clears the 256 × 256 map, then
+draws the steps below. Each quad is full-map (`FUN_0019f960(0, 0, 256, 256, colour, texture)`)
+with ABE on. s = (int)(Sky bright × 0.94) & 0xff.
+
+1. If `Sky ?`: a quad textured `cref` with colour (s, s, s, 0x40), ALPHA 0x44.
+2. The world, drawn from the reflection camera (`FUN_0021fa58` / `FUN_001c2720`; their content is
+   not traced).
+   - Eye = the point `FUN_001c5eb0` passes + (0, Refl HEIGHT, 0).
+   - Forward = normalize(0.8 · f + (0, 1, 0)), with f the HUD manager camera's `+0x20` and
+     0.8 = `DAT_00333e78`.
+   - The projection angle is `Refl ANGLE`: `FUN_00295910(+0x14, 1, 1, 2500)`, called once in the
+     constructor.
+3. If `Sky ?` and `Sky blend` ≠ 0: `cref` again with colour (s, s, s, Sky blend), ALPHA 0x44.
+4. If `Desat ?`: a quad textured `rmsk` (common.ssh, 64 × 64) whose colour is the packed `Desat`
+   word, ALPHA 0x62 = Cd − Cs: a subtraction.
+
+When `DAT_003349e0 + 0x30` is 1, steps 2-4 are replaced by a flat (0x80, 0x80, 0x80, 0x80) quad.
+
+`cref` is taken from the sheet registered as key 4, else from `data\render\ext.ssh` (key 5,
+128 × 128 [D]).
+
+### 10.7 Unproven
+
+- The texture function (TFX / TCC) of every pass. TEX0 comes from the texture packets
+  (`GAME::SpecularMap`'s descriptor; the module descriptors), which are not decoded.
+  - `FUN_001c0930` / `FUN_001c1358` set the low nibble of the texture objects' `+0x10` to 5 and
+    clear bits 25-26; what those fields mean is not traced.
+  - The draw rules above assume modulate, with 0x80 = 1.0.
+- COLCLAMP, FRAME / ZBUF masks, and therefore whether the base pass writes the frame-buffer alpha
+  that the dash specular reads.
+- Which point `FUN_001c5eb0` hands the reflection camera (`FUN_00201af0(0x339190)`), what the
+  reflection scene draws, and which sheet key 4 is.
+- Whether the `.tun` `Refl ANGLE` is in place before the constructor's one projection call. The
+  same question applies to `FUN_001b0158`'s light directions.
+- What uploads VU1 0x40..0x48 (the positional lights, and 0x48, which the clip/fog block uses).
+- The glass-damage pass of `MatCarGlassPacked` (its branches) and `MatCarTextureSwitchPacked`'s
+  `SwitchData`. The `Glass` and `Gouraud[Packed]` slot layouts are not read (no car strip uses
+  them).
+- The damage pass in detail; C_w on a damaged car.
 - Which `default` row the name lookup lands on.
 - Live check C-5: breakpoint `FUN_001c1778` during a paris drive. Expect k ∈ {0, 2, 3, 4, 5}, the
   vehicle name `vanquish`, and a return of `block + 16k` (§10.2).

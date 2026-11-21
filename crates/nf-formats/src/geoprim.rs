@@ -306,6 +306,10 @@ impl<'m> ModelIndex<'m> {
 
     fn img(&self) -> &[u8] { &self.module.image }
 
+    /// The sheet entry name of the `__EAGL::TAR` descriptor at `.data` value `addr`, if one is
+    /// there (the name [`Self::packet_texture`] returns).
+    pub fn texture_name(&self, addr: u32) -> Option<&str> { self.textures.get(&addr).map(String::as_str) }
+
     fn ptr(&self, p: u32) -> Result<usize> {
         let at = self.data_offset + p as usize;
         if at >= self.img().len() {
