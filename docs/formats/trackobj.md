@@ -137,13 +137,13 @@ Every placement geoprim leaves without a model (geoprim.md §3) is one of two ki
 - **Collision-only**: the article has no `as` parts, only `ca` collision pieces (`WALLFIX*`,
   `CUSTBADWALL*`, `WFInv*`, `Invisible_Barrier_*`, `River*`, `Frozenjump*`…). Nothing to draw.
 - **Effect parts**: the `as` payload's `+4` names an `ef` list instead of a model
-  (`trafficlight` part 1, `EiffelLight`, `Construction_Lights`, `University`…). Type 6 entries
-  name a particle system; type 2's draw is not traced. The effect positions and the particle
-  system format are not decoded.
+  (`trafficlight` part 1, `EiffelLight`, `Construction_Lights`, `University`…). Model parts
+  carry `ef` lists too. Type 2 = a glare sprite, type 6 = a Giotto effect (`GIOT::<name>` in the
+  effects gallery): decoded in `nf_formats::trackfx`, docs/systems/driving-effects.md section 7.
 
 ## 5. Not done
 
 - The `V4-32` layout of `Rock_Collapse`, `JA_SAL`, `JB_SAL`, `LookOutTowerExplosion` (geoprim.md §4):
   not decoded; its strip unit is still unknown.
-- The trigger fire conditions, the smackable physics body, the type-2 effect draw.
+- The trigger fire conditions, the smackable physics body.
 - Item data flag bit 0 (set on 17 RACE items as 0x51): its meaning before Init World sets it.

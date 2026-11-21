@@ -280,6 +280,23 @@ pub fn map_placements(crp: &Crp<'_>) -> Result<Vec<Placement>> {
     Ok(out)
 }
 
+/// Word 15 (`+0x3c`) of every `Map in#0` item, by item index: the LOD / grid radius word
+/// (`FUN_001ad128`, `FUN_001c7098`) [M].
+pub fn map_item_word15(crp: &Crp<'_>) -> Result<Vec<u32>> {
+    let map = crp
+        .pool()?
+        .into_iter()
+        .find(|r| r.tag == tag::MAP)
+        .ok_or_else(|| FormatError::Invalid("no Map article in the pool".into()))?;
+    let inst = window(crp, &map)?
+        .into_iter()
+        .find(|r| r.tag_code() == TAG_IN && r.instance() == Some(0))
+        .ok_or_else(|| FormatError::Invalid("no in#0 record in the Map window".into()))?;
+    let at = inst.data_addr(crp.data)?;
+    let n = inst.count.max(0) as usize;
+    (0..n).map(|i| u32_at(crp.data, at + i * PLACEMENT_SIZE + 0x3c)).collect()
+}
+
 /// `(article, part) → EAGL model name` (`EAGL::<a>::{as  0000}::Model[0].XX`) for every article part
 /// whose `as` payload ends in `{u16 index, "sr"}` [D].
 pub fn part_models(crp: &Crp<'_>) -> Result<HashMap<(String, u16), String>> {
