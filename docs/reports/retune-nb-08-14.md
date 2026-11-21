@@ -61,10 +61,15 @@
 - The full suite (tools/test/suite.py): **did NOT fit the window, same environment as round 13 —
   background jobs are killed between tool calls in this sandbox** (verified twice this session:
   the nohup'd suite died twice between tool calls, suite.out emptied both times; the 10-minute
-  foreground Bash cap also cannot hold the whole four-crate suite). What ran instead: the whole
-  affected binary above (6/1, 176.48 s) plus the three lever runs. No `crates/*/src/` change this
-  window, so every other binary is byte-identical in behaviour to the merged 08-13 state, whose
-  numbers are in docs/reports/retune-nb-08-13.md.
+  foreground Bash cap also cannot hold the whole four-crate suite — a second foreground attempt
+  spent its whole cap inside the suite's build step, which re-links every test binary of the four
+  crates). The first foreground attempt also hit `No space left on device (os error 28)`: the
+  two 10-minute-capped builds had left stale `target/release/build` generations (1515 dirs, the
+  test executables live there); they were cleared by mtime (nothing newer than the finished
+  build touched), 5.0 GB freed, and the affected binary's own artifacts were kept. What ran
+  instead: the whole affected binary above (6/1, 176.48 s) plus the three lever runs. No
+  `crates/*/src/` change this window, so every other binary is byte-identical in behaviour to
+  the merged 08-13 state, whose numbers are in docs/reports/retune-nb-08-13.md.
 
 ## What's left (the next window's levers, in priority order)
 
