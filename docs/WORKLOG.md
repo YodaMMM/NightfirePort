@@ -282,3 +282,14 @@ sisters, the plain walks, the d2 Agent sister and both ally tests byte-exact]. T
 ledger + the next levers (the second-salvo lane; the west launch starvation measured dead from
 the rim; the reply-cadence live check) are in the ignore message. Report:
 docs/reports/retune-nb-08-14.md.
+
+## retune-nb-08-15 (2026-11-21, round 15)
+
+Branch `s/retune-nb-08-15` from origin/master, origin/s/retune-nb-08-14 merged in (the only
+conflict was the walk's ignore line; kept the 08-14 ledger — master's run-12 census finding is
+the ledger's round-5 lockout answer, already recorded). Continuing the lever ledger on
+walk_the_whole_mission_on_real_input_real_damage_00agent from the round-14 state (death t29924,
+the first killer salvo survived): the next untried lever is (1) THE SECOND-SALVO LANE — score
+the dodge diagonal on keeping z inside the pocket band −179.6..−178.9 while preferring the east
+x, judged on its own real run. Helpers stay gated to 08 + d3. Progress appended below as it
+lands.
