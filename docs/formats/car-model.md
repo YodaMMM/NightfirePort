@@ -140,3 +140,51 @@ The variants are the game's damage/state sets: taxi variant 0.0 = 1087 verts →
   pointers into the relocated module's `.data` [M expectation].
 - **C-4 — GeoPrim consumer**: the EAGL function that reads the batch table (the `0xa0000000`
   group headers at .data+0x231c0 for taxi) — its address pins the last open format piece (§6).
+
+## 9. The car draw path and the decoded parts (`crates/nf-formats/src/carmesh.rs`) [M + D]
+
+Decoder: `carmesh::car_mesh(crp_bytes)` → `CarMesh { name, sheet, skel, parts, draw_lists }`;
+each `CarPart` is one `in#0` item with its matrix, flags, attachment kind, `as` set, LOD list
+and LOD-0 strips (positions, UVs, normals, texture) in the part frame. Tests:
+`crates/nf-formats/tests/carmesh_disc.rs` (all 58 car files of the 8 driving archives) and the
+unit tests in `carmesh.rs`.
+
+**Draw path** (DRIVING.ELF):
+
+- `FUN_001d35d8` 0x1d35d8 (vehicle draw, vtable 0x3885d8): all `in#0` items through
+  `FUN_001ad6b8` while no draw list is selected (`car + 0x348 == 0`, as `FUN_001d2338` leaves
+  it), else the items a `vd  #N` record lists (`FUN_001ad758`: `items + u16[k] × 0x40`;
+  selected by `FUN_001d2618` → `FUN_001c8ba8`, record count = number of indices). So `vd` holds
+  **item** indices (C-3's "`sa#N`" marker is the `as` short tag: the item's `+0x1c` word is
+  `'as' << 16 | N`).
+- `FUN_001ad498` per item: skipped when `+0x0c & 1`; matrix from the table at 0x333a60
+  indexed by `+0x0d` (`FUN_001beee0`): 0xff = own matrix (`FUN_001bf140`), 0xfe = own matrix ×
+  the run-time matrix of `Skel` part `+0x0e − 1` (`FUN_001bf600` → `FUN_001bef68`), 0xef =
+  another run-time matrix (`FUN_001bf598`), < 100 = animated (`FUN_001a30c0`); then × the car
+  matrix (`FUN_002cbb88`). Mirrored items (`+0x0c & 0x80`) store a negated x axis [D].
+- The `as` payload is the LOD set read by `FUN_001ad2e0`: `+0x04` effect ref, `+0x08`
+  animation ref, `+0x10`/`+0x14` f32 (`+0x14` = the y half-extent of the LOD-0 geometry on all
+  686 sets with geometry, exactly [D]; `+0x10` not identified), `+0x18` u16 own index,
+  `+0x1c` LOD count, `+0x1d` pass (2 = now, else queued by `FUN_001ab050`), `+0x1e`
+  render-state hook (table 0x3337a0), `+0x20` `{f32 distance, sr ref}` per LOD.
+- The model draw is the track's (`FUN_002843a0`, docs/formats/geoprim.md §4b): one visible
+  group per car model (970 models) [D].
+
+**Batch layouts** [D]: A = `V3-32` positions + `V2-16` UV (u16 − 0x8000) / 1024 + `V3-8`
+normal (byte − 0x80) / 127 + two `V4-16` arrays (undecoded); B = five `V4-32` arrays
+(position, normal, UV, two undecoded); positions-only. 249,532 of 249,596 normals have unit
+length ± 5 %; there is no colour upload in any car chain. Strip list: 3 bytes per vertex, 2 for
+positions-only batches, wrapping past 255.
+
+**Old reading** (`crp_mesh::TrackModule::extract_car_mesh`): treats `vd#1` as `as` indices,
+places `as#k` with item k's matrix, drops mirrored items, decodes the batch behind
+`*(entry − 0x18)`, reads UVs at /1024 but normals as colours. On the vanquish 4,221 of its
+10,375 vertices lie on the car the new reading places.
+
+**Open**: which `vd` list the game selects for each vehicle (the caller of the `FUN_001d2618`
+vtable slot is not found; the constructor leaves none, which draws every item); the run-time
+`Skel` / 0xef matrices (identity at rest is not proven); the texture of 85 strips whose model
+sets none before them (GS state carried from an earlier draw, not traced); the ultralights'
+`blck` texture, which no sheet of their archives holds; the two undecoded per-vertex arrays; the
+car microcode (`MatCar*`, in the car module) is not disassembled, so the /1024 UV rule, the
+normal bias and the strip-list unit are data-proven only.

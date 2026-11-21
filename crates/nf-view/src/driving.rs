@@ -411,7 +411,21 @@ fn load_car_into_scene(
         }
     }
 
-    let strips = car_mod.extract_car_mesh(&car_crp, car_stem);
+    // The car's parts through the corrected draw chain (nf_formats::carmesh: each placement names its
+    // model set [M DRIVING.ELF 0x1ad2e0 +0x1c], the vd lists hold placement indices [M 0x1ad758]),
+    // every drawn part placed in car space; normals ride the vertex nrm (the car batches carry no
+    // vertex colours [D]). The old reader stays as the fallback when the car file does not decode.
+    let strips: Vec<nf_formats::crp_mesh::MeshStrip> = match nf_formats::carmesh::car_mesh(&crp_bytes) {
+        Ok(car) => car.drawn(None).into_iter().filter(|part| !part.hidden()).flat_map(|part| {
+            part.strips.iter().map(move |st| nf_formats::crp_mesh::MeshStrip {
+                positions: st.positions.iter().map(|&q| part.apply(q)).collect(),
+                uvs: st.uvs.clone(),
+                colors: st.normals.iter().map(|n| [(n[0] * 127.0) as i8 as u8, (n[1] * 127.0) as i8 as u8, (n[2] * 127.0) as i8 as u8]).collect(),
+                texture: st.texture.clone(),
+            }).collect::<Vec<_>>()
+        }).collect(),
+        Err(_) => car_mod.extract_car_mesh(&car_crp, car_stem),
+    };
     if strips.is_empty() {
         return None;
     }

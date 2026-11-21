@@ -920,6 +920,13 @@ impl TrackModule {
     /// Decode only the intact primary-variant (`vd#1` if present) parts of a car `.crp`,
     /// using the article's `Base` bounding box and `in#0` bone transforms (excluding EMP/damage
     /// spheres and alternate damage variants).
+    ///
+    /// Superseded by `carmesh::car_mesh`, which follows the game's car draw path. Known wrong here
+    /// [M FUN_001d35d8 / FUN_001ad758 / FUN_001ad2e0]: `vd#N` lists `in#0` item indices, not `as`
+    /// indices; an item names its `as` set at +0x1c, so `as#k` is not placed by item k (several
+    /// items — mirrored pairs — share one set); each entry's batch is the one its render list's
+    /// op 4 calls (`geoprim::ModelIndex::draw_chain`), not the one at `*(entry − 0x18)`; car UVs are
+    /// /1024 and the `V3-8` bytes are 0x80-biased normals, not colours (docs/formats/car-model.md §9).
     pub fn extract_car_mesh(&self, crp: &crate::crp::Crp, fallback_name: &str) -> Vec<MeshStrip> {
         let Ok(articles) = crp.track_articles() else {
             return self.extract_all_article_parts(fallback_name, [-1.0, -1.0, -2.5], [1.0, 1.0, 2.5]);
