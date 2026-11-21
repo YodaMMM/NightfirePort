@@ -1706,7 +1706,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 if sim.bond.pos[1] <= 13.2 { break; }
                 w.tick(Input::default(), false);
             }
-            w.tick(Input { crouch: true, ..Default::default() }, false);
+            // s-crouch-latch: the "uncrouch press" that stood here was always LOST — it landed
+            // inside the port's old flat 60-tick lockout, so the shipped fight ran crouched. With
+            // the game's lockout (it reopens 13 ticks after the press [M Player_SSCrouch
+            // 0x1924c0:45-55]) the press now stands Bond, and standing there
+            // re-grows the capsule onto the upper floor (feet 13.47, the zap band; measured: a
+            // stand at the 13.2 break (mid-fall) and one after a grounded-wait both end at y 13.4704, deaths t21064 / t20944,
+            // worse than the crouched t21070). The press is dropped so the shipped crouched
+            // fight is unchanged; the STANDING lower-floor fight the ledger wants was not reached by
+            // either measured stand (both re-grew onto the upper floor).
+            w.tick(Input::default(), false);
             w.tick(Input::default(), false);
             eprintln!("[08 anchor] bond {:?} after the crouch drop", w.scene.sim.as_ref().unwrap().bond.pos);
             // run 11 TRIED and REVERTED: forcing the stance standing after the drop (the
