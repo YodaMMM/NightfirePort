@@ -20,6 +20,8 @@ pub mod bounds;
 pub mod camera;
 // Vehicle damage + health: mission+0x378..0x384, the car's damage virtual, zones, contacts.
 pub mod damage;
+// The DamageZones upload (FUN_001d3138), ESetVisualDamage (FUN_001876c8) and the model's damage masks.
+pub mod deform;
 // Effects: the particle pool, emitters, wheel smoke/spray/sparks, glare pulse (FUN_001f29d8 family).
 pub mod effects;
 // The MIS01 sniper phase's flight path, triggers, timers, view limits and shot test.
