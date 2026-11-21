@@ -364,3 +364,16 @@ most — even far upstream — and change it so Bond reaches the end fight with 
 (the t29924 death has sat for three rounds; the 08-16 ledger measured the killer chain
 un-survivable at the 6.0 entry and survivable at ~10-12). Setup next, then the upstream
 hit-ledger measurement on the merged tree. Report: docs/reports/retune-nb-08-17.md.
+Round 17 measured and shipped the ledger only (both levers reverted). The merged-tree
+baseline (master's fusebox-pit sight-abort + 08-16) RESHAPED the death: t28183 (frame
+28185) at (113.01,13.47,-179.26), 59 hits, 22 return-fire fights — the full hit ledger from
+the start is in the ignore message (trio -28.0 / #15 -12.0 / #16 -4.0 / #5 -6.0 / #26 -4.0 /
+the PRE-FIGHT approach burst -28.0 / #25 -18.0 during the dive ride). Lever (a) the JIGGLE
+FIGHTS (the accuracy-law motion factors [M 0x179740:52-54; ACTION.ELF statics 0.25/0.75 [D]])
+tried on its own run and DEAD (the deck took 8 rows and the re-rolled timeline wedged the
+boarding descent t26700); lever (b) the post-launch survival crouch tried and DEAD as a
+byte-identical no-op (the standing zaps are pre-fight, the killer rows are #25 during the
+ride). Both reverted; the final tree is the merge itself. Whole binary 6 passed / 1 failed
+(the target walk), 165.28 s [L the final-tree run]. The next lever (the PRE-FIGHT crouch +
+the ride-free survival path) and the fight-order item are in the ignore message. Report:
+docs/reports/retune-nb-08-17.md.

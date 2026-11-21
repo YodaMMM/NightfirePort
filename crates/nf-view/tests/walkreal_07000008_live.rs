@@ -3494,6 +3494,52 @@ baseline's own damage ledger killed one lever and measured another dead before a
    machine-powered (a gdbwatch on the volume's damage tick vs the copter's range) decides
    whether ANY local park can ever be zap-free; (3) the chain-entry math: entry 6.0 with the
    ring un-survivable below ~10-12 — with the park measured dead and the pre-crouch dead by
+ SHIPPED/MEASURED 2026-11-21 round 17 (retune-nb-08-17, still red — the death RESHAPED by
+the merge): the branch is origin/master b5278f0d1 (walks-1121-08-cabin's fusebox-pit
+sight-abort, which cut #15 to 12.0/3 and #16 to one -4.0 row [L the merged-tree ledger]) +
+08-16 merged in; two test-file conflicts resolved keeping both sides' content. THE
+MERGED-TREE BASELINE [L the 2026-11-21 NF_DMG_TRACE run]: death t28183 (frame 28185) at
+(113.01,13.47,-179.26), 59 hits for 100.0, 22 return-fire fights — 1741 ticks EARLIER than
+round 16 and to a NEW killer. The FULL hit ledger from the start (tick, source, amount):
+the station-hall y-46 deck trio -28.0 (7 x -4.00 t601-960: #14 1/#3 1/#13 4/#2 2, all on
+Bond WEDGED at (147.7-148.8,46.1,-93.8/9) while the nav's return fire killed them one
+pistol stand at a time — #14 t672, #3 t740, #13 t971, #2 t1033 — the fights worked, the
+cost was the rooted stands in the lanes); #15 -12.0 (3 x -4.00 t4560-4860, the sight
+abort's own measured residue); #16 -4.0 (t5201); #5 -6.0 (2 x -3.00 t6666-6670, the
+secure-room man the doorway stands held 7 times without a kill); #26 -4.0 (t24695, one
+row — was #27 21.0/7 on master's tree); the PRE-FIGHT approach burst -28.0 (14 x -2.00
+t27776-27951 on the STANDING capsule at the anchor — the fight only opens at frame 27917
+[L the [08 gates] t0 row], no stance scheduler exists before it); #25 -18.0 (3 x -6.00
+t28111-28183 from (117.5,23.0,-133.5) d 47.0 weapon 0x15 hp 20 — DURING the t51-191 dive
+ride, the missile cam freezes the input). The dive launch landed -101.0 at fight-t 191
+[L the [08 rocket] rows]. Levers this round, each on its own real run: (a) the JIGGLE
+FIGHTS (the shared-helper opt-in: a 1-tick strafe press every 50 ticks inside
+stand_and_fire, re-arming every tracking shooter's TargetFirstMoved x0.25 120-tick window
+[M DroneWeap_DoBulletAccuracy 0x179740:52-54 + DoOpponentTargetting 0x179a48:65-73; the
+ACTION.ELF statics 0x30cb00-08 = 2.0/0.25/0.75 [D], effective on 08 — the ReadTuningVars
+05-08 tail does not override them]) — TRIED and DEAD: the deck took 8 rows (-32.0, WORSE —
+the roll variance went the wrong way) and the re-rolled timeline wedged the boarding
+descent HARD at 'the lower level east nav 5' (the half-open door pos01 0.50, 6 mitigation
+cycles, assert) t26700 with health 7.0 — the shifted fight positions moved the downstream
+nav start states. Reverted. (b) the post-launch survival crouch (the west-band stand press
+gated to rockets < 1) — TRIED and DEAD AS A NO-OP: death t28183 byte-identical [L the
+lever run] — the 14 standing zaps are PRE-FIGHT (no scheduler there) and the killer rows
+are #25 during the ride. Reverted. NEXT LEVERS (priority): (1) THE PRE-FIGHT CROUCH —
+press the crouch at the anchor arrival so the approach burst hits the crouched capsule
+(the standing burst rate 14 rows/175 ticks vs the crouched tail 7/1600 [L both baselines]);
+the fight then opens CROUCHED: the t51 dive launch never fires (the crouched eye is
+lintel-blindfolded [L the crouched slit anchor ledger]) so NO ride happens and #25's
+snipes get ANSWERED by the fight machinery instead of hitting a frozen input — the fight
+is survival-only either way (the post-launch line_ok is measured dead, round 16), and the
+crouched eye's STEEP RISING rays to #25 (y 23, d 47, +9.5 rise over 47 u clears the
+lintel) keep the fights live [L the round-13 crouched-fight note]; (2) the hall trio's
+rooted-stand cost (-28.0) has no [M]-backed lever left: the accuracy law's motion factors
+do not bite (a), the lanes cover the whole deck (the 08-9 ledger), the early scoop+arm
+detour costs more than it saves (the arm cycle alone is 396 ticks in the lanes); a
+fight-order change (the most-hits-first pick over the last-hit pick) is the only untried
+shape — #13's 4 rows landed while he was fought third; (3) the reply-cadence live check
+(carried rounds 11-16) now DECIDES lever (1)'s value: if the w62 chain is provoked by the
+launch, the ride-free path also skips the chain.
    data, the entry can only rise via the hall (item 1) or the volume (item 2)."]
 // nb-scan-all-08 ledger (2026-11-18, still red; the original fight code measures t28298 and
 // every lever this window tried measured WORSE — each on its own real run):
