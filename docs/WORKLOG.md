@@ -48,3 +48,9 @@
   the #11 window cap, then the #3 trade posture.
 - Ran whole on this tree: walkreal_07000001_live = 7 passed / 0 failed / 1 ignored (509 s),
   interactables_07000001_live = 10 passed / 0 failed (25.5 s).
+- Round 2 close-out: d1 and d2 GREEN (ignores lifted, proof in the test docs + the report).
+  d3 moved t75294 -> t83962 on the ammo x-scope lever; the refreshed ledger names the endgame
+  walk posture as the next lever (the post-clear stairwell-head nav's own stuck-flank walked
+  Bond into the mouth pack at d 0.8-0.9, inside the x2 band). The recovery tap posture is in
+  (d3/real-damage gated) and engages once the walk posture holds. Report:
+  docs/reports/retune-nb-01-2.md.
