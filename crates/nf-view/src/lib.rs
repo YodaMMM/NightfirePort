@@ -817,6 +817,14 @@ pub fn load_front_end(iso: &str, archive: &str, all: bool, save: Option<&nf_game
     load_impl(iso, archive, all, save, dev, &[], false, None, difficulty, bonus)
 }
 
+/// [`load_front_end`] with the profile's game-complete byte: on a finished game the level kit's
+/// weapon 10 is record 0xC (`Player_EquipWeapon` → `Upgrade_Weapon` case 10 [M 0x1a8a58:24-30,
+/// 0x1a8f30]). The app's level loads run this one.
+#[allow(clippy::too_many_arguments)]
+pub fn load_front_end_gc(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, difficulty: u32, bonus: u64, game_complete: bool) -> Result<scene::Scene> {
+    load_impl_gc(iso, archive, all, save, dev, &[], false, None, difficulty, bonus, game_complete)
+}
+
 /// difficulty-effects: the warm reload with a weapon-asset set at the selected difficulty.
 pub fn load_with_carry_weapons_difficulty(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, wids: &[u8], difficulty: u32) -> Result<scene::Scene> {
     load_impl(iso, archive, all, save, false, wids, false, None, difficulty, 0)
@@ -936,6 +944,13 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
 }
 
 fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
+    load_impl_gc(iso_path, archive, all, save, dev, give, mp, mp_settings, difficulty, bonus, false)
+}
+
+/// [`load_impl`] with the profile's game-complete byte (`GameState[0x52]`), which the level kit's
+/// `Upgrade_Weapon` reads [M 0x1a8f30 case 10] (mp-drops).
+#[allow(clippy::too_many_arguments)]
+fn load_impl_gc(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64, game_complete: bool) -> Result<scene::Scene> {
     use nf_formats::{anim::Sequence, character, levelbin::LevelBin};
     use std::collections::HashMap;
     let mut t = std::time::Instant::now();
@@ -1891,8 +1906,8 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             sim.mp_combat.gate_setup(humans, &sim.mp.as_ref().unwrap().settings, &sim.weapons, loaded);
             equipped
         } else {
-            nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
-                &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded)
+            nf_game::player::init_level_loadout_ex(level_id, save, &mut sim.drones.health,
+                &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded, game_complete)
         };
         // The switch request is the game's `M_CONTROL+0x63`; the draw machine holsters and draws it
         // (`Player_WeaponSelect` 0x1a2cc0). 0x47 (none) draws nothing.
@@ -4125,6 +4140,9 @@ impl App {
         // zero word [L ee_start_05 0x2e1b88]. A part-to-part load runs with no front end up: the
         // word comes from the stashed session.
         let bonus = self.fe.as_ref().map_or_else(|| self.profile_session.bonus_bits(), |fe| fe.bonus_bits());
+        // mp-drops: the game-complete byte the kit's `Upgrade_Weapon(10)` reads [M 0x1a8f30 case 10]
+        // (the same single store the post-load restore below seeds `Progress::game_complete` from).
+        let game_complete = self.fe.as_ref().map_or(self.profile_session.saved_progress(), |fe| fe.saved_progress()).is_some_and(|p| p.game_complete);
         let job = async_load::Job::spawn(move || {
             if let Some(viv) = driving::driving_viv_for_level(next) {
                 driving::load_driving_scene(&iso, viv)
@@ -4135,7 +4153,7 @@ impl App {
                     .map(|sc| (sc, None))
                     .map_err(|e| e.to_string())
             } else {
-                load_front_end(&iso, &name, all, save.as_ref(), dev, difficulty, bonus)
+                load_front_end_gc(&iso, &name, all, save.as_ref(), dev, difficulty, bonus, game_complete)
                     .map(|sc| (sc, None))
                     .map_err(|e| e.to_string())
             }

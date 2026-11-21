@@ -14005,6 +14005,10 @@ pub struct Drones {
     /// there is NO host-only gate anywhere in the function. The port's per-machine filtering is
     /// port design; the game-side guarantee is humans-before-bots, first-taker-wins.
     pub mp_shared_pickups: bool,
+    /// mp-drops: the local player's character row allows the second SMG (`default_bot_stats[skin]`
+    /// byte 9 == 1) — the MP take remap's `dual` [M 0x18e650:146-160]. Set by the scene each MP
+    /// tick; unread in single player (`mp_master == 0` takes the `Upgrade_Weapon` path).
+    pub mp_take_dual: bool,
     /// The grapple points (placement 0x3A, `Grapple_Create` 0x198298; fix-gadgets).
     pub grapple_points: Vec<crate::gadget::GrapplePoint>,
     /// The animated SimpleScripts (`SS_Create` 0x1a9c58 / `SS_Update` 0x1a9948; map-tower2): the
@@ -14282,6 +14286,9 @@ pub struct NetBody {
     pub hanging: bool,
     /// The slot's shared armour (`BLData+0x8B0`) — the armour pickup's refusal gate.
     pub armour: f32,
+    /// The slot's character row allows the second SMG: `default_bot_stats[skin]` byte 9 == 1 —
+    /// `Pickup_Handler`'s MP take remap reads it [M 0x18e650:146-160] ([`crate::pickup::Inventory::take_id`]).
+    pub dual: bool,
 }
 
 /// `NDrone2_DefaultInit` (0x14b300): the voice set `+0xD8` from the character id (skin 0x05000000 + id).
@@ -14552,6 +14559,7 @@ impl Drones {
             pain_alpha: 1.0,
             // mp-bot-weapons.
             mp_shared_pickups: false,
+            mp_take_dual: false,
             worldobjs: Default::default(),
             // fix-world-fx: the presentation FX.
             fx: Default::default(),
@@ -19405,7 +19413,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // every weapon-10 drop (the 07000007/08/0c/4a guards) handed Bond record 0xC (double
         // damage, full auto) on a game nobody had finished.
         let clock = self.progress.game_complete as u32;
-        let res = self.inventory.take(d.weapons, p, loaded, &mut self.health.armour, clock);
+        // mp-drops: in a match `Pickup_Handler` takes through the MP remap, not `Upgrade_Weapon`
+        // [M 0x18e650:141-160] — no handgun table, no game-complete 10 → 0xC.
+        let mp_dual = (self.mp_master != 0).then_some(self.mp_take_dual);
+        // The equip id, read BEFORE the take (the MP remap reads the owned byte of record 10).
+        let take_up = self.inventory.take_id(p.weapon, mp_dual, clock);
+        let res = self.inventory.take_ex(d.weapons, p, loaded, &mut self.health.armour, clock, mp_dual);
         // `NF_PICKUPLOG=1`: the take result and why (fix-player2's drop diagnostics; shared file —
         // one env-gated line only).
         if std::env::var_os("NF_PICKUPLOG").is_some() {
@@ -19433,14 +19446,14 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // writes BLData+0x8bc = 1.0].
             self.pain_alpha = 1.0;
             if self.auto_switch && matches!(t, crate::pickup::Taken::Weapon { .. }) {
-                let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                let id = take_up;
                 if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
                     self.weapon_switch_request = Some(id);
                 }
             }
             // The Ronin case re-take [M 0x1a8a58:81-85]: holding the remote 0x53 → the request 0x52.
             if matches!(t, crate::pickup::Taken::Weapon { .. }) {
-                let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                let id = take_up;
                 if let Some(r) = crate::pickup::Inventory::ronin_retake_request(id, self.bond_weapon) { self.weapon_switch_request = Some(r); }
             }
             // `PlrStat_LogBondBonus(0)` 0x1999e0 — `Pickup_Handler` case 6 0x18e650:234-236
@@ -19528,23 +19541,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // The bot arm never refuses armour (health +20, armour +rounds capped — 0x18e650:
                 // case 3 of the class-2 branch).
                 if !b.bot && kind == crate::pickup::kind::ARMOUR && b.armour >= 50.0 { continue; }
-                let clock = frame;
+                // mp-drops: the match's take remap (`Pickup_Handler` 0x18e650:141-160 — no
+                // `Upgrade_Weapon` online, so no game-complete arm). The old `clock = frame` fed the
+                // tick count in as the game-complete byte: every weapon-10 take became record 0xC.
+                let clock = 0;
                 if b.local {
                     let p = self.pickups[k].clone();
                     let loaded = d.skins.contains_key(&d.weapons.first_person(p.weapon as usize));
                     let mut armour = b.armour;
-                    let taken = self.inventory.take(d.weapons, &p, loaded, &mut armour, clock);
+                    let take_up = self.inventory.take_id(p.weapon, Some(b.dual), clock);
+                    let taken = self.inventory.take_ex(d.weapons, &p, loaded, &mut armour, clock, Some(b.dual));
                     if std::env::var_os("NF_PICKUPLOG").is_some() {
                         eprintln!("[take-net] tick {} slot {} weapon {:#x} kind {} → {:?}", frame, b.slot, p.weapon, p.kind, taken);
                     }
                     if self.auto_switch && matches!(taken, Some(crate::pickup::Taken::Weapon { .. })) {
-                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                        let id = take_up;
                         if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
                             self.weapon_switch_request = Some(id);
                         }
                     }
                     if matches!(taken, Some(crate::pickup::Taken::Weapon { .. })) {
-                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                        let id = take_up;
                         if let Some(r) = crate::pickup::Inventory::ronin_retake_request(id, self.bond_weapon) { self.weapon_switch_request = Some(r); }
                     }
                     if matches!(taken, Some(crate::pickup::Taken::Bonus)) { self.progress.log_bond_bonus(self.mission.status()); }
@@ -19562,7 +19579,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 match p.respawn {
                     0 => p.gone = true,
                     0xFFFF => {}
-                    r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10; }
+                    // Hidden while `elapsed <= FRAME_RATE_INT · respawn · 10` [M 0x18e148:183-185]:
+                    // the restore lands on the tick after the limit — limit+1 ticks, the same
+                    // count `take_pickup`/`consume_pickup` use (mp-drops: this online arm restored
+                    // one tick early).
+                    r => { p.hidden = true; p.state = 2; p.respawn_ticks = 60 * r as u32 * 10 + 1; }
                 }
                 let at = [p.m[3][0], p.m[3][1], p.m[3][2]];
                 if let (Some(id), Some(sfx)) = (sound, d.sfx) { self.play_sound(at, sfx.get(id)); }
