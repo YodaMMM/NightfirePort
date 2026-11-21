@@ -2415,7 +2415,7 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 #[test]
 // Stream batch 1121: Bond died at the yard landing (t20311) with no armour. GREEN with the
 // annex floor's own body armour (192.82, 10.79, -272.03) taken after the annex drop [L the
-// 2026-11-21 run: armour 0 -> 50 at 54.8 health, seven yard kills, the walk completes].
+// 2026-11-21 run: armour 0 -> 50 at 54.8 health, five yard kills, the walk completes].
 fn walk_arrival_to_the_c5_door_real_damage_agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true));
 }
