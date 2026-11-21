@@ -330,3 +330,23 @@ origin/master with origin/s/retune-nb-08-15 merged (d1373ac73). Round-15 ledger 
 death has sat at t29924 for two rounds, so this round tries a lever upstream of that fight
 (route, order, cover) per the task line, taking untried levers from the ignore message and
 skipping everything measured dead. Sandbox reset: full re-setup (clone, downloads, build).
+
+- **Round 16 (2026-11-21): went UPSTREAM of the killer chain per the task line; the death
+  stays t29924 but the ledger now carries the FULL upstream budget and two measured-dead
+  levers.** Baseline reproduced byte-exact on the merged tree (master d57c3fdac + 08-15):
+  death t29924, 63 hits/100.0 [L the NF_DMG_TRACE run]. The budget: the station hall −48.0
+  (12 × −4.00, the trio + #9 + #10 at the y-46 deck), #16 −8.0, the machine-fight volume
+  zaps −38.0 (approach 9 standing + sustained flip 3 + CROUCHED tail 7 at the anchor), the
+  chain −6.0; chain entry 6.0. **The ledger's item (2) pre-crouch is DEAD BY DATA** — the
+  baseline shows SEVEN −2.00 rows landing on the CROUCHED capsule at the anchor
+  (t26318-27902) — the volume reaches the pocket on both stances, pre-crouching saves zero.
+  **The round-6 note's zap-free park spot (111.99,−179.51) TRIED and DEAD on its own run**
+  (the PARK walk-back, d3-gated post-ride band-closed-only): 12 × −2.00 rows land AT the
+  park (both stances) and the walk died t29795 on the south rim during the chain, 129 ticks
+  worse — no zap-free park exists near the pocket. NEW LAW: line_ok never reopens after the
+  dive launch (0/210 gate samples; the eye sweep stopped 0.02-0.12 u out in all azimuths) —
+  the fight's only machine damage is the t49 launch; from the anchor it cannot be won, only
+  survived. Whole walkreal_07000008_live on the final tree: 6 passed / 1 failed (the target
+  walk), 171.09 s [L]. Next levers: the station-hall −48.0 cover stand (route/order/cover,
+  upstream of the machine fight entirely), the volume's machine-powering live check, the
+  chain-entry math. Report: docs/reports/retune-nb-08-16.md.

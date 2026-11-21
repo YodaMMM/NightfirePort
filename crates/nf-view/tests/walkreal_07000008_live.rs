@@ -3398,18 +3398,48 @@ round-6 no-standing-spot law re-asserted) and the walk died t27885 — 2039 tick
 round-13 lever-3 west-walk death class. Reverted. The whole walkreal_07000008_live binary on
 the final (reverted, shipped-state) tree: 6 passed / 1 failed (the target walk), 177.54 s
 [L the final-tree run — the d1/d2 sisters, the plain walks, the d2 Agent sister and both
-ally tests byte-exact green]. NEXT LEVERS (priority): (1) the walk-back family, untried —
-(1b) give the latch re-pick an interim south return leg before the episodes (a re-pick from
-a north-of-band spot first presses into the band, then runs the episodes), or (1c) speed the
-walk-back's south return off the lip (the crawl is the lip's — the round-7 aimed-strafe crawl
-class; the lever-2b drift data now shows the walk-back ALSO cannot hold the pocket against a
-latched strafe — any drive-term variant must cap the per-pass drift, e.g. dodge_hold capped
-at ~8 ticks for w61-only episodes, so the walk-back out-runs the drift between passes);
-(2) the sustained-burst 3-row cost (f26198-26211, -6.0): the crouch plan's flip takes ~3 rows
-under the 60-tick substate lockout [M Player_ChangeSubState 0x190630:48] — a live check for
-whether the crouch press can flip faster (or the plan pre-crouches on the volume's ARMING
-frame ~f25666 instead of the first row) is the main agent's; (3) the trio 36.0 and the
-reply-cadence live checks (carried, rounds 8-14 — every deck-leg code lever measured dead)."]
+ally tests byte-exact green]. retune-nb-08-16 ledger (2026-11-21, still red — the death
+stays t29924; this round went UPSTREAM of the killer chain per the task line, and the
+baseline's own damage ledger killed one lever and measured another dead before a run):
+1. BASELINE reproduced byte-exact on the merged tree (master d57c3fdac + 08-15): death
+   t29924, 63 hits for 100.0, 19 return-fire fights [L the NF_DMG_TRACE run, 24.35 s]. The
+   FULL upstream budget is now measured: the station hall −48.0 (12 × −4.00 rows t738-2102:
+   the trio #14 4/#11 3/#2 2 + #9 1 + #10 2, all at the y-46 deck) + #16 −8.0 (t5227) + the
+   machine-fight volume zaps −38.0 (the approach burst 9 × −2.00 t25702-25799 standing +
+   the sustained flip 3 × −2.00 t26198-26209 + the CROUCHED tail 7 × −2.00 t26318-27902) +
+   the chain −6.0 (t29795/29924). Chain entry health 6.0.
+2. Ledger item (2) the pre-crouch — DEAD BY DATA, no run needed: the sustained flip's 3
+   rows are NOT the only sustained-window cost — SEVEN more −2.00 rows land on the CROUCHED
+   capsule at the anchor (113.0,13.1,-179.3) (t26318-27902, −14.0 [L the baseline rows]) —
+   the volume reaches the anchor pocket on BOTH stances, so pre-crouching saves ZERO; the
+   08-13 plan's zap-free-trench premise holds on the plate walk's transit, not on a parked
+   sit at the anchor.
+3. The round-6 note's zap-free park spot (111.99,−179.51) — the spot class the ledger
+   carried as untried — TRIED and DEAD on its own real run (the PARK walk-back: d3-gated,
+   post-ride t>200, band-closed-only target swap in the walk-back, the dive prefix byte-exact
+   through the t49 launch): the park spot is INSIDE the volume's reach too — 12 × −2.00 rows
+   land AT the park (t26077-29068, BOTH stances: (111.9,13.5,-179.5) standing then crouched
+   13.1) — and the walk died t29795 at (113.04,13.47,-180.84) STANDING on the south rim
+   during the chain, 129 ticks WORSE, the lever-2b rim-drift death class again. The volume's
+   reach covers the whole west pocket band (~1.2 u along the trench at this latitude); there
+   is NO zap-free park near the pocket. Reverted; the shipped state is the final tree.
+4. NEW LAW measured this round: line_ok NEVER reopens after the dive launch — 0 of 210
+   [08 gates] samples true, the t4100 eye sweep stopped 0.02-0.12 u out in all 16 azimuths
+   [L the baseline log] — the ONLY machine damage in the whole fight is the t49 dive launch
+   (−101.0 of 598); from the anchor the fight cannot be WON, only survived. The exit_ticks
+   walk-out machinery is vestigial (`let _ = exit_ticks`). NEXT LEVERS (priority): (1) the
+   station hall −48.0 (the largest upstream block, route/order/cover family, upstream of
+   the machine fight entirely): the 9 trio rows all land at the lane-mouth nav wedge
+   (149.5-149.6,46.1,−93.1) — a hall-mouth COVER stand west of x 149.5 (ZERO trio rows ever
+   landed west of 149.5 [L the ledger]) needs a probe pass (can the walker's eye/shoot see
+   the trio from behind the mouth cover?) — the 08-2 lane-mouth PRE-EMPT died on the nav
+   wedge, a cover STAND is different and untried; (2) the volume zap cadence at the pocket:
+   the rows cluster in machine-proximity bursts (approach 9 rows/100 ticks, sustained 3
+   rows/11 ticks, tail sparse 7 rows/1600 ticks) — a live check for whether the volume is
+   machine-powered (a gdbwatch on the volume's damage tick vs the copter's range) decides
+   whether ANY local park can ever be zap-free; (3) the chain-entry math: entry 6.0 with the
+   ring un-survivable below ~10-12 — with the park measured dead and the pre-crouch dead by
+   data, the entry can only rise via the hall (item 1) or the volume (item 2)."]
 // nb-scan-all-08 ledger (2026-11-18, still red; the original fight code measures t28298 and
 // every lever this window tried measured WORSE — each on its own real run):
 // 1. the original anchor+crouch fight (112.5, −179.4): death t28298 at (112.25,13.09,−179.16),
