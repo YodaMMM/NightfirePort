@@ -21,8 +21,9 @@
 //! Record layouts (every offset proven — docs/systems/driving-ai.md §1):
 //! - `rn  ` node: +0x00 3×f32 position, +0x0e u8 link count, +0x10 u16[] linked segment ids
 //!   [M 0x225c48:179-186, 0x2247b0:99,139-173];
-//! - `rs  ` segment: +0x0c u16 node A, +0x0e u16 node B [M 0x2215f8:7-8], +0x10 curve control
-//!   (flags & 0x4000) [M 0x222d40:54], +0x3c s16 route id, +0x3e s16 own id, +0x40 3×f32 unit
+//! - `rs  ` segment: +0x00 / +0x10 the Bezier control points beside node A / node B (flags &
+//!   0x4000) [M 0x222d40, 0x226538], +0x0c u16 node A, +0x0e u16 node B [M 0x2215f8:7-8], +0x1c /
+//!   +0x1e s16 the junction at node A / B [M 0x223a30], +0x2c f32 chord length [M 0x226538], +0x3c s16 route id, +0x3e s16 own id, +0x40 3×f32 unit
 //!   direction A→B [M 0x2216b0:8-10], +0x4c f32 speed limit [M 0x12e808:165], +0x50 u16 flags
 //!   [M 0x2247b0:115-118 et al.], +0x52/+0x53 i8 lanes −/+ side [M 0x221f20:28-29], +0x5a i8
 //!   car group [M 0x225490:133];
@@ -193,10 +194,94 @@ impl RoadSeg<'_> {
             0
         }
     }
-    /// +0x10: the curve control point (flags & 0x4000) [M 0x222d40:54 — `param_5 + 0x10`].
+    /// +0x10: the curve's second control point, the one beside node B (flags & 0x4000)
+    /// [M 0x222d40:54 passes `param_5 + 0x10` as the Bezier's P2; D every curved Paris piece: it
+    /// lies nearer node B than node A].
     pub fn curve_ctrl(&self) -> [f32; 3] {
         let f = |o: usize| f32::from_le_bytes(self.data[o..o + 4].try_into().unwrap());
         [f(0x10), f(0x14), f(0x18)]
+    }
+    /// +0x00: the curve's first control point, the one beside node A [M 0x222d40 passes the
+    /// record itself (`param_5`) as P1; FUN_00226538 0x226538 reads `rs + 0` for the node-A end].
+    pub fn curve_ctrl_a(&self) -> [f32; 3] {
+        let f = |o: usize| f32::from_le_bytes(self.data[o..o + 4].try_into().unwrap());
+        [f(0x00), f(0x04), f(0x08)]
+    }
+    /// +0x2c: the centre-line chord length |A − B| the lane control points are scaled against
+    /// [M 0x226538 `rs+0x2c / |P0 − P1|`; D every curved Paris piece: equals |A − B|].
+    pub fn chord_len(&self) -> f32 {
+        f32::from_le_bytes(self.data[0x2c..0x30].try_into().unwrap())
+    }
+    /// +0x1c / +0x1e: the junction (`ri`) at node A / node B, −1 for none [M 0x223a30 and
+    /// 0x1377c8 read `rs + 0x1c + end·2`; D the Paris junction records list these pieces].
+    pub fn junction_at(&self, end: u8) -> i16 {
+        let o = 0x1c + (end as usize & 1) * 2;
+        i16::from_le_bytes([self.data[o], self.data[o + 1]])
+    }
+    /// +0x3c: the route (`rr`) index, −1 for none [M 0x13ca60, 0x132d80].
+    pub fn route(&self) -> i16 {
+        i16::from_le_bytes([self.data[0x3c], self.data[0x3d]])
+    }
+    /// +0x59: the trigger id that holds a 0x100 piece shut while non-zero [M 0x13d618, 0x126c98:148].
+    pub fn trigger_id(&self) -> u8 {
+        self.data[0x59]
+    }
+}
+
+/// The cubic path evaluation of the driving engine's curve object: `FUN_001a85d0` 0x1a85d0 builds
+/// `rows = basis · [P0 P1 P2 P3]` (`FUN_002cbb88`, one VU multiply-add chain per row) and returns
+/// `rows · [t³, t², t, 1]`. Every road curve object is built by `FUN_001a7ba0` (kind +0x60 = 2),
+/// which selects the basis at .data 0x37e4a0 (`FUN_001a7dd0`): the Bezier matrix
+/// [−1 3 −3 1 / 3 −6 3 0 / −3 3 0 0 / 1 0 0 0] [M + D DRIVING.ELF .data 0x37e4a0]. The other basis
+/// (0x37e4e0, ×0.5, the Catmull-Rom matrix) is for kind 1, which no road curve uses.
+pub const BEZIER_BASIS: [[f32; 4]; 4] =
+    [[-1.0, 3.0, -3.0, 1.0], [3.0, -6.0, 3.0, 0.0], [-3.0, 3.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]];
+
+pub fn bezier(p: [[f32; 3]; 4], t: f32) -> [f32; 3] {
+    let tv = [t * t * t, t * t, t, 1.0];
+    let mut out = [0.0f32; 3];
+    for c in 0..3 {
+        let mut acc = 0.0f32;
+        for (j, row) in BEZIER_BASIS.iter().enumerate() {
+            let r = row[0] * p[0][c] + row[1] * p[1][c] + row[2] * p[2][c] + row[3] * p[3][c];
+            acc += r * tv[j];
+        }
+        out[c] = acc;
+    }
+    out
+}
+
+/// One `ri  ` record: a road junction [M 0x223a30 / 0x1377c8 / 0x13efc8; D every Paris record is
+/// 48 bytes, +0x0c equals its index].
+#[derive(Clone, Copy)]
+pub struct Junction<'a> {
+    pub data: &'a [u8],
+}
+
+impl Junction<'_> {
+    /// +0x00: the junction position (the traffic-light check measures from it) [M 0x13efc8].
+    pub fn pos(&self) -> [f32; 3] {
+        let f = |o: usize| f32::from_le_bytes(self.data[o..o + 4].try_into().unwrap());
+        [f(0x00), f(0x04), f(0x08)]
+    }
+    /// +0x0c: the junction's own index [D].
+    pub fn own_id(&self) -> u16 {
+        u16::from_le_bytes([self.data[0x0c], self.data[0x0d]])
+    }
+    /// +0x0e count, +0x10 s16[]: the neighbouring junctions [M 0x223a30].
+    pub fn neighbours(&self) -> Vec<i16> {
+        let n = (self.data[0x0e] as usize).min(4);
+        (0..n).map(|i| i16::from_le_bytes([self.data[0x10 + i * 2], self.data[0x11 + i * 2]])).collect()
+    }
+    /// +0x18 count, +0x1a s16[]: the road pieces that meet here [M 0x223a30, 0x1377c8].
+    pub fn roads(&self) -> Vec<i16> {
+        let n = self.data[0x18] as usize;
+        (0..n)
+            .filter_map(|i| {
+                let o = 0x1a + i * 2;
+                self.data.get(o..o + 2).map(|b| i16::from_le_bytes([b[0], b[1]]))
+            })
+            .collect()
     }
 }
 
@@ -210,6 +295,10 @@ impl RouteRec<'_> {
     /// +0x2e/+0x2f: the occupancy counters (zeroed at load) [M 0x220c28:196-198].
     pub fn occupancy(&self) -> (u8, u8) {
         (self.data[0x2e], self.data[0x2f])
+    }
+    /// +0x2c: the traffic cap — a route takes a spawn only while +0x2e < +0x2c [M 0x13ca60].
+    pub fn traffic_cap(&self) -> u8 {
+        self.data[0x2c]
     }
 }
 
@@ -327,12 +416,15 @@ impl<'a> RoadNet<'a> {
         })
     }
 
-    /// The straight-segment position: `A + (B − A)·t` [M 0x222468:12-20 — VU `_vsub/_vmulbc/_vadd`].
-    /// Curved segments (flags & 0x4000) go through FUN_00222d40 → FUN_001a8380/001a85d0; the port
-    /// evaluates the same cubic's geometry through `curve_point` below (live check L-3 for the
-    /// exact control-point order).
+    /// The centre-line position at `t` — `FUN_00222468` 0x222468: straight pieces
+    /// `A + (B − A)·t` (VU `_vsub/_vmulbc/_vadd`); curved pieces (flags & 0x4000) go through
+    /// `FUN_00222d40` 0x222d40, the Bezier through P0 = node A, P1 = rs+0x00, P2 = rs+0x10,
+    /// P3 = node B (`FUN_001a8380`'s copies with 0x222d40's arguments) [M].
     pub fn seg_point(&self, seg: usize, t: f32) -> Result<[f32; 3], String> {
         let s = self.seg(seg)?;
+        if s.flags() & RSF_CURVED != 0 {
+            return self.curve_point(seg, t);
+        }
         let a = self.node(s.node_a() as usize)?.pos();
         let b = self.node(s.node_b() as usize)?.pos();
         let mut out = [0.0f32; 3];
@@ -342,23 +434,24 @@ impl<'a> RoadNet<'a> {
         Ok(out)
     }
 
-    /// The curved-segment position through the 4-point path: P0 = node A, P1 = rs+0x10,
-    /// P2 = node B, P3 = node B — FUN_001a8380's copies with FUN_00222d40's arguments
-    /// (param_3 = nodeA pos, param_5 = rs → P1 = rs+0x10, param_4 = nodeB) [M 0x222d40:54;
-    /// the interpolation itself (FUN_001a85d0 0x1a85d0) is [S] — Catmull-Rom-shaped 4-point path].
+    /// The curved-piece centre line: `bezier([A, rs+0x00, rs+0x10, B], t)`. `FUN_00222d40`
+    /// calls `FUN_001a8380(curve, param_3 = A, param_5 = rs, param_4 = B, rs + 0x10)`, which
+    /// stores its 2nd/3rd/5th/4th arguments as P0..P3, so P1 = rs+0x00 and P2 = rs+0x10; the
+    /// evaluation is `FUN_001a85d0` with the Bezier basis [M; basis D .data 0x37e4a0]. The old
+    /// port's quadratic through rs+0x10 alone was wrong.
     pub fn curve_point(&self, seg: usize, t: f32) -> Result<[f32; 3], String> {
         let s = self.seg(seg)?;
         let a = self.node(s.node_a() as usize)?.pos();
         let b = self.node(s.node_b() as usize)?.pos();
-        let p1 = s.curve_ctrl();
-        let mut out = [0.0f32; 3];
-        for i in 0..3 {
-            // quadratic through A, P1, B (the minimum the proven data supports)
-            let m0 = a[i] + (p1[i] - a[i]) * t;
-            let m1 = p1[i] + (b[i] - p1[i]) * t;
-            out[i] = m0 + (m1 - m0) * t;
-        }
-        Ok(out)
+        Ok(bezier([a, s.curve_ctrl_a(), s.curve_ctrl(), b], t))
+    }
+
+    /// The `ri` junction record `i` [M 0x223a30's `DAT_0033a604` table].
+    pub fn junction(&self, i: usize) -> Result<Junction<'a>, String> {
+        self.ri
+            .get(i)
+            .map(|data| Junction { data })
+            .ok_or_else(|| format!("junction #{i} out of range ({})", self.ri.len()))
     }
 
     /// A reduced next-segment walk modelled on `FUN_002247b0` 0x2247b0 — the nav-kind-2 chooser,
