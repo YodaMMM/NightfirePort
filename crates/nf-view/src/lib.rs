@@ -6268,6 +6268,7 @@ impl App {
                         self.cam.yaw = yaw;
                         self.cam.pitch = pitch;
                     }
+                    { let (r, u) = billboard_axes(&self.cam); self.scene.drive_particles = drv.particle_groups(r, u); }
                     if matches!(
                         drv.mission_state,
                         nf_game::driving::mission::MissionState::Complete
@@ -7513,7 +7514,7 @@ pub fn run() -> Result<()> {
     if let Some(viv) = u32::from_str_radix(level.trim_end_matches(".bin"), 16).ok().and_then(driving::driving_viv_for_level) {
         let out = args.iter().position(|a| a == "--shot").and_then(|i| args.get(i + 1))
             .context("a driving mission starts from the mission list; headless needs --shot <out.png>")?;
-        let (scene, mut drv) = driving::load_driving_scene(&iso, viv)?;
+        let (mut scene, mut drv) = driving::load_driving_scene(&iso, viv)?;
         let ticks: u32 = args.iter().position(|a| a == "--frame").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0) as u32;
         for _ in 0..ticks { drv.step(0.0, 0.0, 0.0, false); }
         let (p, yaw, pitch) = drv.chase_camera();
@@ -7523,6 +7524,7 @@ pub fn run() -> Result<()> {
             cam = Camera { pos: Vec3::new(v[0], v[1], v[2]), yaw: v[3], pitch: v[4], fov: GAME_FOV };
         }
         let opts = scene::ViewOpts { reinforcements: false, firing: false, right: [1.0, 0.0, 0.0], up: [0.0, 1.0, 0.0] };
+        { let (r, u) = billboard_axes(&cam); scene.drive_particles = drv.particle_groups(r, u); }
         let (layout, _) = scene.skin_layout();
         let (mut pal, _) = scene.skin_palette(&layout, None, ticks as f32, opts, None);
         drv.apply_to_palette(layout.attach_base as usize, &mut pal);

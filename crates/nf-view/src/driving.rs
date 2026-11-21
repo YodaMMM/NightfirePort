@@ -209,6 +209,17 @@ impl CarRig {
     }
 }
 
+/// The player car's tyre smoke and surface spray (nf_game::driving::effects: `FUN_001ee4a0`
+/// emitters, the 1024-particle pool, the ELF's built-in particle types; docs/systems/driving-effects.md).
+pub struct DriveFx {
+    pub lib: nf_game::driving::effects::ParticleLib,
+    pub veh: nf_game::driving::effects::VehicleFx,
+    pub pool: nf_game::driving::effects::ParticleSystem,
+    pub rng: nf_game::driving::effects::DriveRng,
+    /// The track sheet's 256x256 `MAIN` atlas in the scene's textures.
+    pub main_tex: Option<usize>,
+}
+
 /// Live driving mission simulation state.
 pub struct DrivingState {
     pub viv: String,
@@ -242,6 +253,7 @@ pub struct DrivingState {
     pub car_box_centre: [f32; 3],
     /// The player car's posed parts (wheels, hubs); `None` when the model does not decode.
     pub car_rig: Option<CarRig>,
+    pub fx: Option<DriveFx>,
 }
 
 const IDENT_MAT: Mat4 = [
@@ -292,7 +304,53 @@ impl DrivingState {
         } else {
             self.step_flat(&input);
         }
+        self.step_fx();
         self.step_ai(&input);
+    }
+
+    /// The player car's effect emitters for this tick, then the pool steps [M FUN_001ee4a0,
+    /// FUN_001f3188]. The wheel inputs come from the land step: the slip ratio, the contact
+    /// triangle's surface byte; [S] which vtable value each input is (driving-effects.md).
+    fn step_fx(&mut self) {
+        let Some(fx) = self.fx.as_mut() else { return };
+        use nf_game::driving::effects::{CarFxInput, WheelFxInput};
+        let car = &self.car;
+        let wp = car.params.wheel_points();
+        let r = car.rot;
+        let wheels: [WheelFxInput; 4] = std::array::from_fn(|k| {
+            let l = wp[k];
+            let pos = [0, 1, 2].map(|c| car.pos[c] + r[0][c] * l[0] + r[1][c] * l[1] + r[2][c] * l[2]);
+            let plane = car.wheel_cache[k];
+            WheelFxInput { pos, surface: plane.map_or(1, |w| w.surface), flag_a: false, flag_b: plane.is_some(), slip: car.slip[k] }
+        });
+        let v = car.vel;
+        let cin = CarFxInput { vel: v, axis: r[2], speed: (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(), no_snow: false, attach: 0, attach_pos: car.pos };
+        fx.veh.update(self.land.is_some(), &cin, &wheels, self.ticks, false, &fx.lib);
+        fx.veh.tick(1, &fx.lib, &mut fx.rng, &mut fx.pool);
+        fx.pool.run_steps(self.ticks, &fx.lib);
+    }
+
+    /// This frame's particle billboards, grouped by (texture, additive) for the renderer.
+    pub fn particle_groups(&mut self, right: [f32; 3], up: [f32; 3]) -> Vec<(Option<usize>, bool, Vec<Vertex>)> {
+        let Some(fx) = self.fx.as_mut() else { return Vec::new() };
+        let mut groups: Vec<(Option<usize>, bool, Vec<Vertex>)> = Vec::new();
+        for d in fx.pool.draws(&fx.lib, |_| None) {
+            let nf_game::driving::effects::ParticleDraw::Quad { centre, size, rotation, cell, rgba, additive } = d else { continue };
+            let h = size * 0.5;
+            let (sn, cs) = rotation.sin_cos();
+            let ax = [0, 1, 2].map(|k| (right[k] * cs + up[k] * sn) * h);
+            let ay = [0, 1, 2].map(|k| (up[k] * cs - right[k] * sn) * h);
+            let corner = |sx: f32, sy: f32| [0, 1, 2].map(|k| centre[k] + ax[k] * sx + ay[k] * sy);
+            let (u0, v0, uv) = (cell[0], cell[1], cell[2]);
+            let vert = |p: [f32; 3], u: f32, v: f32| Vertex { pos: p, uv: [u, v], rgba, nrm: [0; 4] };
+            let (a, b, c, e) = (vert(corner(-1.0, 1.0), u0, v0), vert(corner(1.0, 1.0), u0 + uv, v0), vert(corner(1.0, -1.0), u0 + uv, v0 + uv), vert(corner(-1.0, -1.0), u0, v0 + uv));
+            let g = match groups.iter().position(|(t, ad, _)| *t == fx.main_tex && *ad == additive) {
+                Some(g) => g,
+                None => { groups.push((fx.main_tex, additive, Vec::new())); groups.len() - 1 }
+            };
+            groups[g].2.extend_from_slice(&[a, b, c, a, c, e]);
+        }
+        groups
     }
 
     fn step_flat(&mut self, input: &CarInput) {
@@ -1312,6 +1370,25 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         let vmin = scene_char_min_y(&scene.char_verts, slot);
         if let Some(v) = vmin { car_box_centre = [0.0, v + car_params.half_extents[1] + car_params.spring_rest, 0.0]; }
     }
+    // The effects: the ELF's particle types and the track's particle sheet (`MAIN` atlas) [D].
+    let fx = (|| {
+        let e = iso.find("/DRIVING.ELF")?;
+        let elf = iso.read_bytes(e.lba as u64 * 2048, e.size as u64).ok()?;
+        let lib = nf_game::driving::effects::ParticleLib::from_elf_types(&nf_formats::drivefx::elf_types(&elf).ok()?);
+        let sheet = match viv_upper.as_str() { "MIS11" => "partic02", "MIS13A" | "MIS13B" | "MIS13C" => "ears_partic01", "MIS3" | "MIS4" => "sav_partic01", _ => "partic01" };
+        let want = ["data", "render", &format!("{sheet}.ssh")].join("\\");
+        let main_tex = bigf.entries.iter().find(|x| x.name.eq_ignore_ascii_case(&want))
+            .and_then(|e| iso.read_bytes(viv_base + e.offset as u64, e.size as u64).ok())
+            .and_then(|raw| maybe_decompress(&raw).ok())
+            .and_then(|b| Ssh::parse(&b).ok())
+            .and_then(|sh| sh.textures.into_iter().find(|t| t.name == "MAIN"))
+            .map(|t| {
+                let i = scene.textures.len();
+                scene.textures.push(TextureImage { key: (0, 0xfee0_0000 | i as u32), width: t.width, height: t.height, rgba: t.rgba, more: Vec::new(), rate: 1 });
+                i
+            });
+        Some(DriveFx { veh: nf_game::driving::effects::VehicleFx::new(&lib), lib, pool: Default::default(), rng: nf_game::driving::effects::DriveRng::seeded(0), main_tex })
+    })();
     let car_rig = (!posed_parts.is_empty())
         .then(|| find_car_entry(p_stem))
         .flatten()
@@ -1331,6 +1408,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         });
     let car = Car::new(car_params, start_pos, start_yaw);
     let state = DrivingState {
+        fx,
         viv: viv_upper,
         car,
         world: FlatWorld::paved(),
@@ -1414,6 +1492,7 @@ mod tests {
             land: None,
             car_box_centre: [0.0; 3],
             car_rig: None,
+            fx: None,
         };
         state.step(1.0, 0.0, 0.0, false);
         assert_eq!(state.progress, 1);
