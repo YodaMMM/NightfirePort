@@ -8,7 +8,6 @@ pub mod ai;
 pub mod audio;
 // The hostile AI and the AI element lifecycle (AIEl/AICo, FUN_0012bec8 and the chase arms).
 pub mod hostile;
-// The hostile AI and the AI element lifecycle (AIEl/AICo, FUN_0012bec8 and the chase arms).
 // The per-pattern chase steering, avoidance, turret, world cap, helicopter leaf rules (§11).
 pub mod patterns;
 // G-056 world-bounds: the driving maps' invisible boundary sheets (DRIVING.ELF 0x331a60).
@@ -27,6 +26,8 @@ pub mod suspension;
 pub mod mission;
 // The game's mission rules: the trigger/action/event machine and the mission manager (FUN_00206b88).
 pub mod script;
+// The script's effect events (camera, audio, movie, AI, traffic, props) with their parameters.
+pub mod script_effects;
 pub mod physics;
 // Track scene objects: drawn/hidden, in the sim, knocked loose (trackobj.md).
 pub mod props;
