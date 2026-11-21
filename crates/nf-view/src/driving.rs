@@ -636,7 +636,22 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     // matrices [M DRIVING.ELF 0x22faf8]).
     let geometry = nf_formats::geoprim::track_geometry(&crp_bytes)?;
     let placements = nf_formats::geoprim::map_placements(&crp).unwrap_or_default();
-    for ws in geometry.strips {
+    // Draw batching: strips sorted by (sky, texture, 64-u map cell) so that each run of one
+    // texture in one cell merges into a single draw below (paris: ~58,700 strips) [port choice].
+    let cell_of = |ws: &nf_formats::geoprim::WorldStrip| -> (i32, i32) {
+        let p = ws.positions.first().copied().unwrap_or([0.0; 3]);
+        ((p[0] / 64.0).floor() as i32, (p[2] / 64.0).floor() as i32)
+    };
+    let mut strips = geometry.strips;
+    strips.sort_by(|a, b| {
+        let ka = (a.article.to_ascii_lowercase().starts_with("sky"), a.texture.clone(), cell_of(a));
+        let kb = (b.article.to_ascii_lowercase().starts_with("sky"), b.texture.clone(), cell_of(b));
+        ka.cmp(&kb)
+    });
+    let m0 = materials.len();
+    let mut group: Vec<(bool, Option<String>, (i32, i32))> = Vec::new();
+    for ws in strips {
+        let gkey = (ws.article.to_ascii_lowercase().starts_with("sky"), ws.texture.clone(), cell_of(&ws));
         // The sky articles (`sky*`) are a small dome (paris: +-30 u as placed, docs/formats/geoprim.md):
         // drawn around the viewer like the on-foot camera skies (Layer::SkyCamera, before the world,
         // no depth write) with their vertices relative to their placement [S: the driving engine's
@@ -652,6 +667,35 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             (bmin, bmax) = (b0, b1); // the dome does not widen the track bounds
             for m in &mut materials[n..] { m.layer = Layer::SkyCamera; m.draw.pass = 0; m.draw.zwrite = false; m.radius = 1.0e6; }
         }
+        for _ in n..materials.len() { group.push(gkey.clone()); }
+    }
+    // Merge consecutive same-group materials whose index ranges touch (one draw per texture per cell).
+    {
+        let mut out: Vec<Material> = Vec::with_capacity(materials.len() - m0);
+        let mut out_g: Vec<(bool, Option<String>, (i32, i32))> = Vec::new();
+        for (m, g) in materials.drain(m0..).zip(group.into_iter()) {
+            if let (Some(last), Some(lg)) = (out.last_mut(), out_g.last()) {
+                if *lg == g && last.key == m.key && last.layer == m.layer && last.first_index + last.index_count == m.first_index {
+                    // Bounding sphere of both.
+                    let d = [m.centre[0] - last.centre[0], m.centre[1] - last.centre[1], m.centre[2] - last.centre[2]];
+                    let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    if dist + m.radius > last.radius {
+                        if dist + last.radius <= m.radius { last.centre = m.centre; last.radius = m.radius; }
+                        else if dist > 0.0 {
+                            let r = 0.5 * (dist + last.radius + m.radius);
+                            let t = (r - last.radius) / dist;
+                            for k in 0..3 { last.centre[k] += d[k] * t; }
+                            last.radius = r;
+                        }
+                    }
+                    last.index_count += m.index_count;
+                    continue;
+                }
+            }
+            out.push(m);
+            out_g.push(g);
+        }
+        materials.extend(out);
     }
 
     let col_tris = crp.extract_collision_tris().unwrap_or_default();
