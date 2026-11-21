@@ -74,9 +74,16 @@ runs); the mechanism that broke the 14-round wall was Bond's CROUCH STATE at the
   other binary is affected by construction; both 0d binaries were run whole anyway (above).
 - The fast runner (`tools/test/suite.py`) was started once at setup (setsid, per the task) and
   this sandbox killed it between tool calls with `suite.out` empty — the rounds-1-14
-  signature, reproduced again. The four-crate full-suite build wall stands (the rootfs held
-  ~3.5 GB free after the 0d binaries vs the ~5.5 GB the four-crate test-binary build needs —
-  the rounds-13/14 measurement). The per-binary whole runs above are the evidence.
+  signature, reproduced again.
+- **The suite ran per-binary in the foreground on the final tree (this sandbox held the
+  build)**: the three non-view crates' whole suites — `cargo test --no-fail-fast -p
+  nf-game -p nf-formats -p nf-audio -- --test-threads=1` — every binary green (nf-game 29,
+  nf-formats 107+11+9+... , nf-audio's set — 151+ passes total) with ONLY the slim-ISO
+  permitted failures: the three `disc_golden` binaries (crp_mesh_disc 2, disc_golden 3,
+  identity_disc 1 — all instant 0.00 s misses, the missing cross-check dumps the slim ISO
+  does not carry). The remaining nf-view test binaries' build then exhausted the rootfs
+  (1.4 GB free, the rounds-13/14/15 ~5.5 GB four-crate wall) and was stopped — the whole 0d
+  binaries above are the nf-view evidence.
 - Live checks for the main agent: none required this round — the walk is green.
 
 ## What's left
