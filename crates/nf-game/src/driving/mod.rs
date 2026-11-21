@@ -28,6 +28,9 @@ pub mod props;
 // The POV weapon mode (the MIS01 sniper phase): weapon table, loadout, gunner, mode flag.
 pub mod pov;
 pub mod road;
+// The SUB_PHYSICS pass (FUN_00190f88: the sub + the ultralights), the VU0 rigid integrator and
+// the per-vehicle pass dispatcher (FUN_00188200 0x188bf8).
+pub mod sub_physics;
 // The weapon table, ammo/reload, projectiles and hit damage (FUN_0020f2b8 + the WeaponMan).
 pub mod weapons;
 // The 3-D listener, pan law, impacts, landings, horns, traffic engine (DRIVING.ELF audio).
