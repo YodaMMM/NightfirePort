@@ -236,4 +236,17 @@ docs/reports/retune-nb-08-12.md.
 ## retune-nb-08-13
 2026-11-21. Round 13 of the 08 whole-mission 00 Agent real-damage walk
 (walk_the_whole_mission_on_real_input_real_damage_00agent). Branch s/retune-nb-08-13 off
-origin/master (6a600cb02) with s/retune-nb-08-12 merged in (clean). Work started.
+origin/master (6a600cb02) with s/retune-nb-08-12 merged in (clean). Shipped the ledger's lever
+(2), the crouch-window stance plan (d3-gated): the sustained hurt-volume burst now taken as 3
+rows (-6.0) instead of 12 (-24.0), every stalemate volume row after it crouched through, rocket
+1 byte-exact (launched t49, landed -101.0). The ledger's lever (1) skipped: round 6 measured the
+lower-floor standing class dead ("no standing spot exists on the lower floor", three lever runs).
+Tried and dead on their own runs: the east-dip stand (t28257, the state-2 cannon pass chewed the
+standing capsule) and the salvo override (t29352, the dodge side pick walked Bond onto the round-11
+mullion corner). Shipped state dies t29801 at (113.08, 13.09, -179.88) crouched on the trench —
+3525 ticks deeper than round 12 — to one -6.00 w62 falloff (the crouched strafe cannot out-run the
+missile's falloff; the machine 497/598, clip 3, no second launchable pass measured — the
+west-high rays stop t0.748, 0.052 short). Whole binary 6 passed / 1 failed, 176.86 s [L the
+final-tree run]. The refreshed ledger + the next levers (the launch starvation; the trench-pinned
+standing dodge; the reply-cadence live check) are in the ignore message. Report:
+docs/reports/retune-nb-08-13.md.
