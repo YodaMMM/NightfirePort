@@ -254,6 +254,9 @@ pub struct DrivingState {
     /// The player car's posed parts (wheels, hubs); `None` when the model does not decode.
     pub car_rig: Option<CarRig>,
     pub fx: Option<DriveFx>,
+    /// The land car's righting reset (nf_game::driving::reset: tipped and touching for 30 ticks
+    /// -> righted where it lies [M 0x188200]) and the triangles it reads.
+    pub reset: Option<(nf_game::driving::reset::ResetState, Vec<CollisionTri>)>,
 }
 
 const IDENT_MAT: Mat4 = [
@@ -301,6 +304,11 @@ impl DrivingState {
         if let Some(g) = &self.land {
             // The land pass owns the height, pitch and roll (its wheels stand on the triangles).
             self.car.step(&input, g, &self.rigid, DT);
+            if let Some((rs, tris)) = self.reset.as_mut() {
+                if let Some(r) = nf_game::driving::reset::check(&self.car, tris, rs, None) {
+                    r.apply(&mut self.car);
+                }
+            }
         } else {
             self.step_flat(&input);
         }
@@ -1412,8 +1420,10 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             CarRig { mesh, rig, attrs, mem: Default::default(), pose, spin: [0.0; 2], parts: posed_parts.clone() }
         });
     let car = Car::new(car_params, start_pos, start_yaw);
+    let reset = land.is_some().then(|| (nf_game::driving::reset::ResetState::new(&car), col_tris.clone()));
     let state = DrivingState {
         fx,
+        reset,
         viv: viv_upper,
         car,
         world: FlatWorld::paved(),
@@ -1498,6 +1508,7 @@ mod tests {
             car_box_centre: [0.0; 3],
             car_rig: None,
             fx: None,
+            reset: None,
         };
         state.step(1.0, 0.0, 0.0, false);
         assert_eq!(state.progress, 1);
