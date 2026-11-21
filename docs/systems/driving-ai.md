@@ -922,3 +922,85 @@ On the land physics (`CollisionGround`) the same run is reported, not asserted: 
 hits a kerb or wall about 4 s in, is thrown up (v.y 7.5), rolls over and falls through the
 ground mesh (y −2400 by the end); a MIS4 car strays 140 (cause not traced). The MIS01 case is the
 `Car::step` land model under AI inputs, not the runtime.
+
+## 14. The elements in the mission script (2026-11-21, branch `s/drive-hostile-facts-2`)
+
+Port: `HostileWorld::element_facts` / `script_elements` / `elements_for` / `trigger_cars` and
+`hostiles::element_refs` (crates/nf-game/src/driving/hostiles.rs); the view fills
+`script::Facts::elements` and `Facts::cars` from them every tick (crates/nf-view/src/driving.rs).
+Tests: `crates/nf-game/tests/driving_hostile_facts.rs` (7), the script unit tests
+`speed_condition_reads_the_car_that_ran_the_trigger` and
+`element_rules_fire_from_the_element_facts`, `crates/nf-view/tests/driving_hostile_facts_live.rs`
+(2, NF_ISO).
+
+### 14.1 What the rules read about an element [M]
+
+- A kind-4 selector holds the element's record pointer; `FUN_0012c640(DAT_00327c30, id)` turns it
+  into the runtime record `db+0x14 + |id - db+0x10| / 0x100 · 0x50` with no state test.
+  `FUN_0012af48` stores the AIEl record pointer at rt +0x20.
+- Health (`FUN_00209820`): `*(rt+0x20) + 0x4c`, the AIEl record's health. The spawn points the
+  actor's hit points at that float (`FUN_00195a08(actor, rec + 0x4c)`), `FUN_00195a58` subtracts
+  and floors at 0, and the despawn `FUN_0012c740` never rewrites it: an idle element reads its
+  loaded health, a live one its actor's, a wreck 0 for the rest of the mission.
+- Position (`FUN_002098a0`) rt +0x30 and speed (`FUN_00209758`) rt +0x3c, written by
+  `FUN_0012b440`: the live actor's position and |velocity|, else the record's +0x30 and 0.
+- Properties (`FUN_00209aa0` → `FUN_0012b138`, strings 0x36b098..0x36b0b8): EMPTY = a vehicle whose
+  riders' +0x14 healths sum to 0 (any state; no riders counts); BLOWOUT = live vehicle, not a
+  helicopter, `vtbl+0x13c` (wheels on) ≤ 3 and no rider at health ≤ 0; SMOKED / OILED = the live
+  vehicle's AIVehicle +0x168 / +0x16c; AWAKE = live, and for a vehicle health > 0 (a henchman by
+  its character's vtbl+0x14). The port has no wheel loss and no smoke / oil writer: BLOWOUT,
+  SMOKED and OILED read false [S]; the port's henchmen are held at their record and read AWAKE
+  while live.
+- Bearing (`FUN_0020ac70`, `FUN_00209958` for the matrix): only a live ground vehicle; d =
+  normalised (player − rt +0x30), angle = acos(row 2 · d) in degrees, negated when
+  cross(row 2, d).y < 0, then `FUN_0020abe0`'s window. That the libm call pair is acos is
+  read from the call shape.
+
+### 14.2 Deaths and removals
+
+Nothing of the script runs when an element dies or is removed [M, D]:
+- The AIEl / AICo records carry no `el` list (every reference word of the eight tracks' records
+  names `AICo` at AIEl +0xf8, `AIEl` at AICo +0x50 or `AISp` at AICo +0x80) [D].
+- The damage virtual `FUN_00189598` at the wreck only books mission statistics
+  (`FUN_00206900` mgr +0x3c0, `FUN_00206960` mgr +0x3c4) [M]; no rule reads those words
+  (`SRuleProgCounter` reads mgr +0x3e4 + 4·id).
+- `FUN_00188200` despawns a wreck at once (`FUN_0012da78`) only for vehicles named "tunnel",
+  "openheli" or "redheli" (with car +0x2c8 = 2 and `FUN_001a2cc0` false); other wrecks stay
+  until the range manager drops them (state 2, gone) [M].
+- The mission learns of a death by polling: `SRuleDeath` (health int == 0), `SRuleDamage` (lost
+  more than the threshold since the last test) and `SRuleHealth` (crossing) on the element's
+  record every frame they are evaluated.
+
+Rule counts with an element selector [D]: MIS01 Death 13, Damage 4, Health 3, Property 11;
+MIS4 Death 8, Damage 2, Range 14, Property 10; MIS11 Death 6, Health 4, Range 30, Property 1,
+PlayerDir 3; MIS13A Death 7; MIS13B Death 12, Range 7, Property 1; MIS13C Death 10, Property 1;
+MIS3 Death 7, Health 2, Property 3; RACE Death 1, Range 3.
+
+### 14.3 The trigger walk
+
+`FUN_0022f0c0` walks the 0x30 vehicle-manager slots whose +0x6e is 2 (set at creation,
+`FUN_001f6e98`; a parked traffic car is 3, `FUN_00132ba8`). `FUN_001862c0` maps the creation type
+to the kind byte +0x6d: 0 and 1 → 1, 2 → 2, 3 → 3, 4 and above (and below 0) → 2. The hostile
+spawn `FUN_0012cb08` creates its ground vehicles as type 2 (flag 8) or 4, the traffic
+`FUN_0013fae0` as type 3: so every AI element's car fires the flag-bit-3 triggers and the traffic
+the bit-6 ones. `EFireTriggerSpeedCondition` reads the speed of the car in the event's walk slot
+(`FUN_001ff088(0x339190, event+0x14)` +0x20), now ported. MIS01 has 615 bit-3 triggers, MIS4
+240 [D]; many are the pursuers' route points (`EAICommand`, `EAIKill`, `EDeactivateAIElement`).
+
+Not traced: the car-slot order (+0x46) the game gives the player, the traffic and the elements
+(the port walks the player, the traffic, then the elements in element order); whether the
+helicopter objects (`FUN_002003c8`) sit in the 0x30 car slots (the port leaves helicopters and
+henchmen out of the walk).
+
+### 14.4 MIS01's fail at the end of the sniper run
+
+List 686 (trigger 685) changes to stage 19. Stage 19's R105 / R107 are `SRuleDeath` on elements 3
+and 11 (AIEl 768 / 2816, the two henchman cars that start on the road): each disables trigger 644
+and starts timer 4 (2 s); R113 (timer 4 below 1 s) calls stage 39, whose R106 fires trigger 712.
+Trigger 644 (player, at (555, 0, 445) on the flight path) calls stage 42, whose R5
+(`SRuleDifficulty` mask 6: difficulty 1 or 2) runs `EAIKill(element 23)`, `EPlayerLose` and
+disables trigger 712 [D]. So on difficulty 1 or 2 the run fails when the flight reaches trigger
+644 with both pursuers alive. Before this branch the view gave the rules no element facts, so
+R105 / R107 could never fire and the view always lost there (tick 424 with the flight's own
+speed).
+

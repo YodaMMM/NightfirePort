@@ -240,6 +240,15 @@ element +0x18 = 0.5, `FUN_001b1110` copies it to the path player's +0xa4) [M], t
 player's velocity, honours `ESetNextAISpline` (`FUN_00158370` -> `FUN_0013dd28` ->
 `FUN_001b1838`: next animation +0x9c) [M], and runs the script at the front end's difficulty.
 
+With the enemy cars in the trigger walk (kind 2, driving-ai.md section 14), Operative with no
+input does not reach the hover track: a pursuer runs the bit-3 trigger **730** (flags 0x40a):
+`ECallStage(35)`, `EKillAIElement`, `ESetAutoDriveCamOffMovie`, `ELetterBoxOn`,
+`EPlayCameraAnim`, `ESetTimer(5, 2.0)`, `EStartTimer(5, down)` [D], and stage 8's rule **20**
+(`SRuleTimer` timer 5 below 0.1) runs `EPlayerLose` [D]. In the view's run: T730 at tick 2796 by
+an enemy car, the lose at 2912. When the game's pursuers reach 730 depends on how they follow
+their roads; not checked against a live capture. The flight checks above run with the enemy
+cars removed.
+
 ## 9. The gunner's view (aim limits, zoom, sway)
 
 - **Limits** [M `FUN_001a49e0` load, `FUN_001b6c60` clamp; D camera.ini

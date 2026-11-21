@@ -20,9 +20,17 @@ struct Run {
     end: [f32; 3],
 }
 
-fn run(game_difficulty: u32, ticks: u32) -> Run {
+struct Logs {
+    rules: std::collections::BTreeMap<usize, (u32, u32)>,
+    triggers: std::collections::BTreeMap<usize, (u32, i32)>,
+}
+
+/// `enemies: false` drops the enemy vehicles, so only the player's spline flight and the traffic
+/// drive the script (the pursuers' own route triggers stay out).
+fn run(game_difficulty: u32, ticks: u32, enemies: bool) -> (Run, Logs) {
     let iso = std::env::var("NF_ISO").unwrap();
     let (_, mut d) = nf_view::driving::load_driving_scene_at(&iso, "MIS01", game_difficulty).expect("load MIS01");
+    if !enemies { d.hostiles = None; }
     let mut r = Run { fired: Vec::new(), ended: None, max_vel_err: 0.0, end: [0.0; 3] };
     for tick in 1..=ticks {
         let p0 = d.car.pos;
@@ -32,15 +40,19 @@ fn run(game_difficulty: u32, ticks: u32) -> Run {
             let e = (0..3).map(|k| (d.car.vel[k] / 60.0 - (d.car.pos[k] - p0[k])).abs()).fold(0.0, f32::max);
             r.max_vel_err = r.max_vel_err.max(e);
         }
-        let sc = d.mission.script.as_mut().expect("MIS01 script");
-        r.fired.extend(sc.take_fired().into_iter().map(|(t, _)| (tick, t)));
+        // The view drains the script's trigger log every tick into `trigger_log` (first fire per
+        // trigger); a trigger new to it this tick fired on this tick.
+        assert!(d.mission.script.is_some(), "MIS01 script");
+        for &t in d.trigger_log.keys() {
+            if !r.fired.iter().any(|f| f.1 == t) { r.fired.push((tick, t)); }
+        }
         if d.mission_state != MissionState::Playing {
             r.ended = Some((tick, d.mission_state));
             break;
         }
     }
     r.end = d.car.pos;
-    r
+    (r, Logs { rules: d.rule_log.clone(), triggers: d.trigger_log.clone() })
 }
 
 fn fired_at(r: &Run, t: usize) -> Option<u32> { r.fired.iter().find(|f| f.1 == t).map(|f| f.0) }
@@ -56,7 +68,7 @@ fn drive_difficulty_maps_the_front_end_pick() {
 #[test]
 fn agent_loses_at_trigger_644_after_the_helicopter_flies_there_at_half_rate() {
     if std::env::var("NF_ISO").is_err() { eprintln!("NF_ISO not set, skipping"); return }
-    let r = run(2, 1500);
+    let (r, _) = run(2, 1500, true);
     let t644 = fired_at(&r, 644).expect("the flight reaches trigger 644");
     let (end, state) = r.ended.expect("Agent: stage 42's rule 5 loses with no pursuer stopped");
     assert_eq!(state, MissionState::Failed);
@@ -71,7 +83,9 @@ fn agent_loses_at_trigger_644_after_the_helicopter_flies_there_at_half_rate() {
 #[test]
 fn operative_flies_the_whole_phase_with_no_lose() {
     if std::env::var("NF_ISO").is_err() { eprintln!("NF_ISO not set, skipping"); return }
-    let r = run(1, 4000);
+    // The flight alone: with the enemy cars left in, a pursuer reaching T730 ends the run first
+    // (`operative_with_the_pursuers_left_alone_fails_on_t730s_timer`).
+    let (r, _) = run(1, 4000, false);
     assert_eq!(r.ended, None, "Operative: rule 5's mask 6 skips difficulty 0");
     assert!(fired_at(&r, 644).is_some() && fired_at(&r, 712).is_some(), "644 then 712 fire on the way");
     let t742 = fired_at(&r, 742).expect("742 (ESetNextAISpline path_Heli_Hover) fires");
@@ -82,4 +96,26 @@ fn operative_flies_the_whole_phase_with_no_lose() {
     let dz = r.end[2] - 542.4;
     assert!((dx * dx + dz * dz).sqrt() < 5.0, "ends at {:?}", r.end);
     assert!(r.max_vel_err < 1e-3, "velocity off by {}", r.max_vel_err);
+}
+
+#[test]
+fn operative_with_the_pursuers_left_alone_fails_on_t730s_timer() {
+    if std::env::var("NF_ISO").is_err() { eprintln!("NF_ISO not set, skipping"); return }
+    // With the enemy cars in the trigger walk (kind 2, flag bit 3), the bit-3 trigger T730
+    // (flags 0x40a) runs for a pursuer: ECallStage(35), EKillAIElement, ELetterBoxOn,
+    // EPlayCameraAnim, ESetTimer(5, 2.0), EStartTimer(5, down) [D MIS01 `Map `]; stage 8's R20
+    // (SRuleTimer, timer 5 below 0.1) runs EPlayerLose [D]. Operative still passes 644 with no
+    // lose there (R5's mask 6). Whether the game's pursuers reach T730 on this tick is not
+    // checked against a live capture.
+    let (r, logs) = run(1, 4000, true);
+    let t644 = fired_at(&r, 644).expect("644 fires");
+    assert!(!logs.rules.contains_key(&5), "Operative: stage 42's R5 never runs");
+    let (end, state) = r.ended.expect("a pursuer left alone reaches T730");
+    assert_eq!(state, MissionState::Failed);
+    let (t730, car) = logs.triggers[&730];
+    assert!(car > 0, "T730 is run by a car of the walk other than the player (slot {car})");
+    assert!(t644 < t730 && t730 < end, "644 at {t644}, T730 at {t730}, the lose at {end}");
+    assert_eq!(logs.rules.get(&20).map(|x| x.0), Some(end), "the lose is R20 on timer 5");
+    // ESetTimer 2.0 s counted down to 0.1 s at 60 ticks a second.
+    assert!((110..=120).contains(&(end - t730)), "T730 to the lose: {} ticks", end - t730);
 }

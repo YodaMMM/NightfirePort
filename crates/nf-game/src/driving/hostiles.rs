@@ -85,6 +85,23 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
+/// Every `sr` word of the track's script naming an `AIEl` record, with the element index
+/// (`CARP::<<Map>>::{AIEl}::<offset>`, offset / 0x100) [D the `sr` paths, M 0x12c640].
+pub fn element_refs(map: &nf_formats::trackstart::MapScript) -> Vec<(u32, usize)> {
+    let mut out: Vec<(u32, usize)> = map
+        .refs
+        .iter()
+        .filter_map(|(w, p)| match nf_formats::driveai::MapRef::parse(p) {
+            nf_formats::driveai::MapRef::Chunk { chunk, offset } if chunk == "AIEl" && offset % nf_formats::driveai::AIEL_RECORD == 0 => {
+                Some((*w, offset / nf_formats::driveai::AIEL_RECORD))
+            }
+            _ => None,
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
+
 /// The ground height under `p` from the caller's `Ground` (the wheel query's plane).
 pub fn ground_y<G: Ground + ?Sized>(g: &G, p: [f32; 3]) -> Option<f32> {
     let pl = g.wheel_plane(p)?;
@@ -622,6 +639,95 @@ impl HostileWorld {
         // Wheels never come off in the port's car (the wheel detach of FUN_001879c8 is not
         // ported) [S]; +0x3e8 is taken as clear [S, its meaning was not traced].
         Some(LiveStatus { pos: v.pos(), health: v.health, wheels: 4, vehicle_3e8: false, hench_returns: true })
+    }
+
+    /// What the mission rules read about element `i` (`FUN_0012c640(DAT_00327c30, id)` →
+    /// the element's runtime record, any state, no liveness test) [M]:
+    /// - health = the AIEl record's +0x4c through the record pointer at rt +0x20
+    ///   (`FUN_00209820`); a live actor's hit points *are* that float (`FUN_00195a08` points the
+    ///   actor's +0x54 at it, `FUN_00195a58` subtracts and floors at 0), so it keeps its last
+    ///   value after a despawn and a wreck reads 0 for the rest of the mission [M 0x12af48,
+    ///   0x12cb08, 0x195a30];
+    /// - position = rt +0x30 (`FUN_002098a0`): the live actor's position, else the record's +0x30
+    ///   [M 0x12b440]; speed = rt +0x3c (`FUN_00209758`): |live velocity|, else 0 [M 0x12b440];
+    /// - the `SRuleProperty` names `FUN_0012b138` answers true, and the `SRulePlayerDir` bearing
+    ///   (`FUN_0020ac70`): only for a live ground vehicle (`FUN_00209958` needs +0x48 = 1,
+    ///   +0x44 = 1 and an actor).
+    pub fn element_facts(&self, i: usize, player: [f32; 3]) -> Option<crate::driving::script::ElementFacts> {
+        let e = self.db.elements.get(i)?;
+        let live = self.live.iter().find(|v| v.element == i);
+        let health = live.map_or(e.rec.health, |v| v.health);
+        let pos = live.map_or(e.rec.pos, |v| v.pos());
+        let speed = live.map_or(0.0, |v| len(v.vel()));
+        let vehicle = e.rec.kind == TYPE_VEHICLE;
+        let live_car = live.filter(|v| matches!(v.kind, LiveKind::Car { .. }) && vehicle && !e.rec.heli);
+        let mut props = Vec::new();
+        // "EMPTY": a vehicle whose riders' +0x14 healths sum to 0 (a vehicle with no riders
+        // included), in any state [M 0x12b138].
+        if vehicle && e.rec.riders.iter().map(|r| r.health).sum::<f32>() == 0.0 {
+            props.push("EMPTY".to_string());
+        }
+        // "BLOWOUT": a live vehicle, not a helicopter, with at most 3 wheels on (`vtbl+0x13c`,
+        // FUN_001879c8) and no rider at health ≤ 0 [M 0x12b138]. The port's cars never lose a
+        // wheel (the wheel detach is not ported), so it reads false [S].
+        // "SMOKED" / "OILED": the live vehicle's AIVehicle +0x168 / +0x16c [M 0x12b138]; their
+        // writers (the player's smoke / oil weapons) are not ported, so both read false [S].
+        // "AWAKE": live; a vehicle while its health is above 0; a henchman by its character's
+        // query (the port's henchmen are held at their record: taken as awake) [M 0x12b138].
+        if e.state == ElemState::Live && (!vehicle || health > 0.0) {
+            props.push("AWAKE".to_string());
+        }
+        // FUN_0020ac70: d = normalised (player − element position); the angle is acos(row 2 ·
+        // d) in degrees, negated when cross(row 2, d).y < 0 [M; acos is the libm call shape].
+        let bearing_deg = live_car.map(|v| {
+            let f = v.rows()[2];
+            let d = norm(sub(player, pos));
+            let a = dot(f, d).clamp(-1.0, 1.0).acos() * 57.295776;
+            if cross(f, d)[1] < 0.0 { -a } else { a }
+        });
+        Some(crate::driving::script::ElementFacts { health, speed, pos, bearing_deg, props })
+    }
+
+    /// The rule facts for every `sr` word of the track's script that names an `AIEl` record
+    /// (`CARP::<<Map>>::{AIEl}::<offset>`, offset / 0x100 = the element index, as the selector's
+    /// pointer becomes an index in `FUN_0012c640`) [M 0x12c640, D the `sr` paths]: the
+    /// [`crate::driving::script::Facts::elements`] map, keyed as the rules carry it.
+    pub fn script_elements(&self, map: &nf_formats::trackstart::MapScript, player: [f32; 3]) -> std::collections::HashMap<u32, crate::driving::script::ElementFacts> {
+        self.elements_for(&element_refs(map), player)
+    }
+
+    /// [`HostileWorld::script_elements`] over a list [`element_refs`] made once.
+    pub fn elements_for(&self, refs: &[(u32, usize)], player: [f32; 3]) -> std::collections::HashMap<u32, crate::driving::script::ElementFacts> {
+        refs.iter().filter_map(|&(w, i)| self.element_facts(i, player).map(|f| (w, f))).collect()
+    }
+
+    /// The live ground vehicles as the trigger walk `FUN_0022f0c0` / `FUN_0022d240` sees them:
+    /// every vehicle-manager car slot whose +0x6e is 2. A hostile car is created through
+    /// `FUN_001ff850` with sim type 2 (chase brain) or 4 [M 0x12cb08], and `FUN_001862c0` maps
+    /// type 2 and every type above 3 to the kind byte +0x6d = 2 (0/1 → 1 the player, 3 → 3 the
+    /// traffic) [M 0x1862c0 → `FUN_001f6e98` writes +0x6d]; so both fire the triggers with flag
+    /// bit 3. Position +0x10, velocity +0x20, radius +0x7c = |half extents|, the box from the
+    /// body rows and the half extents [M 0x22eb28, 0x1f6e98]. Helicopters (`FUN_002003c8`, the
+    /// heli pool) and henchmen are not cars of this walk [S: whether the helicopter objects sit in
+    /// the 0x30 car slots was not traced]. Element order; the slot order the game gives them
+    /// (`+0x46`) was not traced [S].
+    pub fn trigger_cars(&self) -> Vec<crate::driving::script::CarFacts> {
+        self.live
+            .iter()
+            .filter_map(|v| match &v.kind {
+                LiveKind::Car { car, .. } => {
+                    let h = car.params.half_extents;
+                    Some(crate::driving::script::CarFacts {
+                        kind: 2,
+                        pos: car.pos,
+                        vel: car.vel,
+                        radius: len(h),
+                        bbox: Some(crate::driving::script::CarBox { axes: car.rot, half: h.map(|x| x.max(0.001)) }),
+                    })
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// One world frame. Order [S: the relative order of the element manager and the vehicle
