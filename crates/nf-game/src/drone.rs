@@ -23463,7 +23463,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             for id in std::mem::take(&mut dr.anim_stops) { self.audio.stop_all_with_id(id); }
             if let Some(t) = d.sfx { for id in &snd { let h = t.get(*id); self.audio.play3d(h.id, at, None); if !h.looped { self.sounds.push(Sound { id: h.id, pos: at, inner: h.inner, outer: h.outer, weight: h.weight }); } } }
-            for mut p in dr.drops.drain(..) { p.from = Some(index); self.pickups.push(p); }
+            for mut p in dr.drops.drain(..) {
+                p.from = Some(index);
+                // `Pickup_Create` 0x18dda0:166-183: the new pickup's world sphere is pushed out of the
+                // geometry (`Collide_SphereIntersect`, radius obj+0x8C, mask 0x50d) and the
+                // translation takes the same delta. [S] the sphere centre is rotated by the aligned
+                // matrix (the game's obj+0x80 was built from the pre-align one, :162).
+                p.push_out(d.world);
+                self.pickups.push(p);
+            }
             // `Drone_CollisionHandler` (0x140968, WORKLOG 0078): the feet-sphere down-ray + gravity, before the
             // AI-boundary push-out (the game's `AINetwork_GetBoundsPushVectorForSphere` runs last in the handler).
             drop(_pt);
