@@ -200,7 +200,24 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
                 w.dmg.return_fire = rf;
             }
             if !w.shoot(g2, &format!("ambush guard {g2}")) {
-                if w.resupply("ambush ammo") { w.shoot(g2, &format!("ambush guard {g2} retry")); }
+                // retune-nb-01 (d2, the 2026-11-21 run): the resupply box can feed a WHEEL
+                // pool while the held gun stays dry (clip 1 spare 9 before AND after the
+                // "successful" resupply [L the run trace: "resupply done (false)" then the
+                // retry fired at clip 1 spare 9]) — the retry then approached the walled
+                // 24-hp SMG captain #3 into the north lane at (-22.5,13.6) and Bond died
+                // there t14006 to the field's fire (#3 24.4, #7 33.6). A player does not
+                // push a walled captain with 10 rounds: at Agent the retry only runs when
+                // the HELD gun can actually finish him. d1 keeps the old shape (its ambush
+                // fights finish — byte-identical stream).
+                let held = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    (sim.gun.clip as i32) + (sim.gun.spare as i32)
+                };
+                if difficulty == 1 || held >= 12 {
+                    if w.resupply("ambush ammo") { w.shoot(g2, &format!("ambush guard {g2} retry")); }
+                } else {
+                    eprintln!("[01] ambush guard {g2}: held gun dry ({held}) — no retry push into the pocket lane");
+                }
             }
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
         }
@@ -806,6 +823,125 @@ fn d3_aperture_fight(w: &mut Walker, named: &[usize], tag: &str) -> bool {
 
 fn walk_to_the_exit(iso: &str, stop_at_fire: bool) -> Walker { walk_to_the_exit_at(iso, stop_at_fire, 1) }
 
+/// The aim/lane trigger read for the pocket tap loop: the exposed part's own point
+/// (`exposed_aim`, prefer_head's head box within 6.0 — the head part is the ×100 record
+/// [M NDrone2_HitDamage 0x145558]); when the sight is blocked the held-gun's flight-lane
+/// ladder answers (the corridor-fight's own rule [M drone.rs:16465 the round's world trace]),
+/// heights 0.75-first for a non-pistol (the d3 head-box law: the landings ride the aim minus
+/// 0.0-0.2, the part-5 box at dy ~0.55-0.65) and 0.9-first for the pistol (the run13 law).
+/// Returns (the aim point — aim-or-lane, whether ANY point exists, whether the view is
+/// converged inside the fight gates).
+fn pocket_trigger(w: &Walker, g: usize) -> (Option<V3>, bool, bool) {
+    let aim = w.exposed_aim(g);
+    let sim = w.scene.sim.as_ref().unwrap();
+    let d = &sim.drones.list[g];
+    let bp = sim.bond.pos;
+    let ce = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+    let mut lane_at: Option<[f32; 3]> = None;
+    let heights: &[f32] = if sim.gun.weapon == 0x2 { &[0.9f32, 0.6, 0.3, 1.2, 1.5] } else { &[0.75f32, 0.8, 0.6, 0.9, 0.5] };
+    for dy in heights {
+        let to = [d.pos[0], d.pos[1] + dy, d.pos[2]];
+        if sim.world.segment_flight_scoped(sim.world.find_cel(ce), ce, to, false).is_none() { lane_at = Some(to); break; }
+    }
+    let any = aim.is_some() || lane_at.is_some();
+    let at = aim.or(lane_at).unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+    let desired = (at[0] - bp[0]).atan2(at[2] - bp[2]);
+    let err = walker::wrap_pi(desired - sim.bond.yaw).abs();
+    let want_pitch = ((at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop)) / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+    let perr = (want_pitch - sim.bond.pitch).abs();
+    (Some(at), any, err < 0.035 && perr < 0.04)
+}
+
+/// retune-nb-01-2 (d1/d2, the ignore's lever — the plate-lane POCKET TAP LOOP): the d3
+/// lane-stand fight's shape (the fight that won #7's volley race at the hall doorway) moved to
+/// the plate lane's stairwell-head pocket. Bond STANDS at the fight stand (crouched) and taps
+/// with the head-box aim — the shoot machinery (`shoot_bounded`) is what killed the v5-v9 runs:
+/// its flank ladder walked Bond past #17's face at 1.1-1.3 u inside the 3.0 forced band
+/// [M DroneWeap_DoBulletAccuracy 0x179740:100-110] and the ~45-hit SMG stream (50.8) ended the
+/// walk, while the pocket guards DO expose from the north-edge stands ([L] the clear-0 probe:
+/// #17's head at dy +0.51 from (-28,15.5)/(-28.5,16.5)/(-29,16.5)). No approach and no flank
+/// ever: the loop converges the view only. A WALLED guard is left at once (no windows, no
+/// lure): the v2 run measured the lure grind drawing the pocket guards out of their parks and
+/// onto the unattended CONTACT (he died mid-grind at the stairwell head and the exit fired as
+/// the escort-fail restart [L the 2026-11-21 v2 run]) — the green top-up walks prove the plate
+/// walk and the recovery succeed with #2/#4 alive, and the plate walk's own return fire killed
+/// #4 in 590 ticks [L the same run]. One volley (>= 2.0 in the window) ends the peek — the
+/// hall-4 dance's own law — and the pocket's break is a HOLD: crouched, quiet, 150 ticks out
+/// of the tap rhythm (the guards' ~112-tick SMG cycle [L the hall-5 ledger]), then re-peek
+/// from the same stand.
+fn plate_pocket_fight(w: &mut Walker, g: usize, tag: &str) -> bool {
+    // Walled at the stand: no windows at all (the grind law in the doc above).
+    if !pocket_trigger(w, g).1 {
+        eprintln!("[01] {tag}: pocket guard {g}: walled from the stand — left to the plate walk");
+        return false;
+    }
+    for window in 0..4u32 {
+        {
+            let d = &w.scene.sim.as_ref().unwrap().drones.list[g];
+            if d.corpse || d.health <= 0.0 { return true; }
+        }
+        let hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
+        let mut broke = false;
+        let mut taps = 0u32;
+        for t in 0..2400u32 {
+            // A fist guard inside 3.2: abort (see the doc).
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                if d.weapon == 0x0 && walker::dxz(d.pos, sim.bond.pos) < 3.2 {
+                    eprintln!("[01] {tag}: pocket guard {g}: fist guard inside 3.2 — the fight is left");
+                    return w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0;
+                }
+            }
+            let (at, fire_at, converged) = pocket_trigger(w, g);
+            let (input, trigger, done, need_reload) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let d = &sim.drones.list[g];
+                if d.corpse || d.health <= 0.0 { (Input::default(), false, true, false) }
+                else {
+                    let bp = sim.bond.pos;
+                    let at = at.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+                    let desired = (at[0] - bp[0]).atan2(at[2] - bp[2]);
+                    let err = walker::wrap_pi(desired - sim.bond.yaw);
+                    let want_pitch = ((at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop)) / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                    let perr = want_pitch - sim.bond.pitch;
+                    // The taps stay accuracy-gated: no blind fire at all (the v2 run's grind
+                    // law — the wall noise drew the pocket guards onto the unattended contact).
+                    (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), crouch: true, ..Default::default() },
+                        fire_at && converged, false, sim.gun.clip == 0 && sim.gun.spare > 0)
+                }
+            };
+            if done { break; }
+            if need_reload {
+                w.scene.sim.as_mut().unwrap().step_bond(input, false, true, false);
+            } else {
+                if trigger { taps += 1; }
+                w.scene.sim.as_mut().unwrap().step_bond(input, trigger, false, false);
+            }
+            w.total_ticks += 1;
+            w.after_step();
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { return false; }
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= hp0 - 2.0 { broke = true; break; }
+            // Dry dry (clip AND spare): the taps cannot fire — the caller's round-end resupply
+            // owns the refill.
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                if sim.gun.clip == 0 && sim.gun.spare == 0 { eprintln!("[01] {tag}: pocket guard {g} window {window}: dry"); break; }
+            }
+        }
+        let dead = w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0;
+        eprintln!("[01] {tag}: pocket guard {g} window {window}: dead {dead} broke {broke} taps {taps} bond {:.1} at tick {}",
+            w.scene.sim.as_ref().unwrap().drones.health.health, w.total_ticks);
+        if dead { return true; }
+        if broke {
+            // The pocket's peek break is a HOLD (see the doc): crouched, quiet, 150 ticks out
+            // of the tap rhythm — no transit, no flank.
+            for _ in 0..150 { w.tick(Input { crouch: true, ..Default::default() }, false); }
+        }
+    }
+    w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0
+}
+
 /// The walk at `difficulty` — the difficulty select's GameState+0x28 value (1 Operative, 2 Agent,
 /// 3 00 Agent [M the `difficulty[]` table 0x2df4c0: rows carry GameState values 1/2/3; Txt
 /// 0x14d/0x14e/0x14f = "Operative"/"Agent"/"00 Agent", menu.rs]). 1 keeps the plain `load` (the
@@ -1267,6 +1403,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // crouched Bond in the lane took 0 fire across 24 windows, the guards held z 13.5-19.4
         // [L the hall-4 peek runs]), then the crouched home — no walk-through, no mouth stand.
         // The whole doorway LOS stays available for the loop below.
+        // retune-nb-01-2 (d2, the hall volley lever): the volley-race PRE-ARM joins d2 — the
+        // d2 run's #7 hall volley cost 33.6 in ONE frame (8 hits through the aperture) while
+        // the pistol's 16-tick semi-auto gave ~5 attempts in the 91-tick window [L run16; L
+        // the 2026-11-21 d2 run]; the wheel SMG's clip 32 is the deeper pool at the door
+        // phase. d1 keeps the pistol (byte-identical).
+        if difficulty >= 2 {
+            d3_switch_to_smg(&mut w, "the volley-race pre-arm");
+        }
         if difficulty >= 3 {
             // hall-6 (a): PRE-ARM the SMG during the entry's quiet waits — before the press,
             // before the first tap. run17's lesson: the 41-tick holster/draw INSIDE the fight
@@ -1275,7 +1419,6 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             // law: no LOS through the shut door [L the hall-5 entry ledger]). The lane fight
             // then taps at the SMG's own refire interval instead of the pistol's 16-tick
             // semi-auto (~5 attempts in the window [L run16]).
-            d3_switch_to_smg(&mut w, "the volley-race pre-arm");
             // hall-6: ban the hall-INTERIOR fetches (the shared resupply's own no_fetch
             // filter). The on-trail rule admits the interior boxes once the press legs mark
             // the hall — the run10 ledger: the on-trail stock walked Bond to (7.1,14.3) then
@@ -1292,6 +1435,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             // hall's door plane is z 11.2; nothing beyond it is ever worth a fetch walk
             // (the west lanes own the interior ground). d1/d2 leave None (byte-identical).
             w.no_fetch_z_above = Some(11.2);
+            // retune-nb-01-2 (the ledger's ammo-economy lever): the zone's x-scope — the
+            // west-corridor ground (x < 0) is NOT hall interior, and the dead guards' drops
+            // there are the endgame's only ammo (the stairwell-head death held clip 1 spare
+            // 7 while the drops lay on the walked trail). The hall interior (x >= 0) stays
+            // banned (the west lanes own it — the run10/run12 ledgers).
+            w.no_fetch_zone_x_min = Some(0.0);
             w.leg_crouch = true;
             w.use_door_crouch = true;
             w.dmg.return_fire = false; // no return-fire stand in the mouth ray during the entry
@@ -1377,8 +1526,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // the mouth, #7 the deep captain); fighting them before the pistol means the unsurvivable
     // volleys (55.0 in one frame [L the run2 trace]) end first, and the pistol guard's
     // 1.8/hit fire is the survivable trade. Stable sort keeps agent_order's relative order.
-    // d1/d2 keep agent_order's order byte-identical.
-    if difficulty >= 3 {
+    // d1 keeps agent_order's order byte-identical.
+    // retune-nb-01-2 (d2, the ledger's named fight-order pass): d2 joins the volley-race
+    // order — the d2 run's #7 hall volley cost 33.6 in ONE frame (8 hits through the aperture
+    // [L the 2026-11-21 run]) while the mouth shotgunner lived; killing the NEARER shotgunner
+    // first halves the volley clock (each dead 0x1c guard halves it — the d3 lever's own law).
+    if difficulty >= 2 {
         // hall-6 (c): the VOLLEY-RACE order — the race clock starts at the FIRST tap, so the
         // first tap's target must be the VOLLEY OWNER. hall-5's ledger: the first tap killed
         // #6 (the mouth 12-hp guard) at 3164 and #7's first full volley landed 91 ticks later
@@ -1395,7 +1548,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             };
             let ka = if wa == 0x1c { 0 } else { 1 };
             let kb = if wb == 0x1c { 0 } else { 1 };
-            ka.cmp(&kb).then(zb.partial_cmp(&za).unwrap_or(std::cmp::Ordering::Equal))
+            // retune-nb-01 (d3, the 2026-11-21 run): the deeper-first tie-break lost the NEW
+            // stream's race — #7 (deep, 24 hp) took the first tap while #6 (the mouth, 12 hp)
+            // shot free, and both volleyed the lane (the head-box law landed one 12.0 head hit
+            // on #7 at t2264, but #7's 17 pellets for 70.0 still killed at t2324 [L the run]).
+            // A player kills the NEARER shotgunner first: 12 hp dies in one head tap, and each
+            // dead 0x1c guard halves the volley clock. d1 keeps agent_order (the sort is
+            // d2/d3-gated).
+            ka.cmp(&kb).then(za.partial_cmp(&zb).unwrap_or(std::cmp::Ordering::Equal))
         });
     }
     // [01-hall-3, d3 only, READ-ONLY]: the door-phase flight-lane grid — for each virtual
@@ -1495,7 +1655,13 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                             // hall-5 (d3): the lure crouches — the volley cycles own the standing
                             // lure window (run 2's ledger), and the pitch math below already
                             // reads the crouched eye.
-                            (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), crouch: difficulty >= 3, ..Default::default() },
+                            // retune-nb-01-2 (d2, the ignore's named lever): the crouch law is
+                            // d2's too — the d2 run's #7 hall volley cost 33.6 through the
+                            // standing lure/hold (the same aperture, the same deep-hall fan);
+                            // crouching Bond's lure window out of the volley cycle is a real
+                            // player posture. d1 stays standing (the value is false there — the
+                            // d1 stream stays byte-identical); d3 never runs this block.
+                            (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), crouch: difficulty >= 2, ..Default::default() },
                                 err.abs() < 0.02 && perr.abs() < 0.028 && t % 16 == 0, seen, difficulty >= 3 && sim.gun.clip == 0 && sim.gun.spare > 0)
                         }
                     };
@@ -1531,7 +1697,9 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 if seen { break; }
                 // hall-5 (d3): the crossing window waits CROUCHED (the volley cycles own a
                 // standing hold — run 2's ledger).
-                if difficulty >= 3 {
+                // retune-nb-01-2 (d2): the hold crouch with the lure crouch (the lever above) —
+                // d1 keeps wait(30) (byte-identical), d3 never runs this block.
+                if difficulty >= 2 {
                     w.tick(Input { crouch: true, ..Default::default() }, false);
                 } else {
                     w.wait(30);
@@ -1664,6 +1832,19 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 // line is clear), walked CROUCHED, and the taps fire on aim-OR-lane with the
                 // same convergence gate. d1/d2 keep the crouch line and the aim-only trigger
                 // (their streams are the tuned ones; lane_at stays None for them).
+                // retune-nb-01 (d3, the 2026-11-21 run): the VOLLEY-BREAK windows. The first
+                // lever run cleared the door phase but paid 57.6 (two full #7 volleys —
+                // 70.0 -> 12.4 at the kill t2443) and the walk then died at 12.4 to the next
+                // shotgun captain's 4 pellets. The peek-dance law (a wound ends the peek
+                // instantly, walk home to the deep line, wait, next window [L the hall-4
+                // dance runs]) caps the lane time between volleys; hp0 is taken BEFORE the
+                // stand walk so a walk-in volley breaks the fight at once and the re-peek
+                // starts clean. d1/d2 never take the break (it is d3-gated) — one pass, the
+                // old shape.
+                let mut dead = false;
+                for lane_window in 0..4u32 {
+                let hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
+                let mut volley_broke = false;
                 let lane_stand: Option<[f32; 3]> = if difficulty >= 3 {
                     let mut picked: Option<[f32; 3]> = None;
                     let bond_y = w.scene.sim.as_ref().unwrap().bond.pos[1];
@@ -1689,13 +1870,19 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                     // the entry's home leg already holds — the walk no-ops there. The far
                     // stands (the west band, g11's cells) run plain (the shotgunners are dead
                     // by then; a wedge there is a stall, not a death).
+                    // retune-nb-01 (d3, the 2026-11-21 run): the walk-in runs QUIET — the
+                    // return-fire trade during the stand walk paid 57.6 (two #7 volleys,
+                    // 70.0 -> 12.4 at the kill t2443); the fight loop's head taps kill for a
+                    // fraction of that. Restored after the walk. d1/d2 byte-identical.
                     w.leg_crouch = true;
+                    let rf_walk = w.dmg.return_fire;
+                    if difficulty >= 3 { w.dmg.return_fire = false; }
                     w.walk_nav_to(c, &format!("hall guard {g} the lane stand (d3, hall-5)"), 0.6);
+                    if difficulty >= 3 { w.dmg.return_fire = rf_walk; }
                     w.leg_crouch = false;
                 } else {
                     w.walk_nav_to([6.5, 6.4, 7.6], &format!("hall guard {g} the crouch line"), 1.0);
                 }
-                let hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
                 // hall-5 (d3): the SMG rate arm was TRIED and MEASURED A LOSS — the holster/draw
                 // cycle (41 ticks [L the run17 trace]) ate the kill window outright (#6's free
                 // head tap never landed and #7's volley killed at 3274); the switch stays off.
@@ -1722,10 +1909,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                             // 2.1/hit (the shots' spread lands BELOW the aim point — the run15
                             // trace: the aim 6.95, the hit 6.31) and the dy-1.5 arm (run14)
                             // flew over. 0.9 rides the head box through the spread. The lower
-                            // lines follow for a moving guard. d1/d2 read None (the probe is
-                            // d3-gated) — their aim point and trigger are byte-identical.
+                            // lines follow for a moving guard. retune-nb-01-2 (d2): the ladder
+                            // joins d2 (the fight kit, the volley-race lever above) — d1 reads
+                            // None (the probe is d2/d3-gated) and keeps its aim point and
+                            // trigger byte-identical.
                             let mut lane_at: Option<[f32; 3]> = None;
-                            if difficulty >= 3 {
+                            if difficulty >= 2 {
                                 let ce = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
                                 // hall-6 (b), [L the run4/run5/run6 ledgers]: the landings sit ON
                                 // the aim point ±0.36 (the run4/5 hits rode the exposed part's
@@ -1739,7 +1928,17 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                                 let heights: &[f32] = if sim.gun.weapon == 0x2 {
                                     &[0.9f32, 0.6, 0.3, 1.2, 1.5]
                                 } else {
-                                    &[0.05f32, 0.3, 0.6, 0.9, 1.2]
+                                    // retune-nb-01 (d3, the 2026-11-21 runs): the 0.05-first
+                                    // ladder rode the FEET (all part-4 body, 1.05/hit) and lost
+                                    // the volley race 5:1. The dy-0.6 run landed the head record
+                                    // ONCE (part 5 at dy +0.57, 12.0 — 24 -> 10.8) among part-4s
+                                    // at +0.39..+0.50 with the landings riding the aim minus
+                                    // 0.0-0.2 — so the part-5 box on this pose sits at dy
+                                    // ~0.55-0.65 and dy 0.75-0.8 aims dead on it: most taps
+                                    // become 12.0 head hits and the 24-hp captain dies inside
+                                    // his own first-volley window (~t110 of the fight [L the
+                                    // d3v5 run]).
+                                    &[0.75f32, 0.8, 0.6, 0.9, 0.5]
                                 };
                                 for dy in heights {
                                     let to = [d.pos[0], d.pos[1] + dy, d.pos[2]];
@@ -1755,8 +1954,8 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                             // full-height lanes]) — the muzzle-drop law (the SMG lands ~0.9
                             // below the aim point, the run4 ledger) puts the landings at dy
                             // ~0.5 = the part-5 band. The pistol keeps aim.or(lane_at) (the
-                            // run13 kill rode exactly that; d1/d2 byte-identical).
-                            let at = if difficulty >= 3 && sim.gun.weapon != 0x2 {
+                            // run13 kill rode exactly that; d1 keeps aim.or(lane_at).
+                            let at = if difficulty >= 2 && sim.gun.weapon != 0x2 {
                                 lane_at.or(aim).unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]])
                             } else {
                                 aim.or(lane_at).unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]])
@@ -1771,19 +1970,21 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                             // windows are the guard's combat steps, a few ticks wide; the t%16
                             // gate missed them and the captain out-traded the hold line.
                             // hall-5 (d3): the LANE fire — a covered guard with a clear flight
-                            // lane is fired on the lane (the corridor-fight's own rule); the
-                            // d1/d2 trigger expression is unchanged (lane_fire is false there).
-                            let lane_fire = difficulty >= 3 && lane_at.is_some();
+                            // lane is fired on the lane (the corridor-fight's own rule);
+                            // retune-nb-01-2 (d2): the lane fire joins d2 with the ladder (d1's
+                            // lane_fire stays false).
+                            let lane_fire = difficulty >= 2 && lane_at.is_some();
                             // hall-5 (d3): the lane taps' gates are LOOSER than the sight fight's
                             // — the guard's combat steps re-converge the tight ±0.02/±0.028 gate
                             // away every few ticks (the run16 ledger: ONE hit in the 91-tick
                             // window); the game's own spread dominates the accuracy anyway, and
                             // the semi-auto refire still paces the rounds [M
-                            // Player_WeaponFiring 0x1a5460]. d1/d2 keep the tight gate
-                            // byte-identical (the loose gate is d3-only).
-                            let (egate, pgate) = if difficulty >= 3 { (0.035f32, 0.04f32) } else { (0.02f32, 0.028f32) };
+                            // Player_WeaponFiring 0x1a5460]. retune-nb-01-2 (d2): the loose
+                            // gate joins d2 with the fight kit (d1 keeps the tight gate
+                            // byte-identical).
+                            let (egate, pgate) = if difficulty >= 2 { (0.035f32, 0.04f32) } else { (0.02f32, 0.028f32) };
                             (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), crouch: true, ..Default::default() },
-                                (aim.is_some() || lane_fire) && err.abs() < egate && perr.abs() < pgate, false, difficulty >= 3 && sim.gun.clip == 0 && sim.gun.spare > 0)
+                                (aim.is_some() || lane_fire) && err.abs() < egate && perr.abs() < pgate, false, difficulty >= 2 && sim.gun.clip == 0 && sim.gun.spare > 0)
                         }
                     };
                     if done { break; }
@@ -1807,9 +2008,27 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                             last_gh = d.health;
                         }
                     }
-                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                    {
+                        let h = w.scene.sim.as_ref().unwrap().drones.health.health;
+                        if h <= 0.0 { break; }
+                        // retune-nb-01 (d3): ONE volley ends the peek — walk home, wait out
+                        // his cycle, re-peek. The 2.0 threshold is the hall-4 dance's own law.
+                        if h <= hp0 - 2.0 { volley_broke = true; break; }
+                    }
                 }
-                let dead = w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0;
+                let win_dead = w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0;
+                if win_dead { dead = true; }
+                eprintln!("[01] hall guard {g} lane fight window {lane_window}: dead {win_dead} volley_broke {volley_broke} bond {:.1} at tick {}",
+                    w.scene.sim.as_ref().unwrap().drones.health.health, w.total_ticks);
+                if win_dead || !volley_broke { break; }
+                w.leg_crouch = true;
+                let rf_home = w.dmg.return_fire;
+                w.dmg.return_fire = false;
+                w.walk_nav_to([6.5, 6.4, 7.6], "the volley break (d3): home to the deep line", 1.0);
+                w.dmg.return_fire = rf_home;
+                w.leg_crouch = false;
+                w.wait(75);
+                }
                 // hall-6: the dead guard's own drop spot joins the no_fetch ban — his drop
                 // lands inside the hall and the on-trail rule would fetch it deep.
                 if difficulty >= 3 {
@@ -2066,6 +2285,17 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         "AND(0x11,0x12,0x13) must raise ch 153 once the three named guards are dead [D mux placement]");
     eprintln!("[01] the hall AND fired: ch 153 on at tick {}", w.total_ticks);
     if difficulty >= 3 {
+        // retune-nb-01 [L the d1 v6 run]: the d1 opening of this fetch MEASURED A LOSS — the
+        // side door (7.9,5.4,2.9) wedged the direct out-leg (d 4.21, 3000 ticks, armour
+        // untaken) and the lost ticks left the escort unattended during the west-end
+        // pre-clear's guard-2 grind (10800 ticks) — the contact died at (-6.1,13.6) t56723
+        // with Bond at 86.0. The gate stays d3 (its own measured run); d1's next lever is
+        // the pocket fight from the flank-1 spot (see the ledger in the ignore message). — the endgame bleed is the same shape on
+        // this stream: the plate lane's pocket pair took 50.8 (#17 SMG at d 1.3) + 36.8
+        // (#12 punches at d 0.7) = 87.6 of the 100 [L the d1 v5 run], Bond entering the
+        // plate lane at 50.8. The level's armour absorbs the lane's fire first (the d3
+        // measurement: 27 armour taken by the east pair on the fetch itself [L the
+        // armour-fetch run]).
         // 00 Agent: the east armour before the doorway step. The press kill leaves Bond at the
         // hold with 19.0 health, and every route leg into the hall faces the captain #5 (0x1c,
         // up to ~19 in one volley). The level's one untaken armour near the hold sits at
@@ -2806,6 +3036,118 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     let prev_flank_hold = w.flank_hold_x;
     if !w.tops_up() { w.flank_hold_x = Some(-27.0); }
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
+    // retune-nb-01 (d1, the 2026-11-21 run): the plate lane's pocket pair — REAL-DAMAGE
+    // ONLY (the top-up walks keep their route byte-identical; this block walks and fights
+    // and would shift their stream). — the survivors the
+    // stairwell holds left alive stand ON the plate approach lane (#17 0x5000039 SMG 12 hp at
+    // (-28.2,14.7) and the 0x5000036 melee guard #12 at (-29.2,13.5), the contact parked
+    // between them at (-28.3,14.3)), and the plate nav's return-fire fight vs #17 lost its
+    // exposure at keep_off 6.5 (backed east, the pocket wall re-occluded him) then flanked
+    // INTO the pair — #17's SMG at d 1.9 (48 hits, 50.8) and #12's punches at d 0.7 (36.8 in
+    // 65 hits) killed Bond at (-29.86,13.64) t28813 [L the run]. The stairwell fights LANDED
+    // on the pair from the east (12 -> 8 -> 3 on #12 at 5.7-6.4 u), so the east-lane lines
+    // are clear and the fight fails only through the keep-off backing. A player clears the
+    // lane he is about to walk, from the lane itself (nav 26 shot #17 at 5.2 exposed true
+    // [L the same run]), never crossing the pocket line x -27, with the fight band the
+    // ambush's own 4.2 (outside the TooClose 3.0 forced band [M 0x179740:100-110]) so the
+    // exposure holds while the head tap kills a 12-hp type-2 [M NDrone2_HitDamage 0x145558
+    // head ×100]. The melee 0x0 guard is LISTED (the armed filters skip him, and his punches
+    // were the 36.8): a player answers the fist guard on his lane like any other.
+    if !w.tops_up() {
+        let prev_keep = w.keep_off;
+        let prev_back = w.dmg.back_off;
+        w.keep_off = Some(4.2);
+        w.dmg.back_off = Some(4.2);
+            // retune-nb-01-2 (d1/d2, the ignore's lever, re-shaped on the 2026-11-21 probe
+            // runs): the fight happens on the corridor's NORTH edge, from a band-checked
+            // stand. Measured facts ([L] the clear-0 probe on this tree, guard parks #2
+            // (-30.01,10.22,13.58 — the stairwell structure TOP, y 10.22), #4 (-30.26,9.02),
+            // #17 (-31.10,11.80), all aim/lane None from every east stand):
+            //   * every stand east of x -27 is FULLY walled (no part ray, no flight lane at
+            //     dy 0.3-1.5, standing or crouched) — the old east-lane round never fired;
+            //   * #17's HEAD (part 5, dy +0.51) exposes from (-28,15.5)/(-28.5,16.5)/
+            //     (-29,16.5) — the north edge of the lane, between the slab and the pocket
+            //     mouth (the wall pieces have local openings there); an arm (part 51) from
+            //     (-27,16);
+            //   * the old pocket-edge stand (-30,10.2) sits 1.2 u from #4's park and the
+            //     transit to it crossed the guards' advanced spots — #17 parked ON the lane
+            //     at (-31.1,13.5) mid-transit and the forced band [M 0x179740:100-110] ate
+            //     50.8 (the v5-v9 deaths). The parks VARY across runs (the ledger's
+            //     (-30.1..-31.1, 13.1-15.0) vs this run's z 9.0-13.6), so the transit is a
+            //     dice roll and the stand is chosen per round against the LIVE parks.
+            // The stand is the west-most candidate whose dxz to every LIVE lane guard is
+            // >= 3.05 (outside the 3.0 forced band with margin); the fight from it is the
+            // converged tap loop (no approach, no flank — the machinery that died), with a
+            // bounded blind-lure cadence while the guard is walled (the gunshot hearing
+            // draws the pocket guards onto the lane — the ambush's own step-out law
+            // [M DroneFunc_SetNoiseHeard; L the ambush mouth fight's measured advance]).
+            for round in 0..3u32 {
+                let stand: [f32; 3] = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let live: Vec<V3> = (0..sim.drones.list.len()).filter(|&i| {
+                        let d = &sim.drones.list[i];
+                        i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                            && d.pos[0] < -26.0
+                    }).map(|i| sim.drones.list[i].pos).collect();
+                    drop(sim);
+                    let candidates = [[-28.5f32, 16.5], [-29.0, 16.5], [-28.0, 15.5], [-27.0, 16.0], [-26.5, 15.5], [-24.9, 14.5]];
+                    candidates.into_iter()
+                        .find(|c| live.iter().all(|p| walker::dxz(*p, [c[0], p[1], c[1]]) >= 3.05))
+                        .map(|c| [c[0], 6.4, c[1]])
+                        .unwrap_or([-24.9, 6.4, 14.5])
+                };
+                // The stand walk runs QUIET (the v8 lesson: the return-fire flank during a
+                // stand leg walked Bond past #17's face).
+                let rf_stand = w.dmg.return_fire;
+                w.dmg.return_fire = false;
+                w.walk_nav_to(stand, &format!("the plate-lane clear {round} (the north-edge stand)"), 1.0);
+                w.dmg.return_fire = rf_stand;
+                let lane_guards: Vec<usize> = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let bp = sim.bond.pos;
+                    (0..sim.drones.list.len()).filter(|&i| {
+                        let d = &sim.drones.list[i];
+                        i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                            && d.pos[0] < -26.0 && walker::dxz(d.pos, bp) < 11.0
+                            && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon) || d.weapon == 0x0)
+                    }).collect()
+                };
+                if lane_guards.is_empty() { break; }
+                eprintln!("[01] plate-lane clear {round}: fighting {lane_guards:?} from ({:.1},{:.1}) at tick {}",
+                    stand[0], stand[2], w.total_ticks);
+                // The EXPOSED ones first (the v3 lesson): the exposed guard dies inside his own
+                // advance window instead of the loop waiting on a walled one while the exposed
+                // one fires free.
+                let mut order: Vec<usize> = lane_guards.clone();
+                order.sort_by_key(|&g| if walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g) { 0 } else { 1 });
+                for g in order {
+                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                    {
+                        let d = &w.scene.sim.as_ref().unwrap().drones.list[g];
+                        if d.corpse || d.health <= 0.0 { continue; }
+                    }
+                    // retune-nb-01-2: the POCKET TAP LOOP — the converged stand-and-tap from
+                    // the arrived stand, no approach and no flank. `shoot_bounded`'s flank
+                    // ladder walked Bond past #17's face at 1.1-1.3 u inside the 3.0 forced
+                    // band [M 0x179740:100-110] (the v5-v9 deaths) even when he exposed from
+                    // the stand. d3 keeps the old machinery byte-identical (its ledger's
+                    // levers are the endgame economy, not this fight).
+                    if difficulty < 3 {
+                        plate_pocket_fight(&mut w, g, &format!("plate-lane guard {g} (round {round})"));
+                    } else {
+                        w.shoot_bounded(g, &format!("plate-lane guard {g} (round {round})"), 1800);
+                    }
+                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                }
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                if {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    sim.gun.clip + sim.gun.spare < 8
+                } { w.resupply("plate-lane ammo"); }
+            }
+            w.keep_off = prev_keep;
+            w.dmg.back_off = prev_back;
+        }
     w.walk_nav_to(plate, "the plate", 1.2);
     w.flank_hold_x = prev_flank_hold;
     let sim = w.scene.sim.as_ref().unwrap();
@@ -2869,6 +3211,45 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             // (the walk stops on the exit tick) — the fight below would walk Bond off the plate
             // and drop ch 0x10 before the check reads it.
             if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break 'recovery; }
+            // retune-nb-01-2 (d3, the ledger's trade-posture lever): a POCKET guard
+            // (x <= -27) in the recovery is fought with the d1/d2 pocket tap loop's shape —
+            // the band-checked north-edge stand + the converged tap loop — never the shoot
+            // machinery: the v2 run's death rode `shoot`'s flank INTO the pack at the
+            // stairwell mouth (Bond at (-30.64,11.74), #3's 7.20 and #17's 3.60 lands at
+            // d 0.8-0.9 inside the ×2 TooClose band [M Drone_ModBulletDamage 0x139f50]). The
+            // x-scope ammo field admitted no fetchable drops on this stream (the corridor
+            // dead were fist guards — no drops), so the pool stays dry: the taps only fire
+            // when a part exposes, the pool is not burned. Real-damage d3 only: the top-up
+            // walks keep `shoot` (byte-identical) and d1/d2 keep their proven streams.
+            if !w.tops_up() && difficulty >= 3 && gpos[0] <= -27.0 {
+                let stand: [f32; 3] = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let live: Vec<V3> = (0..sim.drones.list.len()).filter(|&i| {
+                        let d = &sim.drones.list[i];
+                        i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                            && d.pos[0] < -26.0
+                    }).map(|i| sim.drones.list[i].pos).collect();
+                    drop(sim);
+                    let candidates = [[-28.5f32, 16.5], [-29.0, 16.5], [-28.0, 15.5], [-27.0, 16.0], [-26.5, 15.5], [-24.9, 14.5]];
+                    candidates.into_iter()
+                        .find(|c| live.iter().all(|p| walker::dxz(*p, [c[0], p[1], c[1]]) >= 3.05))
+                        .map(|c| [c[0], 6.4, c[1]])
+                        .unwrap_or([-24.9, 6.4, 14.5])
+                };
+                if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, stand) > 1.0 {
+                    let rf_walk = w.dmg.return_fire;
+                    w.dmg.return_fire = false;
+                    w.walk_nav_to(stand, &format!("stairwell guard {g} the north-edge stand (d3 tap posture)"), 1.0);
+                    w.dmg.return_fire = rf_walk;
+                }
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break 'recovery; }
+                plate_pocket_fight(&mut w, g, &format!("stairwell guard {g} (d3 tap)"));
+                let dead = w.scene.sim.as_ref().unwrap().drones.list[g].corpse
+                    || w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0;
+                if dead { cleared.insert(g); }
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break 'recovery; }
+                continue;
+            }
             {
                 let sim = w.scene.sim.as_ref().unwrap();
                 if sim.gun.clip + sim.gun.spare < 8 { drop(sim); w.resupply("ammo"); }
@@ -3928,6 +4309,20 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
 /// pocket rule on real damage — the nb-scan-all death t28813 was the plate leg's return-fire
 /// flank walking Bond into the pocket corner beside #12/#17; green, health 43.0 at the exit.
 #[test]
+/// GREEN (retune-nb-01-2, exit to 07000002 at t29163, end health 46.8 [L the v3 run]): the
+/// round-1 ledger's fight-spot was wrong — the clear-0 probe (2026-11-21) measured every east
+/// stand FULLY walled for the pocket set (#2 on the stairwell structure top y 10.22, #4 at
+/// (-30.26,9.02), #17 at (-31.10,11.80); no part ray and no flight lane at dy 0.3-1.5 from any
+/// east stand), while #17's HEAD (part 5, dy +0.51) exposes from the corridor's NORTH edge
+/// ((-28,15.5)/(-28.5,16.5)/(-29,16.5)) and the pocket-edge stand's transit crosses the
+/// guards' advanced spots (their parks vary per run — the v5-v9 deaths). The clear now picks
+/// the west-most north-edge stand outside every live guard's 3.0 forced band
+/// [M 0x179740:100-110] and fights the converged tap loop (no approach, no flank); #17 dies to
+/// ONE head tap at zero cost; the walled #2/#4 are left to the plate walk (the green top-up
+/// walks prove the recovery succeeds with them alive; the plate walk's own return fire killed
+/// #4 in 590 ticks [L the v2 run]). The lure grind is banned: the v2 run measured it drawing
+/// the pocket guards onto the unattended CONTACT (he died mid-grind; the exit fired as the
+/// escort-fail restart).
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
     walker::with_real_damage(walk_from_the_spawn_to_the_exit_with_the_contact);
 }
@@ -3963,6 +4358,16 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
 /// gun-cone-vs-hit-box shield (Walker::shield_boxes, Agent only) and the pocket stance at the
 /// band's west end for a pocket guard Bond can see. Green, 53.8 health at the exit.
 #[test]
+/// GREEN (retune-nb-01-2, exit to 07000002 at t15479, end health 31.8 + armour 50.0, 68.2
+/// total [L the v3 run]): the levers, in the ledger's own order — (1) the d2 lure/hold crouch
+/// (the d3 crouch law joins Agent; the hold no longer stands in the fan), (2) the plate-lane
+/// pocket tap loop (d1's lever — the band-checked north-edge stand killed the pocket set's
+/// shooter in one head tap), and the fight-order pass measured a NO-OP on this stream
+/// (agent_order already put the shotgunners first — the sort gate now admits d2 and the tick
+/// was unchanged, [L the v2 run]). The decisive lever was the volley-race FIGHT KIT joining
+/// d2: the SMG pre-arm during the entry's quiet waits + the head-box lane ladder + the loose
+/// gates + the lane fire (all d2/d3-gated, d1 byte-identical) — #7's one-frame 33.6 hall
+/// volley is gone and the walk finishes 13700 ticks DEEPER than the round-1 death.
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));
 }
@@ -4102,7 +4507,7 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// machinery (d3_aperture_fight + the lane grid + the diag counters) is on the branch, d3-
 /// gated; d1/d2 byte-identical.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): start room fixed (pulsed pre-clear, #0 shot closing); Bond now dies t2324 at the hall lane stand (7.04,6.19,9.67): #7's shotgun volleys 62.8 -> 5.2 in ~14 ticks on arrival [L 2026-11-18 run]; re-tune and un-ignore"]
+#[ignore = "retune-nb-01-2 (round 2): the door phase is WON (the SMG head-box aim killed #6 and #7 with ZERO volleys) and the plate lane is WON on d1/d2 (the band-checked north-edge stands + the converged tap loop — d3 keeps its own machinery there). d3's endgame moved DEEPER on the ammo lever: the no_fetch zone x-scope (boxes west of x 0 fetchable even above z 11.2 — the west-corridor ground is not hall interior) shifted the death t75294 -> t83962 (+8668 ticks) [L the v2/v3 runs]. The NEW death is the post-clear stairwell-head NAV: `walk_nav_to([-30.8,6.4,13.1])`'s own stuck-flank ladder walked Bond INTO the pack at the stairwell mouth (Bond (-30.64,11.74); #3 0x5000038's 7.20 pellet at d 0.8 and #17 0x5000039's 3.60x3 at d 0.9 — inside the ×2 TooClose band [M Drone_ModBulletDamage 0x139f50]; health 17.6 at the flank, the flank target (-31.6,16.6) west into the pocket). The x-scope admitted NO fetchable drops on this stream (the corridor dead were fist guards — no drops; the resupply lines read 'no pickup within the walked-path corridor'). The recovery tap posture (stairwell guard x <= -27 -> the band-checked stand + plate_pocket_fight) is IN but never engaged — the death is upstream of the recovery. NEXT LEVERS: (1) the endgame walk posture — the post-clear/pre-descent stairwell-head navs run with the nav flank machinery live and no pocket hold; band-check the endgame legs (the flank target must stay >= 3.05 from every live pocket guard, the d1/d2 clear's own rule) or hold the flank west of x -27 during the d3 endgame walks; (2) the #11 window cap (the pool thief — the lane windows on #11 burned 24.0 across two windows); (3) after the walk posture holds, the recovery tap posture (already in) answers the mouth pack from the north edge."]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }

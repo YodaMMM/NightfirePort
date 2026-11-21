@@ -304,6 +304,15 @@ pub struct Walker {
     /// fetched even with the entry-time list set — it was not in the pickups list at entry).
     /// None by default: every other walk unchanged.
     pub no_fetch_z_above: Option<f32>,
+    /// retune-nb-01-2 (opt-in, set only by the 07000001 d3 00 Agent walk): the x-scope of the
+    /// `no_fetch_z_above` zone — boxes WEST of this x are FETCHABLE even above the z line.
+    /// The round-1/2 ledger: the endgame died at the stairwell head with clip 1 spare 7 while
+    /// the dead guards' drops lay in the west corridor (x < 0) — the zone bans them along with
+    /// the hall interior (the ban's purpose was the HALL's interior ground, x > 0: the west
+    /// lanes own it, the run10/run12 ledgers). The drops are on the walked trail, so the
+    /// resupply's on-trail rule can take them once the zone relaxes. None by default: every
+    /// other walk unchanged (the zone reads exactly as before).
+    pub no_fetch_zone_x_min: Option<f32>,
     /// Per-tick drone watch (level-06-rook-door debugging, env-gated `NF_DRONE_WATCH="3,4"`):
     /// each listed drone's last logged state; tick_inner prints a line on every state change or
     /// >0.03 move, so a leg that runs inside walk_nav_to stays observable. Additive; no test sets
@@ -426,6 +435,7 @@ impl Walker {
             trail: Vec::new(),
             no_fetch: Vec::new(),
             no_fetch_z_above: None,
+            no_fetch_zone_x_min: None,
             alarm_last: Vec::new(),
             drone_watch, watch_last,
             health_last: Vec::new(),
@@ -842,7 +852,12 @@ impl Walker {
                 .filter(|p| self.no_fetch.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 1.0))
                 // hall-6's zone form (see the field doc): the hall's door plane is z 11.2 —
                 // every interior box is behind it and the west lanes own the interior ground.
-                .filter(|p| self.no_fetch_z_above.map_or(true, |z| p.m[3][2] <= z))
+                // retune-nb-01-2's x-scope: boxes west of `no_fetch_zone_x_min` are fetchable
+                // even above the z line (the west-corridor dead-guard drops — the d3 endgame
+                // lever); the default keeps the zone exact.
+                .filter(|p| self.no_fetch_z_above.map_or(true, |z| {
+                    p.m[3][2] <= z || self.no_fetch_zone_x_min.map_or(false, |xm| p.m[3][0] < xm)
+                }))
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 // A box the walker just wedged on is not the box a player keeps trying: exclude
                 // the already-tried spots so the next attempt takes the next-nearest.
