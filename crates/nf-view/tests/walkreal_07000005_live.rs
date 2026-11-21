@@ -1885,7 +1885,10 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
 /// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the
 /// load path is the only difference.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t10830 at (43.01,45.19,-73.11): every gun dry at the walkway pair [L 2026-11-18 run]; re-tune and un-ignore"]
+/// UN-IGNORED (walks-1121, 2026-11-21 [L the run on this branch]): on the stream-batch-1121b
+/// master the walk completes unchanged — the door chain fires at t11042 with 89.0 health
+/// (1 hit for 11.0, 3 return-fire fights); the 2026-11-18 walkway-pair death no longer
+/// reproduces.
 fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
     // The fights HEAD-HUNT (see the Agent sister): at 00 Agent the guards' accuracy is 1.3 and
     // Bond's pain is unscaled, so every tick a fight stands is a tick of bursts — the head pick
