@@ -488,11 +488,16 @@ impl DrivingState {
                     pos: d.car.pos,
                     vel: d.car.vel,
                     radius: (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt(),
+                    // The traffic cars' own boxes are not built here: the sphere stand-in [S].
+                    bbox: None,
                 }).collect(),
                 player_pos: self.car.pos,
                 player_vel: self.car.vel,
                 // +0x7c = |half extents| [M 0x1f6e98].
                 player_radius: (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt(),
+                // The player body's oriented box: its rotation rows and the model-box half extents
+                // [M 0x22eb28 -> FUN_001f5cf0].
+                player_box: Some(nf_game::driving::script::CarBox { axes: self.car.rot, half: h }),
                 difficulty: 1,
                 ..Default::default()
             };
