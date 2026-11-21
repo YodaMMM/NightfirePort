@@ -13,7 +13,7 @@
 //! (lane-offset) at least `lookahead` ahead, and the control pass turns and pedals toward it. The
 //! old port drove the car on rails at the segment's speed limit; the game does neither (see §9).
 
-use super::physics::{Car, CarInput, CarParams, FlatWorld, Rigid};
+use super::physics::{Car, CarInput, CarParams, FlatWorld, Ground, Rigid};
 use super::road::{lane_offset, LaneSet, RoadNet, RSF_TURN_RESTR_A, RSF_TURN_RESTR_B};
 
 /// The AIVehicle states (+0x70) [M 0x12e350's switch].
@@ -166,6 +166,13 @@ impl SimCar {
     pub fn of_car(car: &Car) -> SimCar {
         let (sin, cos) = car.yaw.sin_cos();
         SimCar { pos: car.pos, vel: car.vel, forward: [sin, 0.0, cos], right: [cos, 0.0, -sin], alive: 1.0 }
+    }
+
+    /// The sim view of a car on the land physics: the forward and side rows are the body's
+    /// own rows (class+0x20 / +0x00, which FUN_00133ab0 reads [M 0x133ab0:34-38]), so a pitched
+    /// or rolled body steers by its real facing.
+    pub fn of_body(car: &Car) -> SimCar {
+        SimCar { pos: car.pos, vel: car.vel, forward: car.rot[2], right: car.rot[0], alive: 1.0 }
     }
 }
 
@@ -1274,6 +1281,24 @@ impl AiDriver {
         let along = self.car.vel[0] * s + self.car.vel[2] * c;
         self.car.vel[0] = s * along;
         self.car.vel[2] = c * along;
+        Ok(cmd)
+    }
+}
+
+impl AiDriver {
+    /// One 60 Hz step on the land physics: the brain (as `step_shared`, reading the body's rows)
+    /// then `Car::step` over `ground` with the car's driver kind, so an AI car runs the game's AI
+    /// pass `FUN_0018ecb8` [M FUN_00188200 0x188bf8-0x188c60]. None of the rail stand-ins of
+    /// `step_shared` apply: the AI pass's own tyre side force holds the car on its line and its
+    /// one-pedal rule (`FUN_0018ecb8` :126-131) handles the brake.
+    pub fn step_land<G: Ground + ?Sized>(&mut self, net: &RoadNet, ground: &G, dt: f32, world: Option<&YieldWorld>, rng: &mut DriveRng) -> Result<DriveCommand, String> {
+        let sim = SimCar::of_body(&self.car);
+        let cmd = match self.brain.step_with(net, &sim, world, &mut || rng.next())? {
+            Some(c) => c,
+            None => DriveCommand::IDLE,
+        };
+        let input = CarInput { throttle: cmd.throttle, brake: cmd.brake, steer: cmd.steer, handbrake: cmd.handbrake };
+        self.car.step(&input, ground, &self.rigid, dt);
         Ok(cmd)
     }
 }
