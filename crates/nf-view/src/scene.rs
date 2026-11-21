@@ -4620,7 +4620,7 @@ impl Sim {
             //   [M disasm 0x1a7e2c-0x1a7e74];
             // - else the option on, or the Q-Claw held (forced on [M 0x1a7cfc-0x1a7d18 `movz`]): the scan;
             // - else: the offsets halve and the lock stays [M 0x1a7e78-0x1a7ecc].
-            let view_pitch = nf_formats::ps2float::mul(self.bond.pitch, std::f32::consts::FRAC_PI_2);
+            let view_pitch = self.bond.view_pitch_ps2();
             let basis = nf_game::autoaim::view_basis(self.bond.yaw, view_pitch, look);
             let qclaw = matches!(self.gun.weapon, 0x50 | 0x51);
             let dir = if self.aiming {
@@ -6775,7 +6775,7 @@ impl Sim {
     /// screen position (`View_3DPoint2Screen`, halved like the auto-aim store) times the zoom, since
     /// `Player_GetAimingPoint` divides by it. `None` behind the eye. For the walkers' aimed stands.
     pub fn cursor_for(&self, at: [f32; 3]) -> Option<[f32; 2]> {
-        let p = nf_formats::ps2float::mul(self.bond.pitch, std::f32::consts::FRAC_PI_2);
+        let p = self.bond.view_pitch_ps2();
         let b = nf_game::autoaim::view_basis(self.bond.yaw, p, self.bond.look());
         let s = nf_game::autoaim::project_offset(self.bond.head(), &b, at)?;
         Some([s[0] * 0.5 * self.zoom, s[1] * 0.5 * self.zoom])
@@ -6784,7 +6784,7 @@ impl Sim {
     /// The current shot direction's offset from Bond's view as (yaw, pitch) radians, what the old
     /// angle-unit `aim_offset` held, for the walkers that steer the effective aim.
     pub fn aim_offset_angles(&self) -> [f32; 2] {
-        let p = nf_formats::ps2float::mul(self.bond.pitch, std::f32::consts::FRAC_PI_2);
+        let p = self.bond.view_pitch_ps2();
         let b = nf_game::autoaim::view_basis(self.bond.yaw, p, self.bond.look());
         let d = nf_game::autoaim::aim_dir(&b, self.drones.aim_offset, self.zoom);
         let mut y = d[0].atan2(d[2]) - self.bond.yaw;

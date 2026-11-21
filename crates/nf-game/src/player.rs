@@ -738,6 +738,17 @@ impl Bond {
         self.pitch * std::f32::consts::FRAC_PI_2
     }
 
+    /// `view_pitch` on the EE lanes the auto-aim basis reads: walking it is
+    /// `ps2float::mul(pitch, π/2)` (bit-exact with the walk's aim), in zero-g the forward row's
+    /// elevation, so the aim basis (`autoaim::view_basis`) agrees with the forward row `look`
+    /// the shot rides instead of a dead scalar pitch [M Player_ZeroG 0x192ab0:74].
+    pub fn view_pitch_ps2(&self) -> f32 {
+        if self.zero_g_active {
+            return self.view_pitch();
+        }
+        nf_formats::ps2float::mul(self.pitch, std::f32::consts::FRAC_PI_2)
+    }
+
     /// The view direction (pitch applied to the forward axis). In the zero-g substates the whole
     /// orientation lives in the object matrix — ZeroG zeroes the scalar pitch BL+0x8a8 EVERY tick
     /// [M Player_ZeroG 0x192ab0:74] — so the view rides the matrix's forward row.
@@ -1984,8 +1995,8 @@ impl Bond {
             // dead here (`Bond::look` returns the matrix's forward row instead).
             self.vel = [0.0; 3];
             // The look rates [M :76-90]: the pitch action → the x angle, the turn action → the y
-            // angle, roll 0 — `RotMatrix` then `Concat(obj, R)` ⇒ m := m·R [M 0x1e4a90:13-49],
-            // the BODY frame (a pitched yaw drifts the up — what the auto-stabiliser repairs).
+            // angle, roll 0 — `RotMatrix` then `Concat(obj, R)`, the BODY frame (a pitched yaw
+            // drifts the up — what the auto-stabiliser repairs).
             // The port's `turn`/`look` are already per-tick deltas (mouse-direct, pad-ramped,
             // D-002); the game's own pad constant is 1.2566371·REC_FRAME_RATE rad/tick, `look`
             // riding in π/2 units.
@@ -3682,6 +3693,31 @@ mod tests {
         assert!(f[1] > 0.3, "five look ticks pitch the aim up: {f:?}");
         assert!((b.view_pitch().sin() - f[1]).abs() < 1e-5, "camera pitch {} vs aim elevation {}", b.view_pitch(), f[1]);
         assert_eq!(b.pitch, 0.0, "the scalar pitch stays dead in zero-g [M 0x192ab0:74]");
+    }
+
+    /// The auto-aim basis (`autoaim::view_basis`, the frame `Player_GetAimingPoint` builds from
+    /// obj+0x90 with the dead scalar pitch [M 0x1a4a98:63-65, Player_ZeroG 0x192ab0:74]) is
+    /// orthonormal with the zero-g forward row only on `view_pitch_ps2`: its up row is
+    /// perpendicular to `look`. Sister: the scalar-pitch basis (0 in zero-g) leaves the up row
+    /// world-up, tilted against a pitched aim by the aim's elevation, so the pin can fail. Walking,
+    /// `view_pitch_ps2` is the walk's EE product bit for bit.
+    #[test]
+    fn zero_g_aim_basis_follows_the_forward_row() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], 0.3);
+        b.pitch = 0.2;
+        assert_eq!(b.view_pitch_ps2().to_bits(), nf_formats::ps2float::mul(0.2, std::f32::consts::FRAC_PI_2).to_bits(), "walking: the EE product");
+        b.pitch = 0.0;
+        b.substate = SS_ZEROG_9;
+        b.tick(&w, &Input::default());
+        for _ in 0..5 { b.tick(&w, &Input { look: 0.05, ..Default::default() }); }
+        let f = b.look();
+        assert!(f[1] > 0.3, "the aim pitched: {f:?}");
+        let dot = |a: [f32; 3], c: [f32; 3]| a[0] * c[0] + a[1] * c[1] + a[2] * c[2];
+        let basis = crate::autoaim::view_basis(b.yaw, b.view_pitch_ps2(), f);
+        assert!(dot(basis[1], f).abs() < 1e-3, "up ⟂ forward on view_pitch_ps2: {}", dot(basis[1], f));
+        let old = crate::autoaim::view_basis(b.yaw, nf_formats::ps2float::mul(b.pitch, std::f32::consts::FRAC_PI_2), f);
+        assert!(dot(old[1], f) > 0.3, "sister: the scalar-pitch basis tilts against the aim ({})", dot(old[1], f));
     }
 
     #[test]
