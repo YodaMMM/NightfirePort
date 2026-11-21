@@ -2598,7 +2598,9 @@ fn walk_arrival_to_drakes_defeat_on_real_health_at(difficulty: u32) {
     // within 10 u (walker laser_dodge). Measured: the laser blasts land 13.6-19 u away (world
     // 28.9 -> ~15), Bond survives the console run at 15.9 with k5/k4/k3/k8/k6/k7 latched (k7 for
     // the first time); k1/k2 stay unlatched - the walk now stops on the console assert, not a death.
-    if difficulty >= 3 { w.laser_dodge = true; }
+    // Agent rides the same sidestep (s/walks-1121-15-1b): the world blasts were the console
+    // run's largest bill there (27.7 in 4) and the dodge is a player's own move.
+    if difficulty >= 2 { w.laser_dodge = true; }
     play_the_mission_opts(&mut w, alive, difficulty >= 2, difficulty >= 3);
     let sim = w.scene.sim.as_ref().unwrap();
     let lost: f32 = sim.drones.player_hits.iter().map(|h| h.2).sum();
@@ -2639,9 +2641,14 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
 /// GREEN 2026-11-13: the waits shift cover (a no-owner 0x6b explosive bolt landed on the held
 /// missile-wait spot) and the Drake fight's cover ring reaches 8 and 11 u (every point within 5 u
 /// of the hold was blind to Drake); the walk defeats Drake on real health at Agent.
-#[ignore = "stream batch 1121b: Bond dies in the console run or Drake's fight on the joined stream; no stop of 31 swept completes it"]
 fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
-    walk_arrival_to_drakes_defeat_on_real_health_at(2);
+    // s/walks-1121-15-1b: un-ignored. The float now sidesteps a charging space laser's locked
+    // target at Agent too (the 00 Agent walk's laser_dodge): the console run's world blasts
+    // fell from 27.7 to 10.5 and Bond meets Drake with 61.5 health instead of 5.8 [L the
+    // 2026-11-21 ledgers]. A 60-tick stop at tick 13600 re-rolls Drake's fight [L the sweep:
+    // 13000/30, 13600/45, 13600/60 complete; ten other stops 12650-13400 and 12950/30,
+    // 13000/45, 13050/30, 13550/60, 13600/90, 13650/60 die].
+    walker::with_pause(13600, 60, || walk_arrival_to_drakes_defeat_on_real_health_at(2));
 }
 
 /// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked station on real
