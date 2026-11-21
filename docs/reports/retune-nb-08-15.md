@@ -97,3 +97,18 @@
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (ntfy.sh unreachable — the same failure as rounds
+5−14; each attempt at 2026-11-21 ~14:26−14:28 UTC):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (rc 28)
+2. python3 urllib: killed by the outer 30 s timeout (rc 124) — no response within the 20 s
+   urlopen timeout, no traceback, nothing written
+3. wget: killed by the outer 30 s timeout (rc 124, quiet mode, no output)
+
+The notification text that could not be delivered:
+`retune-nb-08-15: the band-scored latch pick and the stalemate cannon dodge both tried and
+dead on their own runs; shipped state kept, death t29924, whole binary 6/1; the walk-back
+family next`
