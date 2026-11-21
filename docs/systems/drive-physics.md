@@ -159,9 +159,17 @@ Reverse flips the steer force sign (`FUN_00190f88`:428-433 [M]). The steering sl
   wheel frame; `front_lateral = −(rotated x) · 5.0` **clamped ±12.5**; the rear mirrors it
   (the ±9.375-12.0 rear band per the response limits) — units are the force-API's
   accelerations (see §6).
-- The 18 world colliders @0x331a60 (stride 0x50): spring-damper `F = fps · Δv · compression`
-  (:870-975) — the suspension consumer; constants per collider (the SPRING_* attrs ride the
-  car params) [S for the full form; the exact per-collider table is not lifted yet].
+- ~~The 18 world colliders @0x331a60 (stride 0x50): spring-damper `F = fps · Δv · compression`
+  (:870-975) — the suspension consumer; constants per collider~~ **Corrected (G-056):** the
+  table at 0x331a60 is 19 invisible boundary sheets (4 corners + normal + thickness), and
+  :870-975 is their response: `C = n·s·(fps·v_n − (f·n)/m)`, applied as `C·s` only when
+  `C·n > 0`, with `s = max((t − d)/t, 0.1)` and fps the integer at 0x339f4c, plus a scrape
+  torque [M 0x192130-0x1923bc]. Note this function, `FUN_00190f88`, is the pass the controller
+  `FUN_00188200` runs only for `SUB_PHYSICS` vehicles (subs, ultralights, plane, subcopter
+  [D]) [M 0x188bf8-0x188c04] — so the grip/lateral constants cited from it in this section
+  may not be the land car's; the land car (SUB_PHYSICS 0) takes `FUN_0018cef8` or
+  `FUN_0018ecb8` (unresolved here). Full decode: docs/systems/driving-world-bounds.md; port:
+  `crates/nf-game/src/driving/bounds.rs`.
 - `ROLLING_RESISTANCE` 0x3319a4 and the friction/lateralLoss surface tables feed the same
   accumulators [M registration 0x185668].
 

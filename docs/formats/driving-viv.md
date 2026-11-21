@@ -41,7 +41,9 @@ entries: the census measured over every one of the 1,499 entries
    - `.sub` (loading screens) — plain text starting with a line count (`14\r\nF…`).
    - `.bnk` — most RefPack-compressed; some plain `BNKl` (e.g. `a1_paris.bnk` [D]).
 
-A RefPack decompressor is **not** in the repo yet; through the compressed stream these literals
+A RefPack decompressor ~~is **not** in the repo yet~~ **exists** (update 2026-11-18:
+`refpack.rs` — the `10 FB` gate anchored at DRIVING.ELF 0x323bb0 [M], `decompress`/
+`decompress_into`, goldens); through the compressed stream these literals
 are visible (*measured*, [D]): `default.tun` contains `GRAVITY=-34`, `SLEEP_VEL=5`,
 `GROUND_FRICT…` (key=value text lines); `loading.sfn` starts `FNTS`; the track `.crp` decompressee
 starts `ACRZ`…/`PRAC`-family bytes (interpretation [S], needs the decompressor).
