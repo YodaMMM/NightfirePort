@@ -320,6 +320,10 @@ pub struct DrivingState {
     pub engine: Option<DriveEngine>,
     pub weapons: Option<DriveWeapons>,
     pub glares: Option<DriveGlares>,
+    /// The traffic world the AI yields in: the junction lights' shared phase (FUN_0013ef40, one
+    /// step per 300 ticks) and the world's one driving generator (*0x339190) [M].
+    pub lights: nf_game::driving::ai::JunctionLights,
+    pub ai_rng: nf_game::driving::ai::DriveRng,
     /// A SUB_PHYSICS player vehicle (the sub, the ultralights: FUN_00190f88 + the hull against the
     /// track, nf_game::driving::sub_physics / sub_collide); the car mirrors its body each tick.
     pub sub: Option<(nf_game::driving::sub_physics::SubCraft, nf_game::driving::sub_collide::WorldMesh, nf_game::driving::sub_collide::Building)>,
@@ -696,8 +700,17 @@ impl DrivingState {
         if !self.ai_cars.is_empty() {
             if let Ok(crp) = Crp::parse(&self.crp_bytes) {
                 if let Ok(rn) = RoadNet::parse_crp(&crp) {
-                    for (drv, _) in &mut self.ai_cars {
-                        let _ = drv.step(&rn, DT);
+                    let now = self.ticks as i32;
+                    self.lights.tick(now);
+                    // Every vehicle the yield looks at: the traffic cars and the player
+                    // (kind < 4, status 2 = live) [M 0x135530 / 0x1377c8].
+                    let veh = |pos: [f32; 3], h: [f32; 3]| nf_game::driving::ai::Vehicle { pos, box_x: h[0], box_z: h[2], kind: 1, status: 2, enabled: true, state: 4, alive: 1.0, lane: 0, end: 0 };
+                    let mut vehicles: Vec<nf_game::driving::ai::Vehicle> = self.ai_cars.iter().map(|(d, _)| veh(d.car.pos, d.car.params.half_extents)).collect();
+                    vehicles.push(veh(self.car.pos, self.car.params.half_extents));
+                    let lights = self.lights.clone();
+                    for (k, (drv, _)) in self.ai_cars.iter_mut().enumerate() {
+                        let world = nf_game::driving::ai::YieldWorld { now, lights: lights.clone(), vehicles: &vehicles, me: Some(k), light_objects: &[] };
+                        let _ = drv.step_shared(&rn, DT, Some(&world), &mut self.ai_rng);
                         if let Some(hy) = self.collision.ground_y(drv.car.pos[0], drv.car.pos[1], drv.car.pos[2]) {
                             drv.car.pos[1] = hy;
                         }
@@ -1843,6 +1856,8 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             scene.textures.push(TextureImage { key: (0, 0xfee2_0000 | tex as u32), width: flar.width, height: flar.height, rgba: flar.rgba, more: Vec::new(), rate: 1 });
             Some(DriveGlares { fx, types, tex })
         })(),
+        lights: nf_game::driving::ai::JunctionLights::new(0),
+        ai_rng: nf_game::driving::ai::DriveRng::game_reset(),
         weapons: Some({
             let mut sys = nf_game::driving::weapons::WeaponSystem::new(60, false);
             nf_game::driving::weapons::default_loadout(&mut sys, false);
@@ -1940,6 +1955,8 @@ mod tests {
             engine: None,
             weapons: None,
             glares: None,
+            lights: nf_game::driving::ai::JunctionLights::new(0),
+            ai_rng: nf_game::driving::ai::DriveRng::game_reset(),
             sub: None,
             intro: None,
         };
