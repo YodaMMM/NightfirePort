@@ -80,6 +80,6 @@ pub mod class_sounds;
 // callers use: `nf_game::driving::{Car, CarInput, CarParams,
 // FlatWorld, Rigid, Tuning, DT, Friction, SURFACES}`.
 pub use physics::{
-    Car, CarInput, CarParams, CollisionGround, DT, FlatGround, FlatWorld, Friction, Ground, Rigid, SURFACES,
+    Car, CarInput, CarParams, CollisionGround, DriverKind, DT, FlatGround, FlatWorld, Friction, Ground, Rigid, SURFACES,
     Tuning, WallHit, WheelPlane,
 };

@@ -1359,6 +1359,37 @@ pub fn header_half_extents(crp_bytes: &[u8]) -> Result<[f32; 3]> {
     Ok([(hi[0] - lo[0]) * 0.5, (hi[1] - lo[1]) * 0.5, (hi[2] - lo[2]) * 0.5])
 }
 
+/// The car model's hull points in the body frame (centred on the header box), the list the
+/// physics instance's probe points are built from. `FUN_001f72d8` asks `FUN_00195ae0` for them:
+/// `FUN_001c98f8` returns `*(model+0xc) + 0x60` with the count at `*(model+0xc) + 0x3c`, and
+/// every point's y gets `−FUN_001d38a8()` = `−(Base+0x38 − (max_y − min_y)/2)` added (the model
+/// vtable 0x3885d8 slot +0x54) [M 0x1f72d8:126-139, 0x195ae0, 0x1c98f8, 0x1d38a8]. The list
+/// lands after the four wheel points (class+0x80 + 16·(4 + k)) and is capped at 16 entries in
+/// all, so at most 12 hull points [M 0x1f72d8:140-145]. 16-byte records (x, y, z, 0) [D: every
+/// car model on the disc, 8 or 12 points; helicopter.crp has none].
+pub fn hull_points(crp_bytes: &[u8]) -> Result<Vec<[f32; 3]>> {
+    let crp = Crp::parse(crp_bytes)?;
+    let arti = crp
+        .pool()?
+        .into_iter()
+        .find(|r| r.tag == tag::ARTI)
+        .ok_or_else(|| FormatError::Invalid("no Arti in the car .crp pool".into()))?;
+    let base = window(&crp, &arti)?
+        .into_iter()
+        .find(|r| r.tag == crate::crp_mesh::TAG_BASE)
+        .ok_or_else(|| FormatError::Invalid("no Base record in the car article".into()))?;
+    let p = crp.payload(&base)?;
+    let f = |o: usize| f32_at(p, o);
+    let count = u32_at(p, 0x3c)? as usize;
+    let lift = -(f(0x38)? - (f(0x24)? - f(0x14)?) * 0.5);
+    let mut out = Vec::new();
+    for k in 0..count.min(12) {
+        let o = 0x60 + 16 * k;
+        out.push([f(o)?, f(o + 4)? + lift, f(o + 8)?]);
+    }
+    Ok(out)
+}
+
 /// Decodes a car `.crp` (decompressed bytes): every `in#0` item with its LOD-0 strips.
 pub fn car_mesh(crp_bytes: &[u8]) -> Result<CarMesh> {
     let crp = Crp::parse(crp_bytes)?;

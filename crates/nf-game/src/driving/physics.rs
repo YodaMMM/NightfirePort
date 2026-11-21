@@ -14,7 +14,11 @@
 //! - Engine/gears/steering: `FUN_0018cef8` + the auto-shift/RPM `FUN_0018aa88`; tyre/lateral
 //!   forces `FUN_00190f88`; gravity + ground damping `FUN_001f7c60`; the force API
 //!   `FUN_001f87d8` (accel·mass accumulators); the integration is VU0 microcode
-//!   (`FUN_001f89e0` → `.vutext`) — modelled as semi-implicit Euler here [S], see the doc §6.
+//!   (`FUN_001f89e0` → micro 0x568), lifted in `Car::integrate` (docs/systems/drive-physics.md §12).
+//! - The AI cars (actor+0x2c8 != 0) run `FUN_0018ecb8` + `FUN_0018e548` (`Car::controller_ai`),
+//!   with the in-air levelling `FUN_0018bb90`; the land pass C response is the VU0 program at
+//!   micro 0x1a0 (`Car::hull_response`) over the model's hull points, and pass B answers from
+//!   the track's 2-D walls (`CollisionGround::with_walls`) with `FUN_001fb318`'s land branch.
 //! - The land car (`Car::step`): FUN_00188200's SUB_PHYSICS 0 / IS_SNOWMOBILE 0 / player branch
 //!   runs `FUN_0018cef8` + the per-wheel `FUN_0018c1b0` against the ground triangles
 //!   (`CollisionGround`); docs/systems/drive-physics.md §8 has the function-by-function table.
@@ -298,6 +302,16 @@ pub struct CarParams {
     /// +0xb0 / +0xb4 COUNTER_STEER_SCALE / _LIMIT
     pub counter_steer_scale: f32,
     pub counter_steer_limit: f32,
+    /// +0x3c NOSE_JUMP_ANGLE: the nose-down pitch of the AI cars' in-air levelling target
+    /// [M FUN_001968f8:137 registers the name at +0x3c; FUN_0018bb90 passes it to the x-axis
+    /// rotation FUN_002cc510]
+    pub nose_jump_angle: f32,
+    /// The model's hull points, body frame (`nf_formats::carmesh::hull_points`); empty = the
+    /// port's box-corner stand-ins in `Car::hull_points`
+    pub hull: Vec<[f32; 3]>,
+    /// +0xb8 NUM_BLEND_STEPS: the in-air levelling's running-average length (an int attr)
+    /// [M FUN_001968f8:141; FUN_0018bb90 `((n − 1)·row + target)/n`]
+    pub num_blend_steps: i32,
 }
 
 impl CarParams {
@@ -393,6 +407,9 @@ impl CarParams {
             ws_accel: 30.0,
             counter_steer_scale: 1.72,
             counter_steer_limit: 2.0,
+            nose_jump_angle: 0.03,
+            num_blend_steps: 20,
+            hull: Vec::new(),
         }
     }
 
@@ -474,6 +491,8 @@ impl CarParams {
                 "WS_ACCEL" => p.ws_accel = v,
                 "COUNTER_STEER_SCALE" => p.counter_steer_scale = v,
                 "COUNTER_STEER_SCALE_LIMIT" => p.counter_steer_limit = v,
+                "NOSE_JUMP_ANGLE" => p.nose_jump_angle = v,
+                "NUM_BLEND_STEPS" => p.num_blend_steps = v as i32,
                 _ => {}
             }
         }
@@ -560,6 +579,9 @@ pub trait Ground {
     /// True for the legacy no-ground stand-in (`FlatWorld`): `Car::step` then runs the flat
     /// `step_rail` model instead of the wheels.
     fn legacy_flat(&self) -> Option<&FlatWorld> { None }
+    /// True when `wall_hit` answers from the track's 2-D wall list (the game's land-car pass B
+    /// query); `Car` then runs the game's wall response instead of the stand-in.
+    fn game_walls(&self) -> bool { false }
 }
 
 /// The legacy no-ground stand-in: a caller without the track's collision (the AI rail driver,
@@ -607,6 +629,10 @@ pub struct CollisionGround {
     tris: Vec<nf_formats::crp_mesh::CollisionTri>,
     /// per-cell (ground tris, wall tris)
     cells: std::collections::HashMap<(i32, i32), (Vec<u32>, Vec<u32>)>,
+    /// The `ca` 2-D walls (`Crp::extract_collision_walls`) and their cells; empty = the steep
+    /// triangle stand-in answers `wall_hit`.
+    walls: Vec<nf_formats::crp_mesh::CollisionWall>,
+    wall_cells: std::collections::HashMap<(i32, i32), Vec<u32>>,
 }
 
 impl CollisionGround {
@@ -637,7 +663,72 @@ impl CollisionGround {
                 }
             }
         }
-        CollisionGround { tris, cells }
+        CollisionGround { tris, cells, walls: Vec::new(), wall_cells: std::collections::HashMap::new() }
+    }
+
+    /// The ground triangles plus the track's 2-D walls: `wall_hit` then answers the way the land
+    /// car's pass B query does [M FUN_00219328 / FUN_0021a248 / FUN_00231548]: among the walls
+    /// whose class byte misses the mask 0x20 and whose xz segment the query's xz segment crosses
+    /// (both within ±0.0001), at a crossing height (interpolated along the query) strictly
+    /// between the wall's two end heights, the one nearest the start by
+    /// `max(|dx|, |dz|) + 0.25·min(|dx|, |dz|)`; the normal is the wall's horizontal
+    /// perpendicular `((B.z − A.z), 0, −(B.x − A.x))/|AB|` turned toward the start.
+    pub fn with_walls(tris: Vec<nf_formats::crp_mesh::CollisionTri>, walls: Vec<nf_formats::crp_mesh::CollisionWall>) -> CollisionGround {
+        let mut g = CollisionGround::new(tris);
+        for (i, w) in walls.iter().enumerate() {
+            let (x0, x1) = (w.a[0].min(w.b[0]), w.a[0].max(w.b[0]));
+            let (z0, z1) = (w.a[2].min(w.b[2]), w.a[2].max(w.b[2]));
+            for cx in (x0 / Self::CELL).floor() as i32..=(x1 / Self::CELL).floor() as i32 {
+                for cz in (z0 / Self::CELL).floor() as i32..=(z1 / Self::CELL).floor() as i32 {
+                    g.wall_cells.entry((cx, cz)).or_default().push(i as u32);
+                }
+            }
+        }
+        g.walls = walls;
+        g
+    }
+
+    pub fn walls(&self) -> &[nf_formats::crp_mesh::CollisionWall] { &self.walls }
+
+    fn wall_hit_2d(&self, a: [f32; 3], b: [f32; 3]) -> Option<WallHit> {
+        let (cx0, cx1) = ((a[0].min(b[0]) / Self::CELL).floor() as i32, (a[0].max(b[0]) / Self::CELL).floor() as i32);
+        let (cz0, cz1) = ((a[2].min(b[2]) / Self::CELL).floor() as i32, (a[2].max(b[2]) / Self::CELL).floor() as i32);
+        let mut best: Option<(f32, usize, [f32; 3])> = None;
+        let mut seen = std::collections::BTreeSet::new();
+        for cx in cx0..=cx1 {
+            for cz in cz0..=cz1 {
+                let Some(list) = self.wall_cells.get(&(cx, cz)) else { continue };
+                for &wi in list {
+                    if !seen.insert(wi) { continue; }
+                    let w = &self.walls[wi as usize];
+                    if w.class & 0x20 != 0 { continue; }
+                    // FUN_00231548: the 2-D crossing of the query a→b with the wall A→B.
+                    let f10 = a[0] - w.a[0];
+                    let f8 = w.b[2] - w.a[2];
+                    let f7 = w.b[0] - w.a[0];
+                    let f4 = b[0] - a[0];
+                    let f5 = b[2] - a[2];
+                    let f6 = a[2] - w.a[2];
+                    let den = f8 * f4 - f7 * f5;
+                    if den == 0.0 { continue; }
+                    let s_a = f4 * f6 - f5 * f10;
+                    let t_q = f7 * f6 - f8 * f10;
+                    let inside = |v: f32| (-0.0001 <= v && v <= den) || (v <= 0.0001 && den <= v);
+                    if !(inside(t_q) && inside(s_a)) { continue; }
+                    let t = t_q / den;
+                    let p = add(a, scale(sub(b, a), t));
+                    if !(w.a[1] < p[1] && p[1] < w.b[1]) { continue; }
+                    let (dx, dz) = ((p[0] - a[0]).abs(), (p[2] - a[2]).abs());
+                    let d = if dz < dx { dx + dz * 0.25 } else { dz + dx * 0.25 };
+                    if best.is_none_or(|(bd, _, _)| d < bd) { best = Some((d, wi as usize, p)); }
+                }
+            }
+        }
+        let (_, wi, p) = best?;
+        let w = &self.walls[wi];
+        let mut n = norm([w.b[2] - w.a[2], 0.0, -(w.b[0] - w.a[0])]);
+        if n[0] * (a[0] - p[0]) + n[2] * (a[2] - p[2]) < 0.0 { n = scale(n, -1.0); }
+        Some(WallHit { point: p, normal: n })
     }
 
     pub fn tris(&self) -> &[nf_formats::crp_mesh::CollisionTri] { &self.tris }
@@ -673,7 +764,12 @@ impl Ground for CollisionGround {
         Some(WheelPlane { v0: t.v[0], normal: n, surface: t.surface() })
     }
 
+    fn game_walls(&self) -> bool { !self.walls.is_empty() }
+
     fn wall_hit(&self, a: [f32; 3], b: [f32; 3]) -> Option<WallHit> {
+        if !self.walls.is_empty() {
+            return self.wall_hit_2d(a, b);
+        }
         let d = sub(b, a);
         let (cx0, cx1) = ((a[0].min(b[0]) / Self::CELL).floor() as i32, (a[0].max(b[0]) / Self::CELL).floor() as i32);
         let (cz0, cz1) = ((a[2].min(b[2]) / Self::CELL).floor() as i32, (a[2].max(b[2]) / Self::CELL).floor() as i32);
@@ -793,6 +889,37 @@ pub struct Car {
     pub wheel_cache: [Option<WheelPlane>; 4],
     /// the yaw the last step left (to spot an outside write to `yaw`)
     last_yaw: f32,
+    /// actor+0x2c8 — who drives the car; picks the controller pass [M FUN_00188200 0x188bf8]
+    pub kind: DriverKind,
+    /// actor+0x2db — ticks without a wheel in contact (0 on contact, saturating at 0xff)
+    /// [M FUN_0018ecb8 :524-529, FUN_0018cef8 :904-909]
+    pub air_ticks: u8,
+    /// class+0x4de — ticks since the last car-to-car hit: 0xffff (held, never counted) from
+    /// the body constructor and the placement, 0 on a car↔car response, then +1 per tick
+    /// [M FUN_001f6e98:262, FUN_001f7880:140, FUN_001f9d98:193-196, FUN_001f7c60:64-69]
+    pub since_car_hit: u16,
+    /// instance+0x50 — the angular momentum per unit mass, the integrator's state (ω is
+    /// derived from it) [M the VU0 program at micro 0x568, see `integrate`]
+    ang_mom: [f32; 3],
+    /// the ω `integrate` left, to spot an outside write to `ang_vel`
+    last_ang_vel: [f32; 3],
+}
+
+/// actor+0x2c8, the car constructor's second argument [M FUN_001862c0:118]. The player is 0
+/// (`FUN_00176658` :231 and `FUN_001566b0` :68 pass 0); the AIEl spawner `FUN_0012cb08` passes
+/// 4, or 2 when the element's flags hold 8, and the constructor turns 4 into 2 with +0x378 = 1
+/// [M 0x12cb08:201-205, 0x1862c0:175-179]; the traffic spawner `FUN_0013fae0` passes 3 [M :162].
+/// No constructor call passing 1 was found among the four `FUN_001ff850` callers [M-negative].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverKind {
+    /// 0: `FUN_0018cef8` + `FUN_0018c1b0`.
+    Player,
+    /// 1: the AI pass with the kind-1 arms (no caller found).
+    Kind1,
+    /// 2: the mission's AI vehicles (the AIEl elements): the AI pass.
+    Hostile,
+    /// 3: traffic: the AI pass with the kind-3 arms.
+    Traffic,
 }
 
 /// The body rows for an upright car at `yaw`: right = (cos, 0, −sin), up = y, forward =
@@ -800,6 +927,41 @@ pub struct Car {
 pub fn rot_from_yaw(yaw: f32) -> [[f32; 3]; 3] {
     let (s, c) = yaw.sin_cos();
     [[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]]
+}
+
+/// The rows the VU0 program builds from the orientation quaternion (x, y, z, w) [M micro
+/// 0x110-0x12e]: row0 = (1−2y²−2z², 2xy+2zw, 2xz−2yw), row1 = (2xy−2zw, 1−2x²−2z², 2yz+2xw),
+/// row2 = (2xz+2yw, 2yz−2xw, 1−2x²−2y²) — each row is the standard rotation of a body axis.
+pub fn rows_from_quat(q: [f32; 4]) -> [[f32; 3]; 3] {
+    let [x, y, z, w] = q;
+    [
+        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w)],
+        [2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w)],
+        [2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y)],
+    ]
+}
+
+/// The inverse of `rows_from_quat` for an orthonormal set of rows (the port keeps rows, the
+/// game the quaternion at instance+0x00).
+pub fn quat_from_rows(r: &[[f32; 3]; 3]) -> [f32; 4] {
+    // m[i][j] = the standard matrix, column k = row k.
+    let m = |i: usize, j: usize| r[j][i];
+    let tr = m(0, 0) + m(1, 1) + m(2, 2);
+    let q = if tr > 0.0 {
+        let s = (tr + 1.0).sqrt() * 2.0;
+        [(m(2, 1) - m(1, 2)) / s, (m(0, 2) - m(2, 0)) / s, (m(1, 0) - m(0, 1)) / s, 0.25 * s]
+    } else if m(0, 0) > m(1, 1) && m(0, 0) > m(2, 2) {
+        let s = (1.0 + m(0, 0) - m(1, 1) - m(2, 2)).sqrt() * 2.0;
+        [0.25 * s, (m(0, 1) + m(1, 0)) / s, (m(0, 2) + m(2, 0)) / s, (m(2, 1) - m(1, 2)) / s]
+    } else if m(1, 1) > m(2, 2) {
+        let s = (1.0 + m(1, 1) - m(0, 0) - m(2, 2)).sqrt() * 2.0;
+        [(m(0, 1) + m(1, 0)) / s, 0.25 * s, (m(1, 2) + m(2, 1)) / s, (m(0, 2) - m(2, 0)) / s]
+    } else {
+        let s = (1.0 + m(2, 2) - m(0, 0) - m(1, 1)).sqrt() * 2.0;
+        [(m(0, 2) + m(2, 0)) / s, (m(1, 2) + m(2, 1)) / s, 0.25 * s, (m(1, 0) - m(0, 1)) / s]
+    };
+    let l = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    [q[0] / l, q[1] / l, q[2] / l, q[3] / l]
 }
 
 impl Car {
@@ -811,6 +973,8 @@ impl Car {
             rot: rot_from_yaw(yaw), ang_vel: [0.0; 3], acc_accum: [0.0; 3], torque_accum: [0.0; 3],
             spring_prev: [0.0; 4], contacts: 0, hull_contacts: 0, brake_ticks: 0x1e, wheel_spin: 0.0,
             counter_steering: false, slip: [0.0; 4], wheel_cache: [None; 4], last_yaw: yaw,
+            kind: DriverKind::Player, air_ticks: 0, since_car_hit: 0xffff, ang_mom: [0.0; 3],
+            last_ang_vel: [0.0; 3],
         }
     }
 
@@ -968,7 +1132,14 @@ impl Car {
         // E: the accumulators zero, the working gravity lands (0, g, 0) [M 0x1f7c60:55-60, :168].
         self.acc_accum = [0.0, self.gravity, 0.0];
         self.torque_accum = [0.0; 3];
-        self.controller(input, world);
+        // class+0x4de counts up unless held at 0xffff [M 0x1f7c60:64-69].
+        if self.since_car_hit != 0xffff { self.since_car_hit += 1; }
+        // FUN_00188200's pass pick [M 0x188bf8-0x188c60]: the player FUN_0018cef8, any AI
+        // driver FUN_0018ecb8.
+        match self.kind {
+            DriverKind::Player => self.controller(input, world),
+            _ => self.controller_ai(input, world),
+        }
         self.update_rpm_gear(input.throttle, self.contacts > 0);
         self.yaw = self.rot[2][0].atan2(self.rot[2][2]);
         self.last_yaw = self.yaw;
@@ -976,17 +1147,54 @@ impl Car {
         self.grounded = self.contacts > 0;
     }
 
-    /// Pass B [S form]: each of the 8 hull corners (the model-less branch of FUN_001f72d8 puts
-    /// the box corners at class+0x80..0xfc [M]; which branch the vanquish takes is not traced)
-    /// sweeps `p → p + vel·dt` [M FUN_001fc2f0:251-255]; on a wall hit the response pushes along
-    /// the horizontal wall normal (the land car's response vector has y zeroed [M :316-325]) and
-    /// removes the inward velocity. The response magnitude (FUN_001fb318) is not ported.
+    /// Pass B, `FUN_001fc2f0` for a land vehicle (kind < 4, SUB_PHYSICS 0) [M]. With the track's
+    /// 2-D walls (`Ground::game_walls`): the eleven points of `sub_collide::hull_offsets` (the 8
+    /// corners `±(hx + 0.18), ±hy, ±hz`, the nose `fwd·(hz + 0.05)`, the sides `±right·hx`
+    /// [M FUN_001f8cf0, :100-140]); each is the segment `pos → pos + offset + vel·dt` (:142-150)
+    /// queried with class mask 0x20 (a land car's gather flags 4 = the 2-D wall list only,
+    /// docs/systems/drive-physics.md §10); per hit [M :190-330]:
+    /// - surface 0x0e: the mission event 0x15, no response (not raised here);
+    /// - the depth `|end − hit|` with its y lane zeroed (SUB_PHYSICS != 1), weight 1, or ×0.25
+    ///   with weight 0.25 for the side points 9/10;
+    /// - the application point is the segment end with its height moved to the body centre's
+    ///   plane: `end.y − (end − pos)·up + k`, k = −0.11 (`DAT_00339154`) below 5 m/s, else
+    ///   `max((|v| − 5)/10, 0.5)·−0.11` when `|n·fwd| > 0.8191`, else 0;
+    /// - `FUN_001fb318`'s land branch: the SUB_PHYSICS impulse (`sub_collide::respond`) with the
+    ///   torque taken to the body frame (FUN_001f8418) and its y and z lanes ×0.2, back to world
+    ///   (FUN_001f8498) [M 0x1fb318 :206-216, :245-258].
+    /// Without walls the stand-in [S] pushes out along the horizontal normal of a steep triangle
+    /// and removes the inward velocity.
     fn walls<G: Ground + ?Sized>(&mut self, world: &G, dt: f32) {
+        if world.game_walls() {
+            let b = super::sub_collide::Building::game_defaults();
+            let offs = super::sub_collide::hull_offsets(&self.rot, self.params.half_extents);
+            for (k, off) in offs.iter().enumerate() {
+                let start = self.pos;
+                let end = add(add(self.pos, *off), scale(self.vel, dt));
+                let Some(hit) = world.wall_hit(start, end) else { continue };
+                let n = hit.normal;
+                let mut dvec = sub(end, hit.point);
+                dvec[1] = 0.0;
+                let (mut depth, weight) = (len(dvec), if k < 9 { 1.0 } else { 0.25 });
+                if k >= 9 { depth *= 0.25; }
+                let speed = len(self.vel);
+                let kk = if speed < 5.0 {
+                    -0.11
+                } else if dot(n, self.rot[2]).abs() > 0.8191 {
+                    ((speed - 5.0) / 10.0).max(0.5) * -0.11
+                } else {
+                    0.0
+                };
+                let mut at = end;
+                at[1] = end[1] - dot(sub(end, self.pos), self.rot[1]) + kk;
+                self.wall_respond(depth, weight, n, at, &b);
+            }
+            return;
+        }
         let [hx, hy, hz] = self.params.half_extents;
         for k in 0..8 {
             let l = [if k & 1 == 0 { -hx } else { hx }, if k & 4 == 0 { -hy } else { hy }, if k & 2 == 0 { hz } else { -hz }];
-            // The port sweeps from the body's centre column out to the moved corner, so a corner
-            // already through a wall still finds it [S].
+            // The stand-in sweeps from the body's centre column out to the moved corner [S].
             let a = add(self.pos, self.body_to_world([0.0, l[1], 0.0]));
             let b = add(add(self.pos, self.body_to_world(l)), scale(self.vel, dt));
             let Some(hit) = world.wall_hit(a, b) else { continue };
@@ -1002,16 +1210,67 @@ impl Car {
         }
     }
 
-    /// The hull points pass C tests, in the body frame [S: the game's points come from the car
-    /// model's hull list (`FUN_001f72d8`'s hull branch, points 4.. after the four wheel points),
-    /// which the port does not read]. Tilted (`up.y <= 0.8`) the game tests points 4..count;
-    /// upright only points 8..11 [M 0x1f9670-0x1f96a8]. The port's stand-ins: tilted = the 8
+    /// `FUN_001fb318(depth, weight, inst, info, n, hit, 1, surface)`, the land branch, per unit
+    /// mass (the game's W is the mass-scaled world inverse inertia: `K/m` here). Returns the
+    /// contact strength `min(|j|·0.5/FORCE_LIMIT, 1)`.
+    fn wall_respond(&mut self, depth: f32, weight: f32, n: [f32; 3], hit: [f32; 3], b: &super::sub_collide::Building) -> f32 {
+        let m = self.params.mass;
+        let r = sub(hit, self.pos);
+        let u = add(cross(self.ang_vel, r), self.vel);
+        let vn = dot(u, n) * weight;
+        if 0.0 < vn {
+            return 0.0;
+        }
+        let a = scale(self.inertia_world(cross(r, n), true), 1.0 / m);
+        let bb = cross(a, r);
+        let mut h = (r[0] * r[0] + r[2] * r[2] - (r[0] * n[0] + r[2] * n[2]).abs()).max(0.0);
+        if 0.0 < h {
+            h = h.sqrt() / self.params.half_extents[0];
+        }
+        let den = dot(bb, n) + h;
+        let j = if den == 0.0 {
+            0.0
+        } else {
+            let e = b.restitution_slope() * vn.abs().min(b.micro_threshold);
+            (-(e + 1.0) * (vn - depth * b.pf_scale)) / den
+        };
+        let jc = j.clamp(-b.force_limit, b.force_limit);
+        let cl = |x: f32| x.clamp(-b.friction_limit, b.friction_limit);
+        let f = [cl(u[0] * b.friction_factor), cl(u[1] * b.friction_factor), cl(u[2] * b.friction_factor)];
+        let dv = sub(scale(n, jc), f);
+        self.vel = add(self.vel, dv);
+        let mut tq = self.world_to_body(cross(r, dv));
+        tq[1] *= LAND_WALL_TORQUE;
+        tq[2] *= LAND_WALL_TORQUE;
+        let tq = self.body_to_world(tq);
+        self.ang_vel = add(self.ang_vel, self.inertia_world(tq, true));
+        ((j.abs() * 0.5) / b.force_limit).min(1.0)
+    }
+
+    /// The probe points pass C tests this tick, in the body frame. With the model's hull list
+    /// (`CarParams::hull`, read by `nf_formats::carmesh::hull_points`) the game's list is the
+    /// four wheel points then the hull [M FUN_001f72d8]; upright (`up.y > 0.8`) it tests list
+    /// entries 8..11 (hull 4..7), or 4..11 (hull 0..7) for a falling non-player body (vy ≤ −32,
+    /// |v|² > 25, the collide bit — taken set); tilted every hull point (4..count)
+    /// [M 0x1f9670-0x1f96a8, :101-127]. Without a hull list the port's stand-ins: tilted = the 8
     /// box corners; upright = the 4 bottom corners raised to where a wheel's spring reaches its
-    /// compression limit (a bump stop: they meet the ground only once the springs are spent).
+    /// compression limit [S].
     pub fn hull_points(&self) -> Vec<[f32; 3]> {
+        let hull = &self.params.hull;
+        let upright = self.rot[1][1] > Self::HULL_UPRIGHT_Y;
+        if !hull.is_empty() {
+            if !upright {
+                return hull.clone();
+            }
+            let falling = self.kind != DriverKind::Player
+                && self.vel[1] <= -32.0
+                && dot(self.vel, self.vel) > 25.0;
+            let lo = if falling { 0 } else { 4 };
+            return hull.iter().skip(lo).take(8 - lo).copied().collect();
+        }
         let [hx, hy, hz] = self.params.half_extents;
         let mut out = Vec::with_capacity(8);
-        if self.rot[1][1] > Self::HULL_UPRIGHT_Y {
+        if upright {
             let y = -hy + (self.params.spring_limit - self.params.spring_rest);
             for (sx, sz) in [(-1.0, 1.0), (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
                 out.push([sx * hx, y, sz * hz]);
@@ -1028,44 +1287,82 @@ impl Car {
     pub const HULL_UPRIGHT_Y: f32 = 0.8;
 
     /// Pass C — the hull against the ground (`FUN_001f9500`, run between the wall sweep and the
-    /// integration [M FUN_001ff3d8: the 0x1fc2f0 loop, then the 0x1f9500 loop, then 0x1f8ff0]).
-    /// Each hull point queries the ground plane under it (`FUN_001f6ae0`); a point whose depth
-    /// `w = (v0 − p)·n` is > 0 counts [M 0x1f9770 `c.olt.s 0, w`]; the count lands in +0x6c
-    /// [M 0x1f9804]; the body moves out along the deepest point's plane normal by that depth
-    /// [M 0x1f983c-0x1f9894: `pos += plane[fp].n · max w`]. The game's contact response
-    /// (`FUN_001f91e8`, VU0 microcode 0x1a0) is not lifted: the port removes the velocity into
-    /// that plane instead [S].
+    /// integration [M FUN_001ff3d8]) [M]:
+    /// - the plane under the body centre is queried first (class+0x4e0, `FUN_001f6ae0`); while
+    ///   the centre is above it (`w ≤ 0`) a point whose world offset has y > 0 is skipped, once
+    ///   the centre is below it every point is tested (:110-160);
+    /// - each tested point queries its plane; `w = (v0 − p)·n > 0` is a contact; the count lands
+    ///   in +0x6c (:161-175, 0x1f9804);
+    /// - the contacts go to the response `FUN_001f91e8` (VU0 micro 0x1a0, lifted in
+    ///   `hull_response`), then the body moves out along the deepest contact's normal by its
+    ///   depth (0x1f983c-0x1f9894).
+    /// NO_WORLD_COLLISIONS (+0xc4) bodies and the vtbl+0x64 skip are the caller's [S: taken clear].
     fn hull_ground<G: Ground + ?Sized>(&mut self, world: &G) {
-        let mut count = 0u8;
+        let centre_w = world.wheel_plane(self.pos).map(|pl| dot(sub(pl.v0, self.pos), pl.normal));
+        let centre_below = centre_w.is_some_and(|w| w > 0.0);
+        let mut contacts: Vec<([f32; 3], [f32; 3])> = Vec::new();
         let mut deepest: Option<(f32, [f32; 3], [f32; 3])> = None;
         for l in self.hull_points() {
             let r = self.body_to_world(l);
+            if !centre_below && r[1] > 0.0 && !self.params.hull.is_empty() { continue; }
             let p = add(self.pos, r);
             let Some(pl) = world.wheel_plane(p) else { continue };
             let w = dot(sub(pl.v0, p), pl.normal);
             if w > 0.0 {
-                count += 1;
+                contacts.push((r, pl.normal));
                 if deepest.is_none_or(|(d, _, _)| w > d) { deepest = Some((w, pl.normal, r)); }
             }
         }
-        self.hull_contacts = count;
-        if let Some((w, n, r)) = deepest {
-            self.pos = add(self.pos, scale(n, w));
-            // [S] stand-in for FUN_001f91e8: an inelastic impulse along n at that point, so the
-            // point stops moving into the ground (linear and angular parts, I⁻¹ per mass).
-            let vp = add(self.vel, cross(self.ang_vel, r));
-            let vn = dot(vp, n);
+        self.hull_contacts = contacts.len() as u8;
+        let Some((w, n, r)) = deepest else { return };
+        if self.params.hull.is_empty() {
+            // The box stand-in points are not the game's, so neither is the response [S]: an
+            // inelastic impulse along n at the deepest point (the pre-hull model, kept for the
+            // callers that give no hull list).
+            let vn = dot(add(self.vel, cross(self.ang_vel, r)), n);
             if vn < 0.0 {
-                let ii = self.params.inv_inertia_per_mass();
-                let k_world = |t: [f32; 3]| {
-                    let b = self.world_to_body(t);
-                    self.body_to_world([b[0] * ii[0], b[1] * ii[1], b[2] * ii[2]])
-                };
-                let krn = k_world(cross(r, n));
+                let krn = self.inertia_world(cross(r, n), true);
                 let j = -vn / (1.0 + dot(n, cross(krn, r)));
                 self.vel = add(self.vel, scale(n, j));
                 self.ang_vel = add(self.ang_vel, scale(krn, j));
             }
+        } else {
+            self.hull_response(&contacts);
+        }
+        self.pos = add(self.pos, scale(n, w));
+    }
+
+    /// `FUN_001f91e8` → the VU0 program at micro 0x1a0 (VF: vf20..26 = instance +0x00..+0x60,
+    /// vf17..19 = the world inverse inertia rows class+0x40; VU memory 0.. the contact offsets r,
+    /// 12.. the planes, 27 = (0, class+0x4d4, e, MICRO_THRESHOLD)) [M the lqc2/vsqi sequence
+    /// 0x1f9440-0x1f94b8]. Per contact, in order, with v and ω updated after each:
+    /// `u = v + ω × r`, `vn = u·n`; `j = −(1 + e·min(|vn|, MICRO_THRESHOLD))·vn /
+    /// (1/m + n·((I_w⁻¹(r × n)) × r))` (micro 0x3b-0x64); the tangential push
+    /// `J_t = norm(u − n·vn) · (n·F/m) · class+0x4d4` (0x63-0x8b); `J = n·j + J_t`, applied only
+    /// when `J.y ≥ 0` (the Sy MAC flag, 0x92-0x94): `P += J`, `L += r × J`, `ω = I_w⁻¹·L`
+    /// (0x9c-0xa8). e = GROUND_RESTITUTION / MICRO_THRESHOLD (`DAT_003390f0`, 0.5/10; the
+    /// IS_SNOWMOBILE body uses `DAT_003390f8` = 0.025/10) [M FUN_001fd338:7-8]; class+0x4d4
+    /// = mass/8 · GROUND_FRICTION_COEFF [M FUN_001f72d8:166, DAT_00331974 = 8.0]. Per unit mass
+    /// the tangential factor is GROUND_FRICTION_COEFF/8.
+    fn hull_response(&mut self, contacts: &[([f32; 3], [f32; 3])]) {
+        let e = GROUND_RESTITUTION / MICRO_THRESHOLD;
+        let kt = Rigid::game_defaults().ground_friction_coeff / 8.0;
+        let a = self.acc_accum;
+        for &(r, n) in contacts {
+            let u = add(self.vel, cross(self.ang_vel, r));
+            let vn = dot(u, n);
+            let krn = self.inertia_world(cross(r, n), true);
+            let den = 1.0 + dot(n, cross(krn, r));
+            if !(den.abs() > 1e-9) { continue; }
+            let j = -(1.0 + e * vn.abs().min(MICRO_THRESHOLD)) * vn / den;
+            let ut = sub(u, scale(n, vn));
+            let an = dot(n, a);
+            let jt = scale(norm(ut), an * kt);
+            let jv = add(scale(n, j), jt);
+            if jv[1] < 0.0 { continue; }
+            self.vel = add(self.vel, jv);
+            let dl = cross(r, jv);
+            self.ang_vel = add(self.ang_vel, self.inertia_world(dl, true));
         }
     }
 
@@ -1080,35 +1377,66 @@ impl Car {
         self.acc_accum = [0.0; 3];
         self.torque_accum = [0.0; 3];
         self.hull_contacts = 0;
+        self.since_car_hit = 0xffff;
         self.speed = 0.0;
         self.yaw = rot[2][0].atan2(rot[2][2]);
         self.last_yaw = self.yaw;
         self.yaw_rate = 0.0;
     }
 
-    /// Pass D [M setup FUN_001f89e0, S the VU0 body]: vel += acc·dt (|v| ≤ M_LIMIT), pos += vel·dt;
-    /// ω += I⁻¹·τ·dt in the body frame (|ω| ≤ AM_LIMIT); the rows turn by ω and re-orthonormalise.
-    /// No angular damping for cars: FUN_001f8088's ×NATURAL_ANGULAR_DAMPING is gated on
-    /// inst+0x6d > 3, and cars are kinds 1-3 [M FUN_001f8088, FUN_001f6e98].
+    /// Pass D, `FUN_001f89e0` → the VU0 program at micro address 0x568 (overlay
+    /// `.DVP.overlay..0x0.2745173155` + its 0x800 continuation, loaded from .vutext 0x324e70 /
+    /// 0x325678 [D the ELF's .DVP.ovlytab]), lifted instruction by instruction
+    /// (docs/systems/drive-physics.md §12). VF registers: vf20..27 = instance+0x00..0x70
+    /// (orientation quaternion, pos, vel, ω, momentum P (w = mass), angular momentum L, force,
+    /// torque), vf04 = (dt, 0.5, 1000), vf05 = (−M_LIMIT·m, M_LIMIT·m, −AM_LIMIT, AM_LIMIT)
+    /// [M the lqc2 sequence 0x1f8c84-0x1f8cb4]. The program:
+    /// - `P = clamp_each(P, ±M_LIMIT·m) + F·dt`, `v = P/m` (micro 0xad-0xb9): the clamp is per
+    ///   component and comes before this tick's force;
+    /// - `L += τ·dt`; `ω = I_w⁻¹·L` with last tick's world inverse inertia, clamped per
+    ///   component to ±AM_LIMIT; `L = I_w·ω` again from the clamped ω (0xba-0xd4);
+    /// - `pos += v·dt` (0xd5);
+    /// - `q += 0.5·(0, ω·dt) ⊗ q`, normalised (0xd6-0x10c); the rows are rebuilt from q
+    ///   (0x10f-0x12e) and `I_w⁻¹ = R·diag(I⁻¹)·Rᵀ` for the next tick (0x130-0x14f).
+    /// The force and torque accumulators hold `accel·mass` [M FUN_001f87d8/FUN_001f88c8] and
+    /// the inertia is mass-scaled, so the port keeps every term per unit mass. No angular
+    /// damping for cars: FUN_001f8088's ×NATURAL_ANGULAR_DAMPING is gated on inst+0x6d > 3,
+    /// and cars are kinds 1-3 [M FUN_001f8088, FUN_001f6e98].
     fn integrate(&mut self, rigid: &Rigid, dt: f32) {
-        self.vel = add(self.vel, scale(self.acc_accum, dt));
-        let v = len(self.vel);
-        if v > rigid.m_limit { self.vel = scale(self.vel, rigid.m_limit / v); }
-        self.pos = add(self.pos, scale(self.vel, dt));
-        let tb = self.world_to_body(self.torque_accum);
-        let ii = self.params.inv_inertia_per_mass();
-        let ab = [tb[0] * ii[0], tb[1] * ii[1], tb[2] * ii[2]];
-        self.ang_vel = add(self.ang_vel, scale(self.body_to_world(ab), dt));
-        let w = len(self.ang_vel);
-        if w > rigid.am_limit { self.ang_vel = scale(self.ang_vel, rigid.am_limit / w); }
-        let mut r = self.rot;
-        for row in r.iter_mut() {
-            *row = add(*row, scale(cross(self.ang_vel, *row), dt));
+        let m = rigid.m_limit;
+        let v = [self.vel[0].clamp(-m, m), self.vel[1].clamp(-m, m), self.vel[2].clamp(-m, m)];
+        self.vel = add(v, scale(self.acc_accum, dt));
+        // An outside write to ω (a placement, a response, a park): L follows it.
+        if self.ang_vel != self.last_ang_vel {
+            self.ang_mom = self.inertia_world(self.ang_vel, false);
         }
-        let f = norm(r[2]);
-        let right = norm(cross(r[1], f));
-        let up = cross(f, right);
-        self.rot = [right, up, f];
+        self.ang_mom = add(self.ang_mom, scale(self.torque_accum, dt));
+        let w = self.inertia_world(self.ang_mom, true);
+        let am = rigid.am_limit;
+        let w = [w[0].clamp(-am, am), w[1].clamp(-am, am), w[2].clamp(-am, am)];
+        self.ang_mom = self.inertia_world(w, false);
+        self.ang_vel = w;
+        self.pos = add(self.pos, scale(self.vel, dt));
+        // The quaternion step (vf20 is first scaled by 1000; the normalise cancels it).
+        let q = quat_from_rows(&self.rot);
+        let a = scale(w, dt);
+        let qv = [q[0], q[1], q[2]];
+        let dv = add(cross(a, qv), scale(a, q[3]));
+        let dw = -dot(a, qv);
+        let q = [q[0] + 0.5 * dv[0], q[1] + 0.5 * dv[1], q[2] + 0.5 * dv[2], q[3] + 0.5 * dw];
+        let l = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+        let q = if l > 1e-12 { [q[0] / l, q[1] / l, q[2] / l, q[3] / l] } else { [0.0, 0.0, 0.0, 1.0] };
+        self.rot = rows_from_quat(q);
+        self.last_ang_vel = self.ang_vel;
+    }
+
+    /// `I_w·x` (`inverse` false) or `I_w⁻¹·x` (true), the world inertia `R·diag·Rᵀ` per unit
+    /// mass from `CarParams::inv_inertia_per_mass` [M FUN_00210938].
+    fn inertia_world(&self, x: [f32; 3], inverse: bool) -> [f32; 3] {
+        let ii = self.params.inv_inertia_per_mass();
+        let b = self.world_to_body(x);
+        let d = if inverse { ii } else { [1.0 / ii[0], 1.0 / ii[1], 1.0 / ii[2]] };
+        self.body_to_world([b[0] * d[0], b[1] * d[1], b[2] * d[2]])
     }
 
     /// The land controller: FUN_0018cef8 (pedal states, grip shares, drive, steering, per-wheel
@@ -1240,6 +1568,8 @@ impl Car {
         let mut count = 0u8;
         let fl = p.friction_limit_front;
         let rl = p.friction_limit_rear * cs;
+        let prev_x = self.spring_prev;
+        let mut lift = 0.0f32; // scratch +0x324
         for i in 0..4 {
             let wp = self.wheel_world(i);
             if let Some(pl) = world.wheel_plane(wp) { self.wheel_cache[i] = Some(pl); }
@@ -1269,6 +1599,11 @@ impl Car {
             };
             let n = pl.normal;
             let d = dot(sub(pl.v0, wp), n); // param_5.w [M FUN_001f6ae0]
+            // The landing lift [M 0x18c1b0:160-166, :657]: vtbl+0x214 is FUN_001931f8,
+            // `prev[i] != 0` (vtable 0x379ef0) — a wheel that was not in contact last tick
+            // raises scratch +0x324 to its unclamped `w + REST`, and the body's y takes it after
+            // the loop.
+            if prev_x[i] == 0.0 { lift = lift.max(d + p.spring_rest); }
             let x = (d + p.spring_rest).min(p.spring_limit).max(0.0);
             let prev = self.spring_prev[i];
             let mut process = x > 0.0 || prev > 0.0;
@@ -1323,9 +1658,10 @@ impl Car {
                     f_lat *= p.wheelspin_scale;
                     longd = scale(longd, p.wheelspin_scale);
                 }
-                // The drive along the wheel's long axis (vtbl+0x214 gates it per wheel and its
-                // axle partner; its meaning is not traced — taken as true [S]).
-                let mut force = scale(longd, wdrive);
+                // The drive along the wheel's long axis, only when this wheel or its axle partner
+                // (i ^ 1) was in contact last tick (vtbl+0x214 = `prev != 0`) [M 0x18c1b0:396-409].
+                let driven = prev_x[i] != 0.0 || prev_x[i ^ 1] != 0.0;
+                let mut force = if driven { scale(longd, wdrive) } else { [0.0; 3] };
                 // The application point's height scale (class 0x4fd/0x4fe flags taken 0 [S]).
                 r[1] *= p.wheel_force_app_scale;
                 if slipping && !spin {
@@ -1390,6 +1726,7 @@ impl Car {
             self.torque_accum = add(self.torque_accum, t);
         }
         self.contacts = count;
+        self.pos[1] += lift;
         // The handbrake park [M 0x18cef8 after FUN_0018c1b0]: all four down, handbrake, throttle
         // < 0.1 and |v| < 0.08 → the horizontal velocity, the horizontal force and the yaw
         // torque zero; the spin is reset (FUN_001f8588 with the zero vector 0x355b80 [S value]).
@@ -1403,4 +1740,197 @@ impl Car {
         }
         let _ = park;
     }
+
+    /// The AI cars' land controller: `FUN_0018ecb8` (pedals, grip shares, drive, steer) and its
+    /// per-wheel pass `FUN_0018e548`, which `FUN_00188200` runs for actor+0x2c8 != 0 [M
+    /// 0x188bf8-0x188c60]. It is not the player's pass: no gearbox in the drive, no surface
+    /// friction table, no FRIC_MOD, no rolling resistance, no speed falloff on the steering.
+    ///
+    /// [M FUN_0018ecb8]:
+    /// - one pedal: brake < throttle zeroes the brake, else the throttle (:126-131);
+    /// - grip shares front/rear 0.3/0.7; handbrake: 0.8/0.2 above 5 m/s, else 0.5/0.5, both
+    ///   pedals zeroed (:177-193); with the hit-stun byte +0x29d clear both ×5, and kinds 1/2
+    ///   (vtbl+0x9c = FUN_00193008, +0x2c8) ×1.5 more (:194-216);
+    /// - handbrake drag: `2·speed + 1` below 1 m/s, else `HANDBRAKE_FORCE·(speed·0.075 + 1.75)`
+    ///   (:231-243);
+    /// - drive `throttle·max(MAXACC, 12.5) − brake·max(MAXBRAKE, 12.5)` on the rear wheels only
+    ///   (:256-261, the 0x170 tuples :348-367);
+    /// - steer `input·max(MAXSTEERING, 0.2)`, the forward row turned about y (FUN_002cc590 +
+    ///   FUN_002cbb88, :283-320); the flat-tyre pulls (+0x2a0..+0x2ac == 0) are not ported;
+    /// - every wheel's lateral limit 20 (0x41a00000, :361-367).
+    ///
+    /// [M FUN_0018e548], per wheel: `x = w + REST`; a wheel not in contact last tick
+    /// (vtbl+0x214 = FUN_001931f8, `prev != 0`) raises the landing lift +0x324 to x; x clamps
+    /// to [0, LIMIT]; contact when `x > 0 || prev > 0` and `0.2 < up.y·n.y`; spring
+    /// `x·K + (x − prev)·C` (0 at x = 0); `long = norm(n × norm(axle × n))`, `lat = n × long`;
+    /// `f_lat = clamp((ω×r + v)·lat · grip, ±limit)`, slip `min(|2·f_lat|/limit, 1)`;
+    /// force = `long·drive + n·spring` (x and z of the spring part × SLOPE_SCALE)
+    /// `− norm(v_pt)·hb` (handbrake) `− lat·f_lat` (unless handbraking at ≤ 1 m/s); torque
+    /// `r × force` with r.y × WHEEL_FORCE_APP_SCALE; a lifted wheel (x = 0) of a car with
+    /// contacts whose point rises gets the (0, −25, 0) torque push. After the loop the body's y
+    /// takes the landing lift.
+    fn controller_ai<G: Ground + ?Sized>(&mut self, input: &CarInput, world: &G) {
+        let p = self.params.clone();
+        let mut throttle = input.throttle;
+        let mut brake = input.brake;
+        if brake < throttle { brake = 0.0; } else { throttle = 0.0; }
+        let speed = len(self.vel); // +0x288
+        self.speed = speed;
+        let fwd = self.rot[2];
+        let up = self.rot[1];
+        let long_v = self.vel[0] * fwd[0] + self.vel[2] * fwd[2]; // 0x1cc (vel.y zeroed)
+        let (mut front, mut rear) = (0.3f32, 0.7f32);
+        if input.handbrake {
+            if speed > 5.0 { front = 0.8; rear = 0.2; } else { front = 0.5; rear = 0.5; }
+            throttle = 0.0;
+            brake = 0.0;
+        }
+        // +0x29d (the hit stun, FUN_00187a78) is not modelled: always clear here.
+        front *= 5.0;
+        rear *= 5.0;
+        if matches!(self.kind, DriverKind::Kind1 | DriverKind::Hostile) {
+            front *= 1.5;
+            rear *= 1.5;
+        }
+        let hb = if !input.handbrake { 0.0 } else if speed < 1.0 { speed + speed + 1.0 } else { p.handbrake_force * (speed * 0.075 + 1.75) };
+        // The wheel roll and spin (+0x424 / +0x274) feed only the wheel drawing and effects.
+        let mut roll = (self.vel[0] * self.vel[0] + self.vel[2] * self.vel[2]).sqrt() / (p.wheel_radius * 6.32 * FPS);
+        if roll < 0.01 && input.handbrake { roll = 0.0; }
+        let roll = roll.min(1.0);
+        if self.contacts == 0 || up[1] <= 0.1 {
+            self.wheel_spin *= 0.95;
+        } else {
+            let s = roll.min(AI_MAX_WHEEL_SPIN_RATE);
+            self.wheel_spin = if long_v < 0.0 { -s } else { s };
+        }
+        let drive = throttle * p.maxacc.max(12.5) - brake * p.maxbrake.max(12.5); // 0x1dc
+        let steer_lim = p.maxsteering.max(0.2);
+        self.steer_angle = input.steer * steer_lim; // +0x28c
+        let a = input.steer.clamp(-1.0, 1.0) * steer_lim; // 0x414 (no flat tyres)
+        let (sa, ca) = a.sin_cos();
+        // FUN_002cbb88(rows, Ry(a)): forward's x/z turned about the world y axis.
+        let front_dir = [fwd[0] * ca + fwd[2] * sa, fwd[1], -fwd[0] * sa + fwd[2] * ca];
+        let prev_contacts = self.contacts;
+        let mut count = 0u8;
+        let mut lift = 0.0f32;
+        for i in 0..4 {
+            let wp = self.wheel_world(i);
+            if let Some(pl) = world.wheel_plane(wp) { self.wheel_cache[i] = Some(pl); }
+            let front_axle = i < 2;
+            let (grip, wdrive) = if front_axle { (front, 0.0) } else { (rear, drive) };
+            let limit = AI_WHEEL_LIMIT;
+            let Some(pl) = self.wheel_cache[i] else {
+                self.spring_prev[i] = 0.0;
+                self.slip[i] = 0.0;
+                continue;
+            };
+            let n = pl.normal;
+            let d = dot(sub(pl.v0, wp), n);
+            let prev = self.spring_prev[i];
+            if prev == 0.0 { lift = lift.max(d + p.spring_rest); }
+            let x = (d + p.spring_rest).min(p.spring_limit).max(0.0);
+            let upright = UPRIGHT_GATE < up[1] * n[1];
+            if (x > 0.0 || prev > 0.0) && upright {
+                let f_spring = if x > 0.0 {
+                    count += 1;
+                    let (k, c) = if front_axle { (p.spring_stiffness[0], p.spring_damping[0]) } else { (p.spring_stiffness[1], p.spring_damping[1]) };
+                    x * k + (x - prev) * c
+                } else {
+                    0.0
+                };
+                let axle = if front_axle { front_dir } else { fwd };
+                let s0 = norm(cross(axle, n)); // 0x280
+                let longd = norm(cross(n, s0)); // 0x2a0
+                let lat = cross(n, longd); // 0x260
+                let mut r = sub(wp, self.pos); // 0x250
+                let vpt = add(cross(self.ang_vel, r), self.vel); // 0x290
+                let f_lat = (dot(vpt, lat) * grip).clamp(-limit, limit); // 0x320
+                self.slip[i] = ((f_lat + f_lat).abs() / limit).min(1.0);
+                let mut force = scale(longd, wdrive); // 0x270
+                r[1] *= p.wheel_force_app_scale; // the class 0x4fd/0x4fe flags taken 0 [S]
+                let mut spring = scale(n, f_spring); // 0x280
+                spring[0] *= p.slope_scale;
+                spring[2] *= p.slope_scale;
+                if hb != 0.0 { spring = sub(spring, scale(norm(vpt), hb)); }
+                if hb == 0.0 || speed > 1.0 { spring = sub(spring, scale(lat, f_lat)); }
+                force = add(force, spring);
+                self.acc_accum = add(self.acc_accum, force);
+                self.torque_accum = add(self.torque_accum, cross(r, force));
+            } else {
+                self.slip[i] = 0.0;
+            }
+            if x == 0.0 && prev_contacts != 0 && upright {
+                // The lifted-wheel push [M 0x18e548 the x == 0 arm, LAB_0018eb6c]: vtbl+0x14c
+                // (FUN_00193118, tyre +0x2a0 == 0) false for a sound tyre and +0x2b2 clear; kind 1
+                // always, kinds 2/3 when the instance's collide bit (+0x7c & 1) is set, taken
+                // set [S]; a dead kind-2 car gets none (health is not modelled here).
+                let r = sub(wp, self.pos);
+                if cross(self.ang_vel, r)[1] > 0.0 {
+                    self.torque_accum = add(self.torque_accum, cross(r, [0.0, -25.0, 0.0]));
+                }
+            }
+            self.spring_prev[i] = x;
+        }
+        self.contacts = count;
+        self.pos[1] += lift;
+        // +0x2db, the ticks without contact [M 0x18ecb8:524-529].
+        if count == 0 { self.air_ticks = self.air_ticks.saturating_add(1); } else { self.air_ticks = 0; }
+        // The in-air levelling: kind 1, or kind 2 while alive; class+0x4fd clear (taken), more
+        // than 50 ticks (DAT_00331964) since a car hit, no wheel and no hull point down
+        // [M 0x18ecb8:563-583].
+        if matches!(self.kind, DriverKind::Kind1 | DriverKind::Hostile)
+            && self.since_car_hit > AI_LEVEL_AFTER_HIT
+            && count == 0
+            && self.hull_contacts == 0
+        {
+            self.air_level();
+        }
+    }
+
+    /// `FUN_0018bb90` [M]: with up.y >= 0.4, the level frame of the heading (fwd_l = norm(right
+    /// × Y), right_l = Y × fwd_l), pitched nose-down by NOSE_JUMP_ANGLE (`Rx(a)·level`,
+    /// FUN_002cc510 + FUN_002cbb88: up' = c·Y + s·fwd_l, fwd' = −s·Y + c·fwd_l), is blended into
+    /// the rows as `((n − 1)·row + target)/n`, n = NUM_BLEND_STEPS, and set as the orientation
+    /// (FUN_002cc690 → FUN_001f85c0); past 10 air ticks (DAT_00331968) the angular momentum
+    /// ×0.8 (FUN_001f8588). The port re-orthonormalises the blend [S: FUN_002cc690's handling
+    /// of a non-orthonormal matrix is not read].
+    fn air_level(&mut self) {
+        if self.rot[1][1] < 0.4 { return; }
+        let yv = [0.0, 1.0, 0.0];
+        let fl = norm(cross(self.rot[0], yv));
+        if fl == [0.0; 3] { return; }
+        let rl = cross(yv, fl);
+        let (s, c) = self.params.nose_jump_angle.sin_cos();
+        let target = [rl, add(scale(yv, c), scale(fl, s)), add(scale(yv, -s), scale(fl, c))];
+        let n = self.params.num_blend_steps.max(1) as f32;
+        let mut r = self.rot;
+        for k in 0..3 {
+            r[k] = scale(add(scale(r[k], n - 1.0), target[k]), 1.0 / n);
+        }
+        let f = norm(r[2]);
+        let right = norm(cross(r[1], f));
+        let up = cross(f, right);
+        self.rot = [right, up, f];
+        if self.air_ticks > 10 {
+            let w = scale(self.ang_vel, 0.8);
+            self.ang_vel = w;
+            self.ang_mom = self.inertia_world(w, false);
+            self.last_ang_vel = w;
+        }
+    }
 }
+
+/// `DAT_003319c4` (0.05): the AI pass's wheel-spin clamp [M FUN_0018ecb8:274].
+pub const AI_MAX_WHEEL_SPIN_RATE: f32 = 0.05;
+/// GROUND_RESTITUTION (0x3390e0, 0.5) and MICRO_THRESHOLD (0x3390dc, 10.0): the hull response's
+/// restitution slope `DAT_003390f0` = their ratio [M FUN_001f6600 registers, FUN_001fd338:7; .data].
+pub const GROUND_RESTITUTION: f32 = 0.5;
+pub const MICRO_THRESHOLD: f32 = 10.0;
+/// The land car's wall torque: its body-frame y and z lanes ×0.2 [M FUN_001fb318 :208-216
+/// (`fStack_148 * 0.2` after FUN_001f8418), :248-252 (`auStack_150._4_4_ * 0.2`, FUN_001f8498)].
+pub const LAND_WALL_TORQUE: f32 = 0.2;
+/// The AI pass's per-wheel lateral limit, 20.0 (0x41a00000) [M FUN_0018ecb8:361-367].
+pub const AI_WHEEL_LIMIT: f32 = 20.0;
+/// `DAT_00331964` (int 50): the in-air levelling waits this long after a car hit
+/// [M FUN_0018ecb8:567].
+pub const AI_LEVEL_AFTER_HIT: u16 = 50;
