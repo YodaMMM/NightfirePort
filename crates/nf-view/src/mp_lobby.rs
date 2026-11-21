@@ -391,7 +391,7 @@ impl MpLobby {
                 // ◀ ▶ on an Off bot switches it on with its current character (the row reads
                 // "< Off >": stepping it did nothing, so a bot could only be added by Confirm —
                 // the two-window check's bot never joined) [S].
-                if !b.enabled { b.enabled = true; return true; }
+                if !b.enabled { enable_bot(b); return true; }
                 let mut r = b.character.min(28) as i32;
                 for _ in 0..MP_CHARACTERS.len() {
                     r = (r + dir).rem_euclid(MP_CHARACTERS.len() as i32);
@@ -463,7 +463,8 @@ impl MpLobby {
             MpLobbyRowId::Player(_) | MpLobbyRowId::PlayerTeam(_) => false, // not this machine's row
             MpLobbyRowId::Bot(i) => {
                 let b = &mut self.bots[i.min(nf_net::lobby::BOTS - 1)];
-                b.enabled = !b.enabled; // the Bot Setup page's own Enabled Yes/No row [M P_MPBOTSETUP row 0]
+                // the Bot Setup page's own Enabled Yes/No row [M P_MPBOTSETUP row 0]
+                if b.enabled { b.enabled = false; } else { enable_bot(b); }
                 true
             }
             _ => false, // Start rides the front end (it hands the match over), not the bare model
@@ -592,6 +593,17 @@ impl MpLobby {
         }
         true
     }
+}
+
+/// A bot switched on from the one screen takes the side its character plays for. In the game a
+/// record is only ever enabled by the Bot Choose confirm, which writes `+0x0F = Menu_IsBotGood(char)`
+/// in the same step [M C_SBMPBTCHOOSE 0x210f08:26-43]; the one screen's Enabled toggle skipped
+/// that write, so a bot switched on without a character step kept the record's stale side (the
+/// two-window check: Snow Guard and Black Ops, both Phoenix characters, played for MI6 in every
+/// team game).
+fn enable_bot(b: &mut MpBot) {
+    b.enabled = true;
+    b.team_mi6 = crate::menu::MP_CHARACTER_SIDE_MI6[b.character.min(28) as usize];
 }
 
 /// The Skill list's names [M P_MPBOTSETUP 0x211270:49-59's labels — the values are the record's

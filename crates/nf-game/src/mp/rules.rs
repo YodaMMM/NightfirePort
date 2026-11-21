@@ -587,7 +587,16 @@ impl MpMatch {
         s.status_bits = 0;
         s.dead = false;
         s.spawn_tick = self.tick; // [M 0x185368:90 — obj+0xEC = GameState+0x52]
-        self.settings.players[slot].armor_bonus as f32 + 100.0
+        self.human_health(slot)
+    }
+
+    /// A human's spawn health: the slot's Health Handicap word + 100 [M `Player_Init` 0x1910f8:128-131
+    /// (the match start) and `MP_ReSpawn` 0x185368:71-72 (every respawn) both read
+    /// `(float)*(int *)(MPSettings + slot·0x30 + 0x2c) + 100.0`]. The word is SIGNED (the list is
+    /// -75..+100 [D 0x30d390..0x30d3c8]); `armor_bonus` keeps it as its u32 bit pattern for the
+    /// wire, so it is read back through i32 (-50 is 50 health, not 4.29e9).
+    pub fn human_health(&self, slot: usize) -> f32 {
+        self.settings.players.get(slot).map_or(0, |p| p.armor_bonus as i32) as f32 + 100.0
     }
 
     // --------------------------------------------------------------- who won / restart

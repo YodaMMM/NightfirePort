@@ -1859,9 +1859,14 @@ fn load_impl_gc(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game:
                 let sp = m.get_spawn_point(m.settings.players[slot].team as u16, slot, &mut sim.drones.rng) as usize;
                 let sp_ent = m.spawns.points[sp];
                 let b = nf_game::player::Bond::stand_at(&sim.world, [sp_ent.pos[0], sp_ent.pos[1], sp_ent.pos[2]], sp_ent.facing[1]);
+                // `Player_Init`'s health: the slot's Health Handicap + 100 [M 0x1910f8:128-131]:
+                // the online combat's per-slot word and this machine's own health.
+                let hp = m.human_health(slot);
+                if let Some(h) = sim.mp_hp.get_mut(slot) { *h = hp; }
                 if slot == 0 {
                     first_spawn = sp;
                     sim.bond = b;
+                    sim.drones.health.health = hp;
                     m.set_slot(0, sim.bond.pos);
                 } else {
                     m.set_slot(slot, b.pos);
