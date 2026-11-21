@@ -232,3 +232,8 @@ death). Whole binary 6 passed / 0 failed / 1 ignored, 149.84 s [L the final-tree
 refreshed ledger + the next levers (the off-rim zap-free standing spot; the crouch-window
 plan; the reply-cadence live check) are in the ignore message. Report:
 docs/reports/retune-nb-08-12.md.
+
+## retune-nb-08-13
+2026-11-21. Round 13 of the 08 whole-mission 00 Agent real-damage walk
+(walk_the_whole_mission_on_real_input_real_damage_00agent). Branch s/retune-nb-08-13 off
+origin/master (6a600cb02) with s/retune-nb-08-12 merged in (clean). Work started.
