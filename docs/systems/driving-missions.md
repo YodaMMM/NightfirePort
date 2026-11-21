@@ -1,6 +1,7 @@
 # The driving missions' rules: triggers, actions, events, rules, the end
 
-Status: ported (2026-11-21). Code: `crates/nf-formats/src/trackstart.rs` (`map_script`: the
+Status: ported (2026-11-21; the effect events, the car-box test and the outside setters of the
+wins added the same day). Code: `crates/nf-formats/src/trackstart.rs` (`map_script`: the
 track's triggers, rules, `MSet` and `sr` paths) and `crates/nf-game/src/driving/script.rs`
 (`DriveScript`: the mission manager, the trigger walk, the event queue). `Mission::from_map_script`
 + `Mission::step_facts` (`driving/mission.rs`) wrap it for the existing callers. Evidence: [M] the
@@ -45,9 +46,22 @@ fires from the walks.
 The car test `FUN_0022eb28`: reach = car `+0x7c` radius + trigger radius. Sphere: 3D distance
 under the reach. Otherwise a plan-view distance under the reach, then cylinder: the car's
 `y ± r` overlaps `[y, y + height]`; box: the car's own oriented box against the trigger's
-(`FUN_001f5eb0`). **The port tests the car's bounding sphere against the trigger box**, not the
-car's box. Which two components the plan-view distance uses is read from the two-term VU sum;
-x and z are inferred.
+(`FUN_001f5eb0`), ported as `trigger_box` + `boxes_overlap` + `CarBox`:
+
+- the trigger box: axes `+0x20` (side), up (0, 1, 0) or with flag 0x1000 `cross(+0x30, +0x20)`
+  (`FUN_0025a8e8`), `+0x30` (forward), none normalised; half extents width/2, height/2,
+  length/2; centre = base point + up × height/2 [M 0x22eb28];
+- the car box: the first three rows of the body matrix `*(car+0x5c)`, half extents
+  `body+0x4c0..0x4c8` (at least 0.001 each; `car+0x7c` is their length, [M 0x1f6e98]), centre
+  `car+0x10` [M 0x22eb28 → `FUN_001f5cf0`];
+- the overlap: separated when, along any of either box's three face axes,
+  `|dot(cA − cB, a)| − hA − Σ|dot(a, bB_j · hB_j)| > 0`; the edge-cross axes are not tested
+  (so a few edge-to-edge near misses count as hits, as in the game) [M 0x1f5eb0].
+
+The caller gives the car box in `Facts::player_box` / `CarFacts::bbox`; without one the port
+uses an axis-aligned stand-in whose half diagonal is the radius (`CarBox::from_radius`). Which
+two components the plan-view distance uses is read from the two-term VU sum; x and z are
+inferred.
 
 ### The rules [M 0x209318, 0x2096d0, the per-type constructors and tests]
 
@@ -128,19 +142,43 @@ the context car's speed is above, or with the flag below, the threshold), `EFire
 (0xcb: the driving LCG, ×123456789, low 16 bits kept, percent from bits 8..23 against cumulative
 odds), `ESetMagicCounter` (0xc8), `EIncMagicCounter` (0xb9), `EClearProgrammerEvent` (0xd5),
 `EObjectiveAdd/Pass/SetCurrent/DisplayText` (0xe1/0xe4/0xe5/0xe7), `ESetObjective` (0x45, the
-marker target), `EAddScoreAction` (0x83), `EPlayerSetImmunity` (0x10c). Every other id runs as
-`Output::Effect` (camera, audio, AI, traffic, props, HUD look); the disc test prints each with
-its handler.
+marker target), `EAddScoreAction` (0x83), `EPlayerSetImmunity` (0x10c). `ESetSpecialWeapon`
+(0xc0) is also remembered (`special_weapon`). Every other id runs as
+`Output::Effect { effect, trigger }` with its parameters decoded (§4); the disc test prints each
+id with its handler.
+
+### What the game feeds the rules from outside the script
+
+- **The player's EMP** (`DriveScript::emp_hit`): `FUN_0018ac28`, the `PBondCar` / `PTank`
+  virtual at vtable 0x37a144 / 0x37ac4c, runs when the EMP (`FUN_00182978` weapon 0xe,
+  `FUN_0020d788`) hits a car: the first hit only (`car+0x380`), "SFX_EMPdetonate", an EMP-hit
+  count (`FUN_00206900`, `mgr+0x3c0`), and **programmer event 0 when the car's name starts with
+  "paris_bombvan"** [M 0x18ac28]. MIS01's bomb van elements drive "paris_bombvan" [D `AIEl`
+  +0x54].
+- **Player weapon uses** (`DriveScript::player_fired`): `FUN_0020de20(weapons, slot)` after its
+  ammo / reload checks: slot 0xc counts 0x1f, slot 0xf counts 0x20, **slot 0x14 sets counter
+  0x22 to 1** [M 0x20de20].
+- **Prop keyframe lists** (`DriveScript::run_actions` with
+  `nf_formats::trackstart::prop_scripts`): a prop article's `aq` animation tracks carry an `el`
+  list on some keyframes (`+0x1c`, fixed up by `FUN_002d9de8`); the animation player
+  `FUN_001a35f0` runs a keyframe's list when the animation passes it, with the prop part as the
+  context and no current trigger [M 0x1a35f0]. The `an` record names the track per part.
+  These lists use 14 more ids (`EHideInstance` 0xb, `EShowInstance` 0xc, `ESpawnExplosion`
+  0x21, `EStopEffect` 0x81, ...), now in `ACTIONS` (133 ids).
+- Other programmer events set by game code (`FUN_00208540` callers): 1 (0x12bec8), 2
+  (0x187608), 3 (0x2066d0 / 0x206ca0), 4 (0x207ab0), 5 (0x205220, game modes 3/4), 0x11
+  (0x131770), 0x15 (0x182978 / 0x1fc2f0), 0x16 (0x20d6b0), 0x17 (0x13b2a8 / 0x193938), 0x18
+  (0x2057f0) [M]; not ported (none of the eight wins waits for them).
 
 ## 2. The eight tracks [D, `tests/driving_script_disc.rs`]
 
 | track | start | a fail | a win |
 |---|---|---|---|
-| MIS01 | T684 | player health gone (R0 Death) | T562 → stage 1; R1 waits for programmer event 0; timer 5 (3 s), stage 2; R37 below 0.95 s |
-| MIS11 | T29 | T65 calls stage 39 with counter 0x2d < 3 (R11) | the same with counter 0x2d at 3 (R10) |
-| MIS13A | T28 | health gone (R0) | counter 0xb at 3 (R16) → timer 0 (6 s); R37 stage 8 below 4 s; R15 below 1 s |
+| MIS01 | T684 | player health gone (R0 Death) | T562 → stage 1; R1 waits for programmer event 0 = **the EMP hits the bomb van**; timer 5 (3 s), stage 2; R37 below 0.95 s |
+| MIS11 | T29 | T65 calls stage 39 with counter 0x2d < 3 (R11) | **three uploads**: T51 / T52 / T54 (spheres, every frame while inside) give special weapon 0x14 and call stages 32 / 34 / 35; firing it there sets counter 0x22, so R168 / R171 / R172 count 0x2d and disable their trigger; then T65 → stage 39, R10 at 3 wins. (Stage 33's R170 is never called [D].) |
+| MIS13A | T28 | health gone (R0) | counter 0xb at 3 (R16) → timer 0 (6 s); R37 stage 8 below 4 s; R15 below 1 s. **Counter 0xb is counted by the `JA_SAL` prop** (4 instances): its animation an6, track aq9 keyframe 0, runs `EIncMagicCounter(0xb)`; three of them reach 3 |
 | MIS13B | T67 | health gone (R20 Health below 1) | T33 `EEndMission` |
-| MIS13C | T16 | health gone (R0) | **not found**: R24 needs timer 6, started only by R9 in stage 3, and no list changes to or calls stage 3; R7 (timer 0) has its active bit clear |
+| MIS13C | T16 | health gone (R0) | **the `subMissiles` prop**: its animation an3, track aq4 keyframe 3, runs `EHideInstance` + `ECallStage(3)`; R9 (stage 3) plays the sub's system anim 8, "SFX_NukeSubExplo" and starts timer 6 (4 s); R24 (default list) wins below 1 s. (No `Map` list changes to or calls stage 3; R7 on timer 0 is inactive.) |
 | MIS3 | T214 | health gone (R68) | T244 `EPlayerWin` |
 | MIS4 | T252 | health gone (R1) | T260 → stage 11; six AI elements die (R38..R43 count 0x2f); R52 at 6 → timer 2 (18 s); R37 below 1 s |
 | RACE | T212 | the rival (kind-2 car) reaches T229 | T214 → timer 9 (5 s), stage 2; R9 below 1 s |
@@ -150,13 +188,20 @@ its handler.
 - The timer clock `DAT_00339f54` advancing once per sim step and `DAT_00339f4c` = 60: inferred
   from the 0.016666668 s step [M 0x159d10:28]; their writers are not in the decompile.
 - The order among several triggers hit in one frame (the game walks grid cells).
-- The box trigger test against the car's own box (the port uses the car's sphere); box flag
-  0x1000 (the up axis from the two axes) is not ported.
+- Which axes the car body's matrix rows are (side / up / forward in world space) follows the
+  spawn matrix build `FUN_00210540`; the body's own matrix update is not traced.
 - The walks for the object classes (`FUN_0022dae8`, bits 4/7), the bit-9 class (`FUN_0022d5a8`)
   and projectiles (`FUN_0022def0`).
-- The `el` lists other records own (AI elements, `AICo`): `run_actions` runs one, but when the
-  game runs them is not traced. Who sets programmer event 0 in MIS01 and counts 0xb in MIS13A is
-  not found; the disc test sets them directly. How MIS13C's drive ends is not found.
+- The `el` lists the AI elements and `AICo` records own: `run_actions` runs one, but when the
+  game runs them is not traced.
+- **What starts a prop animation.** The prop state machine (`FUN_001a33c0`, reached from
+  `EPlaySystemAnim` 0x154ad8 → `FUN_001a27a0` and from the car / weapon hit code 0x193938,
+  0x1fc2f0, 0x13b2a8, 0x189598, ...) is not decoded: which hit on `JA_SAL` plays an6, and what
+  plays `subMissiles`' an3, is not traced. The disc test runs those animations' keyframe lists
+  directly. Likewise the EMP and weapon-use checks before `FUN_0018ac28` / the `FUN_0020de20`
+  switch (ammo, reload, locks) are the caller's.
+- MIS13B's `JB_SAL` also counts 0xb from a keyframe list; MIS13B's rules do not read counter 0xb
+  (its win is T33).
 - `SRulePlayerDir`'s angle and `SRuleProperty` for elements are inputs (`ElementFacts`).
 - The RNG's seeding and the other systems that draw from it (traffic, AI) before a random
   trigger.
@@ -164,3 +209,32 @@ its handler.
   health difficulty scalers are not ported.
 - The view (`crates/nf-view/src/driving.rs`) still runs the old channel model; switching it to
   `Mission::from_map_script` + `step_facts` is a caller change outside this port.
+
+## 4. The effect events (`crates/nf-game/src/driving/effects.rs`)
+
+Each creator copies the argument words `+4..` into its event in order, and the handler reads
+them [M per creator / handler]. `effects::decode` turns an unported action into one typed
+`Effect`, named from the game's debug prints where the handler has one (`ECameraLockOn`:
+"fElem, fTrigger, fWheelIndex, fHenchmenIndex, fOffset Up Fw Side, fSmoothTransition, fNoAim";
+`EChangeCarCameraView`, `ECameraZoom`, `ECameraShake`, `EEndCameraAnim`, `EPlayCarCameraAnim`,
+`ESetAutoDriveCamOn`), else from what the handler does; words whose use was not read are
+`argN`. Reference words become `Ref { word, path }` (the `sr` path), triggers an index.
+
+| group | events |
+|---|---|
+| camera | `CameraAnim` (0x3f, a `Cams` animation), `EndCameraAnim` (0x44), `CarCameraAnim` (0x61), `CameraSpline` (0xcc, an `AISp` spline), `CarCameraView` (0xcf), `CameraLockOn` (0xf2), `CameraZoom` (0xf6), `CameraShake` (0xfb), `AutoDriveCam` (0x4c/0x4d/0xe9/0xea), `LetterBox` (0x67/0x68) |
+| audio | `Stream` (0x14: channel "NIS" / "Music" / "speech", stream name; `alive_only` = only while the health fraction is above 0), `Sound` (0x86), `SoundAt` (0xa4: a trigger's position, bank, name, near, far), `StopSoundAt` (0xa6), `AudioMix` (0xf1: level × (1 + percent/100), clamped), `RevertAudioMix` (0xf4), `ResetAudioMix` (0x10a), `StingerChannel` (0x110), `ReleaseStream` (0x111), `PathSound` (0x10e), `CreakLevel` (0xff) |
+| movie / cut-scene | `Movie` (0x4e: `data\loading\<file>` through "mpc", subtitle file), `Transition` (0xf0), `SimRate` (0x70), `Subtitle` (0x103) |
+| AI | `AiCommand` (0x41: `AICo` command, target, element), `AiActivate` (0x42), `AiDeactivate` (0x43), `AiFire` (0x90/0x91), `AiAccuracy` (0x9f), `AiKill` (0xa1, `credit` counts it for the player), `AiVehicleParams` (0xc7), `AiWakeRange` (0x108), `TargetBeacon` (0x109), `AiNextSpline` (0xd1), `AiAvoidZone` (0xf5), `SpawnSentry` (0x94), `DropMine` (0xb4), `PlayerControl` (0x2a/0x2b), `ControlToSpline` / `EndControlToSpline` (0xca/0xef), `AutoDriveSpeed` (0x6c) |
+| traffic | `SpawnTraffic` (0x1c: at the firing trigger's position and direction), `MaxTraffic` (0x78: the cap `DAT_0032b750`, 0 = none) |
+| props | `InstanceVisible` (0x17/0x18 named, 0xb/0xc the prop part), `WakeSmackable` (0x23), `SystemAnim` (0x24: part, anim id, instance), `PlayEffect` (0x9), `SuppressEffect` (0xad), `SwitchEffect` (0xfc/0xfd), `CollisionGeometry` (0x82), `Explosion` (0x9a) |
+| player | `SpecialWeapon` (0xc0) |
+
+Everything else (HUD text and buttons, power-ups, the path-throttle family, player-car tuning,
+award and profile actions) is `Other { id, words }` with the words the creator reads
+(`effects::arg_words`). The disc test checks every effect action of the eight tracks decodes
+with references of the kind the handler expects (elements `{AIEl}`, commands `{AICo}`, splines
+`{AISp}`, instances `{in  0000}`, sounds and channels `CHAR::`); ten reference words name `sr`
+records their files lack (their `path` is empty), and `ESpawnExplosionStatic` word 1 also takes a
+`TRIGGER0=INSTANCE_ELEMENT::n` form on MIS11 whose loader meaning is not traced. Not proven: the
+meaning of the `argN` words; nothing consumes the events yet.

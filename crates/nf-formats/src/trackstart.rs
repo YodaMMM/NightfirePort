@@ -285,6 +285,111 @@ pub fn map_script(crp: &Crp<'_>) -> Result<MapScript> {
     Ok(out)
 }
 
+/// `aq  `: a prop article's animation track, 0x20-byte keyframes; a keyframe's `+0x1c` word is an
+/// `el` reference (0 = none) that the load fixup `FUN_002d9de8` resolves [M 0x2da838 registers it
+/// for `aq`; 0x2d9de8 walks `count` keyframes of 0x20 bytes and fixes `+0x1c`].
+pub const TAG_AQ: u32 = 0x6171_2020;
+/// `an  `: a prop article's animation: 16-byte entries, one per part, whose `+0` names an `aq`
+/// track (`0x6171_nnnn`, 0 = no track for that part) [D: every article of the 8 tracks].
+pub const TAG_AN: u32 = 0x616e_2020;
+/// `aq` keyframe size [M 0x2d9de8: `iVar1 + 0x20`].
+pub const KEYFRAME_SIZE: usize = 0x20;
+
+/// One `aq` track of a prop article with the action lists on its keyframes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PropTrack {
+    /// The `aq` instance index.
+    pub index: u16,
+    /// Keyframe count (payload / 0x20).
+    pub keys: usize,
+    /// (keyframe, its action list), for the keyframes whose `+0x1c` names an `el` list.
+    pub events: Vec<(usize, Vec<TriggerAction>)>,
+}
+
+/// One `an` animation of a prop article: the `aq` track per part (None = that part has none).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PropAnim {
+    pub index: u16,
+    pub tracks: Vec<Option<u16>>,
+}
+
+/// A prop article (an `Arti` of the pool other than `Map`) with its animations and the action
+/// lists its keyframes run. The game's animation player `FUN_001a35f0` runs a keyframe's list
+/// when the animation passes that keyframe: each action's creator, with the prop part as the
+/// context (`DAT_0032e708`) and no current trigger [M 0x1a35f0 tail]. What starts an animation
+/// on a prop (its state machine: `FUN_001a33c0` from `EPlaySystemAnim` 0x154ad8, the car and
+/// weapon hits 0x193938 / 0x1fc2f0 / 0x13b2a8, …) is not decoded here.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PropScript {
+    /// The article's `Name` record.
+    pub name: String,
+    pub tracks: Vec<PropTrack>,
+    pub anims: Vec<PropAnim>,
+}
+
+impl PropScript {
+    /// Every keyframe action list of animation `an`, in part then keyframe order.
+    pub fn anim_events(&self, an: u16) -> Vec<&[TriggerAction]> {
+        let Some(a) = self.anims.iter().find(|a| a.index == an) else { return Vec::new() };
+        a.tracks
+            .iter()
+            .flatten()
+            .filter_map(|aq| self.tracks.iter().find(|t| t.index == *aq))
+            .flat_map(|t| t.events.iter().map(|(_, l)| l.as_slice()))
+            .collect()
+    }
+}
+
+/// The prop articles that carry keyframe action lists [D: e.g. MIS13A `JA_SAL`, MIS13C
+/// `subMissiles`].
+pub fn prop_scripts(crp: &Crp<'_>) -> Result<Vec<PropScript>> {
+    let mut out = Vec::new();
+    for a in crp.pool()? {
+        if a.tag != tag::ARTI {
+            continue;
+        }
+        let Ok(recs) = crp.record_window(&a) else { continue };
+        let mut el: HashMap<u16, &[u8]> = HashMap::new();
+        for r in &recs {
+            if r.tag_code() == TAG_EL {
+                el.insert(r.instance().unwrap_or(0), crp.payload(r)?);
+            }
+        }
+        if el.is_empty() {
+            continue;
+        }
+        let name = crp.article_name(&a)?.unwrap_or("").to_string();
+        let mut s = PropScript { name, tracks: Vec::new(), anims: Vec::new() };
+        for r in &recs {
+            let index = r.instance().unwrap_or(0);
+            if r.tag_code() == TAG_AQ {
+                let p = crp.payload(r)?;
+                let keys = p.len() / KEYFRAME_SIZE;
+                let mut events = Vec::new();
+                for k in 0..keys {
+                    let w = u32_at(p, k * KEYFRAME_SIZE + 0x1c)?;
+                    if w >> 16 == 0x656c {
+                        events.push((k, action_list(&el, w, &format!("{} aq{index} key {k}", s.name))?));
+                    }
+                }
+                s.tracks.push(PropTrack { index, keys, events });
+            } else if r.tag_code() == TAG_AN {
+                let p = crp.payload(r)?;
+                let tracks = p
+                    .chunks_exact(0x10)
+                    .map(|e| {
+                        let w = u32::from_le_bytes(e[0..4].try_into().unwrap());
+                        (w >> 16 == TAG_AQ >> 16).then_some(w as u16)
+                    })
+                    .collect();
+                s.anims.push(PropAnim { index, tracks });
+            }
+        }
+        out.push(s);
+    }
+    Ok(out)
+}
+
 /// The ground height at (x, z) as the game's spawn query takes it: of the triangles containing
 /// (x, z) in plan view (skipping class bit 0x04, [`CollisionTri::ground_query_skips`]) whose lowest
 /// corner lies below `y + 0.5`, the one whose lowest corner is nearest under that level; the height
