@@ -7654,7 +7654,18 @@ pub fn run() -> Result<()> {
         // Render aid: `--drive-throttle T` holds the throttle at T for the run (the hostiles a
         // mission releases on the road ahead need the car to move).
         let throttle: f32 = args.iter().position(|a| a == "--drive-throttle").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(0.0);
-        for _ in 0..ticks { drv.step(throttle, 0.0, 0.0, false); }
+        // Render aid: `--drive-near-element NAME` releases the first AIEl element of that vehicle
+        // name and holds the car 40 units beside its spawn point (a helicopter spawns in range).
+        let near = args.iter().position(|a| a == "--drive-near-element").and_then(|i| args.get(i + 1)).and_then(|name| {
+            let h = drv.hostiles.as_mut()?;
+            let (i, p) = h.world.db.elements.iter().enumerate().find(|(_, e)| e.rec.name.eq_ignore_ascii_case(name)).map(|(i, e)| (i, e.rec.pos))?;
+            h.world.activate(i);
+            Some([p[0] + 40.0, p[1] + 5.0, p[2]])
+        });
+        for _ in 0..ticks {
+            if let Some(p) = near { drv.car.pos = p; drv.car.vel = [0.0; 3]; }
+            drv.step(throttle, 0.0, 0.0, false);
+        }
         let (p, yaw, pitch) = drv.chase_camera();
         let mut cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV };
         if let Some(i) = args.iter().position(|a| a == "--cam") {
@@ -7666,7 +7677,7 @@ pub fn run() -> Result<()> {
         { let a = 1280.0 / 720.0; let h = drv.hud_frame(&scene, a); scene.drive_hud = h; }
         let (layout, _) = scene.skin_layout();
         let (mut pal, _) = scene.skin_palette(&layout, None, ticks as f32, opts, None);
-        drv.apply_to_palette(layout.attach_base as usize, &mut pal);
+        drv.apply_to_palette_eye(layout.attach_base as usize, &mut pal, [cam.pos.x, cam.pos.y, cam.pos.z]);
         *SHOT_PALETTE.lock().unwrap() = Some(pal);
         eprintln!("[driving] {viv}: {} ticks, car at {:?} yaw {:.3}, state {:?}, {} vertices, {} draws", drv.ticks, drv.car.pos, drv.car.yaw, drv.mission_state, scene.vertices.len(), scene.materials.len());
         for (d, slot) in drv.hostile_draws() { eprintln!("[driving] hostile element {} {} ({}) slot {slot} at {:?}", d.element, d.name, d.model, d.matrix[3]); }
