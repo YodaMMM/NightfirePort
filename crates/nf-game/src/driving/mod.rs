@@ -8,6 +8,9 @@ pub mod ai;
 pub mod audio;
 // The hostile AI and the AI element lifecycle (AIEl/AICo, FUN_0012bec8 and the chase arms).
 pub mod hostile;
+// The hostile AI and the AI element lifecycle (AIEl/AICo, FUN_0012bec8 and the chase arms).
+// The per-pattern chase steering, avoidance, turret, world cap, helicopter leaf rules (§11).
+pub mod patterns;
 // G-056 world-bounds: the driving maps' invisible boundary sheets (DRIVING.ELF 0x331a60).
 pub mod bounds;
 // The player chase camera (camera.ini HeliCam + FUN_001b2b48).

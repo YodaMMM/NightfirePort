@@ -4,6 +4,9 @@ Status: **reviewed against the decompile 2026-11-20 — §9 is the per-function 
 supersedes §3.1, §5 and §8 wherever they differ** (first port 2026-10-15). The port lives in
 supersedes §3.1, §5 and §8 wherever they differ; §10 (2026-11-21) adds the hostile AI and the
 AI vehicle lifecycle and supersedes §3.3 and §4** (first port 2026-10-15). The port lives in
+supersedes §3.1, §5 and §8 wherever they differ; §10 (2026-11-21) adds the hostile AI and the
+AI vehicle lifecycle and supersedes §3.3 and §4; §11 (2026-11-21) adds the per-pattern steering**
+(first port 2026-10-15). The port lives in
 `crates/nf-game/src/driving/` (`road.rs` the RNgp/Wmap-side data model + `ai.rs` the AI car step) with the
 RNgp container decode on top of `nf_formats::crp`. Evidence tags: [M] code (function + address,
 DRIVING.ELF — EE address = file offset + 0x107080), [D] disc bytes, [L] EE snapshot, [S] suggested.
@@ -332,6 +335,7 @@ and sets profile 0xc (`FUN_0012e6f8(ai, 0xc)` :130) and pattern 3 (`FUN_0012e468
 | retarget / chase | 0x131080, 0x133850, 0x131770, 0x133f60, 0x135f70, 0x137310, 0x1377c8 | reviewed, not ported | the hostile cars' pursuit, ramming and avoidance. The port had no code for them before this branch and has none now. |
 | weapons | 0x130050 / 0x12f730 / 0x12fa28 / 0x12fd58 | reviewed (§3.3), not ported | needs the actor/animation layer. |
 | retarget / chase | 0x131080, 0x133850, 0x131770, 0x133f60, 0x135f70, 0x137310, 0x1377c8 | see §10 | the ram roll and sight rule of 0x131770 are ported in §10 (`s/drive-ai-hostiles`); the steering arms are still not ported. |
+| retarget / chase | 0x131080, 0x133850, 0x131770, 0x133f60, 0x135f70, 0x137310, 0x1377c8 | see §10 | the ram roll and sight rule of 0x131770 are ported in §10 (`s/drive-ai-hostiles`); the aim point, the pursue/road switch and the chase drive in §11. |
 | weapons | 0x130050 / 0x12f730 / 0x12fa28 / 0x12fd58 | see §10 | ported as fire decisions in §10; the animation-channel side stays with the actor layer. |
 
 ### 9.3 Stand-ins in `AiDriver` [S]
@@ -433,12 +437,14 @@ with a drawn type that has no `.atr` in the archive was not traced).
 | pursuit timers | 0x131770 (part) | **added** | `ram_tick`: every 5 s while the target is seen, `rand/65536 < +0x14c` → ram 3 s (1 s against the player); `sight_tick`: every 0.25 s, seen = `FUN_001330d0`; +0x208 = not seen. |
 | sight | 0x1330d0 | added | `can_see`: ≤ 200 and the world ray (FUN_00215cc8) reports fewer than 2 hits. |
 | pursuit aim | 0x131770 (rest) | reviewed, not ported | the aim point +0x1c0 (the target position; the pattern-3 lead `pos + vel·min(max(lead, 0.2), speed)` — the store of that sum is not visible in the decompile), the hazard scan (DAT_0032b780), the +0x268 block. |
+| pursuit aim | 0x131770 (rest) | see §11 (the aim point is ported there; the lead store is visible) | the aim point +0x1c0 (the target position; the pattern-3 lead `pos + vel·min(max(lead, 0.2), speed)` — the store of that sum is not visible in the decompile), the hazard scan (DAT_0032b780), the +0x268 block. |
 | weapons dispatch | 0x130050 | added | `fire_step`: alive, +0x170, +0x224, a target; profile 10 rockets, 9 guns, else guns / rockets / missiles by the car's flags. The turret aim `FUN_0012f170` is not ported (`turret_on_target` is an input). |
 | machine guns | 0x12f730 | added | cone 0.99 or the turret on target, line of fire clear; reload `round(fps·rate)`, no floor; the flash words. |
 | rockets | 0x12fa28 | added | cone 0.9, channels 6/5 alternating, a busy launcher holds the shot, reload `round(max(fps·rate, fps·0.5))`. |
 | missiles / torpedoes | 0x12fd58 | added | cone 0.707, channels 8/7, the same reload rule. |
 | line of fire | 0x12f530 | added | `line_clear`: blocked by another chase-state car (+0x6d < 4, not traffic) inside a 0.99 cone and nearer than the target. The shot direction the callers pass is not visible in the decompile; the port takes it as an input. |
 | drive arms | 0x133f60 / 0x135f70 / 0x137310 / 0x1377c8 | reviewed, not ported | the pattern-specific steering (pursuit, block, avoidance). |
+| drive arms | 0x133f60 / 0x135f70 / 0x137310 / 0x1377c8 | see §11 | 0x133f60 and 0x137310 ported in §11; 0x135f70 / 0x1377c8 reviewed. |
 | retarget | 0x131080 / 0x133850 | reviewed, not ported | state 2. |
 | riders | 0x1224b0 / 0x120b70 / 0x11e490 / 0x11ff18 / 0x11aca8 | reviewed, not ported | the seated AICharacter classes (window shooter, sunroof gunner, …); their aim and fire are the character layer. |
 
@@ -455,3 +461,85 @@ with a drawn type that has no `.atr` in the archive was not traced).
   into the viewer (nf-view was out of scope).
 - Live check worth doing: in Paris at the first chase, break on FUN_0012cb08 and read the
   record (+0x40 flags, +0x54 name), and on FUN_0012fa28 read +0x228 / +0x22c of the firing car.
+
+## 11. The per-pattern steering, avoidance, turret, world cap, helicopter leaf rules (2026-11-21, branch `s/drive-ai-patterns`)
+
+Port: `crates/nf-game/src/driving/patterns.rs`. Tests: `crates/nf-game/tests/driving_ai_patterns.rs`
+(21; the last one reads the disc). Every row was read in `work/decomp/DRIVING.ELF/`; where the
+decompile hides an argument or a vector order the disassembly was read (capstone over the disc
+ELF, EE = file offset + 0x107080). Verdicts as §9/§10: **added** = no port code before this
+branch, **reviewed** = read, not ported.
+
+### 11.1 The patterns
+
+AI +0x78 picks the drive arm in `FUN_00130508` [M]. The game has five patterns and no separate
+"block" or "flee" pattern: backing off is the reverse logic of `FUN_00133f60` (11.2), and a road
+is blocked by pattern 3/4 cars holding their carrot.
+
+| pattern | aim (+0x1f0) | arm | AICo commands on the disc [D] |
+|---|---|---|---|
+| 1 hold | own position | `FUN_00133f60(0)` in state 5 only | 25 |
+| 2 pursue | `pos + (+0x1e0)·lookahead` | avoidance (`FUN_00137310` in state 5, `FUN_001377c8` otherwise, when +0x154), then `FUN_00133f60(+0x8c)` | 12 |
+| 3 road chase | the carrot (`FUN_00130140`) | state 4: the traffic path; else `FUN_00135f70`, `FUN_00133f60` | 9 |
+| 4 road follower | the carrot | `FUN_00135f70` unless nav +0x94, `FUN_00133f60` | 52 |
+| 5 scripted path | none | the sim copies the path object's transform and velocity (`FUN_001b18a8` / `FUN_001f7880`) | 55 |
+
+Each element's spawn command is AIEl +0xf8, an `sr` reference `0x7372_nnnn`; every one on the
+disc has that tag and `nnnn` no larger than the AICo count; `nnnn - 1` is read as the index
+[D; the base is S].
+
+### 11.2 The table
+
+| function | address | verdict | port / note |
+|---|---|---|---|
+| aim point | 0x131770 (aim block) | **added** | `aim_point`: profile 0xf → the target; mode 1 → the goal +0x1a8; no target → lost; a target moving at ≥ 5: pattern 3 adds `n(v_t)·min(max(lead, 0.2), |v_t|)` (disassembly 0x131cc4, EE `max.s`/`min.s`), other patterns `v_t·0.2`; +0x1d0/+0x1e0 from that point, +0x210 = n(nav+0x10 − pos); lost: pattern 2 → the target (or pos + forward), else the carrot, after the distance was taken. §10.2 said the lead store was not visible: it is (`vmulbc`/`vadd` into auStack_1c0, stored at +0x1c0). |
+| pursue/road switch | 0x131770 (profile 0xd) | **added** | `pursue_switch` / `finish_rejoin` / `road_heading_latch`: pattern 3 → 2 when the road turns away from the target (`dot(nav dir, +0x1e0) < 0.5`) or a slow target is inside the follow distance; pattern 2 → re-join the road when the target is on its road (lane inside the half width, along > 0.7, own speed ≥ 10) or lost, becoming pattern 3 once `dot(fwd, +0x210) ≥ 0.7`; a 60-tick hold (+0x74). The re-join itself (`FUN_00225c48` + the 7.5 advance) is the caller's. |
+| hazard scan | 0x131770 (DAT_0032b780) | reviewed | 30 hazard records; kind 4 tested with `FUN_00140218(5.0, …)`; a hit sets +0x168 and a one-second +0x164. Not ported. |
+| stuck re-join | 0x131770 tail | reviewed | +0x15c counts ticks the actor's vtbl+0x18c is clear; at ≥ fps a non-hold car re-joins; profile 0xf with +0x21c clear re-joins forward once. Not ported. |
+| dispatch | 0x130508 | **added** | `dispatch` → `Arm` (11.1). The gated stop stays `ai::gated_stop`. |
+| chase drive | 0x133f60 | **added** | `chase_drive`: steer `dot(d, row0)` at `|s| ≥ 1` with forward motion, full lock opposite the side while reversing; ramp over 15 (floor 0.05); the +0x140 hysteresis (on at `ahead < −0.15`); the timed reverse +0x25c/+0x260 after a bump (one second, cut short in its second half once `ahead > 0.7`); the head-on rule against the player (the vtbl+0x9c query is made on the target: disassembly 0x1343d8) skips the probe and cancels the handbrake (0x134950: `a1 = 0` in the delay slot); stopping: below 1 release with the handbrake at ≥ 0.1, else throttle 1 rolling backwards / brake 1; reversing: brake 1 while still rolling forward, brake 0.5 up to 7.5. |
+| bump probe | 0x133238 | **added** | `bump_probe`: needs +0xdc and +0xe0 == 6 (cleared on use; `a1` = +0x140 from 0x1345b4); forward ray `2·box_z`; reversing two corner rays at `±box_x`; blocked = ≥ 2 hits. |
+| flying arm | 0x133f60 (+0x118) / 0x1349c0 | **added** | `fly_aim` (altitude hold: the target's height + `sin(phase)·bob`, clamped to [+0x120, +0x11c]) and `fly_drive` (yaw/pitch from `up × fwd` / `fwd × side`, ramp over 5, no hysteresis). +0x118 is the actor's +0xbc byte at controller creation (0x13f748). The bob height 10, or 2.5 for an `IS_HELI` car, and its phase come from `FUN_0012e468` pattern 4. `sin_turns` is `FUN_002cbd50`'s truncated series (0.0033 off at ±π, as in the game). |
+| chase avoidance | 0x137310 | **added** | `avoid_chase`: 64 slots; every other non-traffic, non-target car on the course marks +0x80 over its width; the aim shifts by `best_slot − 32` (−0.5 for an even own width) along `n(d.z, d.y, −d.x)`. Arguments read from the disassembly 0x137388-0x1374e0 (the decompile lost the other car's position copy). |
+| slot build | 0x1369a0 | **added** | `slots_init`: the two 32-unit side rays from the aim (the hit distances are inputs), `+round(|32 − i|·5)`, the centre slots 31..33 cleared. DAT_00399c70 = 32.0 [D]. |
+| on course | 0x135b10 | **added** | `on_course`: ±5 height band, range `clamp(2·speed, 20, 35)` (15 against a faster car), ahead. |
+| slot pick | 0x135cf0 | **added** | `best_slot` (disassembly-checked: the second argument is unused). |
+| road lane pick | 0x135f70 / 0x135d88 / 0x1351d0 / 0x226f18 | reviewed, not ported | the pattern 3/4 version: slots from the road's lane mask (`FUN_00222060`) plus a lane bias, other cars marked ±0x40..0x80 by escort rules, the lane offset blended through `FUN_00226f18`. |
+| traffic yield | 0x1377c8 / 0x135530 / 0x135978 / 0x13efc8 | reviewed, not ported | the junction yield (route flag 0x80, nodes with ≥ 3 links) and the car-ahead stop for non-chase cars; sets +0x194/+0x198/+0x19c. |
+| turret | 0x12f170 | **added** | `turret_step`: wanted angle `acos(dot(+0x1e0, fwd))/2π`, `1 − a` when `(dir × fwd).y < 0` (the vopmula/vopmsub order decoded at 0x12f26c); `TURRET_RANGE` (string at 0x36b540 [D]) gives two arcs in degrees; slew 0.005 turns per tick, snap within 0.005, wrap; the wrap direction is used only when the wanted angle is ≥ 0.75 or ≤ 0.25; +0x238 = on target; the bone gets `round(angle·360)` on channel 0x10 frame 8. It feeds §10's `turret_on_target`. |
+| world cap | 0x2012d0 | **added** | `world_cap`: 36 (48 with the flag); over it the farthest car not of sim kind 2 is removed, then the create needs count < cap; at exactly the cap nothing is removed and the create is refused. |
+| helicopter update | 0x138ef0 | **added** (gate) | `heli_update_gate`: +0x58/+0x5c; outside states 2/9/10 with +0x78 clear the goal tracks the target; then the death check `FUN_0013b2a8`, else the state machine. |
+| helicopter speed | 0x13b4c8 | **added** | `heli_advance`: `clamp(x·0.5, 10, 20)`. |
+| flight control | 0x13b4f8 | **added** (lift, roll) | `heli_lift`: the goal height (ground + alt), roll +0x94 stepping 0.02 toward `dot·max/50` when higher than 2, lift +0xa0 `2·(min(Δy, 10) − v.y) + 9.8` × `clamp(rand·4/65536, 0.5, 1)` when higher than 2; **one driving-generator draw per call**. The yaw +0x98 (the `FUN_001fd548` matrix path) is not ported. |
+| helicopter states | 0x139be8 / 0x139380 / 0x1387a0 / 0x138b88 / 0x1385d8 / 0x1386b8 / 0x13b2a8 | reviewed, not ported | the state machine on +0x7c (1/4 idle, 2 parked at +0xa0, 3 approach, 5 chase, 6/7/8 the road fly-by with the 150 / 35 offsets, 9/10, 16 dead), about 12 KB; only its leaf rules are ported. |
+| rider gunner | 0x122a68 (class vtable 0x369200, ctor 0x1224b0) | **added** | `gunner_sweep`: ±2° per tick, bone `clamp(yaw − 55, −80, 30)`, yaw clamp [−60, 80]. Which seat the class fills and what drives +0x84/+0x160 were not traced. The other rider classes (0x120b70, 0x11e490, 0x11ff18, 0x11aca8) and every rider's shot are the character layer: reviewed, not ported. |
+| path copy | 0x130508 pattern 5 | reviewed | transform from the path object (`FUN_0013e0b0` → +0x60), velocity = path +0x88, sim +0x40 = velocity × sim +0x4c. The path object is scripted data the port does not load. |
+
+### 11.3 The disc test
+
+`each_pattern_on_its_mission` (NF_ISO): for each pattern, the first ground vehicle whose spawn
+command has it (all five are on MIS01: paris_bombvan 1, paradis_car 2 and 3, paris_henchbigbox
+4 and 5), built from its own `.atr`, runs 600 ticks at 1/60 against a scripted player (40 ahead,
+15 u/s, a slow weave) through `aim_point` → `hostile::chase_target_speed` → `dispatch` →
+`avoid_chase` / `chase_drive` → `Car::step`. Results: the hold car stays put with no pedal; the
+pursuer (cap 10) ends 150 from the player against 190 for a parked car; the road chaser drives 76,
+the road follower 26; pattern 5 drives nothing. The helicopter elements (MIS11 helimine, MIS13A
+jungleheli, MIS3 openheli; MIS01's AIEl has none) run `heli_lift` for 600 ticks: 600 draws, the
+height settling at 34.6 for a 35 goal. Harness stand-ins [S]: the flat world at y = 0, the
+nearest road piece by brute force, the traffic junction chooser instead of the hinted kind-3/4
+one, no other cars, the velocity turned onto the heading (as `ai::AiDriver`), +0xa0 read as a
+vertical acceleration.
+
+### 11.4 Unproven / not ported
+
+- Not ported: the road lane pick 0x135f70, the traffic yield 0x1377c8, the hazard scan and the
+  stuck re-join of 0x131770, the hinted junction chooser of navigator kinds 3/4 (0x2235c8 and
+  the 0x130140 direction hint), the helicopter state machine 0x139be8 and its helpers, the
+  helicopter yaw, the rider classes other than 0x369200 and all rider shooting, the pattern-5
+  path object, and the wiring into the viewer.
+- What consumes the helicopter's +0x94/+0x98/+0xa0, and the sign of the pitch call vtbl+0xdc,
+  were not read.
+- The AICo index base (`nnnn - 1`) is inferred from the reference range.
+- `FUN_002cbd50`'s VU accumulation order is summed plainly.
+- Live checks worth doing: in Paris at the first chase break on FUN_00133f60 and read +0x140 /
+  +0x25c and the pedal calls; on FUN_0013b4f8 for a helicopter count the generator draws per tick.
