@@ -729,8 +729,21 @@ impl Route {
             RouteMode::Loop => { if self.index >= count { self.index = 0 } if self.index < 0 { self.index = count - 1 } }
             _ => {
                 if self.index >= count {
+                    // Past the last node the move target IS the route's destination: the
+                    // non-loop arms clamp the index to the count and copy route+0x40 (the dest)
+                    // into route+0x60 (the move target), with no creep recalc [M
+                    // AINetwork_SetupNextNode 0x159668: `puVar12[0x40] = puVar12[0x41]`, then
+                    // `puVar12+0x30 = puVar12+0x20`; LinkCreep_Calc is reached only by the loop
+                    // and bounce arms (LAB_001597a4)]. The creep stays finished, so every later
+                    // `LinkCreep_Increment` lands here again [M 0x159f28: step >= steps →
+                    // SetupNextNode(1)]. The port used to re-creep target → dest in 0.4 steps, and a
+                    // last leg of 0.4..1.0 got ZERO steps (trunc(trunc(len) × 2.5) [M 0x159cc8]): the
+                    // target never left the last node, so a cover run (arrival 0.5, its in-cover
+                    // point 0.8 off the goal) parked 0.55-0.8 short of its goal for thousands of
+                    // ticks.
                     self.index = count;
-                    self.creep = Creep::new(self.target, self.dest, None);
+                    self.target = self.dest;
+                    self.creep.step = self.creep.step.max(self.creep.steps);
                     return;
                 }
                 if self.index < -1 { self.index = -1 }
@@ -849,6 +862,35 @@ impl Route {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `AINetwork_SetupNextNode` 0x159668, non-loop arms: past the last node the move target is
+    /// the route's destination itself (route+0x40 → route+0x60), not a re-crept leg. A last leg
+    /// of 0.4..1.0 creeps in ZERO steps (trunc(trunc(len) × 2.5) [M 0x159cc8]), so the old
+    /// re-creep left the target on the last node forever: a goal 0.67 past the node (a cover
+    /// run's arrival is 0.5) was never reached. The direct (no-node) route has the same end.
+    #[test]
+    fn past_the_last_node_the_move_target_is_the_destination() {
+        let n = net(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], &[(0, 1)], 2);
+        let dest = [10.0, 0.0, 0.67];
+        // A one-node route (the cover run's shape): node 1, then the goal 0.67 off it.
+        let mut r = Route::new(0, RouteMode::OneWay, vec![1], vec![], [9.0, 0.0, 0.0], dest);
+        r.radius = 0.5;
+        r.calc(&n, 0);
+        r.target = r.creep.a;
+        let far = |_: V3| false;
+        let feet = [10.0, 0.0, 0.0];
+        for _ in 0..8 { let _ = r.follow(&n, feet, &far, false); }
+        assert_eq!(r.target, dest, "the target past the last node");
+        assert_eq!(r.follow(&n, feet, &far, false).0, follow::MOVING, "0.67 is outside the 0.5 arrival");
+        assert_eq!(r.follow(&n, [10.0, 0.0, 0.3], &far, false).0, follow::ARRIVED, "0.37 is inside it");
+        // The direct route (`CalcToRouteEnd` start → dest, 0.7 long: zero steps too).
+        let mut r = Route::new(0, RouteMode::OneWay, vec![], vec![], [0.0; 3], [0.0, 0.0, 0.7]);
+        r.radius = 0.5;
+        r.creep = Creep::new(r.start, r.dest, None);
+        r.target = r.start;
+        for _ in 0..8 { let _ = r.follow(&n, [0.0; 3], &far, false); }
+        assert_eq!(r.target, [0.0, 0.0, 0.7], "the direct route's target");
+    }
 
     /// `LinkCreep_AtSpecialNode` 0x159dd0's tier-2 through the port's route follow
     /// (`Drone::near_pos_fn`, the closure every `Route::follow` call site passes): a special

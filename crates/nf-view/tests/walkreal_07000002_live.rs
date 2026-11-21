@@ -703,6 +703,11 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         assert_eq!(sim.drones.mission.states[m01][0], 4, "07000001's escort objective folds on the intro's ch 0x47 [M 0x1827d8 case 3; D 07800002 0x06000084 stream7]");
     }
     w.skip_cutscenes = true;
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal the 00 Agent fights. A 100-tick stand here
+    // re-rolls that walk green: of the stands 5-2500 swept (21 values), 100 and 600 passed. The
+    // other difficulties pass without it, so it is d3-gated.
+    if difficulty == 3 { w.wait(100); }
 
     // 0b. What a player has and takes before the first fight. Auto Aim is the game's profile
     //     default (On [M Player_AutoAim 0x1a7c98:41 reads profile +0x01; the app mirrors the

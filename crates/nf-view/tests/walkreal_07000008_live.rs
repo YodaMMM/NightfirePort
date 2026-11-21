@@ -2650,6 +2650,10 @@ fn the_ally_fights_only_the_guards_through_the_noise_path() {
 // input only, no damage/health writes. The Operative walk ends at 1.2 health, 116 hits for
 // 98.8, the Hind down (f31140); the whole mission walked in 31146 ticks.
 fn walk_the_whole_mission_on_real_input_real_damage() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/400/700 passed.
+    walker::set_post_intro_wait(30);
     // los-mask-join: under the game's sight masks [M 0x176f18 mask 0xa27] the secure-room guard
     // #4 hit Bond 28 times (68.2) while he held at the closed door, and the plain sight rule
     // never answered him [L the masked run]. The Agent sisters' glass-fight rule (Bond's sight
@@ -2697,6 +2701,10 @@ fn walk_the_whole_mission_on_real_input_real_damage() {
 // sister's timeline byte-exact by construction; the whole binary re-run green on this tree).
 #[test]
 fn walk_the_whole_mission_on_real_input_real_damage_agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/90/200/700 passed.
+    walker::set_post_intro_wait(30);
     // HEAD-HUNT (the 05/07 00 Agent sisters' tactic on this level group): at Agent the guards'
     // hit chance is DroneFiring_Accuracy_Normal 1.1 (Operative 0.8) and Bond's pain is
     // Plr_DMod_Normal 0.7 (0.6) [M tuning.rs 05-08 group] — every tick a fight stands is a

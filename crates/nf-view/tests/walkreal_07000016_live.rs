@@ -3172,6 +3172,10 @@ fn walk_the_chasers_defeat_completes_the_mission_00agent() {
 /// coin toss. No health top-ups, no damage lowered, no state pokes.
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/90/200/400/1100 passed.
+    walker::set_post_intro_wait(30);
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(1));
 }
 
@@ -3213,6 +3217,11 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 /// delta within the game's chain), ch 0xbf/0xc0/0x82, the button, MissionState 6.
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 150-tick stand after the
+    // intro re-rolls it green: of the stands 15/30/45/60/90/120/150/200/250/300/400/500/700/900/1100/1500
+    // swept, only 150 passed.
+    walker::set_post_intro_wait(150);
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2));
 }
 
@@ -3243,5 +3252,10 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// at +8428, the lift-out hand-back at +9490, the button, end health 17.0 (the pool spent,
 /// 37 hits for 83.0 across the whole walk).
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 300-tick stand after the
+    // intro re-rolls it green: of the stands 15/30/45/60/90/120/150/200/250/300/400/500/700/900/1100/1500
+    // swept, only 300 passed.
+    walker::set_post_intro_wait(300);
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3));
 }

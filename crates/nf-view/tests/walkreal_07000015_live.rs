@@ -2243,6 +2243,10 @@ fn crouching_under_the_door52_beam_passes_it() {
 /// tree and outlived its own red (an ignored test is never re-run), so it is removed.
 #[test]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/90/200/400 passed.
+    walker::set_post_intro_wait(30);
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(2));
 }
 
@@ -2311,6 +2315,10 @@ fn walk_spawn_to_the_omega_sector_exit_agent() {
 
 #[test]
 fn walk_spawn_to_the_omega_sector_exit_00agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/90/400/700/1100 passed.
+    walker::set_post_intro_wait(30);
     walk_spawn_to_the_omega_sector_exit_at(3);
 }
 

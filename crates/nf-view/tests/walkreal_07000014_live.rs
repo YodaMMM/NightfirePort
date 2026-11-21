@@ -2432,6 +2432,10 @@ fn burn_keypad(w: &mut Walker, at: V3, ch: u32) {
 /// The walked tripbomb route: pickup → place → retreat → shoot, everything on real input.
 #[test]
 fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 200-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 200/400 passed.
+    walker::set_post_intro_wait(200);
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
 

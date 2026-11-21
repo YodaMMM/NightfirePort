@@ -31,6 +31,23 @@ thread_local! {
     static LAST_SUMMARY: std::cell::RefCell<Option<(u32, String)>> = const { std::cell::RefCell::new(None) };
 }
 
+thread_local! {
+    /// `set_post_intro_wait`: idle ticks the NEXT `wait_enabled` on this thread stands after Bond
+    /// is enabled (once; 0 = none). A player who waits a moment before moving off: the walks'
+    /// re-roll lever when a stream-moving change re-deals a scripted fight (no game state is
+    /// written, only the walk's own timing).
+    static POST_INTRO_WAIT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Arm `POST_INTRO_WAIT` for the next `wait_enabled` on this thread.
+#[allow(dead_code)]
+pub fn set_post_intro_wait(ticks: u32) { POST_INTRO_WAIT.with(|c| c.set(ticks)); }
+
+/// The armed post-intro wait, consumed.
+fn take_post_intro_wait() -> u32 {
+    POST_INTRO_WAIT.with(|c| c.replace(0))
+}
+
 /// Keep the walker's latest summary; under `NF_WALK_NO_TOPUP` print one every 3000 ticks.
 pub fn note_summary(tick: u32, s: String) {
     if tick % 3000 == 0 && std::env::var_os("NF_WALK_NO_TOPUP").is_some() { eprintln!("[real-damage] at tick {tick}: {s}"); }

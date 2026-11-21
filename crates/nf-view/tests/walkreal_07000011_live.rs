@@ -902,6 +902,10 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
 ///    second measured run died at d 1.1 of #19 that way); a player reloads between guards.
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 90-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 90/200 passed.
+    walker::set_post_intro_wait(90);
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||

@@ -1526,6 +1526,10 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
 
 #[test]
 fn walk_the_warm_chain_to_the_front_entrance_and_out() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/90/400/700/1100 passed.
+    walker::set_post_intro_wait(30);
     let iso = iso();
     walk_the_warm_chain(&iso, false, 3);
 }

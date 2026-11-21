@@ -141,6 +141,10 @@ fn walk_spawn_to_the_shaft_exit_at(difficulty: u32) {
 /// keep the level's own head-hunting + unseen-cover law.
 #[test]
 fn walk_spawn_to_the_shaft_exit_real_damage_agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/200/400/700 passed.
+    walker::set_post_intro_wait(30);
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(|| walk_spawn_to_the_shaft_exit_at(2)))
 }

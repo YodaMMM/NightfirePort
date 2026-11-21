@@ -167,9 +167,13 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
             .filter(|w| w[1].tick > if i == 0 { 0 } else { reloads[i - 1].0 } && w[1].tick <= *tick && w[1].shots > w[0].shots)
             .filter(|w| w[0].clip <= 0)
             .count();
-        assert_eq!(per_clip, 5 + past_empty,
-            "reload #{} at tick {}: {} shots since the previous reload ({} of them past the empty clip), the game's clip is 5 [M 0x14b300:345-348 + 0x178f68:270]",
-            i, tick, per_clip, past_empty);
+        // s-g028-cover-walks: the window's first reload counts from the clip the guard holds when the
+        // window opens, not a full 5: on the cover-goal stream guard #1 enters the window with a
+        // part-spent clip (reload #0 came after 4 rounds). Every later reload counts 5.
+        let held = if i == 0 { samples.first().map_or(5, |s| s.clip.clamp(0, 5) as usize) } else { 5 };
+        assert_eq!(per_clip, held + past_empty,
+            "reload #{} at tick {}: {} shots since the previous reload ({} of them past the empty clip), the guard held {} of the game's clip of 5 [M 0x14b300:345-348 + 0x178f68:270]",
+            i, tick, per_clip, past_empty, held);
         let before = samples.iter().filter(|sm| sm.tick < *tick).last().map(|sm| sm.clip);
         assert!(before.map_or(true, |c| c < 1), "reload #{} at tick {}: entered with clip {:?}, the game's trigger is clip < 1 [M 0x148338:196]", i, tick, before);
         assert_eq!(*clip, 5, "reload #{} at tick {}: the ENTER refill must already show clip 5 [M 0x1666d8 case 1]", i, tick);

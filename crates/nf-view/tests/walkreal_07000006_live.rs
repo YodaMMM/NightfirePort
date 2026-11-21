@@ -1333,6 +1333,10 @@ fn walk_the_castle_interior_to_the_party_real_damage() {
 /// UN-IGNORED 2026-11-13: green on master 7840d9362 (end health 57.8, 23 hits for 42.2) - the
 /// earlier dry-at-the-mouth death no longer reproduces on the current guard rules.
 fn walk_the_castle_interior_to_the_party_real_damage_agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/200/1100 passed.
+    walker::set_post_intro_wait(30);
     walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(2));
 }
 

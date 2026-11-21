@@ -3226,7 +3226,13 @@ fn door_lip_lure(w: &mut Walker) {
     }
 
 #[test]
-fn walk_from_the_spawn_to_the_exit_with_the_contact() { walk_from_the_spawn_to_the_exit_with_the_contact_at(1) }
+fn walk_from_the_spawn_to_the_exit_with_the_contact() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 90-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 90/700/1100 passed.
+    walker::set_post_intro_wait(90);
+    walk_from_the_spawn_to_the_exit_with_the_contact_at(1)
+}
 
 fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
     let iso = iso();
@@ -3240,6 +3246,10 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
 /// mask-0x18 filter needs the skin-0x4F drone too [M Trigger_Hit 0x1b1fc8].
 #[test]
 fn the_plate_refuses_bond_alone() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/200/400/700 passed.
+    walker::set_post_intro_wait(30);
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load"));
     for _ in 0..4000u32 {
@@ -3361,6 +3371,10 @@ fn behind_the_in_way_contact(w: &Walker, ci: usize, head: V3) -> Option<V3> {
 
 #[test]
 fn following_mayhew_down_completes_the_level() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/200/700/1100 passed.
+    walker::set_post_intro_wait(30);
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
     // The hall's hanging lamps are solid (and block the guards' sight, as the game's
@@ -3816,6 +3830,10 @@ fn following_mayhew_down_completes_the_level() {
 /// [M 0x1c98c8:173-189].
 #[test]
 fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_level_loads() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 90-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 90/1100 passed.
+    walker::set_post_intro_wait(90);
     let iso = iso();
     let mut w = walk_to_the_exit(&iso, true);
     // The exit tick: the hold stands with the full count, the fade level is 0, the request rides.

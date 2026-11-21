@@ -473,7 +473,11 @@ impl Walker {
     pub fn wait_enabled(&mut self, max_ticks: u32, what: &str) -> bool {
         for _ in 0..max_ticks {
             self.tick(Input::default(), false);
-            if !self.scene.sim.as_ref().unwrap().disabled { return true; }
+            if !self.scene.sim.as_ref().unwrap().disabled {
+                let n = take_post_intro_wait();
+                for _ in 0..n { self.tick(Input::default(), false); }
+                return true;
+            }
         }
         panic!("Bond still disabled after {max_ticks} ticks ({what})");
     }
