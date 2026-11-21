@@ -17,6 +17,8 @@ pub mod mission;
 pub mod physics;
 // Track scene objects: drawn/hidden, in the sim, knocked loose (trackobj.md).
 pub mod props;
+// The POV weapon mode (the MIS01 sniper phase): weapon table, loadout, gunner, mode flag.
+pub mod pov;
 pub mod road;
 // The weapon table, ammo/reload, projectiles and hit damage (FUN_0020f2b8 + the WeaponMan).
 pub mod weapons;
