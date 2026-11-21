@@ -3334,7 +3334,42 @@ setsid) in the first minutes and this sandbox killed it between tool calls both 
 suite.out empty (the rounds-1-10 signature); the four-crate test-binary build also exceeds the
 rootfs left (2.8 GB free vs ~5.5 GB needed) — the per-binary foreground runs above are the
 evidence. The merged 0d-11 ignore message carried raw double quotes (the tree did not compile)
-— syntax-fixed that round, no test weakened."]
+— syntax-fixed that round, no test weakened. (14) THE retune-nb-0d-14 LEDGER (seven real runs
+2026-11-20, each its own roll, the composed shape + the proven round-13 knobs unless noted):
+(a) THE PLATE ACT PROVEN — the round-14 lever (c) landed on its own roll: NF_0D_PLATE_ROOF_KILL=1
+(the certain act on the roof shooter (138.9,-325.3) y<11 from the PLATE stand (135.7,-307.4),
+d ~17, the ~13-deg pitch over the open yard) killed it at +26 ticks (run 14-e), and the trench
+roof act then found it already down — the degenerate up-pitch line is MOOT; the machinery's
+convergence law: an OPEN line at d ~17 lands in ~26 ticks, so the 13-c north act's 5.367
+cd(snap) refusal was the door-corner COVER, not the distance. (b) THE CROUCH LAW committed: the
+trench stand press precedes the up-pitch acts (the sleepers stay crouched, the yard legs stand);
+NF_0D_PHOTO_CROUCH=1 (the 5-tick press around the whole photograph phase — a LEVEL-pitch stand)
+measured QUIET: the photograph phase took ZERO chips (run 14-h). (c) THE NW KILL measured — #4
+(0x500007e, weapon 0x12) is a MOVER: the landing census (133.1,-273.8) -> parked (128.5..129.6,
+-282.1..-282.5) by its first chip (frame 22935); the fixed boxes missed it at all three stands
+(the yard-south-1 early catch, the plate, the shooting stand) at ZERO ticks — the empty-box act
+returns at once and the timeline stays byte-identical (the 14-f/14-g proof); the INDEX-tracking
+certain act (NF_0D_NW_KILL=2, kill_guard_index_certain — the pick by drone index within a range
+cap, the aim and the line-hit gate read the mover's live boxes each tick) measured NEGATIVE:
+run 14-i died mid-act (t22895) — the aim at d 17.3 on the mover never converged in 141 ticks
+while #1 (the yard-east armed, a NEW top chipper at its (164.2,-286.7) park, 12.4 in 7 hits)
+punished the exposure — the act aim phases ARE the exposure. (d) THE ROLL LAW pinned: the same
+shape reproduced the SAME death exactly (14-j = 14-e: t24195, (136.50,4.78,-308.15), 24 hits
+80.8) — the sight-event keying re-syncs after press-timing shifts within quiet phases, while
+knob presses that ADD aim phases re-roll worse (14-h t23536, 14-i t22895). (e) THE WALL: the
+yard phase spends the whole landing health (~34.8) across the legs+acts+photograph
+(~1000-1900 ticks); the trench is reached at ~10.8 (the furthest ever — round 13 died t23299
+mid roof-act); the death is the return leg's plate-arrival-zone burst (#4+#6 joint fire,
+5 x 1.8). THE ROUND-15 LEVER: (a) the return-leg reshape — a DIRECT trench->stand fast leg
+(skip the plate waypoint's arrival zone where the burst lands; the plate objective is already
+banked at Leg 2); (b) the #6 north act re-judged from the yard-south-1 stand on a roll where #6
+stands in the open (the (a) law above says an open line at d ~15-19 lands fast; the 13-c
+uneconomical verdict was the corner cover); (c) the #1 yard-east armed gets an index act slot
+at the trench (the (154.0,-291.0) box missed its (164.2,-286.7) park in 14-i). This round's
+knobs: NF_0D_PLATE_ROOF_KILL (PROVEN), NF_0D_PHOTO_CROUCH (PROVEN quiet), NF_0D_NW_KILL=1
+(the boxes, free when empty) and =2 (the index act, measured negative) — all default
+byte-identical. Whole binaries on the knobs-unset tree: walkreal_0700000d_live 3 passed /
+0 failed / 2 ignored (100.5 s), interactables_0700000d_live 11 passed / 0 failed (30.4 s)."]
 fn walk_arrival_to_the_c5_door_real_damage_00agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(3, true));
 }

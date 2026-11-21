@@ -289,3 +289,33 @@ every lever the ledger marks measured dead; helpers stay gated to the level and 
   fast legs + the land_wait=10 + SWEEP_PASSES=1 reach the trench at ~25-27; the roof act needs a
   working line; #6's back-fire remains the legs' tax. Final-tree evidence re-verified whole:
   walkreal 3 passed / 0 failed / 2 ignored (106.1 s), interactables 11 passed / 0 failed (31.6 s).
+- retune-nb-0d-14 (2026-11-20, branch s/retune-nb-0d-14 from master ccd79b5be with
+  s/retune-nb-0d-13 merged, clean): the 0d arrival-to-C5-door 00 Agent walk stays RED but the
+  round-14 lever (c) LANDED ON ITS OWN ROLL — the PLATE ACT (NF_0D_PLATE_ROOF_KILL, the ~13-deg
+  pitch from the plate over the open yard) killed the roof shooter at +26 ticks (run 14-e; the
+  trench roof act then found it already down — the degenerate up-pitch never ran). The trench
+  acts all found their targets already down (the strays' thinning) and the walk reached the
+  RETURN LEG at t24195 — the furthest ever (round 13 died t23299 mid roof-act); the killer is
+  the #4+#6 joint 1.8-chip burst at the plate arrival zone with ~10.8 entering. Seven real runs
+  (14-e..14-j, each its own roll, all [L]): the CROUCH LAW committed (the stand press BEFORE the
+  up-pitch acts; the trench sleepers stay crouched); NF_0D_PHOTO_CROUCH proven QUIET (the
+  photograph phase took zero chips — the level-pitch crouch holds; run 14-h); the NW_KILL box
+  acts cost ZERO ticks when the box is empty (14-f/g, the timeline byte-identical); the
+  INDEX-tracking certain act (kill_guard_index_certain, NF_0D_NW_KILL=2 — #4 is a MOVER,
+  (133.1,-273.8) -> (128.5,-282.5), the fixed boxes missed it at every stand) measured
+  NEGATIVE (14-i: the aim at d 17.3 never converged in 141 ticks and #1's 12.4 burst killed
+  mid-act — the acts' aim phases are the exposure). The roll variance pinned: the SAME shape
+  reproduced the SAME death exactly (14-j = 14-e: t24195, (136.50,4.78,-308.15), 24 hits 80.8)
+  — the sight-event keying re-syncs after the press-timing shifts. The yard phase spends the
+  whole landing health (~34.8) across ~1000-1900 ticks; the next lever (the refreshed ignore
+  message): the return-leg reshape (a direct trench->stand fast leg, skipping the plate
+  waypoint's arrival zone where the burst lands) and/or the #6 north act re-judged from the
+  yard-south-1 stand on a roll where #6 stands in the open (the plate act's +26 proves the
+  machinery converges fast on an OPEN line — the 13-c refusal was the door-corner cover).
+  All code is env-gated test-file knobs (NF_0D_STAND_CROUCH already committed; the new
+  NF_0D_PLATE_ROOF_KILL proven, NF_0D_PHOTO_CROUCH proven quiet, NF_0D_NW_KILL 1/2 measured),
+  unset byte-identical. Whole binaries knobs-unset: walkreal_0700000d_live 3 passed / 0 failed
+  / 2 ignored (100.5 s), interactables_0700000d_live 11 passed / 0 failed (30.4 s). The suite
+  fast runner: started once at setup (setsid) and killed between tool calls with suite.out
+  empty (the rounds-1-13 signature); the four-crate build exceeds the rootfs left (3.4 GB free
+  vs ~5.5 GB). Report: docs/reports/retune-nb-0d-14.md.
