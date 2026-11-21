@@ -468,21 +468,104 @@ draws the steps below. Each quad is full-map (`FUN_0019f960(0, 0, 256, 256, colo
 with ABE on. s = (int)(Sky bright × 0.94) & 0xff.
 
 1. If `Sky ?`: a quad textured `cref` with colour (s, s, s, 0x40), ALPHA 0x44.
-2. The world, drawn from the reflection camera (`FUN_0021fa58` / `FUN_001c2720`; their content is
-   not traced).
-   - Eye = the point `FUN_001c5eb0` passes + (0, Refl HEIGHT, 0).
-   - Forward = normalize(0.8 · f + (0, 1, 0)), with f the HUD manager camera's `+0x20` and
-     0.8 = `DAT_00333e78`.
-   - The projection angle is `Refl ANGLE`: `FUN_00295910(+0x14, 1, 1, 2500)`, called once in the
-     constructor.
+2. The scene, drawn from the reflection camera (§10.6.4): the track items that rise over the
+   car, then up to 4 vehicles. No sky dome is drawn; the sky is the `cref` quads.
 3. If `Sky ?` and `Sky blend` ≠ 0: `cref` again with colour (s, s, s, Sky blend), ALPHA 0x44.
 4. If `Desat ?`: a quad textured `rmsk` (common.ssh, 64 × 64) whose colour is the packed `Desat`
    word, ALPHA 0x62 = Cd − Cs: a subtraction.
 
 When `DAT_003349e0 + 0x30` is 1, steps 2-4 are replaced by a flat (0x80, 0x80, 0x80, 0x80) quad.
 
-`cref` is taken from the sheet registered as key 4, else from `data\render\ext.ssh` (key 5,
-128 × 128 [D]).
+Step 1 is drawn before that test, so it stays.
+
+**`cref`** [M `FUN_001c1358` + D]: it comes from a sheet registered as key 4, else from
+`data\render\ext.ssh` (key 5). Key 4 holds the sheets the loaded modules name in their `sn  `
+records (`FUN_001a9600`, `"%s%s"` of the module's folder and the name). `FUN_001c4840` builds the
+track world (`FUN_0021eef0`) before it looks `cref` up, so the track module is loaded by then.
+- Each track module's only `sn` record is `#0`, naming its own sheet (`paris_mis01.ssh`, …) [D].
+- Of every `.ssh` in the 8 archives, `cref` (128 × 128) sits only in `ext.ssh` and in the track
+  sheets of paris, uw, snow1a and snow2a (both archives) [D]. So those tracks reflect their own
+  `cref`, and the three jungle tracks use `ext.ssh`'s.
+- `wref` (`RReflection + 0xc8`) is looked up the same way (ext.ssh has one). Only the getter
+  `FUN_001c1ac8` reads it; its users are not traced.
+
+Code: `rendertun::{CarRender::reflection_view, ReflectionView, ReflectionProjection,
+ReflectionItemQuery, item_bounds}`. Tests: the reflection unit tests in `rendertun.rs` and
+`every_tracks_reflection_map_inputs_decode` in `carshade_disc.rs`.
+
+#### 10.6.4 The reflection view [M `FUN_001c5eb0`, `FUN_001c1ec0`, `FUN_001c1b18`, `FUN_00295910`, `FUN_0021fa58`, `FUN_001c2720`]
+
+There is one reflection map per frame, and every car samples it.
+
+**The camera.**
+- p = the player car's position. `FUN_001c5eb0` passes `FUN_00201af0(0x339190)`: the first car
+  of the sim's `+0xdcc` list (the car `FUN_001fee68` places at the track start), its body
+  (`FUN_001ff088` or `FUN_001ff0b0`) `+ 0x10`.
+- f = row 2 (`+0x20`) of the camera `**DAT_00333ed8` points at (§10.6.1), read at the top of
+  `FUN_001c1ec0`.
+- eye = p + (0, Refl HEIGHT, 0).
+- forward F = normalize(0.8 · f + (0, 1, 0)).
+- right R = normalize((0, 0, −1) × F), up U = normalize(F × R). Both are `VOPMULA` + `VOPMSUB`
+  pairs (0x1c1c14, 0x1c1c50), fs × ft with fs = (0, 0, −1), then F.
+- `FUN_001a4520` stores the rows (R, U, F, eye). `FUN_001a44f0` negates row 2 and `FUN_001a4468`
+  inverts, so view space is x = (q − eye)·R, y = (q − eye)·U, z = −(q − eye)·F. The main camera
+  goes through the same two calls (`FUN_001d4878`).
+- R × U = +F, while a plain camera has R = F × U. So the map is a **mirror image** of what a
+  camera looking along F would see.
+- With F straight up, R = +x and U = −z, so the map's s grows with world x and t with world z.
+  That matches the reflection pass's ST = (0.5 + v.x, 0.5 + v.z) (inferred).
+
+**The projection** (`FUN_001c1560`: `FUN_00295910(Refl ANGLE, 1, 1, 2500, view)`, once).
+- Clip = (k·x, −k·y, a·z + b, −z), with k = 1 / tan(Refl ANGLE / 2), a = −(far + near) / (far −
+  near), b = far · (a + 1). The angle is the full angle, the same across and down (aspect 1).
+- The view's `+0x190` scale divides x and y and multiplies the viewport, so it cancels.
+- Nothing on the per-frame path calls `FUN_00295910` again. `FUN_001d4878` does, but only on the
+  saved main camera when `FUN_001c2440` restores it.
+- The `.tun` value is in place for the one call: `FUN_001426a8` reads each key from the loaded
+  file as it is registered, inside `FUN_001c0930`, which `FUN_001c1560` calls first. The
+  constructor defaults are ANGLE 120, HEIGHT 0, `Sky ?` 1, `Desat ?` 0, `Sky blend` 24,
+  `Sky bright` 223, `Desat` 0x80787878. Every archive's file then sets bright 127 and `Desat`
+  0x80919191 [D].
+- Texel = 128 + 128 · clip / w (y down). This assumes the viewport maps −1..1 onto the 256 map;
+  the GS step is not followed.
+
+**Fog for the scene**: `DAT_0033376c + 4` is set to (24560, 0, 0, 4080 / 24560) and restored
+after. Read as end 24560, start 0 (inferred from the `4080 / (w0 − w1)`), this is far past the
+2500 far plane, so the reflection has almost no fog. `DAT_00339090 + 0x2024` is 0 during the scene
+(meaning not traced).
+
+**What the scene draws.**
+1. Track items: `FUN_0021fa58(50.0, DAT_0033a5d4, list, p, (0, 1, 0, 1))`. The world
+   (`FUN_0021eae8`) is the track module's `Map` → `in  ` items (0x40 bytes) with a cell tree.
+   - The cells whose circle (size × 1.414) meets the 50-unit sphere round p (`FUN_0021f8d0`) give
+     u16 item indices.
+   - An item is kept when all of these hold:
+     - its top rises over the car: `+0x34` + height > p.y + 10 (5 + `DAT_0033a5f0` = 5);
+     - |`+0x30` − p| − 50 ≤ radius, with radius > 0 (`FUN_0021e9f0`; the direction's x and z are
+       0, so its plane test only needs radius > 0);
+     - |`+0x30` − p| < radius + 25 + 0.75 · height;
+     - `+0x0c & 0x0d` == 0.
+   - The `+0x3c` bounds word: scale s = 16 when bit 30 is set, else 0.25. radius = (w & 0x3ff) · s.
+     height = ((w >> 10) & 0x3ff) · s when bit 31 is set, else 2 · radius.
+   - On the disc no item has radius 0. The flags test drops 15 to 1,404 items per track (1,404 of
+     jungleb's 1,412) [D, `every_tracks_reflection_map_inputs_decode`].
+   - The kept items are sorted by address (table order) and drawn with `FUN_001ad618`, the
+     `FUN_001beee0` item matrix and the `FUN_001ad2e0` LOD pick (§11).
+   - Road and ground at the car's height fail the rise test, so the map holds what stands over the
+     car: buildings, trees, poles, overhangs.
+2. Vehicles: `FUN_001c2720` calls the vtable `+0x24` method of the up to 4 objects at
+   `RReflection + 0x1f4`.
+   - The base vehicle class (vtable 0x386a88) has `FUN_001caf08` there, the same `FUN_001ad6b8`
+     part draw as the main view.
+   - The 4 slots keep the smallest LOD measures. The vehicle draw `FUN_001c85f8` measures with
+     `FUN_001ad0b8` and calls `FUN_001c2508` when the measure is below `RReflection + 0x5c`, the
+     worst kept value. `FUN_001c2508` replaces the rank-3 slot and returns at once for an object
+     already kept, without updating its measure. `FUN_001c25f8` removes a destroyed object and
+     `FUN_001c27a8` re-ranks the slots.
+
+The view returned by `CarRender::reflection_view(car_pos, main_forward)` holds eye, R, U, F, the
+projection, the item query (`ReflectionItemQuery::keeps`), the vehicle count, the fog and the
+steps of §10.6.3.
 
 ### 10.7 Unproven
 
@@ -493,10 +576,20 @@ When `DAT_003349e0 + 0x30` is 1, steps 2-4 are replaced by a flat (0x80, 0x80, 0
   - The draw rules above assume modulate, with 0x80 = 1.0.
 - COLCLAMP, FRAME / ZBUF masks, and therefore whether the base pass writes the frame-buffer alpha
   that the dash specular reads.
-- Which point `FUN_001c5eb0` hands the reflection camera (`FUN_00201af0(0x339190)`), what the
-  reflection scene draws, and which sheet key 4 is.
-- Whether the `.tun` `Refl ANGLE` is in place before the constructor's one projection call. The
-  same question applies to `FUN_001b0158`'s light directions.
+- The reflection view (§10.6.4):
+  - which value the map is cleared to (`FUN_00291ce8(target, 0)`, `FUN_00296548(view, 7)`, then
+    `FUN_00291ce8(target, 0xff000000)`);
+  - how the GS viewport maps the clip space onto the map (the texel formula is inferred);
+  - the fog words' meaning, and `DAT_00339090 + 0x2024`;
+  - whether the player's own car is among the 4 kept vehicles (its draw path into `FUN_001c85f8`
+    is not followed), and what a subclass puts in the vtable `+0x24` slot;
+  - when `FUN_001c27a8` runs;
+  - the LOD measure `FUN_001ad618` uses for items while the reflection camera is current
+    (`FUN_001ad128`);
+  - `DAT_003349e0 + 0x30`, the flag that swaps the scene for a flat quad;
+  - for a car on the `FUN_001ff0b0` (0x40-byte) body table, whether `+0x10` is its position.
+- Whether `FUN_001b0158`'s light directions use the `.tun` values (the reading at registration,
+  §10.6.4, settles it for the CarRender keys only).
 - What uploads VU1 0x40..0x48 (the positional lights, and 0x48, which the clip/fog block uses).
 - How the GS draws the glass-damage pass (alpha 127 against the `glassdmgmap` alpha test), and
   `MatCarTextureSwitchPacked`'s `SwitchData`. The `Glass` and `Gouraud[Packed]` slot layouts are not read (no car strip uses
