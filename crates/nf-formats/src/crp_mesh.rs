@@ -1063,6 +1063,9 @@ impl TrackModule {
                     cur += 8;
                 }
             }
+            // A packet whose render-method list sets no texture keeps the previous packet's within
+            // the model (docs/formats/geoprim.md, `ModelIndex::model_strips`) [D].
+            let mut carried: Option<String> = None;
             for entry in entries {
                 if !seen.insert(entry) {
                     continue;
@@ -1073,7 +1076,8 @@ impl TrackModule {
                 let Some(stream) = self.entry_dma_start(entry).and_then(|a| self.dma_chain(a)) else {
                     continue;
                 };
-                let texture = self.packet_texture(eo);
+                if let Some(t) = self.packet_texture(eo) { carried = Some(t); }
+                let texture = carried.clone();
                 for mut strip in self.parse_vif_stream(&stream) {
                     strip.texture = texture.clone();
                     strips.push(strip);
