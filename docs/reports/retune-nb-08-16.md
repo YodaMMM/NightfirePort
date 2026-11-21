@@ -113,3 +113,19 @@
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (ntfy.sh unreachable — the same failure as
+rounds 5-15; each attempt at 2026-11-21 ~17:20-17:21 UTC):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (rc 28)
+2. python3 urllib: killed by the outer 35 s timeout (rc 124) — no response within the 20 s
+   urlopen timeout, no traceback, nothing written
+3. wget: killed by the outer 35 s timeout (rc 124, quiet mode, no output)
+
+The notification text that could not be delivered:
+`retune-nb-08-16: upstream round — the ledger pre-crouch dead by data (the crouched tail
+zaps at the anchor), the round-6 park spot tried and dead on its own run (12 zaps at the
+park, t29795); shipped state kept, death t29924, whole binary 6/1; the station-hall cover
+stand next`
