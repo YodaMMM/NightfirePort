@@ -73,3 +73,25 @@ before the 1159-target growth) is needed for the total line.
 
 not visible to me — this environment shows no token, credit or context-window figures for the
 session (no cost or usage numbers were displayed anywhere in the tooling).
+
+## ntfy failed
+
+All three fallbacks failed — the sandbox resolves ntfy.sh but the TCP connection to it:443 never
+completes (other HTTPS hosts — github.com, copyparty.wizardyoda.com, deb.debian.org, sh.rustup.rs —
+worked all session, so this is host-specific egress filtering). Exact outputs, in order:
+
+1. curl:
+   ```
+   curl: (28) Connection timed out after 20002 milliseconds
+   ```
+   (command: `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-01-4: done — ..." https://ntfy.sh/nightfire-yoda-8k3x`, exit 28)
+2. python3 urllib (fallback 2): `urlopen(..., timeout=20)` never returned — the process hung past
+   the tool-call window and was killed; no response line was printed.
+3. wget (fallback 3):
+   ```
+   --2026-11-21 20:21:23--  https://ntfy.sh/nightfire-yoda-8k3x
+   Resolving ntfy.sh (ntfy.sh)... 159.203.148.75, 129.212.146.227, 144.126.249.138, ...
+   Connecting to ntfy.sh (ntfy.sh)|159.203.148.75|:443...
+   ```
+   then exit 124 (killed by an external `timeout 35` while still inside the TCP connect; a first
+   `wget -q` attempt also produced no body).
