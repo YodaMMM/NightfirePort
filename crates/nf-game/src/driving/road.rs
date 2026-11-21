@@ -68,6 +68,54 @@ impl RoadNode<'_> {
         let b = self.data.get(at..at + 2)?;
         Some(u16::from_le_bytes(b.try_into().unwrap()))
     }
+    /// +0x0c: the node's own index [M 0x2235c8:165 compares it with a segment's node index;
+    /// D every RNgp on the disc: equals the record index].
+    pub fn own_id(&self) -> u16 {
+        u16::from_le_bytes(self.data[0x0c..0x0e].try_into().unwrap())
+    }
+}
+
+/// Which lane-offset table set the track uses. `FUN_00220c28` 0x220c28 points the six class
+/// tables at .data 0x33a618.. when the track is `snow2a_mis4` or `snow2a_race`, else at
+/// 0x33a678.. [M 0x220c28:21-61 — the two strcmp calls against .rodata 0x399be8/0x399c08].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneSet {
+    /// `snow2a_mis4` / `snow2a_race`.
+    Snow2a,
+    /// Every other track.
+    Default,
+}
+
+/// The lane-centre offsets per road class (0..3, `RoadSeg::road_class`) and lane slot 0..5
+/// [D DRIVING.ELF .data 0x33a618 (Snow2a) and 0x33a678 (Default), 6 f32 per class; classes 4/5
+/// are never selected — FUN_00221e98 returns 0..3].
+pub const LANE_TABLE_SNOW2A: [[f32; 6]; 4] = [
+    [0.0, 2.5, 7.5, 12.5, 17.5, 22.5],
+    [0.0, 4.0, 9.0, 14.0, 19.0, 24.0],
+    [0.0, 6.0, 11.5, 16.5, 21.5, 26.5],
+    [0.0, 8.0, 13.0, 18.0, 23.0, 28.0],
+];
+pub const LANE_TABLE_DEFAULT: [[f32; 6]; 4] = [
+    [0.0, 2.0, 6.0, 10.0, 14.0, 18.0],
+    [0.0, 3.0, 7.0, 11.0, 15.0, 19.0],
+    [0.0, 6.0, 11.5, 16.5, 21.5, 26.5],
+    [0.0, 8.0, 13.0, 18.0, 23.0, 28.0],
+];
+
+/// The signed lane offset: `±table[class][|lane|]`, negative for a negative lane
+/// [M 0x2257c0:136-150 (the join), 0x223f98's tail (the next-segment pick)]. A lane past the
+/// table's six slots reads past the array in the game; the port clamps to slot 5 [S].
+pub fn lane_offset(set: LaneSet, class: usize, lane: i8) -> f32 {
+    let t = match set {
+        LaneSet::Snow2a => &LANE_TABLE_SNOW2A,
+        LaneSet::Default => &LANE_TABLE_DEFAULT,
+    };
+    let v = t[class.min(3)][(lane.unsigned_abs() as usize).min(5)];
+    if lane < 0 {
+        -v
+    } else {
+        v
+    }
 }
 
 /// One `rs  ` road segment record's payload — the AI spline piece [M 0x2215f8/0x2216b0/0x12e808].
@@ -112,6 +160,38 @@ impl RoadSeg<'_> {
     /// +0x5a: the car-group id [M 0x225490:133].
     pub fn car_group(&self) -> i8 {
         self.data[0x5a] as i8
+    }
+    /// +0x20: the unit side vector at the node-A end — the lane offset direction
+    /// `FUN_002267d8` 0x2267d8 adds at node A (negated when the car drives B→A) [M 0x2267d8:31-45;
+    /// D every RNgp on the disc: unit length, perpendicular to +0x40 on straight pieces].
+    pub fn side_a(&self) -> [f32; 3] {
+        let f = |o: usize| f32::from_le_bytes(self.data[o..o + 4].try_into().unwrap());
+        [f(0x20), f(0x24), f(0x28)]
+    }
+    /// +0x30: the unit side vector at the node-B end [M 0x2267d8:31-45].
+    pub fn side_b(&self) -> [f32; 3] {
+        let f = |o: usize| f32::from_le_bytes(self.data[o..o + 4].try_into().unwrap());
+        [f(0x30), f(0x34), f(0x38)]
+    }
+    /// +0x58: the lane direction mask — bit k set = lane slot k drives A→B (with the game's
+    /// drive-side flag DAT_003c827c = 1, its only write [M 0x220c28:63]) [M 0x13c5e8:43-58,
+    /// 0x223f98's lane test].
+    pub fn lane_dir_mask(&self) -> u8 {
+        self.data[0x58]
+    }
+    /// The road class that picks the lane-offset table — `FUN_00221e98` 0x221e98: flags 0x10 → 3,
+    /// (flags & 0x820) == 0x820 → 2, flags 0x800 → 1, else 0 [M 0x221e98:5-11].
+    pub fn road_class(&self) -> usize {
+        let f = self.flags();
+        if f & 0x10 != 0 {
+            3
+        } else if f & 0x820 == 0x820 {
+            2
+        } else if f & 0x800 != 0 {
+            1
+        } else {
+            0
+        }
     }
     /// +0x10: the curve control point (flags & 0x4000) [M 0x222d40:54 — `param_5 + 0x10`].
     pub fn curve_ctrl(&self) -> [f32; 3] {
@@ -281,10 +361,12 @@ impl<'a> RoadNet<'a> {
         Ok(out)
     }
 
-    /// The next-segment choice at a node: walk the exit node's link list, skip the entry segment's
-    /// own id and the flag-filtered candidates, detect the direction reversal by the node indices
-    /// [M 0x2247b0:99-255 — the flags 0x2 / 0x200 / 0x400 filters at :115-118, the self-id
-    /// compare at :105, the reversal by node-index equality at :209/221/255].
+    /// A reduced next-segment walk modelled on `FUN_002247b0` 0x2247b0 — the nav-kind-2 chooser,
+    /// which the AI cars never run (traffic navs are kind 1 → `ai::next_segment_traffic`, the
+    /// port of FUN_00223f98 [M 0x12e468 sets the kind, 0x224e00:127-141 dispatches on it]).
+    /// Review verdict (docs/systems/driving-ai.md §9): the car-group filter is not in 0x2247b0
+    /// and the 0x200/0x400 bits are read per travel end there, not as blanket exclusions — this
+    /// walk is kept for its old tests only and is not used by the car AI.
     /// `entry` = the segment being left, `entry_node` = the shared node, `avoid_group` = the
     /// car-group filter (rs+0x5a) the callers pass through FUN_00225490:133.
     pub fn next_segment(
