@@ -280,20 +280,20 @@ All values from `ee_start_05.bin` @ 0x2bf150 `[L]`.
 
 | id | base | sel | name hash | name (if known) | ammo_type | clip | flags68 | tag |
 |---:|---:|:---:|---:|---|---:|---:|---|:---:|
-| 0x4A | 0x4A | ✓ | 0x05000042 | **Q-Claw** (grapple) | 20 | 100 | 0x12480 | `[L+M]` |
-| 0x4B | 0x4A |   | 0x05000042 | Q-Claw variant | 20 | 1 | 0x8082 | `[L]` |
-| 0x4C | 0x4C | ✓ | 0x05000042 | Q-Claw variant 2 | 20 | 100 | 0x12480 | `[L]` |
-| 0x4D | 0x4C |   | 0x05000042 | Q-Claw variant | 20 | 1 | 0x8082 | `[L]` |
-| 0x4E | 0x4E | ✓ | 0x05000043 | **Q-Decryptor** | 26 | 500 | 0x12482 | `[L+M]` |
-| 0x4F | 0x4F | ✓ | 0x05000043 | Q-Decryptor variant | 26 | 500 | 0x12482 | `[L]` |
-| 0x50 | 0x50 | ✓ | 0x05000044 | **Q-Laser** (watch laser) | 0 | 0 | 0x124A0 | `[L+M]` |
-| 0x51 | 0x51 | ✓ | 0x05000044 | Q-Laser variant | 0 | 0 | 0x124A0 | `[L]` |
+| 0x4A | 0x4A | ✓ | 0x05000042 | **Stunner** (watch taser) | 20 | 100 | 0x12480 | `[L+M]` |
+| 0x4B | 0x4A |   | 0x05000042 | Stunner variant | 20 | 1 | 0x8082 | `[L]` |
+| 0x4C | 0x4C | ✓ | 0x05000042 | Stunner upgrade | 20 | 100 | 0x12480 | `[L]` |
+| 0x4D | 0x4C |   | 0x05000042 | Stunner variant | 20 | 1 | 0x8082 | `[L]` |
+| 0x4E | 0x4E | ✓ | 0x05000043 | **Laser** (watch laser; kind-1 lock burn) | 26 | 500 | 0x12482 | `[L+M]` |
+| 0x4F | 0x4F | ✓ | 0x05000043 | Laser upgrade (`Upgrade_Weapon(0x4E)` with `Upgrades[7]`) | 26 | 500 | 0x12482 | `[L]` |
+| 0x50 | 0x50 | ✓ | 0x05000044 | **Grapple** (Q-Claw) | 0 | 0 | 0x124A0 | `[L+M]` |
+| 0x51 | 0x51 | ✓ | 0x05000044 | Grapple variant | 0 | 0 | 0x124A0 | `[L]` |
 | 0x52 | 0x52 | ✓ | 0x05000040 | — | 27 | 1 | 0x20A0 | `[L]` |
 | 0x53 | 0x53 | ✓ | 0x05000040 | variant of 0x52 | 0 | 1 | 0x20A0 | `[L]` |
-| 0x54 | 0x54 | ✓ | 0x05000045 | **Laser Watch** (scoped, zoom 8.0) | 0 | 1 | 0x20E0 | `[L+M]` |
-| 0x55 | 0x54 |   | 0x05000045 | Laser Watch variant | 0 | 1 | 0x20E0 | `[L]` |
-| 0x56 | 0x56 | ✓ | 0x0500004E | — | 0 | 0 | 0x1820A0 | `[L]` |
-| 0x57 | 0x57 | ✓ | 0x0500004E | variant of 0x56 | 0 | 0 | 0x1820A0 | `[L]` |
+| 0x54 | 0x54 | ✓ | 0x05000045 | **Micro-Camera** (scoped, zoom 8.0) | 0 | 1 | 0x20E0 | `[L+M]` |
+| 0x55 | 0x54 |   | 0x05000045 | Micro-Camera variant | 0 | 1 | 0x20E0 | `[L]` |
+| 0x56 | 0x56 | ✓ | 0x0500004E | **Q-Decryptor** | 0 | 0 | 0x1820A0 | `[L]` |
+| 0x57 | 0x57 | ✓ | 0x0500004E | Q-Decryptor upgrade (`Upgrade_Weapon(0x56)` with `Upgrades[5]`) | 0 | 0 | 0x1820A0 | `[L]` |
 | 0x58 | 0x58 | ✓ | 0x0500004F | — | 0 | 0 | 0xA0A0 | `[L]` |
 | 0x59 | 0x59 | ✓ | 0x0500004B | — | 30 | 1 | 0x100B0 | `[L]` |
 | 0x5A | 0x59 |   | 0x0500004B | variant of 0x59 | 30 | 500 | 0x20030 | `[L]` |

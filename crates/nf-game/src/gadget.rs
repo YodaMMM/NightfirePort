@@ -13,9 +13,9 @@
 //!   (`BLData+0x7ec`) at the hand with its far end at the ray hit (`Collide_RayIntersect` 0x1ec690;
 //!   no hit → the full 100). The beam mesh swaps 0x2000131 / 0x2000133 per frame (the flicker).
 //! - The beam carries a WEAPON ID at `obj+0x44`: `Lock_Update` (0x1ae3d8 case 0) scans the lock's
-//!   contact list for class-5 entries whose +0x44 is the Q-Decryptor (0x4E/0x4F, burn 3/tick) or in
-//!   the `− 0x56 < 2` band (0x56/0x57 — the watch laser's and the Q-Laser's beams), and advances the
-//!   lock's burn timer; at the end `Lock_Unlock` writes the lock's out channel.
+//!   contact list for class-5 entries whose +0x44 is the Laser (0x4E/0x4F, burn 3/tick; kind-1 locks)
+//!   or in the `− 0x56 < 2` band (0x56/0x57, the Q-Decryptor's shots; kind-0/2 locks), and advances
+//!   the lock's burn timer or decode; at the end `Lock_Unlock` writes the lock's out channel.
 //! - The port's `Lock::burn` (fix-objects2) models the burn timer as already expired (the level's
 //!   create-time base is 0 [M 0x1ae1f8]), so one tick of beam contact completes it.
 //!

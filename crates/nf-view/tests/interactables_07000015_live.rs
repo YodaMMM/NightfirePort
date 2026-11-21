@@ -20,6 +20,27 @@ fn load15() -> Walker {
     w
 }
 
+/// The real G cycle to the Q-Decryptor: `Player_InitWeapon`'s kit equips `Upgrade_Weapon(0x56)`
+/// [M 0x1a7ef8:131, case 0x7000014], 0x56 on a fresh profile and 0x57 once the decryptor reward's
+/// `Upgrades[5]` is set (these tests load with every medal) [L 07000015 cold load: owned 0x4e/0x56
+/// with the row zero, 0x4f/0x57 with Upgrades[5] = Upgrades[7] = 1]. 0x4e/0x4f is the watch laser,
+/// which burns kind-1 locks only; a keypad (kind 0/2) takes the decryptor [M 0x1ae3d8:47, :162].
+fn hold_decryptor(w: &mut Walker) -> u8 {
+    let want = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        nf_game::pickup::Inventory::upgrade_weapon(0x56, &sim.drones.inventory.upgrades, 0) as u8
+    };
+    let mut cycles = 0;
+    loop {
+        if w.scene.sim.as_ref().unwrap().gun.weapon == want { break; }
+        assert!(cycles < 14, "the G cycle never reached the Q-Decryptor ({want:#x})");
+        w.tick(nf_game::player::Input { gadget_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        cycles += 1;
+    }
+    want
+}
+
 /// The spawn TouchOnce #814 (out 0x4b) — the objective reveal — fires on the spawn gantry, and the
 /// mission announces 'Find the exit to Omega Sector' [L record 15]. Sister: the east room's alert
 /// channel 0xf6 stays off standing here [D #717's volume sits at x 80.8].
@@ -103,7 +124,7 @@ fn the_east_room_touch_wakes_its_squad() {
 /// z 67 is void east of x 44]). The band is SPLIT by #685's closed leaf ([L the live door[33]
 /// record: sph (46.13, 41.52, 71.18) r 1.764 — the leaf spans the N-S doorway plane]), so the
 /// walk takes the level's own gate: the #711 keypad (45.89, 41.96, 69.58, out 0xf9 [D census])
-/// burns through the held Q-Decryptor beam in the doorway's west pocket ([D the pocket floor
+/// decodes under the held Q-Decryptor in the doorway's west pocket ([D the pocket floor
 /// x 43.3..45.9, z 68.6..71.2]), the rising edge opens #685 [M Door_Update's lock path], and the
 /// band's east side carries the crate. The take consumes the pickup
 /// [M Pickup_Handler 0x18e650 case 6 → PlrStat_LogBondBonus 0x1999e0].
@@ -140,7 +161,7 @@ fn the_pickups_take_on_the_walk() {
     // the #711 keypad (45.89, 41.96, 69.58, out 0xf9 [D census]) on the doorway's west pocket
     // (the pocket floor 40.28 spans x 43.3..45.9, z 68.6..71.2 [D tris]) — the same burn chain
     // the_keypad_burn_unlocks_its_door proves for #683/0x95. So: walk south into the pocket,
-    // burn the lock through the held Q-Decryptor beam, walk east through the opened doorway.
+    // decode the lock with the held Q-Decryptor, walk east through the opened doorway.
     w.walk_to(Wp::new(44.5, 41.4, 70.3).r(0.9), "the lock pocket");
     {
         let lock_at = [45.89f32, 41.96, 69.58];
@@ -150,29 +171,12 @@ fn the_pickups_take_on_the_walk() {
             assert!(sim.drones.locks.iter().any(|l| l.out == 0xf9 && !l.unlocked && !l.burned),
                 "the #711 keypad sits locked [M Lock_Create 0x1ae1f8]");
         }
-        let mut cycles = 0;
-        loop {
-            let sim = w.scene.sim.as_ref().unwrap();
-            if sim.gun.weapon == 0x4e { break; }
-            assert!(cycles < 14, "the G cycle never reached the Q-Decryptor (0x4e)");
-            w.tick(nf_game::player::Input { gadget_cycle: 1, ..Default::default() }, false);
-            for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
-            cycles += 1;
-        }
-        // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
-        {
-            let sim = w.scene.sim.as_mut().unwrap();
-            if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 0xf9 && !l.unlocked) {
-                let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
-                sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
-                for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
-            }
-        }
+        let decryptor = hold_decryptor(&mut w);
         let start = w.total_ticks;
         loop {
             let sim = w.scene.sim.as_ref().unwrap();
             if sim.drones.channels.on(0xf9) { break; }
-            assert!(w.total_ticks - start < 600, "the typed code never raised the #711 keypad channel (ch 0xf9) [M 0x1ae3d8 case 4]");
+            assert!(w.total_ticks - start < 900, "the held Q-Decryptor ({decryptor:#x}) never decoded the #711 keypad (ch 0xf9) [M 0x1ae3d8 cases 0/5]");
             let p = sim.bond.pos;
             let eye = p[1] + sim.bond.eye - sim.bond.crouch_drop;
             let dx = lock_at[0] - p[0];
@@ -272,8 +276,8 @@ fn plain_door_opens_and_the_dead_keypad_door_refuses() {
         "the 0xc8 door refuses E: its lock channel has no writer on the level [D census]");
 }
 
-/// The keypad burn — the census §6 open item, now proven: the Q-Decryptor (0x4e, owned by the
-/// level's loadout [D probe: owned 78]) held via the real G cycle burns the KeypadLocked lock
+/// The keypad burn — the census §6 open item, now proven: the Q-Decryptor (0x56, or 0x57 with
+/// the decryptor reward; owned by the level's loadout [M 0x1a7ef8 case 0x7000014]) held via the real G cycle burns the KeypadLocked lock
 /// #458 (out ch 0x95 [D]) through the held beam, the rising edge opens the door #683 (ch_lock
 /// 0x95 [D]) — the same chain walkreal_07000012 proved on its own keypads.
 #[test]
@@ -290,34 +294,15 @@ fn the_keypad_burn_unlocks_its_door() {
         assert!(sim.drones.locks.iter().any(|l| l.out == 0x95 && !l.unlocked && !l.burned),
             "the keypad lock sits locked [M Lock_Create 0x1ae1f8]");
     }
-    // The real G cycle equips the Q-Decryptor.
-    let mut cycles = 0;
-    loop {
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.gun.weapon == 0x4e { break; }
-        assert!(cycles < 14, "the G cycle never reached the Q-Decryptor (0x4e)");
-        w.tick(nf_game::player::Input { gadget_cycle: 1, ..Default::default() }, false);
-        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
-        cycles += 1;
-    }
-    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x4e, "the Q-Decryptor is held [M runs_beam]");
-    // The held beam burns the lock (Lock_Update 0x1ae3d8 case 0's weapon band → the out write
-    // :194-195).
-    // A keypad opens by its typed code or the decryptor; the laser arm is kind 1 only [M 0x1ae3d8:47, :162].
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 0x95 && !l.unlocked) {
-            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
-            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
-            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
-        }
-    }
+    // The real G cycle equips the Q-Decryptor; its held shots decode the keypad (Lock_Update
+    // 0x1ae3d8 case 0 → state 5, four digits, Lock_Unlock → case 1's out write :193-196).
+    let decryptor = hold_decryptor(&mut w);
     let lock_at = [10.29f32, 41.96, 33.76];
     let start = w.total_ticks;
     loop {
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.drones.channels.on(0x95) { break; }
-        assert!(w.total_ticks - start < 600, "the typed code never raised the keypad channel (ch 0x95) [M 0x1ae3d8 case 4]");
+        assert!(w.total_ticks - start < 900, "the held Q-Decryptor ({decryptor:#x}) never decoded the keypad (ch 0x95) [M 0x1ae3d8 cases 0/5]");
         let p = sim.bond.pos;
         let eye = p[1] + sim.bond.eye - sim.bond.crouch_drop;
         let dx = lock_at[0] - p[0];
