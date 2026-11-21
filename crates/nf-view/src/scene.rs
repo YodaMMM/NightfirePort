@@ -526,6 +526,9 @@ pub struct Sim {
     /// dismounting this tick) — their bodies run no walk and no use key this tick (the game's
     /// `Player_Disable` [M GunImp_Activate 0x132f00] keeps the player out of its update).
     net_gun_busy: [bool; nf_net::MAX_AGENTS],
+    /// G-031: the remote replicas walked inside this tick's `step_bond` (online), whose ground
+    /// carry waits for the world's tick (`ride_ground_post_tick`).
+    net_ride_pending: Vec<usize>,
     /// level-05-truck-class5-contact: Bond stood on a MOVING carrier this tick (the ground-carry
     /// hit below — `Player_FeetOnPoint` → `Control_InheritVelocity` 0x133e88's ride). The trigger
     /// toucher's deep reach rides on it (drone.rs's standing arm); the game's own contact shape is
@@ -3008,22 +3011,12 @@ impl Sim {
         // The relink segment's start: the pos at the END of the previous tick — the game's `obj+0x40`
         // the moved pass copies after `control_handle_cel_change` 0x1336f8:212 (the ride below and the
         // tick's own move both belong to the next relink's segment). fix-swim-entry.
+        // G-031 (object order): the ride itself runs AFTER the world's tick, at the end of this
+        // step (`ride_ground_post_tick`): the game's carry is the collide slot inside
+        // `Collide_Update`, which runs after the whole update walk [M 0x1336f8:238], so the lift's
+        // own move of THIS tick is what carries Bond. The old ride ran here, before the walk, on
+        // the motion the carrier made the tick before: Bond trailed every carrier by one tick.
         let prev_tick_pos = self.bond.pos;
-        self.riding = false;
-        if !self.disabled {
-            let p = self.bond.pos;
-            if let Some(g) = self.world.ground_motion(p, [p[0], p[1] - 1.6347, p[2]]) {
-                // level-05-truck-class5-contact: the ride flag the toucher's deep reach reads (see
-                // the `riding` field note). `ground_motion` answers Some ONLY when the first
-                // surface under Bond belongs to a moving object [M world.rs ground_motion], so a
-                // static floor never sets it.
-                self.riding = true;
-                let (sn, cs) = g.turn.sin_cos();
-                let (x, z) = (p[0] + g.delta[0] - g.pivot[0], p[2] + g.delta[2] - g.pivot[2]);
-                self.bond.pos = [g.pivot[0] + x * cs + z * sn, p[1] + g.delta[1], g.pivot[2] - x * sn + z * cs];
-                self.bond.yaw += g.turn;
-            }
-        }
         let before = self.bond.pos;
         // The hurt volumes' every-tick law [M Hurt_Update 0x17e5d0 — the game's object control
         // pass runs it for every hurt object EVERY tick with no player-state guard]: the gate
@@ -3875,6 +3868,8 @@ impl Sim {
                 _ => {}
             }
         }
+        // G-031: the ground carry after the world's tick — see `ride_ground_post_tick`.
+        self.ride_ground_post_tick(net_row.is_some());
         self.first_person = !self.disabled;
         if let Some(shared) = self.net_rng_shared.take() {
             self.net_rng = Some(std::mem::replace(&mut self.drones.rng, shared));
@@ -11037,6 +11032,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             net_row: None,
             net_remotes_done: false,
             net_gun_busy: [false; nf_net::MAX_AGENTS],
+            net_ride_pending: Vec::new(),
             riding: false,
             net_last_takes: Vec::new(),
             use_key_prev: false,
@@ -14759,16 +14755,9 @@ impl Sim {
             // scoped to `cel` — a replica that kept its spawn cel collided differently from the
             // owner's body: the second two-window divergence, a crouch-walk along a wall, 0.004
             // units in one tick), the water level from that cel, `tick_ctx`, the `prev_pos` copy.
+            // G-031: the ground carry runs after the walk, on the carrier's motion of the world
+            // tick that precedes it (`ride_ground_post_tick`) — the local body's order.
             let prev_tick_pos = b.pos;
-            {
-                let p = b.pos;
-                if let Some(g) = self.world.ground_motion(p, [p[0], p[1] - 1.6347, p[2]]) {
-                    let (sn, cs) = g.turn.sin_cos();
-                    let (x, z) = (p[0] + g.delta[0] - g.pivot[0], p[2] + g.delta[2] - g.pivot[2]);
-                    b.pos = [g.pivot[0] + x * cs + z * sn, p[1] + g.delta[1], g.pivot[2] - x * sn + z * cs];
-                    b.yaw += g.turn;
-                }
-            }
             let cel = if (0..3).any(|k| (b.pos[k] - b.prev_pos[k]).abs() > 3.0) {
                 // void-recovery: the teleport arm runs the game's poke semantics too — obj+0x40
                 // (here `prev_pos`) survives the poke, so a FindCel miss recovers from the
@@ -14822,6 +14811,47 @@ impl Sim {
             for id in b.substate_stops.drain(..) { self.drones.audio.stop_all_with_id(id); }
             b.prev_pos = prev_tick_pos;
             self.mp_body_speed[slot] = ((b.pos[0] - before[0]).powi(2) + (b.pos[2] - before[2]).powi(2)).sqrt() * 60.0;
+            // G-031: online (`row`) this pass runs inside `step_bond` before the world's tick, so the
+            // carry waits for it; the later caller (no row) runs after the tick and carries here.
+            if row.is_some() { self.net_ride_pending.push(slot); }
+            else if let Some(b) = self.mp_bonds[slot].as_mut() { Self::ride_ground(&self.world, b); }
+        }
+    }
+
+    /// `Player_FeetOnPoint` 0x194188 → `Control_InheritVelocity` 0x133e88 for one body: standing on
+    /// a moving object, the body moves and turns with it — the feet ray reaches cc + 0.6 below him
+    /// (cc 1.0347 [L]). `ground_motion` answers Some ONLY when the first surface under the body
+    /// belongs to a moving object [M world.rs ground_motion], so a static floor never carries.
+    /// Returns whether the body rode.
+    fn ride_ground(world: &nf_game::world::CollisionWorld, b: &mut nf_game::player::Bond) -> bool {
+        let p = b.pos;
+        let Some(g) = world.ground_motion(p, [p[0], p[1] - 1.6347, p[2]]) else { return false };
+        let (sn, cs) = g.turn.sin_cos();
+        let (x, z) = (p[0] + g.delta[0] - g.pivot[0], p[2] + g.delta[2] - g.pivot[2]);
+        b.pos = [g.pivot[0] + x * cs + z * sn, p[1] + g.delta[1], g.pivot[2] - x * sn + z * cs];
+        b.yaw += g.turn;
+        true
+    }
+
+    /// G-031: the ground carry at the game's place in the tick. `Player_CollisionHandler` 0x1949a8
+    /// is the player class's collide slot: `Collide_Update` calls it AFTER the whole update walk
+    /// [M 0x1336f8:54-68 the walk, :238 Collide_Update], so the carrier (a script entity — the lift,
+    /// the truck — moved by its `SP_Update` → `Script_Interp` 0x1d9a08 inside the walk) has already
+    /// made THIS tick's move, and `Control_InheritVelocity`'s delta is carrier `obj+0x30 − obj+0x40`
+    /// = this tick's step (the moved pass before the collide copies +0x40 ← +0x30, then +0x30 ←
+    /// the new matrix row for the 0x40-flag objects [M 0x1336f8:147-236]). The port's carriers
+    /// post their pose in the world's tick (`set_dynamic`, after the walk), so the carry runs
+    /// here, after `run`. The handler early-returns while the player is disabled (`BLData+0x94a
+    /// == 0`, a script cut-scene) [M 0x1949a8:24] — the `disabled` gate, read after this tick's
+    /// script hand-offs, as the game's collide reads the flag after the walk's script events.
+    fn ride_ground_post_tick(&mut self, online: bool) {
+        // level-05-truck-class5-contact: the ride flag the toucher's deep reach reads (see the
+        // `riding` field note) — set here, read by the next tick's `Trigger_Calc`, which reads
+        // this tick's collide contacts in the game too [M 0x1b1fc8:18].
+        self.riding = !self.disabled && Self::ride_ground(&self.world, &mut self.bond);
+        for slot in std::mem::take(&mut self.net_ride_pending) {
+            if !online { continue; }
+            if let Some(b) = self.mp_bonds[slot].as_mut() { Self::ride_ground(&self.world, b); }
         }
     }
 
