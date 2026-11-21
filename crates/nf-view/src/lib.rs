@@ -1936,8 +1936,11 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             };
             if differs { sim.hud.weapon_label_timer = 60; }
         }
-        eprintln!("loadout: level {level_id:08x} switch request {req} ({} owned weapons, health {:.0}, armour {:.0})",
-            sim.drones.inventory.owned.iter().filter(|&&o| o).count(), sim.drones.health.health, sim.drones.health.armour);
+        // The owned ids and the upgrade row ride the line so a menu-driven run can show the kit
+        // (gold-medal-realpath); the prefix is what the smoke checks grep.
+        let owned_ids: Vec<String> = sim.drones.inventory.owned.iter().enumerate().filter(|(_, &o)| o).map(|(i, _)| format!("{i:#x}")).collect();
+        eprintln!("loadout: level {level_id:08x} switch request {req} ({} owned weapons, health {:.0}, armour {:.0}) owned [{}] upgrades {:?}",
+            owned_ids.len(), sim.drones.health.health, sim.drones.health.armour, owned_ids.join(" "), sim.drones.inventory.upgrades);
     }
     phase_mark("10 music + starts + loadout", t);
     Ok(scene)
