@@ -80,3 +80,52 @@ fn the_05_reveal_plate_fires_on_the_tick_after_the_contact() {
     sim.step_bond(Input::default(), false, false, false);
     assert!(sim.drones.channels.on(0x45), "tick 2: the reveal plate reads tick 1's contact and writes ch 0x45");
 }
+
+/// Cold-start plate: load, then report the 1-based tick whose end first shows `ch` on.
+fn cold_plate_tick(level: &str, ch: u32, max: u32) -> Option<u32> {
+    let iso = iso();
+    let mut scene = nf_view::load(&iso, level, false).expect("load");
+    let sim = scene.sim.as_mut().unwrap();
+    assert!(!sim.drones.channels.on(ch), "{level}: ch {ch:#x} is off before the first tick");
+    for t in 1..=max {
+        sim.step_bond(Input::default(), false, false, false);
+        if sim.drones.channels.on(ch) { return Some(t); }
+    }
+    None
+}
+
+/// [L 2026-11-21 PCSX2 breakpoint trace, docs/reports/s-g031-trigger-lag-truth.md]: on a fresh
+/// 07000009 load Bond spawns on the car-park arrival plate #248 (TouchOnce, out ch 0x51, the six
+/// guards' WAIT_SWITCH channel); the plate's `Trigger_Update` store writes 0 in tick 1's walk and
+/// 1 in tick 2's walk. Fails on the old order (on after tick 1).
+#[test]
+fn the_09_arrival_plate_fires_on_tick_2_like_the_game() {
+    assert_eq!(cold_plate_tick("07000009.bin", 0x51, 10), Some(2));
+}
+
+/// [L 2026-11-21, same trace]: 0700000a's spawn plate #58 (TouchOnce, out ch 0x47) writes 0 in
+/// tick 1's walk and 1 in tick 2's walk.
+#[test]
+fn the_0a_spawn_plate_fires_on_tick_2_like_the_game() {
+    assert_eq!(cold_plate_tick("0700000a.bin", 0x47, 10), Some(2));
+}
+
+/// [L 2026-11-21, same trace]: 0700000a's hatch voice plate #757 (TouchOnce, out ch 0xB7, lock ch
+/// 0x3A off on a fresh load). Bond stood outside at (21.5, 1.1, 17.0), then moved inside to (21.5,
+/// 1.1, 19.07) at the start of a tick (tick N, same room): ch 0xB7 stayed 0 through tick N and was
+/// written 1 in tick N+1's walk. Fails on the old order (on at the end of tick N).
+#[test]
+fn the_0a_hatch_plate_fires_one_tick_after_the_entry() {
+    let iso = iso();
+    let mut scene = nf_view::load(&iso, "0700000a.bin", false).expect("load 0700000a");
+    let sim = scene.sim.as_mut().unwrap();
+    sim.bond = nf_game::player::Bond::stand_at(&sim.world, [21.5, 1.1, 17.0], 0.0);
+    for _ in 0..10 { sim.step_bond(Input::default(), false, false, false); }
+    assert!(!sim.drones.channels.on(0xb7), "outside the plate: ch 0xB7 off");
+    let p = sim.bond.pos;
+    sim.bond.pos = [21.5, p[1], 19.07];
+    sim.step_bond(Input::default(), false, false, false);
+    assert!(!sim.drones.channels.on(0xb7), "tick N (the first walk inside): ch 0xB7 still off, as in the game");
+    sim.step_bond(Input::default(), false, false, false);
+    assert!(sim.drones.channels.on(0xb7), "tick N+1: the plate reads tick N's contact and writes ch 0xB7");
+}
