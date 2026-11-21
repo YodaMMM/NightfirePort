@@ -10,6 +10,13 @@ use nf_formats::weapon::WeaponData;
 pub const SOUND: u32 = 0xf5;
 /// `FRAME_RATE_INT · 120` (single player) with FRAME_RATE_INT = 60 [L]: a dropped gun lasts two minutes.
 pub const DROP_LIFETIME: u16 = 60 * 120;
+/// `FRAME_RATE_INT · 30` with `MPSettings+0x184` set (an MP match): `Pickup_CreateSimple`'s
+/// lifetime argument is `FRAME_RATE_INT · (MPSettings+0x184 != 0 ? 30 : 120)` [M disasm
+/// 0x18f440 `lw a0,0x4924(v0)` (0x2a4924 = MPSettings+0x184, the master copy `MP_Start` writes),
+/// 0x18f464 `addiu v1,zero,0x1e` / 0x18f470 `addiu v1,zero,0x78`, 0x18f474 the multiply by
+/// FRAME_RATE_INT, 0x18f47c `sw v0,0x18(sp)` → `Pickup_Create` param 12 → `+0x2E`]. A gun a
+/// dead player drops in a match lasts 30 s.
+pub const MP_DROP_LIFETIME: u16 = 60 * 30;
 /// `Pickup_CreateFromSet` 0x18f1b0's respawn argument: 3 (×10 s) [M disasm 0x18f21c `addiu s6,zero,3`
 /// → 0x18f25c `sw s6,16(sp)`, `Pickup_Create`'s param 11 → +0x2C].
 pub const SET_RESPAWN: u16 = 3;
@@ -158,6 +165,50 @@ impl Pickup {
         let bounds = *models.get(&model)?;
         Some(Pickup::create(m, w.id(id as usize), rounds, kind, model, bounds))
         // (drops carry no switch channel: `Pickup_CreateSimple` passes 0 [M 0x18f348])
+    }
+
+    /// [`Pickup::create_simple`] inside an MP match: `Pickup_CreateSimple`'s lifetime is
+    /// `FRAME_RATE_INT · 30` ([`MP_DROP_LIFETIME`]) and `Pickup_Create` sets the `+0x38` spin for
+    /// every pickup while `MPSettings+0x180` is set [M 0x18dda0:138-144: `if (kind == 6 ||
+    /// MPSettings._384_4_ != 0) +0x38 = 1`]. The rest (sound 0xF5, no respawn, the fall) is the
+    /// SP create's.
+    pub fn create_simple_mp(m: &Mat4, id: u16, rounds: i16, kind: u16, w: &WeaponData, models: &std::collections::HashMap<u32, Model>) -> Option<Pickup> {
+        let mut p = Self::create_simple(m, id, rounds, kind, w, models)?;
+        p.lifetime = MP_DROP_LIFETIME;
+        p.spin = true;
+        Some(p)
+    }
+
+    /// `Player_CheckForDeath` 0x190810's MP arm [M :42-56]: a human who dies in a match drops the
+    /// gun in hand. `held` = the held record (`anim+0x62`); `m` = the first-person view model's
+    /// matrix (`BLData+0x7E8` → `+0x90`, the gun `Player_PositionGun` 0x1a3b40 poses). The game's
+    /// gates and arguments, in order:
+    /// - `weapon_data[held]+0x80 != 0` (the held record has a world model; the fists and the
+    ///   gadgets with no model drop nothing) and `BLData+0x7E8 != 0` (always set for a player);
+    /// - `Pickup_CreateSimple(gun+0x90, weapon_data[held]+2 (the base), BLData+0x1B8 + base·0xC
+    ///   (the rounds in the BASE record's clip slot), kind 0)` — so the drop carries the clip
+    ///   only, not the carried reserve, and an empty clip drops nothing (`Pickup_CreateSimple`
+    ///   returns at rounds 0 [M 0x18f348:10-12]); the simple create's id refusals and its
+    ///   0x6a/0x6e → 0x33 remap apply;
+    /// - the base 0x1A (the AR) also drops its launcher's rounds: `Pickup_CreateSimple(gun+0x90,
+    ///   0x1B, BLData+0x1B8 + weapon_data[0x1B].id·0xC, kind 1)` and that pickup gets
+    ///   `obj+0xF0 |= 0x10` (hidden — still takeable, see `update_pickups`).
+    /// The drop runs before `Player_WeaponNone` [M :61], in every scenario: no scenario word is
+    /// read on this arm.
+    pub fn player_death_drops(held: u8, inv: &Inventory, m: &Mat4, w: &WeaponData, models: &std::collections::HashMap<u32, Model>) -> Vec<Pickup> {
+        let held = held as usize;
+        let mut out = Vec::new();
+        if w.model(held) == 0 { return out; }
+        let base = w.base(held);
+        let clip = |slot: usize| inv.clip.get(slot).copied().unwrap_or(0);
+        out.extend(Self::create_simple_mp(m, base, clip(base as usize), kind::WEAPON, w, models));
+        if base == 0x1a {
+            if let Some(mut p) = Self::create_simple_mp(m, 0x1b, clip(w.id(0x1b) as usize), kind::AMMO, w, models) {
+                p.hidden = true;
+                out.push(p);
+            }
+        }
+        out
     }
 
     /// `Pickup_Create` (0x18dda0) for a level-placed pickup (type 0xF0, `parsemap_create_dynamic_objects`):
@@ -602,15 +653,46 @@ impl Inventory {
     /// equip [M 0x18e650:142-144]; the message builds the weapon name from the RAW `+0x24` [M :246], so the
     /// returned `Taken` carries `p.weapon` for display.
     pub fn take(&mut self, w: &WeaponData, p: &Pickup, loaded: bool, armour: &mut f32, game_complete: u32) -> Option<Taken> {
+        self.take_ex(w, p, loaded, armour, game_complete, None)
+    }
+
+    /// `Pickup_Handler` 0x18e650's take id for a human: single player `Upgrade_Weapon(raw)`; in an
+    /// MP match (`MPSettings+0x180 != 0`) the game skips `Upgrade_Weapon` (so neither the handgun
+    /// table nor the game-complete 10 → 0xC arm runs) and instead [M 0x18e650:141-160]:
+    /// - when the taker's character row (`BOT_getDefaultStats(MPSettings[slot·0x30 + 0x24])`, the
+    ///   skin's `default_bot_stats` row) has byte 9 == 1 (`dual`): a 10 becomes 0xD when the
+    ///   taker already owns 10 (`BLData+0x232` = the owned byte of record 10);
+    /// - otherwise a 0xD becomes 10;
+    /// - then `Upgrade_MPWeapon(slot, id)` ([`crate::mp::equip::upgrade_mp_weapon`]).
+    /// `mp_dual` = `None` in single player, `Some(dual)` in a match.
+    pub fn take_id(&self, raw: u16, mp_dual: Option<bool>, game_complete: u32) -> u16 {
+        match mp_dual {
+            None => Self::upgrade_weapon(raw, &self.upgrades, game_complete),
+            Some(dual) => {
+                let owned10 = self.owned.get(10).copied().unwrap_or(false);
+                let id = match raw {
+                    10 if dual && owned10 => 0xd,
+                    0xd if !dual => 10,
+                    r => r,
+                };
+                crate::mp::equip::upgrade_mp_weapon(id)
+            }
+        }
+    }
+
+    /// [`Inventory::take`] with the match's take id ([`Inventory::take_id`]); `mp_dual = None`
+    /// is the single-player take.
+    pub fn take_ex(&mut self, w: &WeaponData, p: &Pickup, loaded: bool, armour: &mut f32, game_complete: u32, mp_dual: Option<bool>) -> Option<Taken> {
         // The remapped id decides the owned-check and the equip; the display id stays raw [M 0x18e650:142-144, :246].
-        let id = Self::upgrade_weapon(p.weapon, &self.upgrades, game_complete) as usize;
+        let up = self.take_id(p.weapon, mp_dual, game_complete);
+        let id = up as usize;
         // The ammo path's id: `Pickup_Handler` passes `uVar5 = Upgrade_Weapon(raw)` to
         // `Player_EquipAmmo` for BOTH the owned kind-0 arm and kind 1 [M 0x18e650:142-144, case 0
         // else branch + case 1], and `Player_EquipAmmo` then applies its own 0x1f/0x25 remap
         // [M 0x1a8d18:11-19] — the COMPOSITION, not the raw id alone. The id-6 ammo boxes
         // (07000001/07000005) therefore credit `weapon_data[2]`'s pool: ammo type 1, cap 70
         // [L weapon_data: record 6 is ammo type 2 cap-90-clipped — the port credited type 2].
-        let ammo_id = Self::upgrade_ammo_id(Self::upgrade_weapon(p.weapon, &self.upgrades, game_complete), &self.upgrades, game_complete) as usize;
+        let ammo_id = Self::upgrade_ammo_id(up, &self.upgrades, game_complete) as usize;
         match p.kind {
             kind::WEAPON if !self.owned.get(id).copied().unwrap_or(true) => {
                 self.equip_weapon(w, id, p.rounds, loaded).then_some(Taken::Weapon { weapon: p.weapon })
@@ -698,6 +780,69 @@ mod tests {
         assert_eq!(inv.take(&w, &p, true, &mut armour, 1), Some(Taken::Ammo { weapon: 2, rounds: 5 }));
         assert_eq!(inv.carried[1], 46);
         assert_eq!(armour, 0.0, "a weapon take does not touch the armour");
+    }
+
+    /// mp-drops: `Player_CheckForDeath` 0x190810:42-56 in a match: the held gun drops as a kind-0
+    /// pickup of its BASE id carrying the base record's clip (`BLData+0x1B8 + base·0xC`), with the
+    /// MP lifetime `FRAME_RATE_INT · 30` and the `+0x38` spin; a record with no world model or an
+    /// empty clip drops nothing; the AR (0x1A) adds its launcher's rounds as a hidden kind-1.
+    #[test]
+    fn a_dead_players_gun_drops_with_its_clip_for_30_seconds_and_spins() {
+        let mut w = table();
+        for (id, base, model) in [(0x1au16, 0x1au16, 0x0200_0001u32), (0x1b, 0x1b, 0x0200_0002), (0x17, 0x16, 0x0200_0b44)] {
+            let r = &mut w.records[id as usize];
+            r[0..2].copy_from_slice(&id.to_le_bytes());
+            r[2..4].copy_from_slice(&base.to_le_bytes());
+            r[0x80..0x84].copy_from_slice(&model.to_le_bytes());
+            r[0x92..0x94].copy_from_slice(&30u16.to_le_bytes());
+        }
+        let mut models = std::collections::HashMap::new();
+        for h in [0x0200_0b44u32, 0x0200_0001, 0x0200_0002] { models.insert(h, Model { centre: [0.0, 0.1, 0.0], radius: 0.3 }); }
+        let m = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [5.0, 2.0, -3.0, 1.0]];
+        let mut inv = Inventory::level_start(0x73, 34);
+        inv.clip[0x16] = 17;
+        inv.carried[5] = 60;
+        // The held record 0x17 (base 0x16): the drop is the base with the base slot's clip only.
+        let d = Pickup::player_death_drops(0x17, &inv, &m, &w, &models);
+        assert_eq!(d.len(), 1);
+        assert_eq!((d[0].kind, d[0].weapon, d[0].rounds), (kind::WEAPON, 0x16, 17), "base id, the clip (not the carried 60)");
+        assert_eq!(d[0].lifetime, 1800, "FRAME_RATE_INT · 30 in a match [M 0x18f440-0x18f47c]");
+        assert!(d[0].spin, "every MP pickup spins [M 0x18dda0:138-144]");
+        assert_eq!((d[0].state, d[0].respawn, d[0].hidden), (0, 0, false), "falls, deleted when taken, shown");
+        assert_eq!(d[0].sound, Some(SOUND));
+        // Sister: the SP simple create keeps 120 s and no spin.
+        let sp = Pickup::create_simple(&m, 0x16, 17, kind::WEAPON, &w, &models).unwrap();
+        assert_eq!((sp.lifetime, sp.spin), (7200, false));
+        // An empty clip drops nothing (`Pickup_CreateSimple` returns at rounds 0 [M 0x18f348:10-12]).
+        inv.clip[0x16] = 0;
+        assert!(Pickup::player_death_drops(0x17, &inv, &m, &w, &models).is_empty());
+        // No world model (the fists' record has +0x80 = 0 here) drops nothing.
+        assert!(Pickup::player_death_drops(0x47, &inv, &m, &w, &models).is_empty());
+        // The AR: its own drop plus the hidden launcher rounds from record 0x1B's clip slot.
+        inv.clip[0x1a] = 25;
+        inv.clip[0x1b] = 4;
+        let d = Pickup::player_death_drops(0x1a, &inv, &m, &w, &models);
+        let got: Vec<(u16, u16, i16, bool, u16)> = d.iter().map(|p| (p.kind, p.weapon, p.rounds, p.hidden, p.lifetime)).collect();
+        assert_eq!(got, vec![(kind::WEAPON, 0x1a, 25, false, 1800), (kind::AMMO, 0x1b, 4, true, 1800)]);
+    }
+
+    /// mp-drops: the match take id (`Pickup_Handler` 0x18e650:141-160): no `Upgrade_Weapon` in a
+    /// match (6 stays the P99, 10 never becomes 0xC); a dual-capable character's second 10 is
+    /// 0xD; any other character's 0xD is 10; then `Upgrade_MPWeapon`.
+    #[test]
+    fn the_match_take_id_skips_upgrade_weapon_and_swaps_the_second_smg() {
+        let mut inv = Inventory::level_start(0x73, 34);
+        assert_eq!(inv.take_id(6, None, 0), 2, "single player: UpgradedHandguns[0]");
+        assert_eq!(inv.take_id(10, None, 1), 0xC, "single player, finished game: 10 → 0xC");
+        assert_eq!(inv.take_id(6, Some(false), 1), 6, "a match keeps the P99 record");
+        assert_eq!(inv.take_id(10, Some(false), 1), 10, "a match has no game-complete arm");
+        assert_eq!(inv.take_id(10, Some(true), 0), 10, "dual, 10 not owned yet: the first SMG");
+        inv.owned[10] = true;
+        assert_eq!(inv.take_id(10, Some(true), 0), 0xd, "dual, 10 owned: the second SMG");
+        assert_eq!(inv.take_id(10, Some(false), 0), 10, "not dual: 10 stays");
+        assert_eq!(inv.take_id(0xd, Some(false), 0), 10, "not dual: 0xD becomes 10");
+        assert_eq!(inv.take_id(0xd, Some(true), 0), 0xd, "dual: 0xD stays");
+        assert_eq!(inv.take_id(8, Some(false), 0), 6, "then Upgrade_MPWeapon: 8 → UpgradedP99_MP[0]");
     }
 
     /// `Upgrade_Weapon` (0x1a8f30) with the live tables [L ee_start_05.bin 0x2bee08..]: id 6 → 2 with no

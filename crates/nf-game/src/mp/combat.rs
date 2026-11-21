@@ -746,13 +746,19 @@ impl MpCombat {
     /// A shared pickup take by a human slot (`step_net_world`): the same `Inventory::take` the
     /// local inventory runs, on the gate's shared copy — a remote slot's ammo/weapon pickups
     /// land in the shared state identically on every machine.
-    pub fn gate_take(&mut self, slot: usize, p: &crate::pickup::Pickup, wd: &WeaponData, armour: &mut f32, clock: u32) {
+    /// `dual` = the slot's character row allows the second SMG — the match's take remap
+    /// (`Pickup_Handler` 0x18e650:141-160, [`crate::pickup::Inventory::take_id`]). mp-drops: this
+    /// passed the tick count as `Upgrade_Weapon`'s game-complete byte, so every weapon-10 take
+    /// landed on record 0xC, and the handgun table sent the P99 (6) to the P2K record (2) — the
+    /// match path runs no `Upgrade_Weapon` at all.
+    pub fn gate_take(&mut self, slot: usize, p: &crate::pickup::Pickup, wd: &WeaponData, armour: &mut f32, dual: bool) {
         let Some(g) = self.gates.get_mut(slot) else { return };
-        // The take covers the weapon (raw and the `Upgrade_Weapon` remap): the lazy seed must
-        // not double-grant it later.
+        // The take covers the weapon (raw and the match remap): the lazy seed must not
+        // double-grant it later.
+        let up = g.inv.take_id(p.weapon, Some(dual), 0);
         g.set_seen_bit(p.weapon as usize);
-        g.set_seen_bit(crate::pickup::Inventory::upgrade_weapon(p.weapon, &[0; 9], clock) as usize);
-        let _ = g.inv.take(wd, p, true, armour, clock);
+        g.set_seen_bit(up as usize);
+        let _ = g.inv.take_ex(wd, p, true, armour, 0, Some(dual));
     }
 
     /// One gate tick for a human slot, in `step_net_combat`'s slot order before any shot is

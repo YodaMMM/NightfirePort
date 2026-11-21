@@ -5978,6 +5978,15 @@ impl Sim {
         // tick [M 0x190810:61] — the held id becomes 'G' (0x47) at once, no holster cycle — so the
         // first-person gun is gone for the whole sequence (PCSX2: no gun from the 40th dead frame on).
         // MP re-equips at the respawn (`mp_equip_local`).
+        // mp-drops: in a match the same tick drops the held gun first [M 0x190810:42-56, before
+        // `Player_WeaponNone` at :61]. Offline only: online the per-slot combat owns the death
+        // (`step_net_combat`'s dead-wait loop drops there).
+        if !mp_death_was_active && self.drones.death.active && self.mp.is_some() && self.net_rng.is_none() && self.net_rng_shared.is_none() {
+            let held = self.gun.weapon;
+            let inv = self.drones.inventory.clone();
+            let m = self.rest_gun_matrix(&self.bond, held);
+            self.mp_death_drop(held, &inv, &m);
+        }
         if !mp_death_was_active && self.drones.death.active && self.gun.weapon != 0x47 { self.gun.go_to_hands(); }
         // audit-player-camera-modes [M `Player_PositionCamera` 0x18f5d8:130-132]: while the death
         // state word (obj+0xf4) is 2/3 the case-0 arm zeroes BL+0x90c EVERY tick — a death out of
@@ -6990,6 +6999,52 @@ impl Sim {
     /// orientation by turning the view basis (`fwd` by yaw about up, then pitch about the turned
     /// right) instead of the euler product — the turned-forward construction stands in for the
     /// matrix product (visual only; the sign/order check is a render check).
+    /// mp-drops: the view model's matrix with no bob and the crosshair centred: the
+    /// `Player_PositionGun` 0x1a3b40 pose [`Sim::gun_matrix`] builds, from shared body state only
+    /// (yaw, pitch, head, the record's `+0xE0` offset), so every machine places a dead player's
+    /// drop at the same point. [S] the bob and the crosshair tilt (a few centimetres) are left
+    /// out: they are this machine's view state, not shared; the drop then falls to the floor.
+    pub fn rest_gun_matrix(&self, b: &nf_game::player::Bond, weapon: u8) -> [[f32; 4]; 4] {
+        let f = |o: usize| self.weapons.records.get(weapon as usize).and_then(|r| r.get(o..o + 4)).map_or(0.0, |x| f32::from_le_bytes(x.try_into().unwrap()));
+        let l = [f(0xe0), f(0xe4), f(0xe8)];
+        let (y, pt) = (b.yaw, b.pitch * std::f32::consts::FRAC_PI_2);
+        let up = [-pt.sin() * y.sin(), pt.cos(), -pt.sin() * y.cos()];
+        let gf = b.look();
+        let cross = |a: [f32; 3], c: [f32; 3]| [a[1] * c[2] - a[2] * c[1], a[2] * c[0] - a[0] * c[2], a[0] * c[1] - a[1] * c[0]];
+        let norm = |v: [f32; 3]| { let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-9); v.map(|x| x / n) };
+        let gl = norm(cross(up, gf));
+        let gu = cross(gf, gl);
+        let h = b.head();
+        let o = [l[0], l[1] + 0.2, l[2] - 0.5];
+        let pos = [0, 1, 2].map(|k| h[k] + o[0] * gl[k] + o[1] * gu[k] + o[2] * gf[k] - 0.2 * up[k] + 0.5 * gf[k]);
+        [[gl[0], gl[1], gl[2], 0.0], [gu[0], gu[1], gu[2], 0.0], [gf[0], gf[1], gf[2], 0.0], [pos[0], pos[1], pos[2], 1.0]]
+    }
+
+    /// mp-drops: `Player_CheckForDeath` 0x190810's MP drop (`Pickup::player_death_drops`): the
+    /// dead human's held gun with its clip, 30 s, spinning, takeable by every live player and
+    /// bot (`Pickup_Update`'s taker loops). The pickups join the list like any drop.
+    pub fn mp_death_drop(&mut self, held: u8, inv: &nf_game::pickup::Inventory, m: &[[f32; 4]; 4]) {
+        let drops = nf_game::pickup::Pickup::player_death_drops(held, inv, m, &self.weapons, &self.models);
+        if std::env::var_os("NF_PICKUPLOG").is_some() {
+            eprintln!("[mp-drop] tick {} held {:#x} -> {:?}", self.drones.frame, held, drops.iter().map(|p| (p.weapon, p.kind, p.rounds)).collect::<Vec<_>>());
+        }
+        for d in drops {
+            // The AR's launcher rounds drop hidden (`obj+0xF0 |= 0x10`): never drawn, no slot.
+            if d.hidden { self.drones.pickups.push(d); continue; }
+            let k = mp_drop_slot_for(&self.drones.mp_drop_slots, &self.drones.mp_drop_used, &self.drones.pickups, d.weapon);
+            match k {
+                Some(k) => {
+                    self.drones.pickups[k] = d;
+                    if !self.drones.mp_drop_used.contains(&k) { self.drones.mp_drop_used.push(k); }
+                }
+                None => {
+                    eprintln!("[mp-drop] no reserved draw slot free for weapon {:#x}: pushed, not drawn", d.weapon);
+                    self.drones.pickups.push(d);
+                }
+            }
+        }
+    }
+
     pub fn gun_matrix(&self) -> [[f32; 4]; 4] {
         let w = &self.weapons.records[self.gun.weapon as usize];
         let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
@@ -7738,6 +7793,64 @@ fn script_pickup_reservations(level: &Level, weapons: &nf_formats::weapon::Weapo
         }
     }
     (out, slots)
+}
+
+/// mp-drops-draw: the weapons a dead player can drop in this match, each as an inert reserved pickup
+/// (`gone`), `per_weapon` copies apiece. The renderer draws pickups per index from slots built at
+/// load (`placed_pickup_pose`), so a gun dropped at run time needs a slot that already exists.
+/// The candidates are every record a human can hold: the weapon-set row (its spawn column through
+/// `Upgrade_MPWeapon`, as `MP_EquipPlayer` 0x1855f8 equips it), the arena's other weapon pickups,
+/// the grapple (MPSettings+0x1D0) and the scenario bonus 0x3B, each with the match take's remaps
+/// (`Upgrade_MPWeapon`, 10 and 0xD) [M 0x18e650:141-160]. Each candidate goes through
+/// `Pickup::player_death_drops` itself, so the slot's id, model and bounds are exactly what a death
+/// creates (the base id, the simple create's refusals and 0x6a/0x6e to 0x33). Ids in ascending
+/// order: the draw build and the sim build call this with the same inputs and get the same list.
+fn mp_drop_reservations(mp: &nf_game::mp::MpSettings, placed: &[nf_game::pickup::Pickup], weapons: &nf_formats::weapon::WeaponData, models: &std::collections::HashMap<u32, nf_game::pickup::Model>) -> Vec<nf_game::pickup::Pickup> {
+    use nf_game::mp::equip::{upgrade_mp_weapon, weapon_row};
+    let row = weapon_row(mp);
+    let mut cand: Vec<u16> = row.to_vec();
+    cand.push(upgrade_mp_weapon(weapons.base(row[0] as usize)));
+    cand.push(upgrade_mp_weapon(0x50));
+    cand.push(0x3b);
+    cand.extend(placed.iter().filter(|p| p.kind == nf_game::pickup::kind::WEAPON).map(|p| p.weapon));
+    for c in cand.clone() {
+        cand.push(upgrade_mp_weapon(c));
+        if c == 10 { cand.push(0xd); }
+        if c == 0xd { cand.push(10); }
+    }
+    cand.sort_unstable();
+    cand.dedup();
+    let ident = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let mut templates: Vec<nf_game::pickup::Pickup> = Vec::new();
+    for c in cand {
+        if c as usize >= weapons.records.len() || c > 0xff { continue; }
+        let mut inv = nf_game::pickup::Inventory::level_start(weapons.records.len(), 34);
+        let base = weapons.base(c as usize) as usize;
+        if let Some(x) = inv.clip.get_mut(base) { *x = 1; }
+        for d in nf_game::pickup::Pickup::player_death_drops(c as u8, &inv, &ident, weapons, models) {
+            if d.hidden || templates.iter().any(|t| t.weapon == d.weapon) { continue; }
+            templates.push(d);
+        }
+    }
+    templates.sort_by_key(|t| t.weapon);
+    let per_weapon = (mp.human_count as usize).clamp(1, nf_net::MAX_AGENTS) * 2;
+    let mut out = Vec::new();
+    for t in templates {
+        for _ in 0..per_weapon {
+            let mut p = t.clone();
+            p.gone = true; // reserved: inert until a death drop activates it
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// mp-drops-draw: the reserved slot a death drop of `weapon` takes: a free (`gone`) slot of that
+/// id, a never-used one first (so the bots' rows grow as the appended drops did), else the
+/// lowest-index free one. Shared state only, so every machine picks the same slot.
+fn mp_drop_slot_for(slots: &[usize], used: &[usize], pickups: &[nf_game::pickup::Pickup], weapon: u16) -> Option<usize> {
+    let free = |k: &&usize| pickups.get(**k).is_some_and(|p| p.gone && p.weapon == weapon && p.from.is_none());
+    slots.iter().filter(free).find(|k| !used.contains(k)).or_else(|| slots.iter().find(free)).copied()
 }
 
 /// fix-facial2: `SkinIt` 0x10bf30's morph term — `pos += Σ_m weight[m] × target(base + (morph + m) × 12)`,
@@ -8652,6 +8765,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let reserved_len = reserved.len();
             let mut placed_pickups = placed_pickups;
             placed_pickups.extend(reserved);
+            // mp-drops-draw: the dead players' drop slots, after the script reservations, in the
+            // order the sim build appends them. The draw copies are built live (`gone = false`) so
+            // the loop below gives each an instance; the per-frame pose (`placed_pickup_pose`)
+            // reads the sim's slot and collapses it while it is inert, taken or expired.
+            if let Some(ms) = mp {
+                let mut res = mp_drop_reservations(ms, &placed_pickups, &placed_weapons, &hoist_models);
+                for p in res.iter_mut() { p.gone = false; }
+                placed_pickups.extend(res);
+            }
 
         // The spawn comes from the placement records even when entities are not drawn (Player1 is not a 0x8000 cel).
         crate::phase_mark("b2 placed pickups", t); t = std::time::Instant::now();
@@ -11029,6 +11151,16 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // slot reuse is its documented safe08 design and points at the right entry — the
             // offset bug it fixes is the port's own, the game never had it.]
             drones.script_pickup_slots = sim_slots.into_iter().map(|(k, v)| (k, v + placed_len)).collect();
+            // mp-drops-draw: the dead players' drop slots (the draw build appends the same list).
+            if let Some(ms) = mp {
+                let res = mp_drop_reservations(ms, &drones.pickups, &weapons, &pickup_models);
+                let first = drones.pickups.len();
+                drones.mp_drop_slots = (first..first + res.len()).collect();
+                let mut ids: Vec<u16> = res.iter().map(|p| p.weapon).collect();
+                ids.dedup();
+                eprintln!("[mp-drop] {} reserved drop slots from pickup {first}: weapons {ids:x?}", res.len());
+                drones.pickups.extend(res);
+            }
             // The difficulty was set before the creates above (the game's GameState+0x28 pick);
             // the old direct-load hardcode `= 1` moved into the build parameter so replay loads
             // pass 1 and the front-end path passes the menu's pick.
@@ -14133,10 +14265,28 @@ impl Sim {
             // (respawning, state 2) pickup's row stays registered and targeted (it comes back).
             // local-match-bot-pickups: the delete arm's unregister (reconcile_mp_pickup_rows)
             // relies on this reading — its row-registered gate is this flag [M 0x18a058:10-14].
-            let live: Vec<([f32; 3], u16, u8, bool)> = self.drones.pickups.iter()
+            // mp-drops: a pickup created in play (a dead player's gun) registers when it lands.
+            // `Pickup_Create` registers only a resting pickup and `Pickup_Update`'s fall arm runs
+            // `MP_RegisterPickup` on the landing [M 0x18dda0 tail `+0x20 != 0`, 0x18e148:168-171],
+            // so a falling row (state 0) is not yet available.
+            // mp-drops-draw: the reserved drop slots join the rows in first-activation order (an
+            // inert slot has no row), as the drops did when they were appended.
+            let reserved = &self.drones.mp_drop_slots;
+            let live: Vec<([f32; 3], u16, u8, bool)> = self.drones.pickups.iter().enumerate()
+                .filter(|(k, _)| !reserved.contains(k)).map(|(_, p)| p)
+                .chain(self.drones.mp_drop_used.iter().map(|&k| &self.drones.pickups[k]))
                 .filter(|p| matches!(p.kind, kind::WEAPON | kind::AMMO | kind::ARMOUR))
-                .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]], p.weapon, p.kind as u8, !p.gone))
+                .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]], p.weapon, p.kind as u8, !p.gone && p.state != 0))
                 .collect();
+            // A new pickup appends its row; the older rows keep their visit stamps (the game's
+            // register fills one free slot and leaves the others alone [M 0x189d80:57-60]).
+            if live.len() > self.mp_bot_pickups.len() && !self.mp_bot_pickups.is_empty() {
+                for &(pos, w, c, a) in &live[self.mp_bot_pickups.len()..] {
+                    self.mp_bot_pickups.push(nf_game::mp::bots::BotPickup {
+                        pos, weapon_id: w, mp_class: c, is_obj_flag2: false, visit: [0.0; 16], available: a,
+                    });
+                }
+            }
             if live.len() != self.mp_bot_pickups.len() {
                 self.mp_bot_pickups = live.iter().map(|&(pos, w, c, a)| nf_game::mp::bots::BotPickup {
                     pos, weapon_id: w, mp_class: c, is_obj_flag2: false, visit: [0.0; 16], available: a,
@@ -14632,6 +14782,8 @@ impl Sim {
             match taker {
                 Taker::Local => {
                     if online { self.drones.health.armour = self.mp_armour[local]; }
+                    // mp-drops: the match take remap's character test for this slot [M 0x18e650:146-147].
+                    self.drones.mp_take_dual = self.mp.as_ref().is_some_and(|m| m.settings.dual_wield(local));
                     let force = online && pkind != kind::ARMOUR;
                     let d = nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
                         ai_points: &self.ai_points };
@@ -14866,6 +15018,7 @@ impl Sim {
                 pos: b.pos, sph: b.sphere_centre(), head: b.head(), cel: cel_of(b.pos),
                 hanging: matches!(b.substate, nf_game::player::SS_WIRE | nf_game::player::SS_ZIPLINE),
                 armour: self.mp_armour[slot],
+                dual: self.mp.as_ref().is_some_and(|m| m.settings.dual_wield(slot)),
             });
         }
         if let Some(m) = self.mp.as_ref() {
@@ -14880,7 +15033,7 @@ impl Sim {
                 let sph = nf_game::player::Bond::sphere_centre_at(pos, bt.brain.yaw);
                 v.push(nf_game::drone::NetBody {
                     slot: bt.slot, bot: true, local: false, alive: !bt.dead,
-                    pos, sph, head: e, cel: cel_of(pos), hanging: false, armour: 0.0,
+                    pos, sph, head: e, cel: cel_of(pos), hanging: false, armour: 0.0, dual: false,
                 });
             }
         }
@@ -15088,7 +15241,8 @@ impl Sim {
             if !bot && slot < nf_net::MAX_AGENTS {
                 if let Some(pk) = self.drones.pickups.get(k).cloned() {
                     let mut armour_scratch = self.mp_armour[slot];
-                    self.mp_combat.gate_take(slot, &pk, &self.weapons, &mut armour_scratch, self.drones.frame);
+                    let dual = self.mp.as_ref().is_some_and(|m| m.settings.dual_wield(slot));
+                    self.mp_combat.gate_take(slot, &pk, &self.weapons, &mut armour_scratch, dual);
                 }
             }
         }
@@ -15603,6 +15757,15 @@ impl Sim {
         // 2. The dead wait 5 s, then respawn at the policy's pick.
         for slot in 0..nf_net::MAX_AGENTS {
             if self.mp_dead_ticks[slot] == 0 { continue; }
+            // mp-drops: the death tick (every kill site writes 1; this loop sees each death at 1
+            // exactly once): `Player_CheckForDeath` 0x190810:42-56 drops the slot's held gun with
+            // its clip. Shared state only (the slot's gate: held weapon + inventory, and its
+            // body), so every machine creates the same pickup on the same tick.
+            if self.mp_dead_ticks[slot] == 1 {
+                let gate = self.mp_combat.gates.get(slot).map(|g| (g.weapon, g.inv.clone()));
+                let mat = self.net_body(slot).zip(gate.as_ref()).map(|(b, (w, _))| self.rest_gun_matrix(b, *w));
+                if let (Some((held, inv)), Some(m)) = (gate, mat) { self.mp_death_drop(held, &inv, &m); }
+            }
             self.mp_dead_ticks[slot] += 1;
             if self.mp_dead_ticks[slot] < 300 { continue; }
             let Some(m) = self.mp.as_mut() else { continue };

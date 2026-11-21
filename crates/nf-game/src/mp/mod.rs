@@ -246,6 +246,15 @@ pub struct MpSettings {
 }
 
 impl MpSettings {
+    /// mp-drops: the slot's character row allows the second SMG — `BOT_getDefaultStats(
+    /// MPSettings[slot·0x30 + 0x24])` byte 9 == 1, the test `Pickup_Handler`'s match take remap
+    /// runs [M 0x18e650:146-147; `BOT_getDefaultStats` 0x1263a8 = `default_bot_stats + i·0xE`].
+    /// A skin past the 29-row table reads false [S — the game would read past the table].
+    pub fn dual_wield(&self, slot: usize) -> bool {
+        let Some(p) = self.players.get(slot) else { return false };
+        bots::DEFAULT_BOT_STATS.get(p.skin as usize).is_some_and(|r| r.weapon_byte9() == 1)
+    }
+
     /// The phase-1 default for `--mp <arena>`: an Arena-1-style deathmatch. The menu's own defaults
     /// are not read here (no menu path in phase 1) — the values are the game's fresh-boot
     /// setup records: the score limit 10 and the time limit 10 menu-minutes [M bootup
