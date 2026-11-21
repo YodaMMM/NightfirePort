@@ -56,10 +56,33 @@
   `crates/*/src/` and no `crates/nf-view/tests/common/` change was made (the lever lived
   entirely in the test file and was reverted), so the affected-binary set is
   `walkreal_07000008_live` alone.
-- The full suite (tools/test/suite.py): the background fast runner was started (after the
-  toolchain was up) — see the total line below. If it shows a partial run, the environment
-  killed it between tool calls (the same kill rounds 13-15 verified twice); the affected
-  binary was run whole above regardless.
+- The full suite (tools/test/suite.py): the background fast runner was started and died
+  between tool calls (the same kill rounds 13-15 verified twice), so the suite ran in
+  foreground chunks, plus a fresh failure mode this sandbox introduced mid-window:
+  **the disk filled (a 9.9 GB rootfs; the target tree alone is ~7 GB) and an unlocked
+  `cargo fetch` (run to fetch the missing `ab_glyph`) bumped Cargo.lock and churned the
+  fingerprints** — `Cargo.lock` was restored to HEAD and `cargo fetch --locked` re-run, but
+  the churn re-invalidated parts of the prebuilt set and the remaining builds flap on
+  ENOSPC. Measured result [L the foreground chunk runs, `--test-threads=1`]:
+  - **nf-game: 1193 passed, 3 failed, 5 ignored** — the 3 failures are
+    `drive_ai_land_disc`'s `/DRIVING/MIS01.VIV` trio (BIGF header / disc-data reads), the
+    allowed slim-ISO disc-golden class (the onfoot ISO has no driving disc content).
+  - **nf-formats + nf-audio: 258 passed, 2 failed** — the two `carved_dir` tests
+    (`carved_folder_reads_the_same_bytes_as_the_image`,
+    `carved_index_names_cannot_escape_the_folder`) read carved folders back from the ISO
+    image; this branch touches NO crate code (test-file ledger text + docs only), so these
+    are environmental/disc-image-dependent failures to flag for the main agent, not
+    regressions of this branch.
+  - **nf-view: the affected binary ran WHOLE (6/1, above)**; the remaining nf-view
+    binaries could not complete under the disk wall (their builds flap on ENOSPC; a
+    sampled sibling `walkreal_07000001_live` is minutes-long per test and does not fit the
+    window). No `crates/*/src/` and no `crates/nf-view/tests/common/` change survives in
+    the final tree (the lever was reverted; the only test-file change is the ledger text
+    inside the ignore attribute), so every other nf-view binary is byte-identical in
+    behaviour to the merged 08-15 state whose whole-binary numbers are in
+    docs/reports/retune-nb-08-15.md.
+  - Suite total line: **not obtainable this window** — the wrapper could not finish under
+    the ENOSPC wall; the chunks above are the measured portion.
 
 ## What's left (the next window's levers, in priority order)
 
