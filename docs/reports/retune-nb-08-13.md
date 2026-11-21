@@ -107,3 +107,17 @@ crouched through.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed from this sandbox (ntfy.sh unreachable — the same failure as rounds
+5-12; each attempt at 2026-11-21 ~04:05-04:06 UTC):
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (rc 28)
+2. python3 urllib: killed by the outer 25 s timeout (rc 124) — no response within the 20 s
+   urlopen timeout, no traceback, nothing written
+3. wget: killed by the outer 25 s timeout mid-connect (rc 124, quiet mode, no output)
+
+The notification text that could not be delivered:
+`retune-nb-08-13: the crouch-window lever shipped (the sustained burst crouched), death t26276 ->
+t29801 (+3525 ticks) still red to a w62 falloff in the crouched stalemate; whole binary 6/1`
