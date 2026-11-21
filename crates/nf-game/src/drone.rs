@@ -6560,7 +6560,13 @@ impl Drone {
     /// `NDrone2_MoveTarget_IsRouteNode` (0x1550c8), `NDrone2_CanReachGoalPosition` (0x155ad0) and
     /// `NDrone2_GetAnglesToMoveTarget` (0x155db8); `NDrone2_SetRunToPosition` (0x155b30) and
     /// `NDrone2_SetupAlertTarget` (0x155d48) are the goal-set forms.
-    fn move_to_goal(&mut self, d: &Data) -> u8 { self.move_to_goal_r(d, 2.0) }
+    /// The radius is the goal's own (`Drone+0x704`, `goal_arrival`): every game caller hands
+    /// `MoveToGoalPosition` the goal radius in $f12 (RunForCover: `lwc1 $f12, 0x704` before
+    /// `jal 0x1517d8` [M disasm 0x169240/0x169250]), `SetupRouteToPosition` stores it at
+    /// route+0x8C [M 0x158b10:104] and `AINetwork_FollowRoute` arrives past the last node when the
+    /// route distance drops under route+0x8C [M 0x15b110:20-22]. The old flat 2.0 here made the
+    /// follow arrive 2.0 out on every goal with a smaller radius (cover 0.5, scary flee 1.0).
+    fn move_to_goal(&mut self, d: &Data) -> u8 { let r = self.goal_arrival; self.move_to_goal_r(d, r) }
 
     /// `move_to_goal` with the caller's radius: a fresh route keeps it as its arrival threshold
     /// (`AINetwork_SetupRouteToPosition` 0x158b10 stores the radius at route+0x8C

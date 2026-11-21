@@ -187,8 +187,9 @@ routes (0021), combat movement, start-up properties and WaitSwitch (0022): docs/
 Cover — selection, states and the tick order — is ported and documented above and in docs/systems/drone-cover.md
 (WORKLOG 0023/0079, fix-cover-remainder, fix-search-cover-g028); grenades (0080), AI volumes (0032), head
 tracking and the aim bone (fix-ai-remainder), deaths and hit reactions are ported too. Still open from
-G-026/27/28: hearing beyond the sound-alert chain, per-target cover slots (only Bond is modelled), the
-`RecoverFromScaryObject` (0x86) flee route update and U-030's RunForCover route shape.
+G-026/27/28: hearing beyond the sound-alert chain and the `RecoverFromScaryObject` (0x86) flee route update.
+(Per-target cover slots: Bond is the only slot holder in single player; the RunForCover shape near the gate was the
+goal arrival radius, now matched — docs/systems/drone-cover.md.)
 
 ## Firing [M, L]
 
