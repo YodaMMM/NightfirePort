@@ -220,6 +220,17 @@ pub struct DriveFx {
     pub main_tex: Option<usize>,
 }
 
+/// The driving HUD: hudNTSC.gal's layout and sheets, the ported HUD passes
+/// (nf_game::driving_hud_draw) and the player's health block they read (nf_game::driving::damage).
+pub struct DriveHud {
+    pub layout: nf_game::driving_hud_draw::HudLayout,
+    pub draw: nf_game::driving_hud_draw::DriveHudDraw,
+    /// gallery sheet index -> `Scene::hud_textures` hash.
+    pub sheets: Vec<(u32, u32)>,
+    pub health: nf_game::driving::damage::PlayerHealth,
+    pub last_tick: u32,
+}
+
 /// Live driving mission simulation state.
 pub struct DrivingState {
     pub viv: String,
@@ -257,6 +268,7 @@ pub struct DrivingState {
     /// The land car's righting reset (nf_game::driving::reset: tipped and touching for 30 ticks
     /// -> righted where it lies [M 0x188200]) and the triangles it reads.
     pub reset: Option<(nf_game::driving::reset::ResetState, Vec<CollisionTri>)>,
+    pub hud: Option<DriveHud>,
 }
 
 const IDENT_MAT: Mat4 = [
@@ -336,6 +348,39 @@ impl DrivingState {
         fx.veh.update(self.land.is_some(), &cin, &wheels, self.ticks, false, &fx.lib);
         fx.veh.tick(1, &fx.lib, &mut fx.rng, &mut fx.pool);
         fx.pool.run_steps(self.ticks, &fx.lib);
+    }
+
+    /// This frame's HUD overlay: the ported passes' sprites on the game's 640x448 screen, kept 4:3
+    /// at the window's height (the on-foot HUD's mapping). Text and panels wait for the driving
+    /// font (not drawn yet) [S].
+    pub fn hud_frame(&mut self, scene: &Scene, aspect: f32) -> crate::gpu::HudFrame {
+        let mut f = crate::gpu::HudFrame::default();
+        let ticks = self.ticks;
+        let Some(h) = self.hud.as_mut() else { return f };
+        let (hp, hm, ar, am) = h.health.hud();
+        let input = nf_game::driving_hud_draw::HudInput {
+            dt: ticks.saturating_sub(h.last_tick) as f32 / 60.0,
+            health: hp, health_max: hm, armour: ar, armour_max: am,
+            weapon: None, timer: None, health_always: false, grunt_on_hit: false, suppressed: false,
+        };
+        h.last_tick = ticks;
+        let out = h.draw.frame(&h.layout, &input);
+        let s = 2.0 / 640.0 * (4.0 / 3.0) / aspect.max(1e-3);
+        let ndc = |x: f32, y: f32| [(x - 320.0) * s, 1.0 - y / 224.0];
+        for d in out.draws {
+            let nf_game::driving_hud_draw::HudDraw::Sprite { x, y, w, h: hh, uv, sheet, colour, .. } = d else { continue };
+            let Some(&(_, hash)) = h.sheets.iter().find(|(i, _)| *i == sheet) else { continue };
+            let Some(ti) = scene.hud_textures.iter().position(|(k, _)| *k == hash) else { continue };
+            // GS colour word (R G B A bytes, 0x80 = 1.0).
+            let c = [0, 8, 16, 24].map(|b| ((colour >> b) & 0xff) as f32 / 128.0);
+            let c = [c[0], c[1], c[2], c[3].min(1.0)];
+            let (a, b) = (ndc(x, y), ndc(x + w, y + hh));
+            let v = |p: [f32; 2], t: [f32; 2]| crate::gpu::HudVertex { p, uv: t, c };
+            let first = f.v.len() as u32;
+            f.v.extend_from_slice(&[v([a[0], a[1]], [uv[0], uv[1]]), v([b[0], a[1]], [uv[2], uv[1]]), v([b[0], b[1]], [uv[2], uv[3]]), v([a[0], a[1]], [uv[0], uv[1]]), v([b[0], b[1]], [uv[2], uv[3]]), v([a[0], b[1]], [uv[0], uv[3]])]);
+            f.runs.push((ti + 1, 0, first, 6));
+        }
+        f
     }
 
     /// This frame's particle billboards, grouped by (texture, additive) for the renderer.
@@ -1421,9 +1466,29 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         });
     let car = Car::new(car_params, start_pos, start_yaw);
     let reset = land.is_some().then(|| (nf_game::driving::reset::ResetState::new(&car), col_tris.clone()));
+    // The HUD gallery (data\gfx\data\hudNTSC.gal, every driving archive [D]) and its sheets.
+    let hud = (|| {
+        let want = ["data", "gfx", "data", "hudNTSC.gal"].join("\\");
+        let e = bigf.entries.iter().find(|x| x.name.eq_ignore_ascii_case(&want))?;
+        let data = maybe_decompress(&iso.read_bytes(viv_base + e.offset as u64, e.size as u64).ok()?).ok()?;
+        let gal = nf_formats::gal::Gal::parse(&data).ok()?;
+        let layout = nf_game::driving_hud_draw::HudLayout::from_gal(&gal, false, 448.0).ok()?;
+        let mut sheets = Vec::new();
+        for (idx, _, r) in &gal.sheets {
+            let Some(t) = data.get(r.clone()).and_then(|b| Ssh::parse(b).ok()).and_then(|sh| sh.textures.into_iter().max_by_key(|t| t.width * t.height)) else { continue };
+            // (each sheet also carries 1x1 entries; the atlas the elements' UVs index is the big one [D])
+            let hash = 0xd71d_0000 | *idx as u32;
+            scene.hud_textures.push((hash, TextureImage { key: (0, hash), width: t.width, height: t.height, rgba: t.rgba, more: Vec::new(), rate: 1 }));
+            sheets.push((*idx as u32, hash));
+        }
+        let set = mset_bytes.map(nf_game::driving::damage::HealthSet::parse).unwrap_or_default();
+        let health = nf_game::driving::damage::PlayerHealth::start(&set, &nf_game::driving::damage::StartInputs { difficulty: 1, ..Default::default() });
+        Some(DriveHud { layout, draw: nf_game::driving_hud_draw::DriveHudDraw::new(), sheets, health, last_tick: 0 })
+    })();
     let state = DrivingState {
         fx,
         reset,
+        hud,
         viv: viv_upper,
         car,
         world: FlatWorld::paved(),
@@ -1509,6 +1574,7 @@ mod tests {
             car_rig: None,
             fx: None,
             reset: None,
+            hud: None,
         };
         state.step(1.0, 0.0, 0.0, false);
         assert_eq!(state.progress, 1);

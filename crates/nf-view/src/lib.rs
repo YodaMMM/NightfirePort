@@ -2396,7 +2396,7 @@ pub async fn device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_
 /// sprite is the exception; it rides `Scene::script_overlay_hud`, over the letterbox bars.
 pub fn overlay_for(scene: &scene::Scene, aspect: f32) -> gpu::HudFrame {
     let cutscene = scene.sim.as_ref().is_some_and(|s| s.script_camera().is_some());
-    if cutscene { gpu::HudFrame::default() } else { hud::overlay(scene, aspect) }
+    if cutscene { gpu::HudFrame::default() } else if scene.sim.is_none() && !scene.drive_hud.v.is_empty() { scene.drive_hud.clone() } else { hud::overlay(scene, aspect) }
 }
 
 /// The cut-scene frame (fix-cutscene-letterbox): while a script camera runs the port shows the
@@ -6269,6 +6269,7 @@ impl App {
                         self.cam.pitch = pitch;
                     }
                     { let (r, u) = billboard_axes(&self.cam); self.scene.drive_particles = drv.particle_groups(r, u); }
+                    { let a = self.gfx.as_ref().map_or(16.0 / 9.0, |g| g.config.width as f32 / g.config.height.max(1) as f32); let h = drv.hud_frame(&self.scene, a); self.scene.drive_hud = h; }
                     if matches!(
                         drv.mission_state,
                         nf_game::driving::mission::MissionState::Complete
@@ -7525,6 +7526,7 @@ pub fn run() -> Result<()> {
         }
         let opts = scene::ViewOpts { reinforcements: false, firing: false, right: [1.0, 0.0, 0.0], up: [0.0, 1.0, 0.0] };
         { let (r, u) = billboard_axes(&cam); scene.drive_particles = drv.particle_groups(r, u); }
+        { let a = 1280.0 / 720.0; let h = drv.hud_frame(&scene, a); scene.drive_hud = h; }
         let (layout, _) = scene.skin_layout();
         let (mut pal, _) = scene.skin_palette(&layout, None, ticks as f32, opts, None);
         drv.apply_to_palette(layout.attach_base as usize, &mut pal);
