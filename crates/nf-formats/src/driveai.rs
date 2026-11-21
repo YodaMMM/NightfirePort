@@ -20,6 +20,16 @@ pub const TAG_AIEL: u32 = 0x4149_456c;
 /// `AICo` — the AI command records [D: Map child of every track].
 pub const TAG_AICO: u32 = 0x4149_436f;
 
+/// `AISp` — the AI path records the pattern-5 / helicopter mode-5 commands name [D: Map child
+/// of every track; the `{AISp}::<offset>` targets of the AICo +0x80 references].
+pub const TAG_AISP: u32 = 0x4149_5370;
+/// `sr  ` — a named reference record; its payload is the target's symbol name, which the loader
+/// resolves by name (`FUN_002dc1b0` 0x2dc1b0 → `FUN_002cd5e0`, the pointer stored back into the
+/// record by `FUN_002d45d8`) [M].
+pub const TAG_SR: u32 = 0x7372_2020;
+/// One AISp record size [D: MIS11 38 records in 4,256 B; every `{AISp}::` offset is a multiple].
+pub const AISP_RECORD: usize = 0x70;
+
 /// One AIEl element record size [M 0x12b8b0: `iVar12 * 0x100`].
 pub const AIEL_RECORD: usize = 0x100;
 /// One rider (sub-record) size [M 0x12b8b0: `iVar9 * 0x20 + 0x80`].
@@ -67,6 +77,15 @@ fn u32_at(b: &[u8], o: usize) -> u32 {
 }
 fn u16_at(b: &[u8], o: usize) -> u16 {
     u16::from_le_bytes(b[o..o + 2].try_into().unwrap())
+}
+fn matrix_at(b: &[u8], o: usize) -> [[f32; 4]; 4] {
+    let mut m = [[0.0f32; 4]; 4];
+    for (r, row) in m.iter_mut().enumerate() {
+        for (c, v) in row.iter_mut().enumerate() {
+            *v = f32_at(b, o + r * 16 + c * 4);
+        }
+    }
+    m
 }
 fn cstr(b: &[u8]) -> String {
     let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
@@ -212,9 +231,15 @@ impl AiElement {
 }
 
 /// One AICo record (0xa0 bytes) — the fields `FUN_00145ff8` 0x145ff8 copies into the AIVehicle
-/// (AI offsets in brackets) [M 0x145ff8:153-240].
+/// (AI offsets in brackets) [M 0x145ff8:153-240]; a helicopter takes the same record through
+/// `FUN_00138fa8` 0x138fa8 (`nf_game::driving::heli`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AiCommand {
+    /// +0x00..+0x40: a 4×4 placement (rows; the position in row 3). A helicopter command with
+    /// state 2 puts the helicopter there (`FUN_002cc690` → `FUN_001fd620`) [M 0x138fa8].
+    pub placement: [[f32; 4]; 4],
+    /// +0x58: the helicopter's altitude above the ground (+0x11c, at least 3) [M 0x138fa8].
+    pub altitude: f32,
     /// +0x40 the goal point (`FUN_0012e670` mode 1 → AI +0x1a8).
     pub goal: [f32; 3],
     /// +0x4c → AI +0x220, the follow distance.
@@ -267,6 +292,8 @@ impl AiCommand {
             return invalid(format!("AICo record {} B < 0xa0", b.len()));
         }
         Ok(AiCommand {
+            placement: matrix_at(b, 0),
+            altitude: f32_at(b, 0x58),
             goal: [f32_at(b, 0x40), f32_at(b, 0x44), f32_at(b, 0x48)],
             follow: f32_at(b, 0x4c),
             target_ref: u32_at(b, 0x50),
@@ -293,11 +320,72 @@ impl AiCommand {
     }
 }
 
-/// A track's AI set: the parsed `AIEl` elements and `AICo` commands.
+/// One AISp path record (0x70 bytes) [D MIS11/MIS13A/MIS3; consumer `FUN_0013dfd8` 0x13dfd8 →
+/// `FUN_0013da80` 0x13da80 builds the path follower from it].
+#[derive(Clone, Debug, PartialEq)]
+pub struct AiPath {
+    /// +0x00..+0x40: the path's placement (rows; the position in row 3), handed to
+    /// `FUN_002db690` as the follower's +0x70 transform [M 0x13da80; D: unit rows, row 3 a
+    /// world position].
+    pub placement: [[f32; 4]; 4],
+    /// +0x40: an `sr` reference to the `pt` animation track the follower plays (follower
+    /// +0x4c) [M 0x13da80; D: `{pt  NNNN}` names].
+    pub track_ref: u32,
+    /// +0x44: the track name (`path_mine45L`, …), handed to the player as +0xd0 [M 0x13da80].
+    pub name: String,
+}
+
+impl AiPath {
+    pub fn parse(b: &[u8]) -> Result<AiPath> {
+        if b.len() < AISP_RECORD {
+            return invalid(format!("AISp record {} B < 0x70", b.len()));
+        }
+        Ok(AiPath { placement: matrix_at(b, 0), track_ref: u32_at(b, 0x40), name: cstr(&b[0x44..0x70]) })
+    }
+}
+
+/// What an `sr` record's name points at. The names read `CARP::<<Map>>::{AICo}::8960` (a byte
+/// offset into a Map chunk), `CARP::<<Map>>::{pt  0002}` (a short-tag record by instance) or
+/// `CARP::<article>::{as  0001}` [D every track; the `<<Map>>` group label is `FUN_002dc1b0`'s].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapRef {
+    /// `CARP::<<Map>>::{<chunk>}::<byte offset>`.
+    Chunk { chunk: String, offset: usize },
+    /// `CARP::<group>::{<tag><hex index>}`.
+    Instance { group: String, tag: String, index: u16 },
+    Other(String),
+}
+
+impl MapRef {
+    pub fn parse(name: &str) -> MapRef {
+        let other = || MapRef::Other(name.to_string());
+        let Some(open) = name.find("::{") else { return other() };
+        let Some(close) = name[open..].find('}').map(|c| open + c) else { return other() };
+        let group = name[..open].trim_start_matches("CARP::").to_string();
+        let inner = &name[open + 3..close];
+        let tail = &name[close + 1..];
+        if group == "<<Map>>" && inner.len() == 4 && tail.starts_with("::") {
+            if let Ok(offset) = tail[2..].parse::<usize>() {
+                return MapRef::Chunk { chunk: inner.to_string(), offset };
+            }
+        }
+        if inner.len() == 8 && tail.is_empty() {
+            if let Ok(index) = u16::from_str_radix(&inner[4..], 16) {
+                return MapRef::Instance { group, tag: inner[..4].to_string(), index };
+            }
+        }
+        other()
+    }
+}
+
+/// A track's AI set: the parsed `AIEl` elements and `AICo` commands, the `AISp` paths and the
+/// Map window's `sr` reference names (by instance).
 #[derive(Clone, Debug, Default)]
 pub struct MapAi {
     pub elements: Vec<AiElement>,
     pub commands: Vec<AiCommand>,
+    pub paths: Vec<AiPath>,
+    pub refs: std::collections::BTreeMap<u16, String>,
 }
 
 impl MapAi {
@@ -320,6 +408,18 @@ impl MapAi {
                 for k in 0..n {
                     out.elements.push(AiElement::parse(&crp.data[at + k * AIEL_RECORD..at + (k + 1) * AIEL_RECORD])?);
                 }
+            } else if r.tag == TAG_AISP {
+                let p = crp.payload(&r)?;
+                if p.len() % AISP_RECORD != 0 {
+                    return invalid(format!("AISp payload {} B is not a multiple of 0x70", p.len()));
+                }
+                for c in p.chunks_exact(AISP_RECORD) {
+                    out.paths.push(AiPath::parse(c)?);
+                }
+            } else if r.tag_code() == TAG_SR {
+                if let Some(i) = r.instance() {
+                    out.refs.insert(i, cstr(crp.payload(&r)?));
+                }
             } else if r.tag == TAG_AICO {
                 let p = crp.payload(&r)?;
                 if p.len() % AICO_RECORD != 0 {
@@ -331,6 +431,46 @@ impl MapAi {
             }
         }
         Ok(out)
+    }
+
+    /// The name behind a `{u16 index, "sr"}` reference word (`0x7372_nnnn`) [D].
+    pub fn ref_name(&self, word: u32) -> Option<&str> {
+        if word >> 16 != 0x7372 {
+            return None;
+        }
+        self.refs.get(&(word as u16)).map(|s| s.as_str())
+    }
+
+    fn chunk_index(&self, word: u32, chunk: &str, stride: usize, count: usize) -> Option<usize> {
+        match MapRef::parse(self.ref_name(word)?) {
+            MapRef::Chunk { chunk: c, offset } if c == chunk && offset % stride == 0 && offset / stride < count => Some(offset / stride),
+            _ => None,
+        }
+    }
+
+    /// The AICo record a reference word names: `sr#nnnn` = `{AICo}::<byte offset>`, so the
+    /// index is offset / 0xa0 [D: every element reference on the eight tracks resolves this
+    /// way]. The runtime field is the record's pointer, read as an AICo record by
+    /// `FUN_00145ff8` after the spawn hands it to `FUN_00145fc8` [M 0x12cb08:226-229]. The
+    /// `nnnn - 1` reading of an earlier revision was wrong (MIS01 element 0: `sr#1` = offset
+    /// 8960 = record 56).
+    pub fn command_index(&self, word: u32) -> Option<usize> {
+        self.chunk_index(word, "AICo", AICO_RECORD, self.commands.len())
+    }
+
+    /// The AIEl record a reference word names (`{AIEl}::<offset>`, stride 0x100) [D].
+    pub fn element_index(&self, word: u32) -> Option<usize> {
+        self.chunk_index(word, "AIEl", AIEL_RECORD, self.elements.len())
+    }
+
+    /// The AISp path a reference word names (`{AISp}::<offset>`, stride 0x70) [D].
+    pub fn path_index(&self, word: u32) -> Option<usize> {
+        self.chunk_index(word, "AISp", AISP_RECORD, self.paths.len())
+    }
+
+    /// An element's spawn command (its +0xf8 reference resolved) [M 0x12cb08 + D].
+    pub fn spawn_command(&self, el: &AiElement) -> Option<&AiCommand> {
+        self.command_index(el.command_ref).map(|i| &self.commands[i])
     }
 
     /// The distinct vehicle attribute names (the mission's AI vehicle set), in first-seen order.
@@ -400,5 +540,34 @@ mod tests {
         let c = AiCommand::parse(&b).unwrap();
         assert_eq!((c.follow, c.catchup, c.speed_cap, c.fire_rate, c.ram_chance), (15.0, 1.1, 60.0, 2.0, 0.1));
         assert_eq!((c.pattern, c.profile, c.lane), (4, 0xf, -1));
+    }
+
+    #[test]
+    fn sr_names_resolve_by_offset_not_by_index() {
+        assert_eq!(MapRef::parse("CARP::<<Map>>::{AICo}::8960"), MapRef::Chunk { chunk: "AICo".into(), offset: 8960 });
+        assert_eq!(MapRef::parse("CARP::<<Map>>::{pt  0002}"), MapRef::Instance { group: "<<Map>>".into(), tag: "pt  ".into(), index: 2 });
+        assert_eq!(MapRef::parse("CARP::sky02::{as  0001}"), MapRef::Instance { group: "sky02".into(), tag: "as  ".into(), index: 1 });
+        let mut ai = MapAi::default();
+        ai.commands = vec![AiCommand::parse(&[0u8; AICO_RECORD]).unwrap(); 61];
+        ai.refs.insert(1, "CARP::<<Map>>::{AICo}::8960".into());
+        ai.refs.insert(2, "CARP::<<Map>>::{AICo}::0".into());
+        ai.refs.insert(3, "CARP::<<Map>>::{AICo}::9770".into()); // not a record boundary
+        ai.refs.insert(4, "CARP::<<Map>>::{AISp}::112".into());
+        // sr#1 names record 56, not record 0 (the `nnnn - 1` reading).
+        assert_eq!(ai.command_index(0x7372_0001), Some(56));
+        assert_eq!(ai.command_index(0x7372_0002), Some(0));
+        assert_eq!(ai.command_index(0x7372_0003), None);
+        assert_eq!(ai.command_index(0x7372_0004), None, "an AISp name is not a command");
+        assert_eq!(ai.command_index(0x0000_0001), None, "not an sr word");
+    }
+
+    #[test]
+    fn command_placement_and_altitude() {
+        let mut b = vec![0u8; AICO_RECORD];
+        b[0x30..0x34].copy_from_slice(&5.0f32.to_le_bytes());
+        b[0x38..0x3c].copy_from_slice(&(-7.0f32).to_le_bytes());
+        b[0x58..0x5c].copy_from_slice(&20.0f32.to_le_bytes());
+        let c = AiCommand::parse(&b).unwrap();
+        assert_eq!((c.placement[3][0], c.placement[3][2], c.altitude), (5.0, -7.0, 20.0));
     }
 }

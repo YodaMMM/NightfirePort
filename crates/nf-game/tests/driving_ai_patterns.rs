@@ -859,11 +859,10 @@ fn each_pattern_on_its_mission() {
         let ai = MapAi::from_crp(&crp).unwrap();
         let net = RoadNet::parse_crp(&crp).unwrap();
         let atrs = read(&|n| n.contains("\\pvehicle\\") && n.ends_with(".atr"));
-        // The element's spawn command: +0xf8 is an `sr` reference 0x7372_nnnn; nnnn − 1 is
-        // read as the AICo index [D: every reference on the disc has the 0x7372 tag and an
-        // index ≤ the AICo count; the index base is S].
+        // The element's spawn command: +0xf8 is an `sr` reference `0x7372_nnnn` whose record
+        // names `{AICo}::<byte offset>` [D]; `MapAi::command_index` resolves it.
         for el in &ai.elements {
-            assert!(el.command_ref == 0 || (el.command_ref >> 16 == 0x7372 && (el.command_ref & 0xffff) as usize <= ai.commands.len()), "{mission}: ref {:#x}", el.command_ref);
+            assert!(el.command_ref == 0 || ai.command_index(el.command_ref).is_some(), "{mission}: ref {:#x} → {:?}", el.command_ref, ai.ref_name(el.command_ref));
         }
         if let Some(h) = ai.elements.iter().find(|e| e.kind == TYPE_VEHICLE && e.heli) {
             // The helicopter's lift rule (FUN_0013b4f8) for 600 ticks from its spawn height
@@ -891,7 +890,7 @@ fn each_pattern_on_its_mission() {
             if el.kind != TYPE_VEHICLE || el.heli || el.command_ref == 0 {
                 return None;
             }
-            let c = ai.commands.get((el.command_ref & 0xffff) as usize - 1)?;
+            let c = ai.spawn_command(el)?;
             (c.pattern == pattern).then(|| (el.clone(), c.clone()))
         });
         let Some((el, cmd)) = found else { continue };
