@@ -4,6 +4,8 @@
 //! write-ups; `ai::SimCar` is the physics seam (506's `Car` plugs in — see `ai::AiDriver`).
 
 pub mod ai;
+// The sound logic (banks, mix groups, engine/skid/road-noise voices) — DRIVING.ELF audio classes.
+pub mod audio;
 // G-056 world-bounds: the driving maps' invisible boundary sheets (DRIVING.ELF 0x331a60).
 pub mod bounds;
 // The player chase camera (camera.ini HeliCam + FUN_001b2b48).
