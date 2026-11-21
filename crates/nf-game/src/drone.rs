@@ -559,6 +559,8 @@ pub mod anim_state {
     pub const DRAW_WEAPON: u16 = 0x46;
     pub const STAND_IDLE: u16 = 0x24;
     pub const RELOAD: u16 = 0x52;
+    /// The stand reload's 1-in-30 alternate (`NDrone2_DSTATE_AimStandReload` 0x1666d8:21-24).
+    pub const RELOAD_ALT: u16 = 0x4a;
     pub const BACKOFF: u16 = 0x04;
     pub const CROUCH_AIM: u16 = 0x05;
     pub const STRAFE_LEFT: u16 = 0x0c;
@@ -9037,8 +9039,9 @@ impl Drone {
                 // else the `+0x3b = seen ? (+0x1e == 0) : 0` fire re-arm and stay. There is NO
                 // 0x5b/0x5c exit — the old unseen-ticks arm was the 0x59 ↔ 0x5c thrash (with
                 // DroneFunc_CombatState 0x148338:136-142 sending a stationary 0x5c back to 0x59
-                // every tick). The voice-0xC Rand(3) → 0x6e roll [M 0x1643e8:103-111] is not ported: it
-                // sits behind the +0x3C fire-mode byte, and only 07000008's ally carries that voice.
+                // every tick). The type-0xC (`+0xD8`) Rand(3) → 0x6e roll [M 0x1643e8:103-111] is not ported:
+                // it runs when the fire-anim arm is skipped (`+0x3C` set or `+0x3B` clear), and the only
+                // type-0xC placement on any level is 07000008's escort VIP (g026_reload_census).
                 if !self.stays(d) { self.set_state(AIM_STAND); return true; }
                 self.turn_to_opponent(0.5235988);
                 if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
@@ -9182,14 +9185,21 @@ impl Drone {
             // `NDrone2_DSTATE_AimStandReload` 0x1666d8 (state 0x69) / `NDrone2_DSTATE_AimCrouchReload`
             // 0x167370 (state 0x71) ENTER [M 0x1666d8 case 1]: `firing` drops, the clip refills from
             // the reserve (`+0xBBC = +0xBBE`), and the reload anim's follow-on returns to the matching
-            // fire state (0x68 stand / 0x70 crouch). (The game's 1-in-30 alternate reload anim 0x4a
-            // with the same follow-on is a presentation variant [M 0x1666d8:21-27] — the port plays
-            // RELOAD only.)
+            // fire state (0x68 stand / 0x70 crouch). The STAND reload alone also sets alert status 1
+            // and draws `Rand_Rand(0x1e)` on every entry: a 0 with `CanDoAnimState(0x4a, 0)` plays the
+            // alternate reload anim 0x4a (same follow-on 0x68), else 0x52 [M 0x1666d8:17-27]. The
+            // crouch reload has neither the draw nor the status write [M 0x167370 case 1]. The draw is
+            // taken before the CanDoAnimState test (short-circuit order), so it moves the shared
+            // stream even for anim sets without 0x4a.
             (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1666d8:16 / 0x167370:15]
-                self.firing = false;
+                let anim = if s == AIM_STAND_RELOAD {
+                    self.alert_status_set(1, frame); // `Drone_AlertStatusSet(1)` [M 0x1666d8:17]
+                    if rng.rand(0x1e) == 0 && self.can_do(d, anim_state::RELOAD_ALT) { anim_state::RELOAD_ALT } else { anim_state::RELOAD }
+                } else { anim_state::RELOAD };
+                self.firing = false; // `+0x3B = 0` [M 0x1666d8:18 / 0x167370:17]
                 self.clip = self.clip_max;
-                self.call_anim(d, anim_state::RELOAD, if s == AIM_STAND_RELOAD { AIM_STAND_FIRE } else { AIM_CROUCH_FIRE }, 0);
+                self.call_anim(d, anim, if s == AIM_STAND_RELOAD { AIM_STAND_FIRE } else { AIM_CROUCH_FIRE }, 0);
                 true
             }
             (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::UPDATE) => { self.turn_to_opponent(0.9); true }
