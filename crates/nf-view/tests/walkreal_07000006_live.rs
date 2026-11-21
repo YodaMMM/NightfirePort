@@ -1356,7 +1356,12 @@ fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
     // short stop at tick 8000 (before the east post #25 stand) re-rolls the last fight [L 24
     // grid + 40 random + 24 random second stops: every run died; the 18-value second-stop grid
     // 7700-8200: 8000/5, 8000/15 and 8000/30 complete].
-    walker::with_pauses(&[(400, 400), (8000, 15)], || walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(3)));
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and Bond died at t7308 on the courtyard's strip approach (#11's 0x16 from the
+    // y 55.5 tower, #19 at 12.6 u). Lever: a 10-tick stop at tick 4650 between the two
+    // [L 8 single middle stops 3000-7000 die; 24 random runs: 400/400 + 4650/10 + 8000/15 and
+    // 300/400 + 1700/30 + 3500/150 + 8000/15 complete].
+    walker::with_pauses(&[(400, 400), (4650, 10), (8000, 15)], || walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(3)));
 }
 
 /// THE WELL ON REAL INPUT (level-06-well-drop): the proven route's own legs to the well

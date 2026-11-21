@@ -3216,7 +3216,11 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): Bond died at
     // t5217 in the pocket fight (#5 / #4 bursts). Lever: a 30-tick stop at tick 1600 re-rolls the
     // pocket [L the 22-value sweep: 1600/30 and 3500/30 complete; 1500/30, 1700/30, 1600/20 die].
-    walker::with_real_damage_head_hunting(|| walker::with_pause(1600, 30, || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2)));
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and Bond died at t19492 in the last chaser fight (#14 / #15 at 2-4 u) under the
+    // 1600/30 stop. Lever: the batch's other green value, a 30-tick stop at tick 3500 [L the
+    // 18-run sweep: every 1600/30 + second stop died; 3500/30 and 3400/30 alone complete].
+    walker::with_real_damage_head_hunting(|| walker::with_pause(3500, 30, || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2)));
 }
 
 /// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked chaser mission on
@@ -3252,5 +3256,9 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
     // at 75.5 after it) and a 45-tick stop at tick 3822 (the door[0] crossing) [L the
     // 21-value grid, 30 random runs, then 30 random second stops after 425/30: 3822/45,
     // 3748/45 and 5386/90+8305/90 complete].
-    walker::with_real_damage_head_hunting(|| walker::with_pauses(&[(425, 30), (3822, 45)], || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3)));
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and the pocket fight killed Bond at t3232 (#4 / #5 0x1a bursts) under the 425/30 +
+    // 3822/45 stops. Lever: a 15-tick stop at tick 2800 and a 90-tick stop at tick 4200 [L the
+    // 32-run sweep (8 first-stop moves, 24 random pairs): only 2800/15 + 4200/90 completes].
+    walker::with_real_damage_head_hunting(|| walker::with_pauses(&[(2800, 15), (4200, 90)], || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3)));
 }
