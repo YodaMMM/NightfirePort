@@ -323,3 +323,10 @@ already recorded).
   walk-back family (1b)/(1c) with the per-pass drift cap note; the sustained-burst 3-row live
   check; the carried trio/reply-cadence live checks) are in the ignore message. Report:
   docs/reports/retune-nb-08-15.md.
+
+## retune-nb-08-16 (2026-11-21)
+08 whole-mission 00 Agent real-damage walk, round 16. Branch s/retune-nb-08-16 from
+origin/master with origin/s/retune-nb-08-15 merged (d1373ac73). Round-15 ledger read: the
+death has sat at t29924 for two rounds, so this round tries a lever upstream of that fight
+(route, order, cover) per the task line, taking untried levers from the ignore message and
+skipping everything measured dead. Sandbox reset: full re-setup (clone, downloads, build).
