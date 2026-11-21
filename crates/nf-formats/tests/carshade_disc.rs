@@ -183,3 +183,112 @@ fn every_tracks_light_directions_are_unit_and_point_up() {
     }
     assert_eq!(by.len(), ARCHIVES.len());
 }
+
+/// The car passes (docs/formats/car-model.md §10.6): every GeoPrimState a car list uploads parses
+/// with the traced handlers; the specular / reflection passes of every strip find the `name=envmap`
+/// (paint, chrome, glass: Cs·As + Cd) or `name=specmap` (dash: Cs·Ad + Cd) state in the slot the
+/// microcode kicks; the run-time maps are uploaded to the SpecularMap / ReflectionMap2 slots; and
+/// the textures they name are in the archives' sheets [D].
+#[test]
+fn every_car_pass_finds_its_traced_state_and_textures() {
+    use nf_formats::carmesh::{entry_uploads, CarPassKind, CarPassTexture, GeoPrimState, Upload, SPECULAR_MAP_ENTRY};
+    let Some(iso) = iso() else { return };
+    // (material, pass) → state string (None = no upload in this model before the strip) → strips.
+    let mut by: BTreeMap<(CarMaterial, CarPassKind), BTreeMap<Option<String>, usize>> = BTreeMap::new();
+    // VU1 slot → external texture names op 6 puts there.
+    let mut ext_slots: BTreeMap<u16, BTreeMap<String, usize>> = BTreeMap::new();
+    let (mut states, mut base_tex_same, mut base_tex_diff) = (0usize, 0usize, 0usize);
+    for viv in ARCHIVES {
+        for (name, crp_bytes) in members(&iso, viv, is_car).unwrap() {
+            let crp = Crp::parse(&crp_bytes).unwrap();
+            let module = TrackModule::load(&crp).unwrap();
+            let ext = module.external_refs().unwrap();
+            let ix = ModelIndex::new(&module).unwrap();
+            for sym in module.symbols.iter().filter(|s| s.name.starts_with("__Model:::")) {
+                let part = ix.model_part(sym.value).unwrap();
+                for po in model_entries(&ix, sym.value).unwrap() {
+                    for u in entry_uploads(&ix, &ext, po, part).unwrap_or_else(|e| panic!("{viv} {name}: {e}")) {
+                        match u.what {
+                            Upload::State(s) => {
+                                GeoPrimState::parse(&s).unwrap_or_else(|e| panic!("{viv} {name}: {e}"));
+                                states += 1;
+                            }
+                            Upload::ExternalTexture(t) => *ext_slots.entry(u.vu).or_default().entry(t).or_default() += 1,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            let m = car_mesh(&crp_bytes).unwrap();
+            let mut seen = std::collections::HashSet::new();
+            for p in &m.parts {
+                if p.strips.is_empty() || !seen.insert(p.set) {
+                    continue;
+                }
+                for s in &p.strips {
+                    for pass in s.passes() {
+                        *by.entry((s.material, pass.kind)).or_default().entry(pass.state.clone()).or_default() += 1;
+                        if pass.kind == CarPassKind::Base {
+                            if let CarPassTexture::Module(at) = pass.texture {
+                                if s.slot_textures.get(&at) == s.texture.as_ref() {
+                                    base_tex_same += 1;
+                                } else {
+                                    // Every disagreement is a slot whose descriptor has no name.
+                                    assert!(s.slot_textures.get(&at).is_none(), "{viv} {name}: base slot {:?} vs {:?}", s.slot_textures.get(&at), s.texture);
+                                    base_tex_diff += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (k, v) in &by {
+        eprintln!("{k:?}: {v:?}");
+    }
+    eprintln!("ext slots {ext_slots:?}; {states} states; base texture slot = strip texture {base_tex_same}, differs {base_tex_diff}");
+    // The overlay passes: one state each, the traced blend.
+    for ((m, kind), v) in &by {
+        if !matches!(kind, CarPassKind::Specular | CarPassKind::Reflection) {
+            continue;
+        }
+        for st in v.keys().flatten() {
+            let g = GeoPrimState::parse(st).unwrap();
+            let want = if *m == CarMaterial::Dash { 0x80_0000_0058 } else { 0x80_0000_0048 };
+            assert!(st.starts_with("name="), "{m:?} {kind:?}: {st}");
+            assert_eq!(g.alpha, want, "{m:?} {kind:?}: {st}");
+            assert!(g.abe() && g.tme() && !g.fge(), "{m:?} {kind:?}: {st}");
+        }
+    }
+    // Strips per overlay pass and state [D measured]: none lacks its state.
+    let count = |m: CarMaterial, k: CarPassKind| by.get(&(m, k)).map(|v| v.iter().map(|(s, n)| (s.clone(), *n)).collect::<Vec<_>>()).unwrap_or_default();
+    let env = |prim: &str, n: usize| (Some(format!("name=envmap;primtype={prim}")), n);
+    for k in [CarPassKind::Specular, CarPassKind::Reflection] {
+        assert_eq!(count(CarMaterial::TexturePacked, k), vec![env("tristrip", 10708)], "{k:?}");
+        assert_eq!(count(CarMaterial::Chrome, k), vec![env("tristrip", 2300)], "{k:?}");
+        assert_eq!(count(CarMaterial::GlassPacked, k), vec![env("trilist", 198)], "{k:?}");
+    }
+    assert_eq!(
+        count(CarMaterial::Dash, CarPassKind::Specular),
+        vec![(Some("name=specmap;primtype=trilist".to_owned()), 34), (Some("name=specmap;primtype=tristrip".to_owned()), 5619)]
+    );
+    assert!(count(CarMaterial::Dash, CarPassKind::Reflection).is_empty());
+    assert_eq!(count(CarMaterial::GlassPacked, CarPassKind::Base), vec![(Some("name=glassdmgmap;primtype=trilist".to_owned()), 198)]);
+    assert_eq!((states, base_tex_same, base_tex_diff), (5013, 34770, 1492));
+    assert_eq!(ext_slots.values().map(|m| m.values().sum::<usize>()).collect::<Vec<_>>(), vec![1906, 1906]);
+    assert_eq!(ext_slots.get(&0x11).map(|m| m.keys().cloned().collect::<Vec<_>>()), Some(vec!["__EAGL::TAR:::GAME::SpecularMap".to_owned()]));
+    assert_eq!(ext_slots.get(&0x18).map(|m| m.keys().cloned().collect::<Vec<_>>()), Some(vec!["__EAGL::TAR:::GAME::ReflectionMap".to_owned()]));
+    // The sheets the passes and the reflection map name.
+    for viv in ARCHIVES {
+        for (sheet, want) in [(r"data\render\common.ssh", vec![(SPECULAR_MAP_ENTRY, 32), ("rmsk", 64)]), (r"data\render\ext.ssh", vec![("cref", 128)])] {
+            let f = members(&iso, viv, |n| n == sheet).unwrap();
+            assert_eq!(f.len(), 1, "{viv}: {sheet}");
+            let ssh = nf_formats::ssh::Ssh::parse(&f[0].1).unwrap();
+            for (n, w) in want {
+                let t = ssh.textures.iter().find(|t| t.name == n).unwrap_or_else(|| panic!("{viv}: no {n} in {sheet}"));
+                assert_eq!((t.width, t.height), (w, w), "{viv}: {n}");
+            }
+        }
+    }
+}

@@ -169,6 +169,39 @@ pub fn light_direction(angle_x: f32, angle_y: f32) -> [f32; 3] {
     [x.cos() * y.sin(), -x.sin(), x.cos() * y.cos()]
 }
 
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]] }
+
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if l > 0.0 {
+        v.map(|c| c / l)
+    } else {
+        v
+    }
+}
+
+/// The `SpecularMat` basis `[b, c, a]` the car specular pass projects world normals on
+/// [M `FUN_001aefb8` 0x1aefb8, disassembled]: `a = normalize(L1 − f)` with `L1` = the Light 1
+/// direction (column 0 of the LightSources rows) and `f` = the view's forward vector (also written
+/// as column 3 of the LightSources rows); `b = normalize((0, 1, 0) × a)`; `c = normalize(a × b)`
+/// (`VOPMULA`/`VOPMSUB` pairs at 0x1af114 and 0x1af150, each `fs × ft` with fs = (0,1,0) then a).
+/// The four rows it stores at `+0x20` are `(b_i, c_i, a_i, 0)` for i = x, y, z, then (0, 0, 0, 1)
+/// (`PEXTLW`/`PEXTUW`/`PCPYLD`/`PCPYUD` at 0x1af190), so a row-vector normal gives
+/// `(n · b, n · c, n · a)`.
+///
+/// `f` [M]: the caller passes `camera + 0x20`, the camera being `**(DAT_00333760 + 4)` (the current
+/// view's `+0` object, a 0xb0-byte camera with FOV at `+0xa4`, `FUN_001d40f0`) or, when no view is
+/// current, the HUD manager's (`*DAT_00333ed8`) [`FUN_001aec20`, `FUN_001adc68`]; `FUN_001d5700`
+/// writes `camera + 0x20 = normalize(look point − eye)`, the forward axis from the eye into the
+/// scene. So `a` is the half vector of the light and the eye direction (−f), and a normal along it
+/// samples the map centre.
+pub fn specular_basis(light1_dir: [f32; 3], view_forward: [f32; 3]) -> [[f32; 3]; 3] {
+    let a = normalize([light1_dir[0] - view_forward[0], light1_dir[1] - view_forward[1], light1_dir[2] - view_forward[2]]);
+    let b = normalize(cross([0.0, 1.0, 0.0], a));
+    let c = normalize(cross(a, b));
+    [b, c, a]
+}
+
 /// The third light column of the `World` and `Character` environments: `FUN_001b0158` 0x1b0158
 /// computes all three directions per environment, then overwrites the dual-hemisphere one with
 /// (0, 1, 0) for these two [M: `+0x88/+0x98/+0xa8` and `+0xf8/+0x108/+0x118` ← 0, 1.0, 0]. (Every
@@ -178,6 +211,9 @@ pub const HEMI_AXIS: [f32; 3] = [0.0, 1.0, 0.0];
 impl LightEnv {
     /// `Light 1`'s direction ([`light_direction`]).
     pub fn light1_dir(&self) -> [f32; 3] { light_direction(self.light1_angle_x, self.light1_angle_y) }
+    /// The car specular basis for this environment's Light 1 and the view's forward vector
+    /// ([`specular_basis`]).
+    pub fn specular_basis(&self, view_forward: [f32; 3]) -> [[f32; 3]; 3] { specular_basis(self.light1_dir(), view_forward) }
     /// `Light 2`'s direction ([`light_direction`]).
     pub fn light2_dir(&self) -> [f32; 3] { light_direction(self.light2_angle_x, self.light2_angle_y) }
 
@@ -276,21 +312,43 @@ impl CarRenderEntry {
     pub fn props(&self, c: CarLightClass) -> CarMaterialProps { self.classes[c as usize] }
 }
 
+/// A full-map quad of the reflection map pass ([`CarRender::reflection_steps`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReflectionLayer {
+    /// The texture's sheet entry name.
+    pub texture: &'static str,
+    pub rgba: [u8; 4],
+    /// The GS `ALPHA_1` value (`carmesh::GsBlend::from_alpha`).
+    pub alpha_reg: u64,
+}
+
+/// One step of the reflection map pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReflectionStep {
+    Layer(ReflectionLayer),
+    /// The world drawn from [`CarRender::reflection_camera`] (`FUN_0021fa58` / `FUN_001c2720`; what
+    /// those draw is not traced).
+    Scene,
+}
+
 /// `Render\CarRender\default.tun` [M `FUN_001c0930` 0x1c0930, the `RReflection` private data]: the
 /// globals and one entry per instance in file order (the instance list is the vehicle table +
 /// `Characters` + `Dynamic Objects`; the shipped file names `default` twice [D]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CarRender {
-    /// `Desat` (+0x04), packed like the fog colour ([`packed_colour`]); its consumer is not traced.
+    /// `Desat` (+0x04), packed like the fog colour ([`packed_colour`]): the vertex colour of the
+    /// reflection map's desaturation quad ([`CarRender::reflection_steps`]).
     pub desat: u32,
-    /// `Sky blend` (+0x02, 0..64); its consumer is not traced.
+    /// `Sky blend` (+0x02, 0..64): the alpha of the sky quad drawn over the reflection scene.
     pub sky_blend: u8,
-    /// `Sky bright` (+0x00, 0..255); its consumer is not traced.
+    /// `Sky bright` (+0x00, 0..255): the grey level (× 0.94) of the reflection map's sky quads.
     pub sky_bright: u8,
     /// `Desat ?` (+0x08) and `Sky ?` (+0x0c).
     pub desat_on: bool,
     pub sky_on: bool,
-    /// `Refl HEIGHT` (+0x10, −10..10) and `Refl ANGLE` (+0x14, 5..180); consumers not traced.
+    /// `Refl HEIGHT` (+0x10, −10..10): added to the reflection eye's y [M `FUN_001c1b18`].
+    /// `Refl ANGLE` (+0x14, 5..180): the reflection view's projection angle
+    /// [M `FUN_001c1560`: `FUN_00295910(+0x14, 1, 1, 2500, view)`, once, in the constructor].
     pub refl_height: f32,
     pub refl_angle: f32,
     pub entries: Vec<CarRenderEntry>,
@@ -359,6 +417,50 @@ impl CarRender {
     /// The first entry of that instance name (the game looks a vehicle up by name, `FUN_001965e8`;
     /// which of the two `default` rows that lands on is not traced).
     pub fn get(&self, name: &str) -> Option<&CarRenderEntry> { self.entries.iter().find(|e| e.name == name) }
+
+    /// The grey level of the sky quads: `(int)(Sky bright × 0.94) & 0xff` [M `FUN_001c1ec0`].
+    pub fn sky_level(&self) -> u8 { ((self.sky_bright as f32 * 0.94) as i32 & 0xff) as u8 }
+
+    /// What `FUN_001c1ec0` 0x1c1ec0 draws into the 256 × 256 `GAME::ReflectionMap` each frame, in
+    /// order, after clearing it [M]. Each layer is a full-map quad (`FUN_0019f960(0, 0, 256, 256,
+    /// colour, texture)`) drawn with ABE on and the given GS `ALPHA` value; `rgba` is the vertex
+    /// colour (R, G, B, A bytes):
+    /// 1. if `Sky ?`: texture `cref` (RReflection `+0xc4`), colour (s, s, s, 0x40), ALPHA 0x44
+    ///    ((Cs − Cd)·As + Cd), s = [`Self::sky_level`];
+    /// 2. the scene from the reflection camera ([`ReflectionStep::Scene`]); skipped, together with
+    ///    the layers after it, when a global object's `+0x30` is 1 (`DAT_003349e0`, not traced),
+    ///    which draws a flat (0x80, 0x80, 0x80, 0x80) quad instead;
+    /// 3. if `Sky ?` and `Sky blend` ≠ 0: `cref` again, colour (s, s, s, Sky blend), ALPHA 0x44;
+    /// 4. if `Desat ?`: texture `rmsk` (RReflection `+0xcc`, `common.ssh` entry `rmsk`,
+    ///    `FUN_001c0930`), colour = the packed `Desat` word as bytes, ALPHA 0x62 (Cd − Cs·FIX/128,
+    ///    FIX = 0x80): a subtraction.
+    ///
+    /// `cref` comes from the sheet registered as key 4, else from `data\render\ext.ssh` (key 5)
+    /// [M `FUN_001c1358`]; which file key 4 is has not been traced.
+    pub fn reflection_steps(&self) -> Vec<ReflectionStep> {
+        let s = self.sky_level();
+        let mut out = Vec::new();
+        if self.sky_on {
+            out.push(ReflectionStep::Layer(ReflectionLayer { texture: "cref", rgba: [s, s, s, 0x40], alpha_reg: 0x80_0000_0044 }));
+        }
+        out.push(ReflectionStep::Scene);
+        if self.sky_on && self.sky_blend != 0 {
+            out.push(ReflectionStep::Layer(ReflectionLayer { texture: "cref", rgba: [s, s, s, self.sky_blend], alpha_reg: 0x80_0000_0044 }));
+        }
+        if self.desat_on {
+            out.push(ReflectionStep::Layer(ReflectionLayer { texture: "rmsk", rgba: self.desat.to_le_bytes(), alpha_reg: 0x80_0000_0062 }));
+        }
+        out
+    }
+
+    /// The reflection camera's eye and forward axis for a view forward `f` and a point `p`
+    /// [M `FUN_001c1b18`]: eye = `p + (0, Refl HEIGHT, 0)`, forward = `normalize(0.8 · f + (0, 1,
+    /// 0))` (0.8 = `DAT_00333e78` [D .data]). `p` is the position argument `FUN_001c5eb0` passes
+    /// (from `FUN_00201af0(0x339190)`, the instance table; which instance is not traced).
+    pub fn reflection_camera(&self, p: [f32; 3], f: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+        let v = [0.8 * f[0], 0.8 * f[1] + 1.0, 0.8 * f[2]];
+        ([p[0], p[1] + self.refl_height, p[2]], normalize(v))
+    }
 }
 
 #[cfg(test)]
@@ -468,5 +570,46 @@ mod tests {
         assert!(close(side, [0.5 + 0.79 * 0.5 * 0.72; 3]), "{side:?}");
         // A downward normal gets the sky term alone.
         assert!(close(env.car_light([0.0, -1.0, 0.0], 1.0, 1.0, 1.0), [0.72; 3]));
+    }
+
+    #[test]
+    fn the_specular_basis_is_the_half_vector_frame_with_the_traced_cross_product_order() {
+        // Light from straight above, view along −z (eye looking forward).
+        let [b, c, a] = specular_basis([0.0, 1.0, 0.0], [0.0, 0.0, -1.0]);
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(close(a, [0.0, h, h]), "{a:?}");
+        // (0,1,0) × a, not a × (0,1,0): +x, not −x.
+        assert!(close(b, [1.0, 0.0, 0.0]), "{b:?}");
+        // a × b, not b × a: (0, .707, −.707).
+        assert!(close(c, [0.0, h, -h]), "{c:?}");
+        // A light from the side moves the half vector with it.
+        let [_, _, a2] = specular_basis([1.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+        assert!(close(a2, [h, 0.0, h]), "{a2:?}");
+    }
+
+    #[test]
+    fn the_reflection_map_pass_uses_sky_bright_blend_and_desat_in_the_traced_order() {
+        let c = CarRender::parse(&car_render_text()).unwrap();
+        // Skybright 127 × 0.94 = 119.38 → 119.
+        assert_eq!(c.sky_level(), 119);
+        // Sky? on, Sky blend 24, Desat? off: sky quad, scene, sky quad at alpha 24.
+        let steps = c.reflection_steps();
+        let sky = |a: u8| ReflectionStep::Layer(ReflectionLayer { texture: "cref", rgba: [119, 119, 119, a], alpha_reg: 0x80_0000_0044 });
+        assert_eq!(steps, vec![sky(0x40), ReflectionStep::Scene, sky(24)]);
+        // Desat on: the packed word's bytes, subtracted (ALPHA 0x62).
+        let d = CarRender { desat_on: true, sky_on: false, ..c.clone() };
+        assert_eq!(
+            d.reflection_steps(),
+            vec![ReflectionStep::Scene, ReflectionStep::Layer(ReflectionLayer { texture: "rmsk", rgba: [0x91, 0x91, 0x91, 0x80], alpha_reg: 0x80_0000_0062 })]
+        );
+        // Sky blend 0 drops the second sky quad only.
+        let z = CarRender { sky_blend: 0, ..c.clone() };
+        assert_eq!(z.reflection_steps(), vec![sky(0x40), ReflectionStep::Scene]);
+        // The reflection camera: raised by Refl HEIGHT, looking up between the view axis and +y.
+        let r = CarRender { refl_height: 2.0, ..c };
+        let (eye, fwd) = r.reflection_camera([1.0, 0.5, -3.0], [0.0, 0.0, -1.0]);
+        assert_eq!(eye, [1.0, 2.5, -3.0]);
+        let l = (0.64f32 + 1.0).sqrt();
+        assert!(close(fwd, [0.0, 1.0 / l, -0.8 / l]), "{fwd:?}");
     }
 }
