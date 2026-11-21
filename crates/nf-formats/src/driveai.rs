@@ -272,12 +272,20 @@ pub struct AiCommand {
     pub no_avoid: u8,
     /// +0x7d ≠ 0 → AI +0x158 [M].
     pub follow_target: u8,
-    /// +0x7e lane (< 0 keeps) → nav +0xb0 [M].
+    /// +0x7e (< 0 keeps) → nav +0xb0 [M 0x145ff8:262]. The kind-4 (road follower) junction
+    /// chooser `FUN_002235c8` reads nav +0xb0 as a one-shot link index at a node with three or
+    /// more links and resets it to −1 after use [M 0x2235c8].
     pub lane: i8,
     /// +0x7f → nav +0x04 [M].
     pub nav_byte: u8,
     /// +0x80 pattern argument (an `sr` reference on pattern-5 commands [D]).
     pub pattern_arg: u32,
+    /// +0x84 → nav +0xb1 and +0x85 → nav +0xb2 [M 0x145ff8:265-266]: the junction hint of the
+    /// kind-4 chooser. +0xb1 aims the carrot advance's hint at the target, +0xb2 away from it
+    /// [M 0x130140]; with either set `FUN_002235c8` takes the link best aligned with the hint,
+    /// with both clear it walks the plain chain [M 0x2235c8].
+    pub hint_toward: u8,
+    pub hint_away: u8,
     /// +0x87 / +0x92 machine guns, +0x90 rockets, +0x91 missiles/torpedoes — each honoured only
     /// when the vehicle's `.atr` declares the weapon (`HAS_MACHINEGUNS`/`HAS_CANNONS`,
     /// `HAS_ROCKETS`, `HAS_MISSLES`/`HAS_TORPEDOS`) [M 0x145ff8:216-238, strings 0x36e390.. [D]].
@@ -319,6 +327,8 @@ impl AiCommand {
             lane: b[0x7e] as i8,
             nav_byte: b[0x7f],
             pattern_arg: u32_at(b, 0x80),
+            hint_toward: b[0x84],
+            hint_away: b[0x85],
             guns: (b[0x87], b[0x92]),
             rockets: b[0x90],
             missiles: b[0x91],

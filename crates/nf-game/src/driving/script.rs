@@ -620,6 +620,10 @@ pub struct DriveScript {
     queue: Vec<Event>,
     /// Everything reported since the last [`DriveScript::take_output`].
     pub output: Vec<Output>,
+    /// Every trigger run since the last [`DriveScript::take_fired`], with the walk slot of the
+    /// car that ran it (0 = the player, 1.. = [`Facts::cars`]; −1 = the load-time start list,
+    /// mode-0/1 events keep the slot they were given): a port log, nothing the game keeps.
+    pub fired: Vec<(usize, i32)>,
 }
 
 impl DriveScript {
@@ -693,6 +697,7 @@ impl DriveScript {
             now: 0,
             queue: Vec::new(),
             output: Vec::new(),
+            fired: Vec::new(),
         };
         for i in 0..s.map.triggers.len() {
             if s.map.triggers[i].actions.iter().any(|a| a.id == 0x16) {
@@ -704,6 +709,9 @@ impl DriveScript {
 
     /// Takes the outputs gathered so far.
     pub fn take_output(&mut self) -> Vec<Output> { std::mem::take(&mut self.output) }
+
+    /// Takes the trigger log gathered so far ([`DriveScript::fired`]).
+    pub fn take_fired(&mut self) -> Vec<(usize, i32)> { std::mem::take(&mut self.fired) }
 
     pub fn won(&self) -> bool { self.state == DriveState::Won }
     pub fn lost(&self) -> bool { self.state == DriveState::Lost }
@@ -923,6 +931,7 @@ impl DriveScript {
 
     /// `FUN_0022c890`: run a trigger's list as the current trigger; clear bit 0 when once [M].
     pub fn fire(&mut self, trigger: usize, mode: u32, car: i32) {
+        self.fired.push((trigger, car));
         let actions = self.map.triggers[trigger].actions.clone();
         for a in actions {
             self.create(a, Some(trigger), mode, car);

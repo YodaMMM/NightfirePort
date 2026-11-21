@@ -47,6 +47,8 @@ pub mod script_effects;
 pub mod physics;
 // The player vehicle on a spline (FUN_00131620 + the path pass FUN_00192498): the MIS01 helicopter.
 pub mod path_drive;
+// The race (RACE.VIV): the race read from the data, the rival driver, the race state and HUD numbers.
+pub mod race;
 // Track scene objects: drawn/hidden, in the sim, knocked loose (trackobj.md).
 pub mod props;
 // The POV weapon mode (the MIS01 sniper phase): weapon table, loadout, gunner, mode flag.
