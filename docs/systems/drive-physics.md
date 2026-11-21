@@ -1,6 +1,6 @@
 # Drive physics — the DRIVING.ELF car physics step (CARP)
 
-Status: first port pass. Evidence tags: [M] code (function + address,
+Status: land step ported (§8); first port pass elsewhere. Evidence tags: [M] code (function + address,
 DRIVING.ELF unless named; decompile under `work/decomp/DRIVING.ELF/`), [D] disc, [L] live/trace,
 [S] suggested. File offset = EE − 0x107080 (docs/atlas/driving.md build identity). The per-frame
 loop, scheduler and 60 Hz tick are docs/atlas/driving-elf.md §1 (the timestep is `1/FUN_002d6b90()`
@@ -225,7 +225,59 @@ report asks for the live measurements that pin the macro's exact form.
   clamp 12.5, the grip boost curve 3.5→1.0 at 15 m/s, ROLLING_RESISTANCE 0.1, and the
   parsers round-tripping the shipped text forms.
 
-## 8. The SUB_PHYSICS pass (`FUN_00190f88`) and the rigid integration
+## 8. The land car step (branch s/drive-land-physics)
+
+Which pass runs: `FUN_00188200` takes `FUN_0018cef8` when `SUB_PHYSICS`(+0xc0) == 0, the
+vtbl+0x1d4 object's +0xc8 (`IS_SNOWMOBILE`) == 0 and actor+0x2c8 == 0; actor+0x2c8 != 0 takes
+`FUN_0018ecb8` (the AI cars' pass, not ported) [M 0x188bf8-0x188c60]. §4's `FUN_00190f88`
+numbers (grip boost 3.5→1.0, the ±12.5 clamp) are the SUB_PHYSICS pass, not the land car's; the
+port keeps them only in `Car::step_rail` (the AI rail stand-in, [S]).
+
+The pvehicle names ↔ offsets were re-read from the registration calls (`FUN_0016e590(.., name,
+.., offset, ..)` in `FUN_001968f8`, names from the ELF strings): +0x00 IS_4X4, +0x04 IS_RALLY,
++0x10 WHEEL_FORCE_APP_SCALE, +0x38 YAW_STABILITY_FACTOR, +0x4c SLOPE_SCALE, +0xa0
+HANDBRAKE_RW_FRIC_SCALE, +0xa4 WHEELSPINSCALE, +0xac WS_ACCEL; the rest as §2 [M]. ⚠ The two
+floats after each registration are (for example) 0.1 / 0.9 on every FRW ratio: they read as a
+(min, max) range, so §2's "defaults" may be editor maxima [S].
+
+Corrections to §2/§3: the wheelbase is `2·hz − 1.9` = 2.7336 m (the wheel z = ±hz + ZF/ZR on the
+model box, [M FUN_001f72d8]), not the 1.9 m ZR − ZF; the reverse state's THROTTLE term is the
+engine (`MAXACC·RATIO`), and only the BRAKE term uses the decayed reverse accel [M :425-429];
+the "driving" byte +0x299 the gearbox reads is the contact count `FUN_0018c1b0` returns.
+
+| function | role | port (crates/nf-game/src/driving/physics.rs) | status |
+|---|---|---|---|
+| `FUN_001ff3d8` | physics order: A car↔car, B car↔world, C, D integrate, E reset+gravity, then the controller | `Car::step`: `walls` → `integrate` → accumulators := (0, g, 0) → `controller` → `update_rpm_gear` | [M] order |
+| `FUN_001f72d8` | hull / wheel base points on the model box: wheels (∓hx ± X, −hy, ±hz + Z{F,R}); the no-hull branch puts the 8 box corners at class+0x80 | `CarParams::wheel_points`; `walls` uses the 8 corners | [M]; which branch the vanquish takes [S] |
+| `FUN_001c9778` | the box = model+0xc bbox (max − min)/2 | `half_extents` = vanquish.crp article bbox (0.919, 0.578, 2.317) [D] | model+0xc = the article Base payload [S] |
+| `FUN_00210938` | inverse inertia from mass + box (hz ≤ 4 / > 4 branches) | `inv_inertia_per_mass` | [M] |
+| `FUN_001f87d8` / `88c8` / `8888` / `87a8` | force / torque accumulate × mass (87a8 without) | accumulators hold per-mass values | [M] |
+| `FUN_001f89e0` + `.vutext` 0x568 | integration, `|v| ≤ M_LIMIT·…`, `|ω| ≤ AM_LIMIT` | semi-implicit Euler, body-frame I⁻¹ | [S] (VU0 microcode not lifted) |
+| `FUN_001f8088` | angular damping ×0.995, gated `+0x6c == 0 && +0x6d > 3` | not applied (cars are kinds 1-3) | [M] |
+| `FUN_001f7c60` | zero accumulators, gravity −13 (−34 for jungle_truck) | `acc_accum = (0, gravity, 0)` | [M] |
+| `FUN_001f6ae0` | per-wheel ground query → plane: n = norm((v1−v0)×(v0−v2)), y ≥ 0, n.y ≤ 0.9999; w = (v0 − p)·n (+ `FUN_00213618` term) | `Ground::wheel_plane`, `CollisionGround` (class 0x04 skipped), the per-wheel cache | [M]; the `FUN_00213618` term is taken 0 and the track query's search window (`UP_REACH` 1 m) is [S] |
+| `FUN_0018cef8` | pedal states (brake hold 30 ticks → reverse at long ≤ 0; brake zeroed below 0.5 m/s while counting), the front/rear grip shares (ACCEL/COAST/BRAKE/REVERSE/HANDBRAKE FRW × BRAKING_FRICTION / TOTAL_HANDBRAKE…), counter-steer 0x43c, the wheel roll `|v_xz|/(R·6.32·fps)`, wheel spin, drive `throttle·MAXACC·RATIO − brake·(MAXBRAKE | rev)`, steering, per-wheel grip / drive / limit × friction[surface], FRIC_MOD, the handbrake park | `Car::controller` | [M]; boosts (+0x294/+0x428), 0x29b/0x29f/0x2b2/0x29d bytes (no traced writer, taken 0), the shredded-tyre byte +0x43c, the skid/FX calls not ported |
+| `FUN_0018c1b0` | per wheel: x = clamp(w + REST, 0, LIMIT); contact x > 0 ∥ prev > 0; gate 0.2 < up.y·n.y; spring x·K + (x − prev)·C along n; lateral = (v_pt·lat)·grip·fricmod clamped to the limit, slip scale; drive along the wheel's long axis; slope scale on the spring's horizontal part; handbrake drag; − vel·ROLLING_RESISTANCE; torque r × F (r.y × WHEEL_FORCE_APP_SCALE); the lifted-wheel (0, −50, 0) torque; yaw stability | `Car::controller`'s wheel loop | [M]; vtbl+0x214 (taken true), the 0x324 lift, the shift squat −0.02 not ported [S] |
+| `FUN_0018aa88` | rpm / auto box | `update_rpm_gear` (unchanged), driving = contacts > 0 | [M] |
+| `FUN_001fc2f0` (+`FUN_001fb318`) | hull points swept by vel·dt against the world; land-car response vector y = 0 | `walls`: horizontal push-out + inward velocity removed, steep tris (|n̂.y| < 0.7) only | sweep [M], response [S] |
+
+Measured outcomes of the port (headless): the Vanquish rests on 4 springs carrying exactly the
+13 m/s² bodge gravity; launches at 23.4 m/s² (gear 1 rear drive); tops out at 46.8 m/s in gear 3,
+the balance `2·3·0.52·0.75·8 = 0.4·v` — gears 4/5 need the (unported) boost; reverses to 27.0 m/s;
+on MIS01 it drives 370 m in 600 ticks of full throttle with all four wheels on PAVED triangles
+(crates/nf-game/tests/drive_land_disc.rs). Whether these match the PS2 is unproven: the VU0
+integration and the four untraced actor bytes are the open items.
+
+## 9. The driving view
+
+`crates/nf-view/src/driving.rs` steps the land pass on the track's `CollisionGround` for the land
+missions (MIS01, MIS3, MIS4, RACE). The watercraft (MIS11, MIS13C) and aerial (MIS13A, MIS13B)
+missions keep the flat model and the view's own height follow until their SUB_PHYSICS steps are
+ported. The body box is the player model's article `Base` bbox (centred on the origin); the model
+draws with the body's rotation rows, its lowest vertex at the body's rest contact
+(`pos.y - (half_y + spring_rest)`) [S: the game's render offset is not traced].
+
+## 10. The SUB_PHYSICS pass (`FUN_00190f88`) and the rigid integration
 
 Port: `crates/nf-game/src/driving/sub_physics.rs`; tests `crates/nf-game/tests/drive_sub_physics.rs`
 (unit) and `drive_sub_physics_disc.rs` (NF_ISO).
@@ -309,7 +361,7 @@ W to class+0x40..+0x6f. The inverse inertia comes from `FUN_00210938(mass, half 
 the half extents of the model header box (`FUN_001c9778`). `physics::Car::step` (the land car)
 still integrates with its own Euler form; it does not use `Body::integrate`.
 
-## 9. Function table (SUB_PHYSICS layer)
+## 11. Function table (SUB_PHYSICS layer)
 
 | function | role | port | status |
 |---|---|---|---|
