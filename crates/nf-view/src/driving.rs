@@ -966,6 +966,16 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     scene.char_vertex_start = char_vertex_start;
     scene.char_verts = char_verts;
     scene.attachments = attachments;
+    // The mission's fog (the Render/Fog/<track>.tun tuning text, nf_formats::rendertun): its colour is the
+    // frame's background where nothing draws (the open sky overhead, past the sky bands), as the
+    // on-foot levels clear to theirs. The track's draws keep fog 0, so only the background changes.
+    if let Some(e) = bigf.entries.iter().find(|x| { let n = x.name.to_ascii_lowercase(); n.contains("render") && n.contains("fog") && n.ends_with(".tun") }) {
+        if let Ok(raw) = iso.read_bytes(viv_base + e.offset as u64, e.size as u64) {
+            if let Ok(t) = maybe_decompress(&raw) {
+                if let Ok(f) = nf_formats::rendertun::Fog::parse(&String::from_utf8_lossy(&t)) { scene.fog = Some((f.colour, f.end)); }
+            }
+        }
+    }
 
     let car = Car::new(car_params, start_pos, start_yaw);
     let state = DrivingState {
