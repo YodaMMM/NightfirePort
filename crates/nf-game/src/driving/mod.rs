@@ -14,6 +14,8 @@ pub mod effects;
 pub mod suspension;
 // 647 drive-mission-scripts: the mission state machine (objectives, fails, timers, the PTP end).
 pub mod mission;
+// The game's mission rules: the trigger/action/event machine and the mission manager (FUN_00206b88).
+pub mod script;
 pub mod physics;
 // Track scene objects: drawn/hidden, in the sim, knocked loose (trackobj.md).
 pub mod props;
