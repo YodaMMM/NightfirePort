@@ -1843,7 +1843,10 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
     // walkway pair outlasted the answer stands and the walk wedged at "the south strip 38.5".
     // Lever: a 200-tick stop at tick 9000 (the stairs, before the strip) re-rolls the pair's
     // approach [L the 12-value sweep: 10 of 12 pass, 9000/60 and 9300/60 too].
-    walker::with_real_damage(|| walker::with_pause(9000, 200, the_door_band_exit_chains_to_07000006_walked));
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): with 9000/200 the
+    // walk fell off the south strip 38.5 again. Lever: a 60-tick stop at tick 3000 in its place
+    // [L the 7-value sweep: 500/60, 1000/60, 2000/60, 3000/60, 4000/30, 5000/60, 6000/30 all pass].
+    walker::with_real_damage(|| walker::with_pause(3000, 60, the_door_band_exit_chains_to_07000006_walked));
     REAL_DAMAGE_BACKOFF.with(|c| c.set(false));
 }
 
