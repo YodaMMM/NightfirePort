@@ -22,9 +22,11 @@
 //!   (display+4 = index; the first enabled non-zero index, else 0).
 //! - Channel entries: `FUN_0020d378` 0x20d378 — array at display+0x10, stride 0x54:
 //!   +0x14 |= 1 (enabled), +0x18 += target, +0x1c/+0x20 = progress (min'ed), +0x34 = param.
-//! - Fail/damage setup: `FUN_00206ec0` 0x206ec0 reads MSet +0x27c/+0x280/+0x284/+0x288 (health
-//!   values, defaults 10000.0/1000.0 = 0x461c4000/0x447a0000), scales by the PTP cheat /
-//!   difficulty ints (MSet +0x294 gate, +0x298/+0x29c/+0x2a0/+0x2a4/+0x2a8 percent tables).
+//! - Health set-up: `FUN_00206ec0` 0x206ec0 reads MSet +0x27c/+0x280/+0x284/+0x288 (health max,
+//!   health, armour max, armour; defaults 10000.0/1000.0 = 0x461c4000/0x447a0000) and the
+//!   per-difficulty percents +0x294..+0x2a8 — ported in `driving::damage::PlayerHealth::start`.
+//! - `SRuleDamage` / `SRuleHealth` test the player's health through `FUN_00209ff0` /
+//!   `FUN_0020a1f8` — ported as `driving::damage::{DamageRule, HealthRule}` and used below.
 //! - Mission end: DRIVING main's exit tail maps the outcome to the PTP result
 //!   (`crates/nf-game/src/ptp.rs` — result 1 → `Mission_SetStatus(6)`, 0 → status 3).
 //!
@@ -149,13 +151,14 @@ pub struct MissionSet {
     pub param2: [i32; 32],
     /// +0x14c+i*4: per-channel param 3 (into `FUN_0020d378` arg 5 → entry +0x34).
     pub param3: [i32; 32],
-    /// +0x27c/+0x280/+0x284/+0x288: the health/damage thresholds [M FUN_00206ec0:12-21;
-    /// defaults 10000.0/1000.0 when 0 (the 0x461c4000/0x447a0000 stores)].
+    /// +0x27c/+0x280/+0x284/+0x288: health max, health, armour max, armour [M FUN_00206ec0:
+    /// 12-26; +0x280 == 0 selects 10000/10000/1000/0]. `driving::damage::HealthSet` reads them.
     pub health: [i32; 4],
-    /// +0x294: the difficulty-scaling gate (0 = none) [M FUN_00206ec0:52].
+    /// +0x294: the difficulty-0 health percent, and the gate of the whole step (> 0) [M
+    /// FUN_00206ec0:52-75].
     pub diff_gate: i32,
-    /// +0x298/+0x29c/+0x2a0/+0x2a4/+0x2a8: the per-difficulty percent tables [M FUN_00206ec0's
-    /// /100.0 scalers keyed on mgr+0x3b8 ∈ {1, 2, else}].
+    /// +0x298/+0x29c (health %, difficulty 1/2), +0x2a0/+0x2a4/+0x2a8 (armour %, difficulty
+    /// 0/1/2) [M FUN_00206ec0, keyed on mgr+0x3b8 ∈ {1, 2, else}].
     pub diff_pct: [i32; 5],
 }
 
@@ -223,7 +226,8 @@ impl Trigger {
 pub struct SimSnapshot {
     /// The player car's health [S; SRuleHealth reads it].
     pub health: f32,
-    /// Accumulated damage [S; SRuleDamage].
+    /// Accumulated damage — no rule reads it (`SRuleDamage` watches the health drop, see
+    /// `driving::damage::DamageRule`); kept for the callers.
     pub damage: f32,
     /// Speed [S; SRuleSpeed].
     pub speed: f32,
@@ -268,6 +272,40 @@ pub enum MissionEvent {
     Failed,
 }
 
+/// The `SRuleDamage` / `SRuleHealth` state of one rule. The payload (entry+0x10..) is subject,
+/// target index, then the damage threshold (`SRuleDamage`) or direction + threshold
+/// (`SRuleHealth`) [M FUN_00209738 / FUN_00209f38 / FUN_0020a128].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RuleWatch {
+    Damage(crate::driving::damage::DamageRule),
+    Health(crate::driving::damage::HealthRule),
+}
+
+impl RuleWatch {
+    pub fn of(e: &RuleEntry, k: RuleKind) -> Option<RuleWatch> {
+        use crate::driving::damage::{DamageRule, HealthRule, RuleSubject};
+        let w = |o: usize| e.u32_at(o);
+        let subject = RuleSubject::from_entry(w(0), w(4));
+        match k {
+            RuleKind::Damage => Some(RuleWatch::Damage(DamageRule::new(subject, w(8) as i32))),
+            RuleKind::Health => Some(RuleWatch::Health(HealthRule::new(subject, w(8) != 0, w(12) as i32))),
+            _ => None,
+        }
+    }
+
+    /// One test. Subject 0 reads `(int)` the player's health; the snapshot carries no value for
+    /// subjects 3 (the `FUN_0012c440` pair) and 4 (a mission target's hit points), so those
+    /// read 0 here — unproven against the game's values.
+    pub fn test(&mut self, player_health: f32) -> bool {
+        use crate::driving::damage::RuleSubject;
+        let val = |s: RuleSubject| if s == RuleSubject::Player { player_health as i32 } else { 0 };
+        match self {
+            RuleWatch::Damage(d) => { let v = val(d.subject); d.test(v) }
+            RuleWatch::Health(h) => { let v = val(h.subject); h.test(v) }
+        }
+    }
+}
+
 /// The headless mission state machine.
 pub struct Mission {
     /// The parsed rules, bucketed by group id exactly like `FUN_00205220` (g < 0 → the
@@ -280,9 +318,9 @@ pub struct Mission {
     pub channels: [Channel; 32],
     /// The active objective index (display+4 [M FUN_0020d488]).
     pub active: i32,
-    /// The damage thresholds [M FUN_00206ec0's defaults 10000.0/1000.0].
-    pub health_limit: f32,
-    pub damage_limit: f32,
+    /// Per rule, the `SRuleDamage` / `SRuleHealth` state (`None` for the other types) [M
+    /// FUN_00209f38 / FUN_0020a128 ctors].
+    pub watch: Vec<Option<RuleWatch>>,
     /// Mission timers: (rule index, remaining seconds) — the `SRuleTimer` rules' countdowns [S].
     pub timers: Vec<(usize, f32)>,
     pub state: MissionState,
@@ -323,8 +361,7 @@ impl Mission {
             set: None,
             channels: [Channel::default(); 32],
             active: 0,
-            health_limit: 10_000.0,
-            damage_limit: 1_000.0,
+            watch: Vec::new(),
             timers,
             state: MissionState::Playing,
             drive_index,
@@ -346,8 +383,6 @@ impl Mission {
                     }
                 }
                 m.activate_first();
-                m.health_limit = if s.health[0] != 0 { s.health[0] as f32 } else { 10_000.0 };
-                m.damage_limit = if s.health[1] != 0 { s.health[1] as f32 } else { 1_000.0 };
             }
             None => {
                 // The no-MSet default path's fixed set [M FUN_00205498:11-20]: count-99
@@ -359,6 +394,7 @@ impl Mission {
             }
         }
         m.set = set;
+        m.watch = m.rules.iter().map(|(e, k)| RuleWatch::of(e, *k)).collect();
         m
     }
 
@@ -426,8 +462,10 @@ impl Mission {
             let fire = match k {
                 RuleKind::Always => true, // SRuleAlways: unconditional [D name; S semantics]
                 RuleKind::Timer => fired.contains(&i),
-                RuleKind::Health => sim.health <= 0.0,
-                RuleKind::Damage => sim.damage >= self.damage_limit,
+                RuleKind::Health | RuleKind::Damage => match self.watch.get_mut(i) {
+                    Some(Some(w)) => w.test(sim.health),
+                    _ => false,
+                },
                 RuleKind::Death => sim.died == Some(e.hash),
                 RuleKind::Collision => sim.collided,
                 RuleKind::Prog | RuleKind::ProgCounter => sim.progress >= e.u32_at(0),
@@ -485,8 +523,8 @@ impl Mission {
         }
     }
 
-    /// The fail path: health/damage exhausted [M FUN_00206ec0's thresholds; SRuleHealth/
-    /// SRuleDamage fire the fail].
+    /// The fail path. The rules only fire into their channel; what raises `EPlayerLose` from a
+    /// fired rule is the script's, not traced here.
     pub fn fail(&mut self, events: &mut Vec<MissionEvent>) {
         if self.state == MissionState::Playing {
             self.state = MissionState::Failed;
@@ -559,9 +597,9 @@ mod tests {
     #[test]
     fn mission_set_parses_name_channels_and_thresholds() {
         let mut m = mset3();
-        m[0x27c..0x280].copy_from_slice(&9000i32.to_le_bytes()); // health [M 00206ec0]
-        m[0x280..0x284].copy_from_slice(&800i32.to_le_bytes()); // damage
-        m[0x294..0x298].copy_from_slice(&1i32.to_le_bytes()); // diff gate
+        m[0x27c..0x280].copy_from_slice(&9000i32.to_le_bytes()); // health max [M 00206ec0]
+        m[0x280..0x284].copy_from_slice(&800i32.to_le_bytes()); // health
+        m[0x294..0x298].copy_from_slice(&1i32.to_le_bytes()); // difficulty-0 health % (the gate)
         let s = MissionSet::parse(&m);
         assert_eq!(s.name, "helicopter");
         assert!(s.enabled[1] && s.enabled[2] && s.enabled[3] && !s.enabled[0]);
@@ -614,11 +652,14 @@ mod tests {
     #[test]
     fn fail_path_maps_to_the_ptp_fail_return() {
         let mut rule = Vec::new();
-        rule.extend_from_slice(&entry(4, 0, 1, 9, [0; 16])); // SRuleHealth in ch1
+        // SRuleHealth in ch1: subject 0 (player), falling, threshold 1 [M FUN_0020a128 layout].
+        let mut ph = [0u8; 16];
+        ph[12..16].copy_from_slice(&1i32.to_le_bytes());
+        rule.extend_from_slice(&entry(4, 0, 1, 9, ph));
         let mut m = Mission::load(&rule, Some(&mset3()), 0);
         assert_eq!(m.state, MissionState::Playing);
         m.step(crate::driving::DT, &SimSnapshot { health: 500.0, ..Default::default() });
-        assert_eq!(m.state, MissionState::Playing, "health above 0 keeps playing");
+        assert_eq!(m.state, MissionState::Playing, "health above the threshold keeps playing");
         let ev = m.step(crate::driving::DT, &SimSnapshot { health: 0.0, ..Default::default() });
         assert_eq!(ev, vec![MissionEvent::ObjectiveProgress(1)]);
         m.fail(&mut Vec::new());
@@ -626,6 +667,28 @@ mod tests {
         let ret = m.drive_return(stats, 2);
         assert_eq!((ret.result, ret.status_byte), (0, 4)); // FUN_00300058(0x100000, 0) [M]
         assert_eq!(ret.mission_state(), 3); // Mission_SetStatus(3) [M 0x1c8560]
+    }
+
+    #[test]
+    fn health_and_damage_rules_fire_on_the_game_tests() {
+        // SRuleHealth ch1: player, falling below 500 [M FUN_0020a1f8]; SRuleDamage ch1: player,
+        // a drop of more than 99 [M FUN_00209ff0].
+        let mut ph = [0u8; 16];
+        ph[12..16].copy_from_slice(&500i32.to_le_bytes());
+        let mut pd = [0u8; 16];
+        pd[8..12].copy_from_slice(&99i32.to_le_bytes());
+        let mut rule = Vec::new();
+        rule.extend_from_slice(&entry(4, 0, 1, 9, ph));
+        rule.extend_from_slice(&entry(2, 0, 1, 8, pd));
+        let mut set = mset3();
+        set[0x4c + 4..0x4c + 8].copy_from_slice(&10i32.to_le_bytes()); // ch1 target 10
+        let mut m = Mission::load(&rule, Some(&set), 0);
+        let at = |h: f32| SimSnapshot { health: h, ..Default::default() };
+        assert!(m.step(crate::driving::DT, &at(1000.0)).is_empty(), "first look: no drop, above 500");
+        assert!(m.step(crate::driving::DT, &at(950.0)).is_empty(), "a drop of 50");
+        assert_eq!(m.step(crate::driving::DT, &at(800.0)), vec![MissionEvent::ObjectiveProgress(1)], "a drop of 150");
+        assert_eq!(m.step(crate::driving::DT, &at(450.0)), vec![MissionEvent::ObjectiveProgress(1); 2], "below 500 and a drop of 350");
+        assert!(m.step(crate::driving::DT, &at(450.0)).is_empty(), "no new crossing, no drop");
     }
 
     #[test]
