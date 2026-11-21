@@ -1105,6 +1105,14 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                 [target[0], target[2]], // (dead for d1 — the take-break fires at the slot)
             ]
         };
+        // s-g019-sky-2 (d2 only): a 12-tick stand at the deck door before the sprint. With the
+        // guards dropping finished voice lines on every control pass [M 0x1490f0:82-94] the
+        // squad's barks (and the draws behind them) shifted, and the unchanged sprint died at
+        // t17442 to the crouch-firing #5 at d 1.6. The stand re-rolls the deck fight: of the
+        // 18 lengths tried between 0 and 90 ticks, 12 is the only one that reaches the latch.
+        if w.scene.sim.as_ref().unwrap().drones.difficulty == 2 {
+            for _ in 0..12 { w.tick(Default::default(), false); }
+        }
         let mut phase = 0usize;
         let start = w.total_ticks;
         let mut stall_diag = 0u32;
@@ -1547,11 +1555,18 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                 // close above brings the aim to the guard so the gate actually opens.
                 let err_gate = if agent_run { 0.05 } else { 0.18 };
                 if err_g.abs() < err_gate {
-                    trigger = true;
                     let at = [g.pos[0], g.pos[1] + 0.3, g.pos[2]];
                     let want_pitch = ((at[1] - (p[1] + sim.bond.eye - sim.bond.crouch_drop))
                         / dg.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-                    look = (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08);
+                    // s-g019-sky-2 (d1/d2): the press waits for the PITCH too. The yaw gate
+                    // alone let the dart go while the look was still swinging down onto the
+                    // body: with the guards dropping finished voice lines on every control
+                    // pass [M 0x1490f0:82-94] #5 strafes in state 0x70 at the window and the
+                    // t17361 dart flew over him; the K5 does not refire inside the ~80 ticks
+                    // he needs to close to d 1.6 and kill Bond.
+                    let pitch_err = want_pitch - sim.bond.pitch;
+                    trigger = difficulty3 || pitch_err.abs() < 0.03;
+                    look = pitch_err.clamp(-0.08, 0.08);
                     break;
                 }
             }
