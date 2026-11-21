@@ -22,7 +22,10 @@
 use std::path::{Path, PathBuf};
 
 /// The repository the issues go to (the releases' repository).
+#[cfg(not(target_os = "android"))]
 pub const REPO: &str = crate::launcher::update::REPO;
+#[cfg(target_os = "android")]
+pub const REPO: &str = "";
 /// The issue form (`.github/ISSUE_TEMPLATE/bug_report.yml`).
 pub const TEMPLATE: &str = "bug_report.yml";
 
@@ -34,7 +37,10 @@ pub fn reports_dir() -> Option<PathBuf> { crate::settings::config_dir().map(|d| 
 
 /// The build's version line: `0.1.3 (commit abc1234)` / `dev build (commit …)`.
 pub fn version_line() -> String {
+    #[cfg(not(target_os = "android"))]
     let v = crate::launcher::update::current_version().map(str::to_string).unwrap_or_else(|| "dev build".into());
+    #[cfg(target_os = "android")]
+    let v = "android build".to_string();
     format!("{v} (commit {})", crate::replay::git_hash())
 }
 
