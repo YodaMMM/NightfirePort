@@ -572,9 +572,23 @@ impl DrivingState {
 
     /// This frame's particle billboards, grouped by (texture, additive) for the renderer.
     pub fn particle_groups(&mut self, right: [f32; 3], up: [f32; 3]) -> Vec<(Option<usize>, bool, Vec<Vertex>)> {
-        let shine = self.shine_group(right, up);
-        let Some(fx) = self.fx.as_mut() else { return shine.into_iter().collect() };
-        let mut groups: Vec<(Option<usize>, bool, Vec<Vertex>)> = shine.into_iter().collect();
+        let mut shine: Vec<(Option<usize>, bool, Vec<Vertex>)> = self.shine_group(right, up).into_iter().collect();
+        // The projectiles in flight: a small additive glow each [S: the game draws the rocket /
+        // missile models and their trails; the models are not decoded yet].
+        if let Some(w) = self.weapons.as_ref().filter(|w| !w.shots.is_empty()) {
+            let mut v = Vec::new();
+            for sh in &w.shots {
+                let h = 0.35;
+                let c = |sx: f32, sy: f32| [0, 1, 2].map(|k| sh.pos[k] + right[k] * h * sx + up[k] * h * sy);
+                let q = |p: [f32; 3]| Vertex { pos: p, uv: [0.0, 0.0], rgba: [255, 180, 80, 128], nrm: [0; 4] };
+                let (a, b, cc, d) = (q(c(-1.0, 1.0)), q(c(1.0, 1.0)), q(c(1.0, -1.0)), q(c(-1.0, -1.0)));
+                v.extend_from_slice(&[a, b, cc, a, cc, d]);
+            }
+            shine.push((None, true, v));
+        }
+        let shine = shine;
+        let Some(fx) = self.fx.as_mut() else { return shine };
+        let mut groups: Vec<(Option<usize>, bool, Vec<Vertex>)> = shine;
         for d in fx.pool.draws(&fx.lib, |_| None) {
             let nf_game::driving::effects::ParticleDraw::Quad { centre, size, rotation, cell, rgba, additive } = d else { continue };
             let h = size * 0.5;
