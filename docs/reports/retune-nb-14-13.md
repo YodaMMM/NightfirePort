@@ -91,9 +91,13 @@ the pocket-bombardment completion design.**
   (`crates/nf-view/tests/common/*`) carry ZERO change this round** — the other walks'
   byte-identity is by construction, and the whole-binary counts above match rounds 9-12.
 - The fast suite (`tools/test/suite.py`) was started in the background on the final tree per
-  the task order; its tail is read before the final push (the round-12 disk lesson stands:
-  the four-crate test build may not fit this rootfs — if no total line exists, the two
-  required binaries' whole runs above are the evidence, as in rounds 4-12).
+  the task order; the sandbox killed it between tool calls with an empty `suite.out` (a
+  second, 25-second foreground probe confirmed the build phase starts silently — the runner
+  writes its per-binary lines only after the four-crate `--no-run` build). The round-12 disk
+  lesson stands — the four-crate test build does not fit this rootfs beside the two required
+  binaries (4.6 GB free at the check) — and the window could not hold build + run to a total
+  line. **No total line exists this round; the two required binaries' whole runs above are
+  the evidence, as in rounds 4-12.**
 - Facts tagged [L] come from this window's runs on the real ISO with the NF traces; code
   citations are [M] with the addresses in the test comments; no test was weakened; the game
   bytes, the token and the URLs stayed out of the commits.
@@ -123,3 +127,12 @@ round-9 levers 2/3.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed (the exact output):
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: the command hit the 120-second tool timeout and was killed with no output
+   (`wget -q -O- --post-data ... https://ntfy.sh/nightfire-yoda-8k3x` — killed, duration
+   120003 ms).
