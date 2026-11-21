@@ -15,6 +15,8 @@ pub mod patterns;
 pub mod bounds;
 // The player chase camera (camera.ini HeliCam + FUN_001b2b48).
 pub mod camera;
+// Vehicle damage + health: mission+0x378..0x384, the car's damage virtual, zones, contacts.
+pub mod damage;
 // Effects: the particle pool, emitters, wheel smoke/spray/sparks, glare pulse (FUN_001f29d8 family).
 pub mod effects;
 // The MIS01 sniper phase's flight path, triggers, timers, view limits and shot test.
