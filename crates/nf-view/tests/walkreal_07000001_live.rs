@@ -1850,6 +1850,8 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 // starts clean. d1/d2 never take the break (it is d3-gated) — one pass, the
                 // old shape.
                 let mut dead = false;
+                // retune-nb-01-3 (d3): the fight's baseline health for the window-burn cap.
+                let fight_hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
                 for lane_window in 0..4u32 {
                 let hp0 = w.scene.sim.as_ref().unwrap().drones.health.health;
                 let mut volley_broke = false;
@@ -2036,6 +2038,20 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 w.dmg.return_fire = rf_home;
                 w.leg_crouch = false;
                 w.wait(75);
+                // retune-nb-01-3 (d3, the ledger's lever 2, the #11 window cap): a heavy window
+                // re-peeks into the SAME burst — #11's lane windows burned 24.0 across two
+                // windows, two one-frame captain bursts the 2.0 volley break cannot prevent
+                // (it fires after the damage landed) [L the round-2 ledger]. The pool is the
+                // endgame's weapon (the v4-v6 runs enter the pocket trades at 30.6 and die on
+                // the crossfire), so a guard whose windows already cost > 10.0 total is LEFT:
+                // the plate walk's own return fire answers stragglers (the d1 run: #4 died to
+                // it in 590 ticks), and d1/d2 keep their window shape byte-identical.
+                if difficulty >= 3
+                    && fight_hp0 - w.scene.sim.as_ref().unwrap().drones.health.health > 10.0 {
+                    eprintln!("[01] hall guard {g}: the window burn cap (bond {:.1} of {:.1} spent) — the guard is left",
+                        fight_hp0 - w.scene.sim.as_ref().unwrap().drones.health.health, fight_hp0);
+                    break;
+                }
                 }
                 // hall-6: the dead guard's own drop spot joins the no_fetch ban — his drop
                 // lands inside the hall and the on-trail rule would fetch it deep.
