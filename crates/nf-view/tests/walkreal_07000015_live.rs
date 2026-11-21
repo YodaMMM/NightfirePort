@@ -243,42 +243,6 @@ fn draw_persist(w: &mut Walker, id: u8, label: &str) {
         w.scene.sim.as_ref().unwrap().gun.weapon);
 }
 
-/// retune-nb-15 (the west-room lob lever): one frag throw at a live POINT (the guard's own
-/// position — he cannot see Bond at the door[29] threshold [L the geom diagnostic: #11/#18
-/// los false in every poke cycle], so there is no counter-fire to outrun). The aim+press core
-/// of `shoot_mine` without the mine bookkeeping: turn/pitch to the aim point, fire on the
-/// 0.002-rad gate every 12 ticks, up to 3 pulls or 240 ticks (the frag is TIME-fused 210
-/// [M Bullet_init 0x12c5a0's default] — the pop lands at the rest ~220 ticks after the
-/// throw, near the aim point). Returns Bond's distance to the aim point at the throw.
-fn throw_frag_at(w: &mut Walker, aim: [f32; 3], label: &str) -> f32 {
-    let mut pulls = 0u32;
-    let mut thrown_d = 0.0f32;
-    for t in 0..240u32 {
-        let (input, on) = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let bp = sim.bond.pos;
-            let eye_y = bp[1] + sim.bond.eye - sim.bond.crouch_drop;
-            let (dx, dy, dz) = (aim[0] - bp[0], aim[1] - eye_y, aim[2] - bp[2]);
-            let err = walker::wrap_pi(dx.atan2(dz) - sim.bond.yaw);
-            let want = (dy / dx.hypot(dz).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-            let perr = want - sim.bond.pitch;
-            let on = err.abs() < 0.002 && perr.abs() < 0.002 && t % 12 == 0;
-            (nf_game::player::Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() }, on)
-        };
-        if on {
-            pulls += 1;
-            thrown_d = { let sim = w.scene.sim.as_ref().unwrap(); let bp = sim.bond.pos;
-                ((aim[0] - bp[0]).powi(2) + (aim[2] - bp[2]).powi(2)).sqrt() };
-            w.tick_fire(input);
-            if pulls >= 1 { break; }
-        } else {
-            w.tick(input, false);
-        }
-    }
-    eprintln!("[15lob] {label}: pulls {pulls}, Bond {thrown_d:.2} u off the aim point");
-    thrown_d
-}
-
 /// The pre-lane stand's AIMED stand (real-health-00agent-15-5): the 07000006 walk's proven
 /// aimed_stand, file-local (shared helpers stay opt-in per the merge lessons). The parts that
 /// make long-range stands land, each measured on the 0c/06 branches: the settle + the aim-RAISE
@@ -566,6 +530,10 @@ fn aimed_stand_impl(w: &mut Walker, di: usize, label: &str, cap: u32, head_first
                 for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
             } else if fire {
                 last_tap = t;
+                if std::env::var_os("NF_STAND_TRACE").is_some() {
+                    let s = w.scene.sim.as_ref().unwrap();
+                    eprintln!("[tap] {label} t{t} #{di} hp {:.1} aim {:?} clip {} door51 {:#x}", s.drones.list[di].health, aim, s.gun.clip, s.drones.doors.list[51].state);
+                }
                 w.tick_fire(input);
             } else {
                 w.tick(input, false);
@@ -674,6 +642,184 @@ fn backpedal_face(w: &mut Walker, to: [f32; 3], face: [f32; 3], r: f32, label: &
         w.tick(input, false);
     }
     panic!("{label}: backpedal_face cap\n{}", walker::fail_dump_pub(&w.scene, to, label));
+}
+
+/// The ammo inventory line for the ledger: the gun in hand and every carried ammo slot.
+fn ammo_line(w: &Walker) -> String {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let inv = &sim.drones.inventory;
+    let carried: Vec<String> = inv.carried.iter().enumerate().filter(|(_, &c)| c != 0)
+        .map(|(i, c)| format!("{i:#x}:{c}")).collect();
+    format!("gun {:#04x} clip {} spare {} carried [{}] health {:.1} armour {:.1}", sim.gun.weapon, sim.gun.clip,
+        sim.gun.spare, carried.join(" "), sim.drones.health.health, sim.drones.health.armour)
+}
+
+/// The keypad room east of door[33] (#685, ch_lock 0xf9 [D]), the 00 Agent real-damage walk's
+/// resupply: five frag pickups (0x34, 1 round each, (57.6..58.4, 40.4, 70.3..71.0)) and a
+/// 30-round 0x1a ammo box (58.36, 40.32, 72.02) [D map54 #146 ×5 / #159, the 0xF0 census], no
+/// guard placed inside [D the roster]. The level's own gate is the #711 keypad (45.89, 41.96,
+/// 69.58, out 0xf9) in the doorway's west pocket; the code goes in through the keypad page
+/// (`Keypad::arm` + the digits, the tower2 / interactables_07000015 idiom) with the Q-Decryptor
+/// (0x4e, the loadout's [D]) held on the lock, and the 0xf9 rising edge opens the leaf [M
+/// Door_Update's lock path]. Back to the nav lane top afterwards with the gun that was in hand.
+/// Measured: 0x1a carried 20 → 50, frags 6 → 9 (two frag pickups stay on the floor), no hit
+/// taken, ~1200 ticks.
+fn keypad_cache(w: &mut Walker) {
+    let prev = w.scene.sim.as_ref().unwrap().gun.weapon;
+    eprintln!("[15cache] before: {}", ammo_line(w));
+    w.walk_to(Wp::new(44.5, 41.4, 70.3).r(0.9), "the #711 lock pocket");
+    let mut cycles = 0;
+    while w.scene.sim.as_ref().unwrap().gun.weapon != 0x4e {
+        assert!(cycles < 14, "the G cycle never reached the Q-Decryptor (0x4e)");
+        w.tick(nf_game::player::Input { gadget_cycle: 1, ..Default::default() }, false);
+        for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        cycles += 1;
+    }
+    // A keypad opens by its typed code or the decryptor (the tower2 / interactables idiom).
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        if let Some(li) = sim.drones.locks.iter().position(|l| l.out == 0xf9 && !l.unlocked) {
+            let code = sim.drones.key_codes.code(sim.drones.locks[li].code);
+            sim.drones.keypad = Some((li, nf_game::lock::Keypad::arm(code, false)));
+            for c in code { sim.drones.keypad_digit((c - b'0') as u32); }
+        }
+    }
+    let lock_at = [45.89f32, 41.96, 69.58];
+    let start = w.total_ticks;
+    while !w.scene.sim.as_ref().unwrap().drones.channels.on(0xf9) {
+        assert!(w.total_ticks - start < 600, "the #711 keypad never raised ch 0xf9");
+        let input = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let eye = p[1] + sim.bond.eye - sim.bond.crouch_drop;
+            let err = walker::wrap_pi((lock_at[0] - p[0]).atan2(lock_at[2] - p[2]) - sim.bond.yaw);
+            let want = ((lock_at[1] - eye) / walker::dxz(p, lock_at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+            nf_game::player::Input { turn: err.clamp(-0.05, 0.05), look: (want - sim.bond.pitch).clamp(-0.05, 0.05), ..Default::default() }
+        };
+        w.tick_fire(input);
+    }
+    for _ in 0..90 { w.tick(nf_game::player::Input::default(), false); }
+    w.walk_to(Wp::new(47.5, 41.4, 70.2).r(1.0), "door[33] through east");
+    w.walk_to(Wp::new(53.4, 41.4, 71.2).r(1.0), "the keypad room");
+    w.walk_to(Wp::new(58.2, 41.4, 71.9).r(0.4), "the keypad room's 0x1a box");
+    w.walk_to(Wp::new(58.0, 41.4, 70.6).r(0.3), "the keypad room's frags");
+    let left: Vec<String> = walker::pickups(w.scene.sim.as_ref().unwrap()).iter()
+        .filter(|(p, _, _)| p[0] > 50.0 && p[0] < 60.0 && p[2] > 69.0 && p[2] < 73.0)
+        .map(|(p, k, id)| format!("kind {k} id {id:#x} at ({:.2},{:.2})", p[0], p[2])).collect();
+    eprintln!("[15cache] in the room: {} (left: {left:?})", ammo_line(w));
+    w.walk_to(Wp::new(47.5, 41.4, 70.2).r(1.0), "door[33] back west");
+    w.walk_to(Wp::new(44.5, 41.4, 70.3).r(0.9), "the lock pocket back");
+    w.walk_to(Wp::new(41.9, 41.4, 71.2).r(1.2), "the nav lane top again");
+    if prev != 0x4e { draw_persist(w, prev, "the gun back in hand after the keypad room"); }
+    eprintln!("[15cache] after: t{} {}", w.total_ticks, ammo_line(w));
+}
+
+
+/// The west-room grenadiers still standing (x < 8, z 60..84, the room past door[29]), nearest first.
+fn west_room_live(w: &Walker) -> Vec<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let b = sim.bond.pos;
+    let mut v: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+        d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+            && d.pos[0] < 8.0 && (60.0..84.0).contains(&d.pos[2]) && (d.pos[1] - b[1]).abs() < 3.0 }).collect();
+    v.sort_by(|&a, &c| walker::dxz(sim.drones.list[a].pos, b).total_cmp(&walker::dxz(sim.drones.list[c].pos, b)));
+    v
+}
+
+/// The live hostiles within `max_d` of Bond on his floor, nearest first.
+fn live_near(w: &Walker, max_d: f32) -> Vec<usize> {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let b = sim.bond.pos;
+    let mut v: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+        d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+            && (d.pos[1] - b[1]).abs() < 3.0 && walker::dxz(d.pos, b) < max_d }).collect();
+    v.sort_by(|&a, &c| walker::dxz(sim.drones.list[a].pos, b).total_cmp(&walker::dxz(sim.drones.list[c].pos, b)));
+    v
+}
+
+/// The first of `cands` whose head or body the gun rays reach from where Bond stands.
+fn first_in_sight(w: &Walker, cands: Vec<usize>) -> Option<usize> {
+    let s = w.scene.sim.as_ref().unwrap();
+    cands.into_iter().find(|&di| head_aim(s, di).is_some() || walker::DamageLog::exposed_part_gun_rays(s, di).is_some())
+}
+
+/// Walk to `to` (plain steering) the way a player crosses a room under guns: every tick, a
+/// guard from `pick` whose head or body the gun rays reach is answered at once with the
+/// head-first aimed stand, then the walk resumes. door[29] is re-opened when it has shut in
+/// front of Bond (east of its plane).
+fn walk_react(w: &mut Walker, to: [f32; 3], r: f32, label: &str, pick: &dyn Fn(&Walker) -> Vec<usize>) {
+    let mut stands = 0u32;
+    for _ in 0..2400u32 {
+        let (done, closed) = { let s = w.scene.sim.as_ref().unwrap();
+            (walker::dxz(s.bond.pos, to) < r, s.bond.pos[0] > 10.6 && s.bond.pos[2] > 65.0 && s.drones.doors.list[29].state & 0xc == 0) };
+        if done { return; }
+        if closed { open_door_facing(w, [10.56, 41.59, 70.13], "door[29] on the react walk"); continue; }
+        if stands < 6 {
+            if let Some(di) = first_in_sight(w, pick(w)) {
+                stands += 1;
+                let k = aimed_stand_impl(w, di, &format!("{label}: the guard in sight"), 400, true);
+                eprintln!("[15react] #{di} killed {k} t{} {}", w.total_ticks, ammo_line(w));
+                continue;
+            }
+        }
+        let input = { let s = w.scene.sim.as_ref().unwrap(); let p = s.bond.pos;
+            let err = walker::wrap_pi((to[0] - p[0]).atan2(to[2] - p[2]) - s.bond.yaw);
+            nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() > 0.6 { 0.0 } else { 1.0 }, ..Default::default() } };
+        w.tick(input, false);
+    }
+    eprintln!("[15react] {label}: walk_react cap at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+}
+
+/// Hold the spot `ticks` ticks, answering every guard from `pick` that comes into the gun rays'
+/// reach with the head-first aimed stand (the stand's own ticks count toward the hold).
+fn hold_react(w: &mut Walker, ticks: u32, label: &str, pick: &dyn Fn(&Walker) -> Vec<usize>) {
+    let end = w.total_ticks + ticks;
+    let mut stands = 0u32;
+    while w.total_ticks < end {
+        if stands < 6 {
+            if let Some(di) = first_in_sight(w, pick(w)) {
+                stands += 1;
+                let k = aimed_stand_impl(w, di, &format!("{label}: the guard in sight"), 400, true);
+                eprintln!("[15react] {label}: #{di} killed {k} t{} {}", w.total_ticks, ammo_line(w));
+                continue;
+            }
+        }
+        w.tick(nf_game::player::Input::default(), false);
+    }
+}
+
+/// The west room one grenadier at a time (00 Agent real damage). The room is a ring walkway
+/// round a lower centre (floor 38.8 at (4.0, 69.5) against the ring's 40.3 [D floor_below]);
+/// door[29] opens onto the ring's east side and the three grenadiers stand on its far west side:
+/// #11 (-1.87, 77.42), #10 (-5.14, 67.25), #18 (-6.32, 71.64) [D the d3 roster]. The eye-line
+/// scan from the ring (`world.segment` from the eye at 1.83 over the floor to each spawn head)
+/// gives each guard his own spot: (5.0, 71.25) sees #11 alone, (6.0, 66.0) sees #10 alone, and
+/// (3.0, 65.0) sees #10 and #18 (so #18 alone once #10 is down). The route walks those spots in
+/// that order, the south ring being the way to door[52] anyway, and takes each guard with the
+/// head-first aimed stand from his own spot, out of the other two's sight.
+fn west_room_one_at_a_time(w: &mut Walker) {
+    for (spot, near, skin, label) in [
+        ([5.0f32, 71.25], [-1.87f32, 77.42], 0x50000b2u32, "the north-west grenadier (#11) from his own spot"),
+        ([6.0f32, 66.0], [-5.14f32, 67.25], 0x50000b2u32, "the west grenadier (#10) from his own spot"),
+        ([3.0f32, 65.0], [-6.32f32, 71.64], 0x500008cu32, "the launcher guard (#18) from the south ring"),
+    ] {
+        if west_room_live(w).is_empty() { break; }
+        walk_react(w, [spot[0], 41.4, spot[1]], 0.8, "a west-room guard's own spot", &west_room_live);
+        let Some(di) = agent_drone_nearest_skin(w, [near[0], 41.34, near[1]], 8.0, skin) else {
+            eprintln!("[15ring] {label}: already down");
+            continue;
+        };
+        let k = aimed_stand_impl(w, di, label, 600, true);
+        let s = w.scene.sim.as_ref().unwrap();
+        eprintln!("[15ring] #{di} {label}: killed {k} t{} bond ({:.2},{:.2}) {}", w.total_ticks, s.bond.pos[0], s.bond.pos[2], ammo_line(w));
+    }
+    // Any grenadier still standing: nearest first from where Bond stands.
+    for _ in 0..3 {
+        let Some(&di) = west_room_live(w).first() else { break };
+        let k = aimed_stand_impl(w, di, "the west-room leftover, nearest first", 600, true);
+        eprintln!("[15ring] leftover #{di} killed {k} {}", ammo_line(w));
+        if !k { break; }
+    }
 }
 
 fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
@@ -1222,7 +1368,14 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
             }
         }
     }
-    w.walk_route(route_b1b);
+    if difficulty >= 3 && !w.tops_up() {
+        let (b1c, b1d) = route_b1b.split_at(route_b1b.iter().position(|(l, _)| *l == "the nav lane west").unwrap());
+        w.walk_route(b1c);
+        keypad_cache(&mut w);
+        w.walk_route(b1d);
+    } else {
+        w.walk_route(route_b1b);
+    }
     // The door[32] doorway guard clears BEFORE the lane is walked (a player clears the doorway
     // before stepping past it); at the d2 roster the placement-spot resolution is kept.
     if difficulty >= 2 {
@@ -1436,161 +1589,18 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     let (route_c, route_d) = route.split_at(route.iter().position(|(l, _)| *l == "the southwest jog").unwrap());
     let solo = difficulty >= 3 && !w.tops_up();
     if solo {
-        // retune-nb-15 (the west-room poke-and-step-back): the lever-4 real run measured the
-        // pre-throw newborn pick KILL #11 clean (no blast — the law works once born is
-        // re-based to the phase's first poll), but the walk's own band crossing handed the
-        // pair their sight ~50 ticks before the first fight poll: #18's launcher round was
-        // already airborne and popped mid-fight for −37.7, and #10 (unseen from the solo
-        // line) survived his stand and threw again later. The door[29] doorway band makes
-        // ALL THREE visible from the threshold (12.4, 71.2) — the d2 rim lever's own measured
-        // premise (#10 z ≈ 70.75, #11 z ≈ 72.1 inside 70.06..72.32 [D]) — and mutual: their
-        // sight opens at the same spot, so a thrown round lands ~220 ticks later ~5-9 u off
-        // the throw-time position [L the lever-4 blast, 9.0 u off the solo line]. A player
-        // pokes the doorway (the fights answer whoever is exposed — the pre-throw pick for
-        // the newborns, born = the phase's first poll), then steps BACK east out of the
-        // arcing pops' reach (~16 u, the lever-4 rest geometry) and waits out the fuse
-        // before the next poke. The P2K rides the phase (drawn below): its spread-0.0 rounds
-        // [L ee_start_05.bin weapon_data 0x02 +0x24/+0x98] satisfy the taps' 0.01-rad aim
-        // gate immediately — the lever-4 AR fight took 240 ticks (clip-3 dry-swap + cone
-        // gates) and conceded the airborne pop; a dead grenadier throws nothing.
-        // [S] the 250/400-tick windows are this run's measured margins, not game rules.
+        // s-pickup-pushout-walks-2 (the west-room plan on the push-out stream): the old poke /
+        // frag-lob / solo-line shape spent ~5000 ticks in the doorway band and its lobs popped on
+        // Bond (−55.08 at (15.43, 71.65), Bond's own frag back off the leaf) or fed the fights'
+        // resupply nav, which walked him 37 u back east onto the armour behind the dead 0xc8
+        // door (the 6000-tick wedge). With the keypad room's ammo in the carry (keypad_cache), the
+        // room is crossed one grenadier at a time on the reacting walk instead: each guard the
+        // gun rays reach is taken with the head-first aimed stand the moment he is in sight.
+        // Measured on this tree: #11 (t10319), #18 (t10526) and #10 (t10720) killed from the
+        // ring's east side with no hit taken, health 58.6 kept.
         w.walk_route(&route_c[..1]);
-        for cycle in 0..4 {
-            let live = { let sim = w.scene.sim.as_ref().unwrap(); let b = sim.bond.pos;
-                sim.drones.list.iter().any(|d| d.present && d.enabled && !d.corpse && d.health > 0.0
-                    && d.team == 1 && walker::dxz(d.pos, b) < 24.0) };
-            if !live { break; }
-            { let sim = w.scene.sim.as_ref().unwrap(); let b = sim.bond.pos;
-              for (i, d) in sim.drones.list.iter().enumerate() {
-                if d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
-                    && walker::dxz(d.pos, b) < 24.0 {
-                    walker::DamageLog::geom_dump(&sim, i);
-                }
-              } }
-            for _ in 0..250 {
-                w.tick(nf_game::player::Input::default(), false);
-                let _ = w.return_fire("the west-room poke");
-            }
-            w.walk_to(Wp::new(29.0, 41.4, 71.2).r(1.0), "the west-room step-back (out of the arcing pops' reach)");
-            for _ in 0..400 { w.tick(nf_game::player::Input::default(), false); }
-            if cycle < 3 {
-                w.walk_to(Wp::new(12.4, 41.4, 71.2).r(0.9), "the west-room re-poke");
-            }
-        }
-        // retune-nb-15 (the west-room lob): the geom diagnostic measured the trio's own sight
-        // FALSE at the threshold in every cycle — they cannot see Bond here, so nothing
-        // counters a lob — but the fights' pick needs the walker's ray, which stays blocked,
-        // and the route's own deep legs (the jog, the door[52] lane) walk INTO their sight
-        // (the lever-5 death: the arcs at d 11.6, frames 15184-15294, at the door[52] legs).
-        // A player lobs his own frag (0x34, the level's loadout [D]; 1 + 7 rounds measured)
-        // at the live guards from the threshold — the #526 lob's measured reach is 16.22 u
-        // [L], so #11 (~14.5 u) is in reach; #18 (~18.7 u) is past the measured reach and
-        // gets a lob only if a later cycle finds him closer. The pop lands ~220 ticks later
-        // ON the aim point (the guard's position — his drift is ~1-2 u over the flight [L
-        // the 15diag trace]) and kills a 20-hp grenadier outright. Between lobs the walk
-        // steps back east out of any stray pop's reach and waits the fuse, like the plank.
-        // [S] the lob's ballistic rest geometry is measured only at the #526 mine so far.
-        if difficulty >= 3 && !w.tops_up() {
-            let owned34 = w.scene.sim.as_ref().unwrap().drones.inventory.owned.get(0x34).copied().unwrap_or(false);
-            if owned34 {
-                // The lever-9/10 traces: the door use ran while Bond stood at the step-back
-                // spot (18.5 u from the leaf — the press loop expired out of reach, the leaf
-                // stayed shut) and the lob's frag hit the closed leaf 2 u west of the throw
-                // point, bounced back east down the straight lane and popped on Bond at
-                // tick 15438. The throw lane needs Bond AT the threshold and the leaf OPEN:
-                // re-threshold first, then the use (the solo-line walks prove the door opens
-                // from there), then the lobs.
-                if { let s = w.scene.sim.as_ref().unwrap(); walker::dxz(s.bond.pos, [12.4, 41.4, 71.2]) } > 2.0 {
-                    w.walk_to(Wp::new(12.4, 41.4, 71.2).r(0.9), "the west-room re-threshold (before the lane use)");
-                }
-                { let s = w.scene.sim.as_ref().unwrap();
-                  eprintln!("[15lob] door[29] state {:#x} pos {:?} before the lane use",
-                      s.drones.doors.list[29].state, s.drones.doors.list[29].pos); }
-                w.use_door(29, "door[29] for the west-room throw lane");
-                draw_persist(&mut w, 0x34, "the frag for the west-room lobs");
-                for _lob in 0..3 {
-                    let live11 = { let sim = w.scene.sim.as_ref().unwrap();
-                        sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0
-                            && d.team == 1 && d.skin == 0x50000b2
-                            && walker::dxz(d.pos, [12.4, 41.3, 71.2]) < 20.0
-                            && d.pos[2] > 72.0) };
-                    let live18 = { let sim = w.scene.sim.as_ref().unwrap();
-                        sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0
-                            && d.team == 1 && d.skin == 0x500008c
-                            && walker::dxz(d.pos, [12.4, 41.3, 71.2]) < 20.0) };
-                    let Some(di) = live11.or(live18) else { break };
-                    let aim = { let sim = w.scene.sim.as_ref().unwrap(); let b = sim.bond.pos;
-                        let p = sim.drones.list[di].pos;
-                        // 4 u SHORT of the guard (toward Bond): the arc lands there and the roll
-                        // continues AWAY from Bond — the lever-7 trace measured a full-length
-                        // lob bounce off the far wall roll BACK down the straight lane and pop
-                        // on Bond's step-back spot (the explosion at (27.6,40.4,71.4), kind 52,
-                        // −58.58). The blast still kills: the rest 4-8 u off the guard is
-                        // 80·(1−(d−1.06)/15) = 46-64 vs his 20 hp [M Explode_Propagate
-                        // 0x17c518's continuous falloff].
-                        let short = if p[0] < b[0] { 4.0f32 } else { -4.0f32 };
-                        [p[0] + short, 41.0, p[2]] };
-                    let d_aim = { let sim = w.scene.sim.as_ref().unwrap(); let b = sim.bond.pos;
-                        ((aim[0] - b[0]).powi(2) + (aim[2] - b[2]).powi(2)).sqrt() };
-                    if d_aim > 17.5 {
-                        eprintln!("[15lob] #{di} at {d_aim:.2} u is past the measured 16.22 u reach — skipped this cycle");
-                    } else {
-                        throw_frag_at(&mut w, aim, &format!("the west-room lob at #{di}"));
-                    }
-                    // retune-nb-15 diagnostic: the frag's flight — where does it go?
-                    { let s = w.scene.sim.as_ref().unwrap();
-                      eprintln!("[15lob] door[29] state {:#x} after the use; the frag's flight:",
-                          s.drones.doors.list[29].state); }
-                    for i in 0..60 {
-                        w.tick(nf_game::player::Input::default(), false);
-                        if i % 10 == 0 {
-                            let sim = w.scene.sim.as_ref().unwrap();
-                            let gs: Vec<String> = sim.drones.grenades.iter()
-                                .map(|g| format!("({:.1},{:.2},{:.1})", g.pos[0], g.pos[1], g.pos[2])).collect();
-                            eprintln!("[15fly] t{} grenades {}", w.total_ticks, gs.join(" "));
-                        }
-                    }
-                    w.walk_to(Wp::new(29.0, 41.4, 71.2).r(1.0), "the west-room step-back after the lob");
-                    for _ in 0..400 { w.tick(nf_game::player::Input::default(), false); }
-                    w.walk_to(Wp::new(12.4, 41.4, 71.2).r(0.9), "the west-room re-threshold");
-                }
-            }
-        }
+        west_room_one_at_a_time(&mut w);
     } else { w.walk_route(route_c); }
-    if solo {
-        // 00 Agent real health: the through leg's return-fire fight on #11 went killed-false while
-        // the grenadiers' throws took 58.9 -> 5.1 (the t8578 death). Bond walks from the threshold
-        // straight to #11's solo line - (5.0, 71.25), the one spot that sees him with #10/#18 hidden
-        // [the 11-13 live bullet-line scan at t7347: #11 (-1.99, 77.11), #10 (-5.07, 66.93), #18
-        // (-6.33, 71.81)] - and takes him head-first (dead at +20), then the rest nearest-first.
-        for (spot, near) in [([5.0f32, 71.25], [-2.0f32, 77.1])] {
-            let di = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse && d.health > 0.0
-                && d.team == 1 && walker::dxz(d.pos, [near[0], 41.3, near[1]]) < 3.0) };
-            let Some(di) = di else { continue };
-            // The fights' dry-mag resupply nav walks Bond 32 u back east mid-leg (it wedged at
-            // (25.84, 37.67) for the 6000-tick cap on the far-#462 stream); the solo-line walk
-            // holds it - the drops are taken after the room is clear.
-            let was = w.dmg.resupplying;
-            w.dmg.resupplying = true;
-            let _ = w.try_walk_to(Wp::new(spot[0], 41.4, spot[1]).r(0.4), "a west-room solo line");
-            w.dmg.resupplying = was;
-            let k = aimed_stand_impl(&mut w, di, "the west-room grenadier from his solo line", 600, true);
-            eprintln!("[15solo] #{di} from ({}, {}) killed {k} health {:.1}", spot[0], spot[1], w.scene.sim.as_ref().unwrap().drones.health.health);
-        }
-        // Then the rest nearest-first, head-first, from where Bond stands (#18 closed to 4.9 u
-        // and threw 37.9 while the old second solo hop walked).
-        for _ in 0..4 {
-            let di = { let sim = w.scene.sim.as_ref().unwrap(); let b = sim.bond.pos;
-                sim.drones.list.iter().enumerate().filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
-                    && d.pos[0] < 8.0 && (60.0..84.0).contains(&d.pos[2]) && walker::dxz(d.pos, b) < 16.0)
-                    .min_by(|a, c| walker::dxz(a.1.pos, b).total_cmp(&walker::dxz(c.1.pos, b))).map(|(i, _)| i) };
-            let Some(di) = di else { break };
-            let k = aimed_stand_impl(&mut w, di, "the west-room grenadier, nearest first", 600, true);
-            eprintln!("[15solo] nearest #{di} killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
-            if !k { break; }
-        }
-        w.walk_route(&route_c[1..]);
-    }
     // (The west-room grenadiers are answered from the rim mark above, before this doorway is
     // walked — level-15-agent-doors. The fights' leftovers resolve on the legs' return fire.)
     // REAL-HEALTH TACTIC (level-15-agent-doors-2): the placement-spot pre-shoots at the rim mark
@@ -1638,7 +1648,10 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // hold (0 -> t9746 in the hall, 60/120/180 -> t9948-t11352, 300 -> the hall CROSSED, death
     // t20553 at the door[42] fence leg with 5.4 health and a dry gun) [S the 300 is the
     // measured sweep's, not a game rule].
-    if difficulty >= 3 && !w.tops_up() { w.wait(300); }
+    // s-pickup-pushout-walks-2: the 300 ticks are now a reacting hold — the still wait took
+    // 33.5 from #4 (19.8 u) and #19 (18.3 u) through the doorway on the push-out stream; the
+    // hold's head-first aimed stands killed both (#4 at +22, #19 at +186) with no hit taken.
+    if difficulty >= 3 && !w.tops_up() { hold_react(&mut w, 300, "the door[50] threshold hold", &|w| live_near(w, 26.0)); }
     w.use_door(50, "door[50] for the 733 line");
     // The d2 Agent run settles 12 ticks, not 40: the run-6 ledger lost the great-hall race by
     // ~20-30 ticks — #5's grenade was already airborne when the pre-shoot's 0x1a round landed
@@ -1690,47 +1703,15 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
                     eprintln!("[15p4] #{g} killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
                 }
             }
-            // retune-nb-15-2 (the through-leg lob at the placement-733 launcher, the run-1
-            // hall-cross lever's finding): #5 stands ON the bridge lane — live (7.93,41.37,36.54)
-            // vs the route's east-bridge leg (6.5,41.4,34.0), closest approach ~1.7 u [L the
-            // t19840 trace] — and the fights cannot pick him from the corridor (the walker-ray
-            // asymmetry, the ignore's lever-5/12 measurement), so a fightless cross body-ran
-            // into his point-blank launcher (−14.00×2 −13.58 at d 1.5, frames 20050-20058 [L the
-            // run-1 death]). His own lobs rest on the Bond↔#5 line ~8.35 u off the throw-time
-            // position (the 20233 baseline pop: rest (6.1,41.4,39.6), throw spot (0.02,41.41,
-            // 45.30), thrower (7.93,41.37,36.54)), so the blast (radius 15 [M Explode_Propagate
-            // 0x17c518]) reaches only ~11.6 u PAST any throw-time spot — a player lobs his OWN
-            // frag (0x34, the level's loadout [D]; 1 + 7 rounds, ~4 left after the #526 and the
-            // west-room lobs [L the measured draws]) from the door[50] THROUGH leg (0,44 —
-            // south of the leaf plane, the throw line crosses no leaf; it crosses the pit's
-            // x −4..4 band at x 6.3, over the bridge strip), retreats NORTH through the doorway
-            // to (0,55) (the sight line from (7.93,36.54) to (0,55) crosses the door plane z
-            // 46.1 at x 3.8 — outside the aperture — so his sight and throw cycle stop; the pops
-            // aimed at the lob spot rest ≈ (6.1,38.2) and reach (0,55) at 15.03 u > radius 15 →
-            // zero [M the sweep's truncation]), waits the flight + fuse, and crosses the bridge
-            // over the corpse. [S] the 8.35/15.03 numbers are this run's measured geometry, not
-            // game rules.
+            // s-pickup-pushout-walks-2: the placement-733 launcher (#5, bridge mouth) is taken from
+            // door[50]'s through leg with the head-first aimed stand, not the old frag lob from
+            // (0, 44) + the retreat to (0, 55): on the push-out stream that lob's frag came back
+            // through the doorway and popped at (−0.4, 59.5) for −46.46 on the retreat spot, and a
+            // still hold at (0, 45.4) without a stand took 58.6 from #5's bursts. The reacting
+            // walk + a 360-tick hold measured #5 dead at +21 of his stand with no hit taken.
             if difficulty >= 3 && !w.tops_up() {
-                let owned34 = w.scene.sim.as_ref().unwrap().drones.inventory.owned.get(0x34).copied().unwrap_or(false);
-                if owned34 {
-                    w.dmg.shooters_window = Some((0.0, 0.0));
-                    for _lob in 0..2 {
-                        let di5 = { let sim = w.scene.sim.as_ref().unwrap();
-                            sim.drones.list.iter().position(|d| d.present && d.enabled && !d.corpse && d.health > 0.0
-                                && d.team == 1 && walker::dxz(d.pos, [6.25, 41.45, 35.69]) < 8.0) };
-                        let Some(di) = di5 else { break };
-                        w.walk_to(Wp::new(0.0, 41.4, 44.0).r(1.0), "the door[50] through lob spot");
-                        draw_persist(&mut w, 0x34, "the frag for the placement-733 launcher");
-                        let aim = { let sim = w.scene.sim.as_ref().unwrap();
-                            let p = sim.drones.list[di].pos; [p[0], 41.0, p[2]] };
-                        throw_frag_at(&mut w, aim, "the great-hall lob at the bridge-mouth launcher");
-                        w.walk_to(Wp::new(0.0, 41.4, 55.0).r(1.0), "the corridor retreat (out of the launcher's sight)");
-                        for _ in 0..360 { w.tick(nf_game::player::Input::default(), false); }
-                    }
-                    // the fights need a gun, not the frag hand (a tap with 0x34 would THROW it):
-                    draw_persist(&mut w, 0x02, "the P2K back in hand after the great-hall lob");
-                    w.reload_full();
-                }
+                walk_react(&mut w, [0.0, 41.4, 44.0], 1.0, "the door[50] through stand", &|w| live_near(w, 22.0));
+                hold_react(&mut w, 360, "the door[50] through hold", &|w| live_near(w, 22.0));
             }
             // retune-nb-15: the positioning shoot is OFF for d3 — the lever-11/12/13 real
             // runs measured its flank nav as the exposure (29 hits with the great-hall lob,
@@ -1966,20 +1947,26 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         // from a live grenade (any sim grenade inside its radius + 2 u) - measured: the walk
         // completes (holds of 600 and 1200 both green).
         w.walk_route(&route[..1]);
+        // s-pickup-pushout-walks-2: the hold fights with the 0x1a (77 carried after the keypad
+        // room's box and the corridor drops) and the head-first aimed stand on the guard in
+        // sight. Measured: #14, #12 and #13 killed with one 0x1a round each, no hit taken; with
+        // the P2K the stand on #13 landed body rounds of 2.1-2.8 every other tap, ran the clip dry
+        // at hp 5 and his bursts (7.0 each) finished Bond during the reload. The hold also runs
+        // on (to 2400 ticks) while a live guard stands within 12 u: a 600-tick hold that ended
+        // with #13 behind the door walked Bond into his bursts at d 4.6.
+        draw_persist(&mut w, 0x1a, "the 0x1a for the door[51] hold");
+        eprintln!("[15react] the door[51] hold starts: {}", ammo_line(&w));
         let hold: u32 = 600;
         let home = w.scene.sim.as_ref().unwrap().bond.pos;
         let t0 = w.total_ticks;
-        while w.total_ticks - t0 < hold {
-            let (gren, pick) = {
+        while w.total_ticks - t0 < hold
+            || (w.total_ticks - t0 < 2400 && !live_near(&w, 12.0).is_empty()) {
+            let gren = {
                 let sim = w.scene.sim.as_ref().unwrap();
                 let bp = sim.bond.pos;
                 let gren = sim.drones.grenades.iter().filter(|g| walker::dxz(g.pos, bp) < g.radius.max(4.0) + 2.0)
                     .map(|g| g.pos).next();
-                let pick = (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
-                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 20.0
-                        && (d.pos[1] - bp[1]).abs() < 3.0 && walker::DamageLog::visible(sim, i) })
-                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)));
-                (gren, pick)
+                gren
             };
             if let Some(gp) = gren {
                 // step away from the grenade: world direction bond - grenade, mapped into the view frame
@@ -1996,7 +1983,11 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
                 w.tick(nf_game::player::Input { forward: dir_f.clamp(-1.0, 1.0), strafe: dir_s.clamp(-1.0, 1.0), ..Default::default() }, false);
                 continue;
             }
-            if let Some(g) = pick { w.shoot_bounded(g, "the door[51] hold", 90); continue; }
+            if let Some(g) = first_in_sight(&w, live_near(&w, 20.0)) {
+                let k = aimed_stand_impl(&mut w, g, "the door[51] hold: the guard in sight", 240, true);
+                eprintln!("[15react] the door[51] hold: #{g} killed {k} t{} {}", w.total_ticks, ammo_line(&w));
+                continue;
+            }
             if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, home) > 1.5 {
                 w.lenient = true; w.walk_to(Wp::new(home[0], home[1], home[2]).r(0.8), "back to the door[51] threshold"); w.lenient = false;
             } else { w.tick(nf_game::player::Input::default(), false); }
@@ -2281,6 +2272,23 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage() {
 /// and a clear line (a live scout); the grenadier stands now sit behind the d3 gate in the
 /// body (the fence-mark stands at 28 u never fired — the 0.02-rad aim gate is a torso
 /// width there; the door[38]-north point is the next try).
+///
+/// s-pickup-pushout-walks-2 ledger (the dropped-gun push-out stream, `Pickup_Create`
+/// 0x18dda0:166-183): two 0x14 drops the old walk lived on are gone (guard #1's falls to a lower
+/// floor, guard #3's lies off the lane with 5 rounds), and the old west-room shape (pokes, frag
+/// lobs, the solo line) died at t15214 to Bond's own frag. What the level offers, counted with
+/// `Level::parse` (the 0xF0 placements of map54) and the d3 load: 2 BodyArmourHeavy 100
+/// ((12.18, 0.18) behind door[37]'s 0xf7 keypad and door[35]'s dead 0xc8; (22.53, 35.53) behind
+/// door[43]'s dead 0xc8), 3 0x1a ammo boxes of 30 ((2.18, −9.70) at the exit, (16.24, −1.36)
+/// behind door[37], (58.36, 72.02) in the keypad room), 5 frags in the keypad room, 2 kind-6
+/// bonus pickups (gold-medal gated, not created), and the 20 guards' own guns (0x15 ×7, 0x1a
+/// ×13). The keypad room is the one cache on the route: door[33]'s #711 keypad sits 2.6 u off
+/// the nav lane top. The plan: keypad_cache at the nav lane top (0x1a 20 → 50, frags 6 → 9);
+/// the west room one grenadier at a time on the reacting walk (west_room_one_at_a_time — #11,
+/// #18, #10 dead with no hit); the door[50] threshold and through legs as reacting holds (#4,
+/// #19, #5 dead with no hit, the old frag lob's −46.46 gone); the door[51] hold with the 0x1a
+/// (#14, #12, #13, one round each). Measured on this tree: green, health 58.6 from the silo
+/// crossing to the exit (the opening crossing still costs 41.0).
 #[test]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(3));
