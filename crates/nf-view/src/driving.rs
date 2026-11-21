@@ -384,7 +384,27 @@ impl DrivingState {
             progress: self.progress,
             difficulty: 1,
         };
-        let _events = self.mission.step(DT, &snap);
+        if self.mission.script.is_some() {
+            let h = self.car.params.half_extents;
+            let facts = nf_game::driving::script::Facts {
+                cars: self.ai_cars.iter().map(|(d, _)| nf_game::driving::script::CarFacts {
+                    kind: 0, // traffic: neither 1 (player) nor 2 [S: +0x6d of a traffic car not traced]
+                    pos: d.car.pos,
+                    vel: d.car.vel,
+                    radius: (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt(),
+                }).collect(),
+                player_pos: self.car.pos,
+                player_vel: self.car.vel,
+                // +0x7c = |half extents| [M 0x1f6e98].
+                player_radius: (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt(),
+                difficulty: 1,
+                ..Default::default()
+            };
+            let _ = snap;
+            self.mission.step_facts(&facts);
+        } else {
+            let _events = self.mission.step(DT, &snap);
+        }
         self.mission_state = self.mission.state;
     }
 
@@ -968,10 +988,21 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
                 .next();
             if let Some(t_stem) = traffic_stem {
                 if let Some((c, s)) = find_car_entry(&t_stem) {
+                    // The traffic car's own attributes (data/sim/attrib/pvehicle/<model>.atr, shipped
+                    // beside each model [D]: civilian steering 0.2 against the player's 0.09); the
+                    // player's settings only when the file is missing.
+                    let t_params = bigf
+                        .entries
+                        .iter()
+                        .find(|x| x.name.eq_ignore_ascii_case(&format!("data\\sim\\attrib\\pvehicle\\{t_stem}.atr")))
+                        .and_then(|e| iso.read_bytes(viv_base + e.offset as u64, e.size as u64).ok())
+                        .and_then(|raw| maybe_decompress(&raw).ok())
+                        .map(|b| CarParams::parse_atr(&String::from_utf8_lossy(&b)))
+                        .unwrap_or_else(|| car_params.clone());
                     let step_seg = (rn.segs.len() / 5).max(1);
                     for k in 1..=4 {
                         let seg = (k * step_seg) % rn.segs.len();
-                        if let Ok(drv) = AiDriver::on_segment(car_params.clone(), rn, seg, 0, k as i8) {
+                        if let Ok(drv) = AiDriver::on_segment(t_params.clone(), rn, seg, 0, k as i8) {
                             if let Some(slot) = load_car_into_scene(
                                 &iso,
                                 viv_base,
@@ -1009,7 +1040,13 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         .flatten()
         .or_else(|| crp.pool_find(0x4d53_6574).ok().flatten())
         .and_then(|r| crp.payload(&r).ok());
-    let mission = Mission::load(rule_bytes, mset_bytes, drive_index_for_viv(&viv_upper));
+    // The track's mission script runs the game's own rules (triggers, events, rules, timers,
+    // win/lose: nf_game::driving::script, docs/systems/driving-missions.md); the rule-bytes model
+    // stays the fallback when the script does not read.
+    let mission = match nf_formats::trackstart::map_script(&crp) {
+        Ok(ms) => Mission::from_map_script(ms, drive_index_for_viv(&viv_upper)),
+        Err(_) => Mission::load(rule_bytes, mset_bytes, drive_index_for_viv(&viv_upper)),
+    };
     let mission_state = mission.state;
 
     // Extract `Map` `Trgr` checkpoint triggers and emit subtle translucent ground beacon rings
