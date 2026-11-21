@@ -2912,12 +2912,46 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // byte-identical). NF_0D_NW_KILL=1 arms the fixed-box acts; =2 arms the INDEX-tracking
     // acts (kill_guard_index_certain — the mover catch; the same three stands).
     let nw_kill: u32 = if yard_run { std::env::var("NF_0D_NW_KILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) } else { 0 };
+    // retune-nb-0d-15, THE NORTH ACT FROM THE YARD-SOUTH-1 STAND (the round-15 lever (b), the
+    // round-14 ledger): the 13-c #6 north act measured UNECONOMICAL from the wire-dodge stand
+    // (142, -291.5) — the door-corner COVER killed the line (cd(snap) 5.367 at d ~16.5); the
+    // round-14 plate act PROVED the same machinery converges in ~26 ticks on an OPEN line at
+    // d ~17. The yard-south-1 stand (138.09, 5.02, -291.04, where the fast leg arrives) has the
+    // #6 corner (137.1, -275.5) at d ~15.6 across the OPEN yard — the proven far class (the
+    // 14-e plate act's own). NF_0D_NORTH_S1=1 fires the same certain box act there, BEFORE the
+    // plate leg (the #6 corner is the return leg's top chipper: 14.4 in 8 hits in run 15-a).
+    // Gated to the container roll + the run variant (unset = byte-identical).
+    let north_s1 = container_drop && yard_run
+        && std::env::var("NF_0D_NORTH_S1").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+    // retune-nb-0d-15, THE #4 EARLY HEAD ACT knob (the runs 15-a..15-e ledger): see the act
+    // comment inside the yard legs below. Gated to the container roll + the run variant
+    // (unset = byte-identical).
+    let nw_head_early = container_drop && yard_run
+        && std::env::var("NF_0D_NW_HEAD_EARLY").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
     if yard_fast {
         fast_leg(&mut w, [136.5, 4.5, -290.0], 2.0, "the yard south 1");
         if nw_kill == 2 {
             let _ = kill_guard_index_certain(&mut w, 4, 0x500007e, 20.0, 8.0, "the north-west armed #4 (the early catch, index)", 260);
         } else if nw_kill == 1 {
             let _ = kill_guard_certain_at(&mut w, [129.6, -282.1], [4.0, 4.0], 8.0, "the north-west armed #4 (the early catch)", 260);
+        }
+        if north_s1 {
+            let _ = kill_guard_certain_at(&mut w, [137.1, -275.5], [6.0, 6.0], 10.0, "the north-band #6 (the yard-south-1 act, the open line)", 260);
+        }
+        // retune-nb-0d-15, THE #4 EARLY HEAD ACT (the round-15 ledger): the mover #4's 0x12
+        // cadence (14.4 = 8 x 1.8) killed EVERY return leg this round and it cannot be caught
+        // LATE (the certain box-centre aim misses the live park, the plate head act ran BEFORE
+        // the park completed, the trench stand is d ~38). From the PROVEN open-line stand (the
+        // yard-south-1 arrival, where the #6 act landed +81) the head act rides the LIVE boxes
+        // (shoot_far_box, the walk's own fight machinery that hits movers) — the #4 corridor
+        // band (the landing census (133.1,-273.8) [L], the mid-move lane, the park band
+        // (128.5..133.3, -281.3..-282.5) [L five rolls]) fits one box (131.5,-278.0)
+        // tol (3.5, 5.5) and no other live guard inhabits it (#6's corner 5.6 east of the
+        // centre, #3 far south, the trench pair far). One head hit drops a guard [M
+        // NDrone2_HitDamage 0x145558 x DroneDamage_Head]. NF_0D_NW_HEAD_EARLY=1 arms it
+        // (the run variant only; unset = byte-identical).
+        if nw_head_early {
+            let _ = kill_guard_head_present(&mut w, [131.5, -278.0], [3.5, 5.5], "the north-west armed #4 (the yard-south-1 head act, the corridor band)", 400);
         }
         fast_leg(&mut w, [136.0, 4.5, -308.5], 1.2, "the plate");
     } else {
@@ -2926,6 +2960,12 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             let _ = kill_guard_index_certain(&mut w, 4, 0x500007e, 20.0, 8.0, "the north-west armed #4 (the early catch, index)", 260);
         } else if nw_kill == 1 {
             let _ = kill_guard_certain_at(&mut w, [129.6, -282.1], [4.0, 4.0], 8.0, "the north-west armed #4 (the early catch)", 260);
+        }
+        if north_s1 {
+            let _ = kill_guard_certain_at(&mut w, [137.1, -275.5], [6.0, 6.0], 10.0, "the north-band #6 (the yard-south-1 act, the open line)", 260);
+        }
+        if nw_head_early {
+            let _ = kill_guard_head_present(&mut w, [131.5, -278.0], [3.5, 5.5], "the north-west armed #4 (the yard-south-1 head act, the corridor band)", 400);
         }
         w.walk_to(Wp::new(136.0, 4.5, -308.5).r(1.2), "the plate");
     }
@@ -2960,6 +3000,21 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         let _ = kill_guard_index_certain(&mut w, 4, 0x500007e, 34.0, 8.0, "the north-west armed #4 (the plate act, index)", 260);
     } else if nw_kill == 1 {
         let _ = kill_guard_certain_at(&mut w, [129.6, -282.1], [5.0, 5.0], 8.0, "the north-west armed #4 (the plate act, the parked spot)", 260);
+    }
+    // retune-nb-0d-15, THE #4 PLATE HEAD ACT (the round-15 runs 15-a..15-d ledger): the mover
+    // #4's 0x12 cadence (14.4 = 8 x 1.8) killed EVERY return leg this round (the 15-b/15-c/
+    // 15-d return bursts), and the certain box act cannot catch it: the BOX-CENTRE aim misses
+    // the mover's live park by ~3.4 u (15-c: the line to the centre blocked at 0.139 AND the
+    // park sits 3.4 u off the centre) and the park DRIFTS per roll ((128.5..133.3,
+    // -281.3..-282.5) across 14-e/15-a/15-b/15-c/15-d). The HEAD act rides the LIVE boxes
+    // (the present-pick + shoot_far_box) and the slab-edge law is height-asymmetric: the head
+    // lines clear where the chest rays die (the 15-c chest line died at 0.139). The pick box
+    // is the measured park band, a one-head-hit kill [M NDrone2_HitDamage 0x145558 x
+    // DroneDamage_Head]. NF_0D_NW_HEAD=1 arms it (the run variant only; unset = byte-identical).
+    let nw_head = container_drop && yard_run
+        && std::env::var("NF_0D_NW_HEAD").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+    if nw_head {
+        let _ = kill_guard_head_present(&mut w, [130.9, -281.9], [3.5, 2.0], "the north-west armed #4 (the plate head act, the park band)", 300);
     }
     if yard_fast { fast_leg(&mut w, [137.0, 5.2, -320.0], 1.5, "the display trench"); }
     else { w.walk_to(Wp::new(137.0, 5.2, -320.0).r(1.5), "the display trench"); }
@@ -3047,9 +3102,24 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // Leg 4: north to the shooting stand — the yard face of bigdoor02 #96 (bounds
     // 131.78..137.08, 3.99..7.35, −269.85..−269.15 [D placed gfx]) seen from 11+ m out, outside
     // the death blast's reach (blast damage 1000 [D p5]; top_up_health guards anyway).
+    // retune-nb-0d-15, THE RETURN-LEG RESHAPE (the round-15 lever (a), the round-14 ledger):
+    // the return leg's death is the plate-arrival-zone burst (#4+#6 joint fire, 5 x 1.8,
+    // t24195 at (136.50,4.78,-308.15) [L runs 14-e/14-j], ~7.2 entering in run 14-h) — the
+    // "back to the plate" waypoint (138.0, 4.5, -305.0) r 1.5 adds an arrival dwell + settle +
+    // re-turn INSIDE the open-yard stretch where the joint burst lands, and the plate objective
+    // is ALREADY BANKED at Leg 2 (ch 0x1d asserted there). NF_0D_RETURN_FAST=1 walks ONE
+    // direct fast_leg trench -> shooting stand (the same helper, the stick held 1.0 to the
+    // arrive check, no mid-leg arrival dwell at all) and skips the plate waypoint entirely.
+    // Gated to the container roll + the run variant + the fast legs (unset = byte-identical).
+    let return_fast = container_drop && yard_run && yard_fast
+        && std::env::var("NF_0D_RETURN_FAST").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
     if yard_fast {
-        fast_leg(&mut w, [138.0, 4.5, -305.0], 1.5, "back to the plate");
-        fast_leg(&mut w, [135.0, 4.5, -281.0], 1.5, "the shooting stand");
+        if return_fast {
+            fast_leg(&mut w, [135.0, 4.5, -281.0], 1.5, "the direct trench->stand leg (the return reshape)");
+        } else {
+            fast_leg(&mut w, [138.0, 4.5, -305.0], 1.5, "back to the plate");
+            fast_leg(&mut w, [135.0, 4.5, -281.0], 1.5, "the shooting stand");
+        }
     } else {
         w.walk_to(Wp::new(138.0, 4.5, -305.0).r(1.5), "back to the plate");
         w.walk_to(Wp::new(135.0, 4.5, -281.0).r(1.5), "the shooting stand");
@@ -3369,7 +3439,41 @@ at the trench (the (154.0,-291.0) box missed its (164.2,-286.7) park in 14-i). T
 knobs: NF_0D_PLATE_ROOF_KILL (PROVEN), NF_0D_PHOTO_CROUCH (PROVEN quiet), NF_0D_NW_KILL=1
 (the boxes, free when empty) and =2 (the index act, measured negative) — all default
 byte-identical. Whole binaries on the knobs-unset tree: walkreal_0700000d_live 3 passed /
-0 failed / 2 ignored (100.5 s), interactables_0700000d_live 11 passed / 0 failed (30.4 s)."]
+0 failed / 2 ignored (100.5 s), interactables_0700000d_live 11 passed / 0 failed (30.4 s).
+(15) THE retune-nb-0d-15 LEDGER (six real runs 2026-11-21, each its own roll, the composed
+flagship + PLATE_ROOF_KILL unless noted): (a) THE NORTH-S1 ACT PROVEN — the round-14 lever (b)
+landed: NF_0D_NORTH_S1=1 fires the #6 certain box act from the YARD-SOUTH-1 stand (138.09,
+5.02,-291.04, the fast leg's own arrival), d ~15.6 across the OPEN yard — DOWN AT +81 ticks on
+EVERY roll that fired it (15-b/15-c/15-d/15-e) — the second confirmation of the round-14
+open-line convergence law (the 13-c refusal was the door-corner cover from the wire-dodge
+stand, not the distance). Net on its roll: the walk reached t24481 — THE FURTHEST EVER (+286
+vs the 14-e/j pin t24195). (b) THE STUCK DWELL IDENTIFIED: the return's back-to-the-plate
+fast leg BURNED ITS 1200-TICK CAP stuck at (136.50,4.78,-308.15) on the 15-b/15-e rolls —
+the waypoint (138.0,4.5,-305.0) r 1.5 sits BEHIND the plate prop (135.67,5.10,-307.42) from
+the south approach; Bond pushes the prop's south-east face 2.4 u short and the leg never
+arrives — ~1100 ticks of open-yard exposure, the window #4's cadence ate. (c) THE #4 MOVER
+UNCAUGHT: the park DRIFTS per roll ((128.5..133.3, -281.3..-282.5) across 14-e/15-a/15-b/
+15-c/15-d) and completes AFTER the plate arrival (the 15-e plate head act found the band
+EMPTY — free, and the death stayed t24481 BYTE-IDENTICAL to 15-b, the third free-act
+confirmation); the certain box-centre aim misses the live park by ~3.4 u AND its line to the
+centre blocked at 0.139 (15-c: 260 ticks wasted, death t23807); the early head act at the
+open stand drew the converged pack's joint burst (#1 the yard-east armed (164.2,-286.7) +
+#0 + #4, 6 chips in 15 ticks, death t22911 mid-act — the 14-i signature: the acts' aim
+phases ARE the exposure). (d) THE RETURN RESHAPE measured NEGATIVE unthinned (15-a: the
+direct trench-to-stand leg re-rolled the crossing worse, #6's burst t23386; 15-d: with #6
+dead, #4's burst caught the crossing t23831 at (135.39,-296.33)). THE ROUND-16 LEVER:
+(i) the stuck-dwell fix — the return's first waypoint moved EAST of the plate prop (e.g.
+(141.0,-303.0)) then the stand, NOT the direct leg (15-a/15-d negative); (ii) the #1
+yard-east armed (0x500007e, 0x12, FIXED park (164.2,-286.7) [L 15-f, the lever (c) park
+again]) gets the yard-east act slot — the trench's (154.0,-291.0) box misses it by 7.3 —
+move the box onto the park (a LEVEL-pitch crouched act per the crouch law); (iii) the #4
+mover stays UNCAUGHT by the proven machinery — needs the main agent's fieldprobe of the
+plate-to-park-band line or a live-checked tracker. This round's knobs: NF_0D_NORTH_S1
+(PROVEN), NF_0D_RETURN_FAST (negative unthinned), NF_0D_NW_KILL=1's #4 plate act (negative
+on the mover), NF_0D_NW_HEAD (the park incomplete — free), NF_0D_NW_HEAD_EARLY (the aim
+phase fatal at the open stand) — all default byte-identical. Whole binaries on the
+knobs-unset tree: walkreal_0700000d_live 3 passed / 0 failed / 2 ignored (101.2 s),
+interactables_0700000d_live 11 passed / 0 failed (31.1 s)."]
 fn walk_arrival_to_the_c5_door_real_damage_00agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(3, true));
 }
