@@ -15820,9 +15820,10 @@ impl Sim {
         let ent = m.spawns.points[sp];
         let b = nf_game::player::Bond::stand_at(&self.world, [ent.pos[0], ent.pos[1], ent.pos[2]], ent.facing[1]);
         m.set_slot(slot, b.pos);
+        let hp = m.human_health(slot); // `Player_Init`'s handicap + 100 [M 0x1910f8:128-131]
         self.mp_bonds[slot] = Some(b);
         // The online combat's per-slot state starts fresh for the new agent (700v6).
-        self.mp_hp[slot] = 100.0;
+        self.mp_hp[slot] = hp;
         self.mp_armour[slot] = 0.0;
         self.mp_dead_ticks[slot] = 0;
         true
