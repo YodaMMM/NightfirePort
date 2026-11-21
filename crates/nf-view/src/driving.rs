@@ -77,6 +77,40 @@ pub struct CollisionGrid {
 impl CollisionGrid {
     const CELL: f32 = 16.0;
 
+    /// The nearest hit of the segment a->b on the collision triangles (two-sided), for the chase
+    /// camera's pull-in ray (`FUN_002127f0` in the game; this grid test is the port's query).
+    pub fn segment_hit(&self, a: [f32; 3], b: [f32; 3]) -> Option<[f32; 3]> {
+        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let (x0, x1) = (a[0].min(b[0]), a[0].max(b[0]));
+        let (z0, z1) = (a[2].min(b[2]), a[2].max(b[2]));
+        let (cx0, cx1) = ((x0 / Self::CELL).floor() as i32, (x1 / Self::CELL).floor() as i32);
+        let (cz0, cz1) = ((z0 / Self::CELL).floor() as i32, (z1 / Self::CELL).floor() as i32);
+        let mut best: Option<f32> = None;
+        for cx in cx0..=cx1 {
+            for cz in cz0..=cz1 {
+                let Some(list) = self.cells.get(&(cx, cz)) else { continue };
+                for &ti in list {
+                    let [p0, p1, p2] = self.tris[ti].v;
+                    let e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+                    let e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+                    let h = [d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]];
+                    let det = e1[0] * h[0] + e1[1] * h[1] + e1[2] * h[2];
+                    if det.abs() < 1e-8 { continue; }
+                    let inv = 1.0 / det;
+                    let sv = [a[0] - p0[0], a[1] - p0[1], a[2] - p0[2]];
+                    let u = inv * (sv[0] * h[0] + sv[1] * h[1] + sv[2] * h[2]);
+                    if !(0.0..=1.0).contains(&u) { continue; }
+                    let q = [sv[1] * e1[2] - sv[2] * e1[1], sv[2] * e1[0] - sv[0] * e1[2], sv[0] * e1[1] - sv[1] * e1[0]];
+                    let v = inv * (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]);
+                    if v < 0.0 || u + v > 1.0 { continue; }
+                    let t = inv * (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]);
+                    if (0.0..=1.0).contains(&t) && best.is_none_or(|bt| t < bt) { best = Some(t); }
+                }
+            }
+        }
+        best.map(|t| [a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t])
+    }
+
     pub fn build(raw_tris: Vec<CollisionTri>) -> Self {
         let mut tris = Vec::new();
         let mut cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
@@ -160,6 +194,9 @@ pub struct DrivingState {
     pub wheels: [SusWheel; 4],
     pub sus_params: SusParams,
     pub ticks: u32,
+    /// The driving engine's chase camera (nf_game::driving::camera, `FUN_001b2b48`) and its last view.
+    pub cam: Option<(nf_game::driving::camera::ChaseCamera, nf_game::driving::camera::HeliParams, nf_game::driving::camera::ArmParams)>,
+    pub cam_view: Option<nf_game::driving::camera::CamView>,
 }
 
 const IDENT_MAT: Mat4 = [
@@ -182,6 +219,21 @@ fn yaw_pos_mat(pos: [f32; 3], yaw: f32) -> Mat4 {
 impl DrivingState {
     pub fn step(&mut self, throttle: f32, brake: f32, steer: f32, handbrake: bool) {
         self.ticks = self.ticks.wrapping_add(1);
+        // The chase camera, once per tick on the car's pose (the previous tick's: a one-tick lag vs
+        // the game's end-of-frame update [S]); the pull-in ray is the collision grid's segment test.
+        {
+            let pose = nf_game::driving::camera::CarPose::from_yaw(self.car.pos, self.car.yaw, self.car.vel);
+            if self.cam.is_none() {
+                let (hp, arm) = nf_game::driving::camera::default_heli_cam(player_car_stem(&self.viv.to_ascii_uppercase()));
+                let c = nf_game::driving::camera::ChaseCamera::new(&hp, &arm, &pose);
+                self.cam = Some((c, hp, arm));
+            }
+            let grid = &self.collision;
+            if let Some((c, hp, arm)) = self.cam.as_mut() {
+                let mut ray = |a: [f32; 3], b: [f32; 3]| grid.segment_hit(a, b);
+                self.cam_view = Some(c.update(hp, arm, &pose, false, &mut ray));
+            }
+        }
         let input = CarInput {
             throttle: throttle.clamp(0.0, 1.0),
             brake: brake.clamp(0.0, 1.0),
@@ -332,6 +384,11 @@ impl DrivingState {
 
     /// Third-person chase camera behind the player car: `(pos, yaw, pitch)`.
     pub fn chase_camera(&self) -> ([f32; 3], f32, f32) {
+        if let Some(v) = &self.cam_view {
+            let yaw = v.fwd[0].atan2(v.fwd[2]);
+            let pitch = v.fwd[1].clamp(-1.0, 1.0).asin();
+            return (v.eye, yaw, pitch);
+        }
         let yaw = self.car.yaw;
         let fwd = [yaw.sin(), 0.0, yaw.cos()];
         let cam_pos = [
@@ -1055,6 +1112,8 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         wheels: [SusWheel::default(); 4],
         sus_params: SusParams::VANQUISH,
         ticks: 0,
+        cam: None,
+        cam_view: None,
     };
     Ok((scene, state))
 }
@@ -1110,6 +1169,8 @@ mod tests {
             wheels: [SusWheel::default(); 4],
             sus_params: SusParams::VANQUISH,
             ticks: 0,
+            cam: None,
+            cam_view: None,
         };
         state.step(1.0, 0.0, 0.0, false);
         assert_eq!(state.progress, 1);
