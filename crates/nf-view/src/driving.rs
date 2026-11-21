@@ -243,6 +243,17 @@ pub struct CarShine {
     pub tex: Option<usize>,
 }
 
+/// The player car's engine sound: the ten layer loops of the track's Engine bank (slot 9) and the
+/// game's layer logic (nf_game::driving::audio::EngineSound: FUN_002fa8f0 / FUN_002ff040).
+pub struct DriveEngine {
+    pub snd: nf_game::driving::audio::EngineSound,
+    /// Per layer: the decoded loop and its sample rate.
+    pub voices: [Option<(std::sync::Arc<nf_audio::Pcm>, u32)>; 10],
+    pub playing: [bool; 10],
+    /// Opened by the window app only (`start_audio`): headless shots and tests stay silent.
+    pub output: Option<nf_audio::Output>,
+}
+
 /// Live driving mission simulation state.
 pub struct DrivingState {
     pub viv: String,
@@ -282,6 +293,7 @@ pub struct DrivingState {
     pub reset: Option<(nf_game::driving::reset::ResetState, Vec<CollisionTri>)>,
     pub hud: Option<DriveHud>,
     pub shine: Option<CarShine>,
+    pub engine: Option<DriveEngine>,
     /// The scripted control and camera layer (nf_game::driving::intro, docs/systems/driving-intros.md):
     /// the race countdown hold, scripted splines, letterbox. Fed by the mission script's events.
     pub intro: Option<(nf_game::driving::intro::IntroState, nf_formats::drivepath::MapPaths)>,
@@ -351,6 +363,7 @@ impl DrivingState {
             self.step_flat(&input);
         }
         self.step_fx();
+        self.step_engine(input.throttle);
         self.step_ai(&input);
     }
 
@@ -374,6 +387,42 @@ impl DrivingState {
         fx.veh.update(self.land.is_some(), &cin, &wheels, self.ticks, false, &fx.lib);
         fx.veh.tick(1, &fx.lib, &mut fx.rng, &mut fx.pool);
         fx.pool.run_steps(self.ticks, &fx.lib);
+    }
+
+    /// Opens the audio output for the engine sound (the window app calls this; nothing else does).
+    pub fn start_audio(&mut self) {
+        if nf_audio::silent() { return; }
+        if let Some(e) = self.engine.as_mut() {
+            if e.output.is_none() { e.output = nf_audio::Output::open(); }
+        }
+    }
+
+    /// One tick of the engine layers: the game's rpm/load slew and the ten voices' volume and
+    /// pitch, sent as SPU voice commands (pitch 0x1000 = 48 kHz). The chase camera listens from
+    /// outside (distance 2: the exterior layers) [M audio.rs Listener default].
+    fn step_engine(&mut self, throttle: f32) {
+        let ticks = self.ticks;
+        let rpm = self.car.rpm * 1.25; // the player's bridge factor [M 0x188200:589]
+        let Some(e) = self.engine.as_mut() else { return };
+        e.snd.base_update(rpm, 0.0, 0.0, throttle, false, ticks);
+        let f = e.snd.layer_update(ticks, &nf_game::driving::audio::Listener::default(), 1.0);
+        let Some(out) = e.output.as_ref() else { return };
+        let mut cmds = Vec::new();
+        for (k, v) in f.voices.iter().enumerate() {
+            let Some((pcm, rate)) = &e.voices[k] else { continue };
+            let pitch = ((v.pitch * *rate as f32 / 48_000.0) * 4096.0).clamp(0.0, 0x3fff as f32) as u32;
+            let vol = v.volume.clamp(0.0, 1.0);
+            if vol > 0.0 && !e.playing[k] {
+                cmds.push(nf_audio::Cmd::Play { voice: 0xd000 + k as u32, pcm: pcm.clone(), pitch, left: vol, right: vol, delay: 0.0, reverb: false });
+                e.playing[k] = true;
+            } else if vol > 0.0 {
+                cmds.push(nf_audio::Cmd::Set { voice: 0xd000 + k as u32, pitch, left: vol, right: vol });
+            } else if e.playing[k] {
+                cmds.push(nf_audio::Cmd::Stop { voice: 0xd000 + k as u32 });
+                e.playing[k] = false;
+            }
+        }
+        out.send(cmds);
     }
 
     /// This frame's HUD overlay: the ported passes' sprites on the game's 640x448 screen, kept 4:3
@@ -1543,6 +1592,34 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             };
             CarRig { mesh, rig, attrs, mem: Default::default(), pose, spin: [0.0; 2], parts: posed_parts.clone() }
         });
+    // The engine sound: the track's bank list (banks.ini) picks the Engine slot's bank; its .h
+    // names the ten layer sounds (ENGINE_VOICES; the vanquish has no midload pair [D]).
+    let engine = (|| {
+        let read = |n: &str| -> Option<Vec<u8>> {
+            let e = bigf.entries.iter().find(|x| x.name.eq_ignore_ascii_case(n))?;
+            maybe_decompress(&iso.read_bytes(viv_base + e.offset as u64, e.size as u64).ok()?).ok()
+        };
+        let p = |parts: &[&str]| parts.join("\\");
+        let track = crp_entry.name.rsplit(|c: char| c == '/' || c as u32 == 0x5c).next()?.trim_end_matches(".crp").to_ascii_lowercase();
+        let secs = nf_formats::easnd::parse_banks_ini(&String::from_utf8_lossy(&read(&p(&["data", "audio", "banks.ini"]))?));
+        let (_, path) = nf_game::driving::audio::track_banks(&secs, &track).into_iter().find(|(s, _)| *s == nf_game::driving::audio::ENGINE_SLOT)?;
+        // banks.ini writes `cars/vanquish.bnk`; the archive names use backslashes [D].
+        let bnk_name = p(&["data", "audio", &path.to_ascii_lowercase().replace('/', &p(&["", ""]))]);
+        let bank_bytes = read(&bnk_name)?;
+        let table = nf_formats::easnd::SfxTable::from_header(&String::from_utf8_lossy(&read(&bnk_name.replace(".bnk", ".h"))?));
+        let bank = nf_formats::easnd::Bank::parse(&bank_bytes).ok()?;
+        let voices = nf_game::driving::audio::ENGINE_VOICES.map(|k| {
+            let id = table.get(k)? as usize;
+            let patch = bank.slots.get(id)?.as_ref()?.first()?;
+            let pcm = nf_formats::easnd::Bank::decode(&bank_bytes, patch).ok()?;
+            let ls = (patch.loop_start >= 0 && (patch.loop_start as usize) < pcm.len()).then_some(patch.loop_start as usize).or(Some(0));
+            Some((std::sync::Arc::new(nf_audio::Pcm { data: pcm, loop_start: ls }), patch.rate.max(1)))
+        });
+        voices.iter().any(|v| v.is_some()).then(|| DriveEngine {
+            snd: nf_game::driving::audio::EngineSound::new(nf_game::driving::audio::PLAYER_ENGINE_RPM),
+            voices, playing: [false; 10], output: None,
+        })
+    })();
     let car = Car::new(car_params, start_pos, start_yaw);
     let reset = land.is_some().then(|| (nf_game::driving::reset::ResetState::new(&car), col_tris.clone()));
     // The car's specular pass: its Specular-pass strips at rest (car space), the CarRender entry,
@@ -1600,6 +1677,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         reset,
         hud,
         shine,
+        engine,
         intro: nf_formats::drivepath::map_paths(&crp).ok().map(|p| (nf_game::driving::intro::IntroState::new(60), p)),
         viv: viv_upper,
         car,
@@ -1688,6 +1766,7 @@ mod tests {
             reset: None,
             hud: None,
             shine: None,
+            engine: None,
             intro: None,
         };
         state.step(1.0, 0.0, 0.0, false);
