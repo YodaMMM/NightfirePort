@@ -9,17 +9,11 @@
 /// The level's cel graph, built alongside `parse_room_cels` (which is this function's room half —
 /// the two MUST agree; `Scene::cels` is `.0`).
 ///
-/// `cells` spans the WHOLE parse in archive order — the game's pCelList record array is parse-wide
-/// (parsemap_block_map_data_static appends one 0x50-byte record per cel placement as each map is
-/// parsed, sub-maps first, main map last), and the main map's portal block indexes THAT array.
-/// *Measured* [D]: 07000002's main-map portal records point past the main map's own cel placements
-/// (22 of 37 endpoints) — they address sub-map cels too.
-///
-/// The pCelList record index: `parsemap_block_map_data_static` (0x1d1998) addresses the record as
-/// `pCelList + placement.index * 0x50` for by-index placements (the by-hash path goes through the
-/// entity hashtable, untraced — those records are unreachable here and the portals naming them are
-/// counted in `dropped_portals`). Records the port cannot resolve are the *sparse* remainder of the
-/// game's array; only the named ones exist as nodes.
+/// `cells` holds one node per cel placement of the whole parse, in archive order (sub-maps first,
+/// main map last). Each map file gets its own `pCelList` (`parsemap_block_map_header` 0x1d1430), and
+/// a portal endpoint names a record of the map that carries the portal block; the endpoint rules
+/// (per-map record keys, by-hash records, the stale-register carry-over and first-parsed-wins) are
+/// on `nf_view::scene::parse_cel_graph` [M 0x1d15f8, 0x1d1998] (G-016).
 #[derive(Clone, Default)]
 pub struct CelGraph {
     pub cells: Vec<CelNode>,

@@ -1512,24 +1512,6 @@ pub use nf_game::celgraph::{
     portal_cel_chain, portal_cel_chain_from_cell, portal_cel_chain_from_cell_doors,
     quicksort_viscel,
 };
-/// The level's cel graph, built alongside `parse_room_cels` (which is this function's room half —
-/// the two MUST agree; `Scene::cels` is `.0`).
-/// The level's cel graph, built alongside `parse_room_cels` (which is this function's room half —
-/// the two MUST agree; `Scene::cels` is `.0`).
-///
-/// `cells` spans the WHOLE parse in archive order — the game's pCelList record array is parse-wide
-/// (parsemap_block_map_data_static appends one 0x50-byte record per cel placement as each map is
-/// parsed, sub-maps first, main map last), and the main map's portal block indexes THAT array.
-/// *Measured* [D]: 07000002's main-map portal records point past the main map's own cel placements
-/// (22 of 37 endpoints) — they address sub-map cels too.
-/// The level's cel graph, built alongside `parse_room_cels` (which is this function's room half —
-/// the two MUST agree; `Scene::cels` is `.0`).
-///
-/// The pCelList record index: `parsemap_block_map_data_static` (0x1d1998) addresses the record as
-/// `pCelList + placement.index * 0x50` for by-index placements (the by-hash path goes through the
-/// entity hashtable, untraced — those records are unreachable here and the portals naming them are
-/// counted in `dropped_portals`). Records the port cannot resolve are the *sparse* remainder of the
-/// game's array; only the named ones exist as nodes.
 /// The collision scope graph from the parsed cel graph (fix-safe08b): plain bboxes + the portals as
 /// the two triangles `Intersect_Portal` (0x1ea7b8) tests, for `CollisionWorld::build_scoped`.
 /// Pub for the census tests to drive the exact build path (`Scene::build`'s sequence) headlessly
@@ -1565,12 +1547,28 @@ fn cel_flags_word(flags16: u16) -> u32 {
     }
 }
 
+/// The level's cel graph, built alongside `parse_room_cels` (which is this function's room half —
+/// the two MUST agree; `Scene::cels` is `.0`). `cells` holds one node per cel placement of the
+/// whole parse in archive order.
+///
+/// Portal endpoints (G-016). `parsemap_block_map_header` 0x1d1430 allocates a fresh `pCelList`
+/// per map file, and a cel's `+0x38` is its record: `pCelList + placement.index * 0x50` by index,
+/// or the entity hashtable's record for a by-hash placement [M `parsemap_block_map_data_static`
+/// 0x1d1998] — `parsemap_block_entity_params` 0x1d1508 registers each map's records under their
+/// hashes. `parsemap_block_portal_data` 0x1d15f8 matches an endpoint against the CURRENT map's
+/// `pCelList + idx * 0x50`, so the key is (map, record). [D every level]: every by-hash cel
+/// placement's hash lives only in its own map, so `level.by_hash` gives the same record.
+/// Two quirks of the resolver [M disasm 0x1d160c-0x1d1780]: (1) the endpoint registers are zeroed
+/// once per block and only `movz`-written on a match, so an endpoint naming no cel keeps the
+/// PREVIOUS record's cel (07000012's 18 Sky bridge records 35-52 ride record 34's pair [D]); (2) the
+/// cel chain is newest-first (`build_alloc_cel` 0x1c93f8 prepends) and the last match wins, so a
+/// record shared by several cel placements resolves to the first parsed one.
 pub fn parse_cel_graph(level: &Level) -> (Vec<Cel>, CelGraph) {
     let main = level.main_map();
     let mut cells: Vec<CelNode> = Vec::new();
     let mut rooms: Vec<Cel> = Vec::new();
     let mut room_to_cell: Vec<Option<usize>> = Vec::new();
-    let mut cell_of_record: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut cell_of_record: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
     let mut chains: Vec<Vec<u32>> = Vec::new();
     let mut own_cells_main: Vec<Option<u32>> = Vec::new();
     for (mi, map) in level.maps.iter().enumerate() {
@@ -1635,15 +1633,22 @@ pub fn parse_cel_graph(level: &Level) -> (Vec<Cel>, CelGraph) {
             // hangs each generic on the room `build_FindCel` 0x1c8cb0 picks for its centre, a
             // collision raycast tie-break that needs the whole cel set + the scoped world.)
             if is_main { own_cells_main.push(Some(idx as u32)); }
-            // The record address is `pCelList + index*0x50` [M 0x1d1998] — by-index placements only.
-            if !p.by_hash() { cell_of_record.insert(p.index as usize, idx); }
+            // The record: (map, index) by index, the hashtable's record by hash [M 0x1d1998]; the
+            // first parsed cel holding a record is the one the portal resolver finds (see above).
+            if let Some(rec) = obj { cell_of_record.entry(rec).or_insert(idx); }
         }
     }
     let mut portals = Vec::new();
     let mut dropped = 0usize;
-    for map in &level.maps {
+    for (mi, map) in level.maps.iter().enumerate() {
+        // `s3`/`s4` of 0x1d15f8: zeroed once, overwritten only on a match (the stale rule).
+        let (mut sa, mut sb): (Option<usize>, Option<usize>) = (None, None);
         for q in &map.portals {
-            let (Some(a), Some(b)) = (cell_of_record.get(&(q.cel_a as usize)).copied(), cell_of_record.get(&(q.cel_b as usize)).copied()) else {
+            if let Some(&c) = cell_of_record.get(&(mi, q.cel_a as usize)) { sa = Some(c); }
+            if let Some(&c) = cell_of_record.get(&(mi, q.cel_b as usize)) { sb = Some(c); }
+            // Both still zero only when a block's FIRST record misses: the game then writes the
+            // portal through a null cel. Not on the disc; dropped and counted.
+            let (Some(a), Some(b)) = (sa, sb) else {
                 dropped += 1;
                 continue;
             };
