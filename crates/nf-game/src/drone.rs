@@ -18039,7 +18039,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     ///   offset (`BL+0x120/+0x124`, the target's screen position ×2) and the lock pointer change
     ///   [M 0x1a7778-0x1a77d8].
     /// - The release: the pointer clears only when the cap still equals `Autoaim_Range` after the scan
-    ///   [M 0x1a7e0c-0x1a7e20] — so a Q-Claw scan (cap 50/100) never clears it.
+    ///   [M 0x1a7e0c-0x1a7e20], so a Q-Claw scan (cap 50/100) never clears it.
     /// - Then all four offsets halve (`BL+0x118..0x124`, the port's cursor halves in the Sim) and the shot
     ///   aims through the halved offset [M 0x1a7e78-0x1a7ecc; Player_Update 0x193600 runs
     ///   `Player_Weapon` (→ `Player_AutoAim`) before `Player_WeaponFiring`, jal 0x194064 / 0x194070].
@@ -18058,7 +18058,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // weapon-handling [M Player_AutoAim 0x1a7c98:63-78]: the Q-Claw scans ONLY the class-'Q' objects
         // (the grapple points, `Grapple_Create` 0x198298), never the drones; the object position
         // (`obj+0x30` for a class other than 2/3 [M :113-120]); the port's point is the placement plus its
-        // object's sphere centre [S — the centre offset, not obj+0x30]. Grapple points carry an index past
+        // object's sphere centre [S, the centre offset, not obj+0x30]. Grapple points carry an index past
         // `GRAPPLE_AIM` in `aim_target`.
         const GRAPPLE_AIM: usize = 1 << 20;
         let mut cands: Vec<(usize, V3)> = Vec::new();
@@ -18067,7 +18067,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         } else {
             for (i, dr) in self.list.iter().enumerate() {
                 // `Check_AutoAim` (0x1a73f8): skip drawn==0 (`obj+0xFC`), dead (`+0xAC <= 0`), voice set 0xB
-                // (`+0xD8`), the Disabled state (`obj+0xF4 == 1`, covered by `enabled`), and — single player —
+                // (`+0xD8`), the Disabled state (`obj+0xF4 == 1`, covered by `enabled`), and, single player ,
                 // every non-enemy team (`+0x44 != 1`; the MP build's `MP_areObjectsOnSameTeam` is not
                 // modelled). Bone 2 (`AnimGetBoneWorldTrans(obj, 0x80000002)`).
                 if !dr.present || !dr.enabled || !dr.drawn || dr.corpse || dr.health <= 0.0 || dr.kind == 0xb || dr.team != 1 { continue; }

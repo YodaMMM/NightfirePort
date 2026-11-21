@@ -766,8 +766,8 @@ fn auto_aim_snaps_to_a_guard_near_the_crosshair() {
 }
 
 /// s-auto-aim [M Check_AutoAim 0x1a73f8 disasm 0x1a7778-0x1a77d4, Player_AutoAim 0x1a7c98 disasm
-/// 0x1a7e78-0x1a7ecc, HUD_UpdateCrossHair 0x19e6d0:87-92]: the stored offset is a SCREEN position —
-/// the projected target ((sx − W/2)/(W/4), (sy − H/2)/(H/4)) halved, i.e. where the crosshair sits —
+/// 0x1a7e78-0x1a7ecc, HUD_UpdateCrossHair 0x19e6d0:87-92]: the stored offset is a SCREEN position ,
+/// the projected target ((sx − W/2)/(W/4), (sy − H/2)/(H/4)) halved, i.e. where the crosshair sits ,
 /// not the old (yaw, pitch) radians. A guard to the right of the view sits at x > 0 (screen right);
 /// the old store held −0.025 rad. The next tick with no target halves it in screen space and the
 /// shot goes through that point (`Player_GetAimingPoint` 0x1a4a98).

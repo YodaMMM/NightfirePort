@@ -4567,7 +4567,7 @@ impl Sim {
             // scan], so the button-held raise runs the ease (the per-tick ease lives in the
             // step_bond path, right after the aim gate) and only the button-UP ticks scan.
             // s-auto-aim: one `Player_AutoAim` 0x1a7c98 step per tick, then the shot through
-            // `Player_GetAimingPoint` 0x1a4a98 — all in the game's screen units (`BL+0x120/+0x124`):
+            // `Player_GetAimingPoint` 0x1a4a98, all in the game's screen units (`BL+0x120/+0x124`):
             // - aim bit set: the offsets ease toward the cursor (`BL+0x118/+0x11c`) at 0.5, the lock stays
             //   [M disasm 0x1a7e2c-0x1a7e74];
             // - else the option on, or the Q-Claw held (forced on [M 0x1a7cfc-0x1a7d18 `movz`]): the scan;
@@ -6724,8 +6724,8 @@ impl Sim {
         Some([s[0] * 0.5 * self.zoom, s[1] * 0.5 * self.zoom])
     }
 
-    /// The current shot direction's offset from Bond's view as (yaw, pitch) radians — what the old
-    /// angle-unit `aim_offset` held — for the walkers that steer the effective aim.
+    /// The current shot direction's offset from Bond's view as (yaw, pitch) radians, what the old
+    /// angle-unit `aim_offset` held, for the walkers that steer the effective aim.
     pub fn aim_offset_angles(&self) -> [f32; 2] {
         let p = nf_formats::ps2float::mul(self.bond.pitch, std::f32::consts::FRAC_PI_2);
         let b = nf_game::autoaim::view_basis(self.bond.yaw, p, self.bond.look());

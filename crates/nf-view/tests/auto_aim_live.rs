@@ -1,10 +1,10 @@
 //! s-auto-aim: Bond's auto-aim per tick as `Player_AutoAim` 0x1a7c98 runs it (spec:
 //! docs/systems/auto-aim.md). Each test drives the real `Sim::step_bond` path and fails on the
 //! port's previous angle-unit model:
-//! 1. one ease per aimed tick toward the cursor, in screen units [M disasm 0x1a7e2c-0x1a7e74] — the
+//! 1. one ease per aimed tick toward the cursor, in screen units [M disasm 0x1a7e2c-0x1a7e74], the
 //!    port eased twice (step_bond + the fire path's dir pick) in angle units;
 //! 2. with the option off the lock pointer `BL+0x114` is left alone [M 0x1a7e78-0x1a7ecc: that arm
-//!    only halves the offsets] — the port cleared it;
+//!    only halves the offsets], the port cleared it;
 //! 3. the Q-Claw forces the scan on whatever the option says [M 0x1a7cfc-0x1a7d18: `movz` sets the
 //!    option byte to 1 for 0x50/0x51];
 //! 4. a Q-Claw scan never releases its lock: the release compares the cap with `Autoaim_Range` (25)
@@ -49,7 +49,7 @@ fn give_and_settle(scene: &mut nf_view::scene::Scene, id: u8, rounds: i32) {
 
 #[test]
 fn an_aimed_tick_eases_the_offset_once_toward_the_cursor() {
-    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set, skipping"); return };
     let mut scene = load05(&iso);
     give_and_settle(&mut scene, 0x02, 41);
     let sim = scene.sim.as_mut().unwrap();
@@ -74,7 +74,7 @@ fn an_aimed_tick_eases_the_offset_once_toward_the_cursor() {
 
 #[test]
 fn the_option_off_keeps_the_lock_pointer() {
-    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set, skipping"); return };
     let mut scene = load05(&iso);
     let sim = scene.sim.as_mut().unwrap();
     sim.auto_aim = false;
@@ -113,7 +113,7 @@ fn face(sim: &mut nf_view::scene::Sim, g: [f32; 3]) {
 
 #[test]
 fn the_q_claw_scans_with_the_option_off_and_never_releases() {
-    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set, skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
     let sim = scene.sim.as_mut().unwrap();
     tick_idle(sim, 3000);
@@ -130,7 +130,7 @@ fn the_q_claw_scans_with_the_option_off_and_never_releases() {
         if sim.drones.aim_target == Some(GRAPPLE_AIM + gi) { snapped = true; break; }
     }
     assert!(snapped, "the claw scans with the option off");
-    // Face away: nothing in the window, but the claw's cap (50) never equals 25 — the lock stays.
+    // Face away: nothing in the window, but the claw's cap (50) never equals 25, the lock stays.
     sim.bond.yaw += std::f32::consts::PI;
     for _ in 0..5 { sim.step_bond(Input::default(), false, false, false); }
     assert_eq!(sim.drones.aim_target, Some(GRAPPLE_AIM + gi), "the claw's empty scan keeps the lock");

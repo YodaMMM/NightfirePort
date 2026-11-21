@@ -32,8 +32,8 @@ pub fn focal() -> (f32, f32) {
 }
 
 /// Bond's view frame as the rows the port's camera uses: R0 = screen-left (x), R1 = up (y), R2 = the
-/// view direction (`look`). The game builds the same frame twice — the viewer matrix the projection
-/// reads (`Viewer+0x160..0x180`) and `obj+0x90 · RotMatrixX(−pitch)` in `Player_GetAimingPoint` — and the
+/// view direction (`look`). The game builds the same frame twice, the viewer matrix the projection
+/// reads (`Viewer+0x160..0x180`) and `obj+0x90 · RotMatrixX(−pitch)` in `Player_GetAimingPoint`, and the
 /// auto-aim only needs the two to agree. The port takes both from Bond's yaw and view pitch (radians).
 /// *Unproven*: the game's matrices' last-bit values (the RotMatrix lanes) [S].
 pub fn view_basis(yaw: f32, pitch: f32, look: V3) -> [V3; 3] {
@@ -49,7 +49,7 @@ fn dot(r: V3, d: V3) -> f32 {
 /// `View_3DPoint2Screen` 0x1e7708 followed by `Check_AutoAim`'s store [M disasm 0x1e7708-0x1e77ec,
 /// 0x1a7784-0x1a77d4]: v = the view frame · (p − eye); `None` (the −1 return) when v.z < 0; then
 /// sx = W − (v.x·(fx/z) + W·0.5), sy = v.y·(fy/z) + H·0.5 and the stored offset is
-/// ((sx − W·0.5)/(W·0.25), (sy − H·0.5)/(H·0.25)) — **twice** the target's screen position: the
+/// ((sx − W·0.5)/(W·0.25), (sy − H·0.5)/(H·0.25)), **twice** the target's screen position: the
 /// end of `Player_AutoAim` halves it before the HUD and the shot read it.
 pub fn project_offset(eye: V3, basis: &[V3; 3], p: V3) -> Option<[f32; 2]> {
     let d = [trig::ee_sub(p[0], eye[0]), trig::ee_sub(p[1], eye[1]), trig::ee_sub(p[2], eye[2])];

@@ -620,7 +620,7 @@ mod tests {
         assert!(r >= -PI && r <= PI, "wrap of a wrapped value left the range: {r}");
     }
 
-    /// `asinf` 0x232d48 (s-auto-aim): outside [−1, 1] the game's wrapper returns 0.0, not ±π/2 — the
+    /// `asinf` 0x232d48 (s-auto-aim): outside [−1, 1] the game's wrapper returns 0.0, not ±π/2, the
     /// `__fdlib_version` 1 domain arm [M 0x232d64-0x232e24; D/L 0x30ba00 = 1]. The port's old
     /// `x.clamp(-1, 1).asin()` gave ±π/2 there. Inside the domain the op-for-op core stays within
     /// 4 ulp (chopped EE ops) of the f64 arcsine on every branch (|x| < 0.5, the split 0.5-0.975 form, above 0.975, ±1).
