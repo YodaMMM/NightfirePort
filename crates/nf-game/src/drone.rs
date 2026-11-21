@@ -22811,6 +22811,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             for (t, m, delay) in dr.msg_out.drain(..) { self.delayed_msgs.push((t, m, frame + delay)); }
             dr.voice_finished = dr.voice.is_none_or(|v| self.audio.finished(v.0));
+            // `NDrone2_ControlSTANDARD` 0x1490f0:82-94 polls `+0x4D0` on every control pass and
+            // zeroes it once `Sound_IsFinnished` reads the node finished [M] (`Drone_Control`
+            // 0x139268:48-61 runs it whenever `PreDroneControl` returns, which it does with 1 on
+            // every path but the SetState arm [M 0x148db0:56/86/128]). Kept, the finished handle
+            // went stale: the next sound to take that pool node made the guard read as talking
+            // again, and his next bark (and the draws behind it) moved with unrelated sounds.
+            if dr.voice_finished { dr.voice = None; }
             dr.patrol_cooldown = self.patrol_cooldown;
             dr.saw_opp_last_frame = self.saw_opp_last_frame;
             // guard-blast-smoke: the smoke cloud's touch this tick → msg 0x17 (DealWithObjHit case
@@ -26154,6 +26161,35 @@ mod abseil_tests {
                 hitboxes: &$keep.11, volumes: &$keep.12, sfx: None, models: &$keep.13, surfaces: None, voices: None,
                 difficulty: 2, ai_points: &$keep.14 };
         };
+    }
+
+    /// `NDrone2_ControlSTANDARD` 0x1490f0:82-94: every control pass reads `+0x4D0` through
+    /// `Sound_IsFinnished` and zeroes it once the line is finished [M]. The pool node the line
+    /// held is then free for the next sound (`Sound_UpdateSounds` 0x1dda70 frees a state-2 node),
+    /// and a guard must not read as talking because an unrelated sound took that node.
+    /// Sister: while the line plays the guard stays busy and keeps his handle.
+    #[test]
+    fn a_finished_line_drops_the_handle_so_a_reused_node_is_not_talk() {
+        empty_data!(0x0700_000b, d_keep, d);
+        let mut drones = Drones::new(vec![drone_at([10.0, 0.0, 10.0])], Rng::new(0x5eed));
+        let l = ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+        let h = drones.audio.play3d(0x25e, [10.0, 0.0, 10.0], None);
+        drones.list[0].voice = Some((h, 0x25e));
+        // The rest of the 256-node pool busy, so the next sound must reuse a freed node.
+        for _ in 1..crate::sound::POOL { drones.audio.play3d(0x7, [0.0; 3], None); }
+        drones.tick_inner(&d, &Player::default());
+        assert_eq!(drones.list[0].voice, Some((h, 0x25e)), "sister: the playing line keeps its handle");
+        assert!(drones.list[0].voice_busy(), "sister: the playing line is busy [M 0x149798]");
+        // The line ends: the node goes state 2, the pass reads it finished and drops the handle.
+        drones.audio.stop(h);
+        drones.tick_inner(&d, &Player::default());
+        assert_eq!(drones.list[0].voice, None, "finished: +0x4D0 = 0 on the control pass [M 0x1490f0:91]");
+        // The sound update frees the node, and the next sound takes it.
+        drones.audio.update(None, l, &|x| x != h);
+        let h2 = drones.audio.play3d(0x7, [0.0; 3], None);
+        assert_eq!(h2, h, "the pool handed the freed node to the next sound");
+        drones.tick_inner(&d, &Player::default());
+        assert!(!drones.list[0].voice_busy(), "an unrelated sound on the reused node is not the guard's line");
     }
 
     /// G-055 (drone-block-swaps): `NDrone2_PreDroneControl`'s second-switch flush
