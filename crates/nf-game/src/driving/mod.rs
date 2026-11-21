@@ -48,6 +48,10 @@ pub mod reset;
 pub mod weapons;
 // The 3-D listener, pan law, impacts, landings, horns, traffic engine (DRIVING.ELF audio).
 pub mod sound_events;
+// Script streams (music / speech / NIS), the speech-ambience fader and the mix events.
+pub mod stream_events;
+// Tank / heli / ultralight voices, weapon fire / flight / explosion sounds, the audio listener.
+pub mod vehicle_sounds;
 
 // The car physics lives in `physics.rs` (a single `driving.rs` beside this `driving/`
 // directory would collide, rustc E0761). The re-export keeps every public path the tests and

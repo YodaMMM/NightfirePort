@@ -89,12 +89,59 @@ Effective volume = own × parent chain; a running fade adds its step per read an
 - Disc [D, `drive_sound_events_disc`]: `SFX_CarAlarm` (ctor `FUN_002debc8`) is in no bank on any
   track; sandbump1..3 only on MIS11; the boat and snowmobile engine keys sit in slot 9.
 
+## Streams [M] (`stream_events.rs`, disc test `drive_streams_disc`)
+
+- `EStreamEvent` (0x14) words: 1 channel, 2 name, 3 fade seconds (int, -1 = wait for the current
+  stream to end), 4 loop, 5 only while the player has health, 6 prebuffer. Handler `FUN_0015d000`:
+  `speech` → the fader (skipped while the manager's +0x3cc and +0x3d0 are both set), `nis` → the
+  fader as NIS (fade 0), `music` → the Music channel. Compares are case-insensitive.
+- Channels (`FUN_002eb7a8`): Music reads `driving\<base>.mus` (the speech base minus its language),
+  Speech reads `driving\<base><lang>.spe`. Entry = the name lower-cased + `.asf`. On the disc all
+  121 (track, stream) pairs the eight tracks' scripts use are in the archive their channel reads,
+  and `bondmove` is in every `.mus` and `.spe` [D].
+- Channel update `FUN_002e8c70`: a waiting record with fade >= 0 fades the current stream out
+  linearly over that many seconds, then the next starts in the same update; fade -1 waits. A
+  prebuffered record opens held until `EReleaseStream`, or is purged after +0xb4 clock units.
+- Fader `SpeechVsAmbience` (`FUN_002f8e00` / `FUN_002f9180`): a speech line sets `0:Fader2` (the
+  parent of almost every effects group) to the ini's `0:Fade Effects` and the Music channel to
+  `0:Fade Music` at once; when the channel is free again the level climbs 2/s and both follow
+  level × (1 − duck) + duck. NIS lines do not duck and are dropped while a plain line plays. The
+  free channel loops the ambience stream of the region the car is in (`FUN_00147e30`). Duck
+  volumes per track are pinned (MIS01 0.3 / 0.4, MIS4 0.25 / 0.3 ...).
+- Stinger: every `EAddScoreAction` plays `bondmove` on the stinger channel (default Speech → NIS
+  path; `ESwitchStingerChannel` `music` → the Music channel, fade 0).
+- Mix events: `ESetAudioMix` target = clamp((pct/100 + 1) × ini volume) over N reads,
+  `ERevertAudioMix` back to the previous volume, `EResetAudioMix` every group to its ini volume
+  (0 for groups the ini lacks). The group map is case-insensitive (`FUN_002f37e0`).
+- `EPlaySound` (2-D, `Power Ups`) / `EPlaySoundPos` (3-D, `World Sounds`, words 5 / 6 = min / max)
+  name the bank by its `banks.ini` path; every key resolves except `SFX_timerbeep` in
+  `snox/g3_snowmb.bnk` on MIS3 [D].
+
+## Vehicles, weapons, listener [M] (`vehicle_sounds.rs`)
+
+- Class updates (vtable +0x24): tank `FUN_002f1000` (treads = min(speed/8, 1), 0 without rear
+  contact, pitch level/2 + 1/2), heli `FUN_002f16b8` (rotor blend 0.9·b (+0.1 when moving);
+  inside (< 2) three voices each at pans 0.25 / 0.75 / 0), ultralight `FUN_002e3c90` (dive / low /
+  high layers by the climb rate, pitch 0.7..1.7). `SFX_TankTread` is in no bank [D].
+- Listener `FUN_00147e30`: the main render view's camera matrix (and the velocity after it) while
+  the view set exists, else the player body's matrix at the car position.
+- Landing strength = max over counted wheels of compression × 5, ≤ 1 (`FUN_0018c1b0` /
+  `FUN_0018cef8`, copied by the bridge). Horn request = the traffic driver's avoidance
+  `FUN_001377c8` finding a blocker in its way.
+- Fire `FUN_0014ca60` by weapon: ten 2-D `POV Weapons` `SFX_<stem>Fire`; rocket / missile / prox
+  mine / cannon / grenade / torpedo 3-D (min 50, max 200; `Weapons Fire` for the player,
+  `Henchmen Fire` for others; AI torpedoes `SFX_htorpedofire`); the gun only for AI cars
+  (`SFX_hmntmachfire`, flying ones `SFX_HumntmachFire` at 0.75) and elements (`SFX_HMachGun1/2`
+  alternating; `SFX_HMachGun2` is in no bank [D]); on MIS3 every other gun shot is skipped.
+- Flight `FUN_00180bc8` (`SFX_RocketTrans`, `SFX_MissleTrans`, `SFX_EMPtrans`, torpedo keys,
+  `SFX_UMissileTrans`; none for the MIS3 rocket and the snowmobile rocket), Q-Pulse hit
+  `SFX_EMPdetonate`, lock warning `SFX_Htargetlock`, explosions `FUN_0015a098` (four keys round
+  robin with a 30-unit cooldown each, plus `SFX_DistExp`; ranges ×5 on jungleb).
+
 ## Not traced / not ported
 
-Which script event starts which stream: the stream names sit in the track `.crp` as `CHAR::`
-strings. `FUN_0015d000` (the stream event: `speech` / `nis` / mix-group channel) is described but
-its records are not decoded. Also not traced: the landing strength (+0x150) writer, the clock unit of
-the impact cooldowns, which matrix the listener's camera record points at (the port uses the chase
-camera's rows), the boat / snowmobile / helicopter / tank / ultralight updates (ctor keys only), and
-the projectile weapons' fire jump table (`FUN_0014ca60`, key `SFX_<weapon>Fire`). The viewer does
-not play any of this yet.
+The boat and snowmobile sub-steps (`FUN_002e74d8` / `FUN_002e7d60` / `FUN_002e76f8` /
+`FUN_002e73b8`; `FUN_002feaa0` / `FUN_002fed98` / `FUN_002ee768` / `FUN_002ede60`), the turret, the tank's engine object, the
+wheel query behind the landing strength, the blocker test behind the horn, the unit of the game
+clock used by cooldowns and the prebuffer purge, what a channel's +0x48 does, and the writers of
+`DAT_00355e6c` / `DAT_003c82c8` / `DAT_00355e88`. The viewer does not play any of this yet.
