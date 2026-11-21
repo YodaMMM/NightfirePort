@@ -3797,7 +3797,7 @@ impl Sim {
         }
         let (head, look) = (self.bond.head(), self.bond.look());
         // The shot's direction through the crosshair: forward + 0.76966 cx · right + 0.57724 cy · up.
-        let (yaw, p) = (self.bond.yaw, self.bond.pitch * std::f32::consts::FRAC_PI_2);
+        let (yaw, p) = (self.bond.yaw, self.bond.view_pitch());
         let right = [-yaw.cos(), 0.0, yaw.sin()];
         let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
         let (tx, ty) = (0.76966 * self.cross[0], 0.57724 * self.cross[1]);
@@ -7202,7 +7202,7 @@ impl Sim {
         let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
         let (p, t) = (self.bob[0], self.bob[1]);
         let l = [f(0xe0) + 0.01 * p.sin() + 0.001 * t.sin(), f(0xe4) + 0.01 * p.cos().abs() + 0.001 * (1.7 * t).cos(), f(0xe8) + 0.02 * (0.84329 * p).sin()];
-        let (y, pt) = (self.bond.yaw, self.bond.pitch * std::f32::consts::FRAC_PI_2);
+        let (y, pt) = (self.bond.yaw, self.bond.view_pitch());
         let left = [y.cos(), 0.0, -y.sin()];
         let up = [-pt.sin() * y.sin(), pt.cos(), -pt.sin() * y.cos()];
         let fwd = self.bond.look();

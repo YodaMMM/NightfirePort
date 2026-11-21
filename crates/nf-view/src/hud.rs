@@ -608,7 +608,7 @@ pub fn flare_sun_screen(s: &crate::scene::Sim) -> Option<(f32, f32)> {
     let pos = s.bond.head();
     let p = [pos[0] - sv[0], pos[1] - sv[1], pos[2] - sv[2]];
     let yaw = s.bond.yaw;
-    let pitch = s.bond.pitch * std::f32::consts::FRAC_PI_2;
+    let pitch = s.bond.view_pitch();
     let f = 1.0 / ((std::f32::consts::FRAC_PI_3 / s.zoom.max(1e-3)) * 0.5).tan();
     let fwd = [pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()];
     let right = [-yaw.cos(), 0.0, yaw.sin()];
@@ -1671,7 +1671,7 @@ fn mp_panes(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) 
     // forward a blip to the right of the viewer lands right of the ring centre and one ahead lands
     // above it [S — the port's camera-axis mapping onto viewer+0x120].
     let yaw = s.bond.yaw;
-    let pitch = s.bond.pitch * std::f32::consts::FRAC_PI_2;
+    let pitch = s.bond.view_pitch();
     let fwd = [pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()];
     let right = [-yaw.cos(), 0.0, yaw.sin()];
     let up = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]];
@@ -1887,7 +1887,7 @@ pub fn camera_scan_roots(s: &crate::scene::Sim) -> Vec<[f32; 3]> {
 pub fn project_hud(s: &crate::scene::Sim, p: [f32; 3]) -> Option<(f32, f32)> {
     let pos = s.bond.head();
     let yaw = s.bond.yaw;
-    let pitch = s.bond.pitch * std::f32::consts::FRAC_PI_2;
+    let pitch = s.bond.view_pitch();
     let f = 1.0 / ((std::f32::consts::FRAC_PI_3 / s.zoom.max(1e-3)) * 0.5).tan();
     let fwd = [pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()];
     let right = [-yaw.cos(), 0.0, yaw.sin()];
@@ -1926,7 +1926,7 @@ pub fn copter_lock_bracket(points: &[(f32, f32)], frame: u32, w: f32, h: f32) ->
 pub fn camera_brackets(s: &crate::scene::Sim, aspect: f32) -> Vec<[f32; 4]> {
     let pos = s.bond.head();
     let yaw = s.bond.yaw;
-    let pitch = s.bond.pitch * std::f32::consts::FRAC_PI_2;
+    let pitch = s.bond.view_pitch();
     let fov = std::f32::consts::FRAC_PI_3 / s.zoom;
     let f = 1.0 / (fov * 0.5).tan();
     // The render's camera axes (`Camera::right`/`dir`, lib.rs): right from the yaw alone, up = right × fwd.

@@ -461,7 +461,7 @@ fn start_camera(scene: &scene::Scene) -> Camera {
 /// camera convention), else the level's start camera.
 pub(crate) fn bug_replay_shot(scene: &scene::Scene, out: &std::path::Path) -> Result<()> {
     let cam = match scene.sim.as_ref() {
-        Some(s) => { let h = s.bond.head(); Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: s.bond.yaw, pitch: s.bond.pitch * std::f32::consts::FRAC_PI_2, fov: GAME_FOV } }
+        Some(s) => { let h = s.bond.head(); Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: s.bond.yaw, pitch: s.bond.view_pitch(), fov: GAME_FOV } }
         None => start_camera(scene),
     };
     shot(scene, &cam, &out.to_string_lossy(), None, 0.0, scene::ViewOpts::default(), false, false, None, None)
@@ -6404,7 +6404,7 @@ impl App {
                         }
                         if !self.noclip {
                             let h = sim.bond.head();
-                            self.cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: view_fov(sim) };
+                            self.cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.view_pitch(), fov: view_fov(sim) };
                             // mp-local-look (online aim lagged the mouse): the lockstep
                             // runs this player's turn/look `input_delay` ticks late (3 at least, up to
                             // 15 with the adaptive delay over the internet). The camera adds the turn/
@@ -8262,7 +8262,7 @@ pub fn run() -> Result<()> {
                     }
                 }
             }
-            if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.pitch * std::f32::consts::FRAC_PI_2, fov: view_fov(sim) }; }
+            if walk { let h = sim.bond.head(); cam = Camera { pos: Vec3::new(h[0], h[1], h[2]), yaw: sim.bond.yaw, pitch: sim.bond.view_pitch(), fov: view_fov(sim) }; }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.script_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov }; } }
             if walk { if let Some((p, yaw, pitch, fov)) = sim.wire_camera() { cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV / fov }; } }
             eprintln!("Bond at {:?}{}, health {}", sim.bond.pos, if sim.disabled { " (disabled by a script)" } else { "" }, sim.drones.health.health);
