@@ -1679,6 +1679,14 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
                     let _ = w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3),
                         &format!("east to Rook's wake touch #476 node {k}"));
                     if k == 21 { delta_approach_scan(&mut w, k); }
+                    // The fights past the delta approach end at the node arrival again (d1
+                    // only; the d2 sister is green on the finish-fights stream and stays
+                    // byte-exact): finish_fights held the node-26 fight on #28 at d 15.8 until
+                    // the gun ran dry (clip 15 + spare 12, "out of ammo at +572"), and the
+                    // unarmed walk then died to #28/#29 at 4 u (t36801). With the fight cut at
+                    // the arrival the walk keeps its rounds for the close exchange and
+                    // completes (health 48.7 at the 07000015 load).
+                    if k == 21 && w.scene.sim.as_ref().unwrap().drones.difficulty == 1 { w.dmg.finish_fights = false; }
                     // retune-nb-14: the wake fights empty the clip — the v3 run went dry on #28
                     // at node 26 ("shooting drone 28 ... clip 15 spare 12" at d 15.8, "out of
                     // ammo at +572", the determined pass killed false on an empty gun) and the
@@ -2220,8 +2228,10 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// node-by-node (one nav_route read from cur_pos, the same r(1.3) legs [L the d3 branch's
 /// byte-exact note]) with the delta_approach_scan after node 21 (the d3 chain's own law) and
 /// the d3 chain's loot pass keyed on the dry gun (clip+spare < 10) instead of a fixed node.
+/// UN-IGNORED (ignored-walks-1121): the fights past node 21 end at the node arrival again (d1
+/// only) — the finish-fights hold had spent the whole gun on #28 at d 15.8; green, health 48.7
+/// at the 07000015 load.
 #[test]
-#[ignore = "retune-nb-14-3 measured on the batch suite 2026-11-19: Bond dies t36801 at (5.05,1.13,-23.31), drones #28/#29 (weapon 0x1a) at ~4 u land 65.2 of the 100 (41 hits, 23 return-fire fights); re-tune the approach to that pair and un-ignore"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }

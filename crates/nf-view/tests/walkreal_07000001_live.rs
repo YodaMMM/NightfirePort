@@ -95,6 +95,10 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.gun.clip + sim.gun.spare < 30 { let _ = sim; w.resupply("pre-ambush ammo"); }
     }
+    // Agent (real damage): a full clip first — the d2 real-damage run opened
+    // the mouth fight on clip 1 / spare 9 and never fired a full burst at the 24-health
+    // captain #3 (death t14006, #3's 24.4 in 35 hits from 7.8 u).
+    if difficulty == 2 && !w.tops_up() { w.reload_full(); }
     w.walk_nav_to([-24.0, 6.4, 14.8], "the ambush stance (east of the ch-0xF slab)", 0.8);
     w.walk_nav_to([-25.7, 6.4, 14.8], "cross the ch-0xF slab (the ambush pops)", 0.25);
     for _ in 0..120 {
@@ -2314,7 +2318,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 // nav leg 3000 ticks). Measured: armour 50 in 380 ticks with the contact behind
                 // Bond, the ambush fought from the mouth, the contact walks to the plate - the walk
                 // COMPLETES (was t19729).
-                if k == 0 && difficulty >= 3 && walker::dxz(*at, [-14.36, 6.51, 16.06]) < 0.5 {
+                if k == 0 && (difficulty >= 3 || (difficulty == 2 && !w.tops_up())) && walker::dxz(*at, [-14.36, 6.51, 16.06]) < 0.5 {
                     let rf = w.dmg.return_fire; w.dmg.return_fire = false;
                     let t0 = w.total_ticks;
                     w.walk_nav_to([-15.89, 6.45, 16.36], "the west armour side (00agent)", 0.4);
@@ -2776,8 +2780,15 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     }
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
+    // The pocket rule holds on the descent too (real damage only — the topped-up walks keep
+    // master's choreography): the d1 real-damage run's plate leg met #17 parked at (-28.2, 14.7)
+    // and the return fire's flank walked Bond INTO the pocket corner (-29.86, 13.64), where #12
+    // and #17 at 0.7-1.9 u landed the last 50 hp (death t28813).
+    let prev_flank_hold = w.flank_hold_x;
+    if !w.tops_up() { w.flank_hold_x = Some(-27.0); }
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
     w.walk_nav_to(plate, "the plate", 1.2);
+    w.flank_hold_x = prev_flank_hold;
     let sim = w.scene.sim.as_ref().unwrap();
     let on_plate = sim.bond.pos[0] < -32.0 && sim.bond.pos[2] > 12.0;
     if !on_plate {
@@ -3894,8 +3905,10 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
 /// tests' own `top_up_health = true` included) and the walker's return fire on — Bond's death
 /// panics with the death spot and the last hits (common/damage_log.rs), so a pass pins that the
 /// walk completes on the port's own damage.
+/// UN-IGNORED (ignored-walks-1121): the descent legs (the stairwell head, the plate) hold the
+/// pocket rule on real damage — the nb-scan-all death t28813 was the plate leg's return-fire
+/// flank walking Bond into the pocket corner beside #12/#17; green, health 43.0 at the exit.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t28813 at (-29.86,6.47,13.64) [L 2026-11-18 run]; re-tune and un-ignore"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
     walker::with_real_damage(walk_from_the_spawn_to_the_exit_with_the_contact);
 }
@@ -3924,7 +3937,7 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
 /// parked west of x -27 (the walled pocket — no clear eye ray from any mouth stand [L]) is
 /// fought SHOOT-ONLY, never approached into the 0.4-u corner where the pre-fix run died.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t14006 at (-22.47,6.47,13.64) [L 2026-11-18 run]; re-tune and un-ignore"]
+#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond died t14006 at (-22.47,6.47,13.64) on clip 1 spare 9 at the ch-0xF mouth; ignored-walks-1121 added the west armour box (50.0) and a full clip before the slab, and the walk now dies t26967 at (-23.31,6.48,14.20): the pocket guard #17 (-30.5,6.3,14.9) lands 52.3 in 49 hits from 7.2 u while every eye ray to his parts is blocked (no exposed part, three holds per window) and the band-edge windows on the walled #2/#4 spend the clock; re-tune the mouth fight (a stance that sees into the pocket, or fight #17 first) and un-ignore"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));
 }
