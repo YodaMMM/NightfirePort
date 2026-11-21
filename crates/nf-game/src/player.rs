@@ -2728,6 +2728,25 @@ pub fn init_level_loadout(
     w: &nf_formats::weapon::WeaponData,
     loaded: impl Fn(u8) -> bool + Copy,
 ) -> u8 {
+    init_level_loadout_ex(level, save, health, inv, ch, w, loaded, false)
+}
+
+/// [`init_level_loadout`] with the game-complete byte `GameState[0x52]` (`Progress::game_complete`).
+/// The single-player `Player_EquipWeapon` runs `Upgrade_Weapon` on its id [M 0x1a8a58:24-30, the
+/// `MPSettings+0x180 == 0` arm], and `Upgrade_Weapon`'s case 10 returns 0xC while that byte is set
+/// [M 0x1a8f30 case 10]: on a finished game the default arm's `EquipWeapon(10, 999)` lands on
+/// record 0xC (the stronger record of 10). The other tables read `inv.upgrades` as before.
+#[allow(clippy::too_many_arguments)]
+pub fn init_level_loadout_ex(
+    level: u32,
+    save: Option<&RamSave>,
+    health: &mut crate::bullet::PlayerHealth,
+    inv: &mut crate::pickup::Inventory,
+    ch: &mut Channels,
+    w: &nf_formats::weapon::WeaponData,
+    loaded: impl Fn(u8) -> bool + Copy,
+    game_complete: bool,
+) -> u8 {
     // `Upgrade_Weapon(6)` (0x1a8f30 case 6 → `UpgradedHandguns[Upgrades[0]]`: 2 on a fresh profile
     // [L], 4/6/8 with the handgun gold-medal rewards) — `iVar8` at 0x1a7ef8:126, the handgun every
     // kit equips, the request of the 01/05/default arms and the RamLoad cases' continuation gate.
@@ -2888,6 +2907,12 @@ pub fn init_level_loadout(
                 (0xe, 999), (0x10, 999), (0x54, 0), (0x1c, 999), (0x15, 999), (10, 999), (0xd, 999),
                 (0x56, 0), (0x58, 0), (0x41, 999), (0x59, 999), (0x3b, 999), (0x1a, 999),
                 (0x33, 999), (0x11, 999), (2, 999), (0x2a, 999), (0x42, 999), (0x43, 999), (0x45, 999)] {
+                // `Upgrade_Weapon(10)` = 0xC on a finished game [M 0x1a8a58:24-30 → 0x1a8f30 case
+                // 10]. The model check reads the raw id's record first [M 0x1a8a58:19-21].
+                if id == 10 && game_complete {
+                    inv.equip_weapon(w, 0xC, rounds, loaded(id as u8));
+                    continue;
+                }
                 equip(inv, w, id, rounds, loaded);
             }
             inv.equip_ammo(w, 0x1f, 10);
