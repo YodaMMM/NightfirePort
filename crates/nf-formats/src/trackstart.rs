@@ -194,8 +194,10 @@ pub struct TrackSpawn {
     pub dir: [f32; 3],
     /// `atan2(dir.x, dir.z)`: the heading about +y with yaw 0 = +z.
     pub yaw: f32,
-    /// The `EStartMission` argument word (`+4` of the arguments), read as f32: the start speed
-    /// factor (× the car's `+0x4c`) [M 0x15c920 / 0x15c738].
+    /// The `EStartMission` argument word (`+4` of the arguments), read as f32 (`lwc1 $f12, 4($s0)`
+    /// at 0x15c93c): the start speed in m/s. The handler writes `norm(dir) × arg × inst+0x4c`
+    /// into the sim instance's momentum (+0x40), and +0x4c is the body mass, so the velocity is
+    /// `norm(dir) × arg` [M 0x15c920 / 0x15c738; FUN_001f6e98 :124 stores the mass at +0x4c].
     pub speed_factor: f32,
 }
 
@@ -564,6 +566,25 @@ pub fn plane_height(t: &[[f32; 3]; 3], x: f32, z: f32) -> f32 {
         return v0[1];
     }
     v0[1] - (n[0] * (x - v0[0]) + n[2] * (z - v0[2])) / n[1]
+/// `MSet` — the Map window's mission set record [M 0x22faf8 :118 `FUN_002d5a10(map, 'MSet')`].
+pub const TAG_MSET: u32 = 0x4d53_6574;
+
+/// The pvehicle name the player is spawned in: the C string that opens the `MSet` payload.
+/// The chain [M]: `FUN_0022faf8` passes the MSet record to `FUN_00205220`, which stores its
+/// payload pointer at mission+0x1c; `FUN_00204d18` copies it to mission+0x1b44 (only the names
+/// `db5` / `z8` are swapped for an unlocked car by `DAT_0033a010..020`); "Spawn player car"
+/// (`FUN_00176658` :207-231) takes the name from `FUN_002051f8` (mission+0x1b44, or
+/// `jungle_truck` when the low-memory byte 0x1009a1 has bit 0) and builds the car; the
+/// constructor's own override `DAT_0033196c` is never written in DRIVING.ELF (no store to it,
+/// no pointer to it) [M FUN_001862c0 :117-126]. On the disc [D]: MIS01 helicopter, MIS11
+/// vanquishsub, MIS13A jungle_truck, MIS13B ultralight, MIS13C fodbase, MIS3 supersnow, MIS4
+/// vanquishalps, RACE cobra_player. None when the Map window has no MSet record.
+pub fn mission_vehicle(crp: &Crp<'_>) -> Result<Option<String>> {
+    let Some(map) = crp.pool()?.into_iter().find(|r| r.tag == tag::MAP) else { return Ok(None) };
+    let Some(ms) = crp.record_window(&map)?.into_iter().find(|r| r.tag == TAG_MSET) else { return Ok(None) };
+    let p = crp.payload(&ms)?;
+    let end = p.iter().position(|&b| b == 0).unwrap_or(p.len());
+    Ok(Some(String::from_utf8_lossy(&p[..end]).into_owned()))
 }
 
 /// The player start of a track `.crp`: the (last, as `FUN_0022cd30` fires them in index order)

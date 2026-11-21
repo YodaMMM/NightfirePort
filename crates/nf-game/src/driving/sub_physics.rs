@@ -25,6 +25,7 @@
 
 use super::bounds::{ZoneQuad, ZONES};
 use super::physics::{Car, CarInput, CarParams, FlatWorld, Rigid};
+use super::sub_collide::{collide_world, Building, CollideOut, WorldMesh};
 
 /// The integer frame rate the sheet response reads (sim+0xdbc = 0x339f4c, `FUN_001feda0` stores
 /// `FUN_002d6b90()` = 60 on NTSC) [M].
@@ -440,9 +441,13 @@ pub struct SubCraft {
     pub roll_target: i8,
     /// +0x2d6, set by `FUN_001932c0`; 1 at spawn [M FUN_001862c0:112].
     pub roll_release: bool,
-    /// +0x29e, set by `FUN_001931b8`; 0 unless a script sets it [S: the ctor's zeroing is not
-    /// traced].
+    /// +0x29e, set by `FUN_001931b8` (vtbl+0x1e4). The world collision pass clears it every tick
+    /// and sets it when the nose is stuck against a surface at low speed
+    /// (`sub_collide::CollideOut::nose_stuck`) [M FUN_001fc2f0 :199-203, :290-321]; 0 at spawn.
     pub stunt: bool,
+    /// The model header box half extents (`FUN_001c9778`): the inertia's and the hull's
+    /// [M FUN_001862c0 :155, :250, the 0x1867a8 stack argument of FUN_001f6e98].
+    pub half_extents: V3,
 }
 
 impl SubCraft {
@@ -469,6 +474,18 @@ impl SubCraft {
             roll_target: 0,
             roll_release: true,
             stunt: false,
+            half_extents,
+        }
+    }
+
+    /// The `EStartMission` handler's velocity [M FUN_0015c738]: the sim instance's momentum
+    /// (+0x40) is set to `norm(dir) · arg · mass` (+0x4c is the mass, [M FUN_001f6e98 :124]),
+    /// so the start velocity is `norm(dir) · arg` m/s (`arg` = the action's f32 word, MIS13A 35,
+    /// MIS13B 2 [D]).
+    pub fn start_mission(&mut self, dir: V3, arg: f32) {
+        let n = dot(dir, dir).sqrt();
+        if n > 0.0 {
+            self.body.vel = scale(dir, arg / n);
         }
     }
 
@@ -725,6 +742,18 @@ impl SubCraft {
         let mut inp = *input;
         self.controller(&mut inp);
         self.body.integrate(rigid, dt);
+    }
+
+    /// One tick with the world collision (pass B, `FUN_001fc2f0`) between the controller and the
+    /// integration. The game's frame runs B → D (integrate) → the controller [M 0x1ff3d8, 0x159d10];
+    /// controller → B → D is the same cycle.
+    pub fn step_world(&mut self, input: &SubInput, rigid: &Rigid, building: &Building, mesh: &WorldMesh, dt: f32) -> CollideOut {
+        let mut inp = *input;
+        self.controller(&mut inp);
+        let out = collide_world(&mut self.body, self.half_extents, mesh, building, dt);
+        self.stunt = out.nose_stuck;
+        self.body.integrate(rigid, dt);
+        out
     }
 }
 

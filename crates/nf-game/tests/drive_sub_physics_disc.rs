@@ -139,3 +139,120 @@ fn every_sub_physics_mission_flies_600_ticks_of_throttle_inside_its_world() {
         eprintln!("skip: no /DRIVING/ extents in this image");
     }
 }
+
+/// Each sub mission (MIS11, MIS13A, MIS13B, MIS13C): the player vehicle the track's `MSet` names
+/// [M FUN_00176658 → FUN_002051f8 → FUN_00204d18; D], the start speed of its `EStartMission`
+/// [M FUN_0015c738], the header box of the SUB_PHYSICS craft [M FUN_001c9778; D the `Base`
+/// record], then 1200 ticks of full throttle with steering and pitch sweeps under
+/// `SubCraft::step_world` (the world collision `FUN_001fc2f0` against the track's CDat
+/// triangles): the craft's centre never crosses a collision triangle. In MIS13A and MIS13C the
+/// spawn vehicle is a land-pass vehicle (jungle_truck / fodbase), so the archive's SUB_PHYSICS
+/// craft (ultralight / ultralightbig) is the one flown there. The plain `step` (no world pass)
+/// crosses a surface on at least one of the four.
+#[test]
+fn each_sub_mission_flies_1200_ticks_of_throttle_and_sweeps_without_entering_terrain() {
+    use nf_game::driving::sub_collide::{Building, WorldMesh, QUERY_CLASS_MASK};
+    let Ok(path) = std::env::var("NF_ISO") else { eprintln!("skip: NF_ISO not set"); return };
+    let iso = IsoImage::open(&path).expect("open NF_ISO");
+    // (archive, MSet vehicle, start speed, the SUB_PHYSICS craft flown, its header half extents)
+    let cases = [
+        ("MIS11", "vanquishsub", 0.0f32, "vanquishsub", [0.919f32, 0.578, 2.317]),
+        ("MIS13A", "jungle_truck", 35.0, "ultralight", [5.344, 1.190, 2.998]),
+        ("MIS13B", "ultralight", 2.0, "ultralight", [5.344, 1.190, 2.998]),
+        ("MIS13C", "fodbase", 0.0, "ultralightbig", [10.688, 2.379, 5.995]),
+    ];
+    let rigid = Rigid::game_defaults();
+    let building = Building::game_defaults();
+    let mut ran = 0;
+    let mut plain_crossed = 0;
+    for (viv, mission_vehicle, speed, stem, want_half) in cases {
+        let Some(e) = iso.find(&format!("/DRIVING/{viv}.VIV")) else { continue };
+        let g = nf_formats::disc::read_bigf(&iso, e).unwrap();
+        let base = e.lba as u64 * 2048;
+        let Some(track) = g
+            .entries
+            .iter()
+            .find(|x| {
+                let n = x.name.to_ascii_lowercase();
+                n.starts_with("data\\track\\") && n.ends_with(".crp")
+            })
+            .and_then(|t| entry(&iso, base, &g, &t.name.clone()))
+        else {
+            eprintln!("skip {viv}: no track extents");
+            continue;
+        };
+        let crp = Crp::parse(&track).unwrap();
+        assert_eq!(nf_formats::trackstart::mission_vehicle(&crp).unwrap().as_deref(), Some(mission_vehicle), "{viv}");
+        let atr = |s: &str| {
+            entry(&iso, base, &g, &format!("data\\sim\\attrib\\pvehicle\\{s}.atr")).map(|b| VehicleAttrs::parse_atr(&String::from_utf8_lossy(&b)))
+        };
+        let spawn_attrs = atr(mission_vehicle).unwrap_or_else(|| panic!("{viv}: no {mission_vehicle}.atr"));
+        let spawn_pass = drive_pass(&spawn_attrs, 0, false);
+        assert_eq!(spawn_pass == DrivePass::Sub, mission_vehicle == stem, "{viv}: {mission_vehicle} → {spawn_pass:?}");
+        let tris = crp.extract_collision_tris().unwrap();
+        let spawn = nf_formats::trackstart::track_spawn(&crp, &tris).unwrap();
+        assert_eq!(spawn.speed_factor, speed, "{viv}");
+        let attrs = atr(stem).unwrap();
+        assert_eq!(attrs.sub_physics, 1, "{viv} {stem}");
+        let car = entry(&iso, base, &g, &format!("data\\car\\model\\{stem}.crp")).unwrap();
+        let half = nf_formats::carmesh::header_half_extents(&car).unwrap();
+        for k in 0..3 {
+            assert!((half[k] - want_half[k]).abs() < 0.001, "{viv} {stem}: header half {half:?}");
+        }
+        let lod = half_extents(&car);
+        let mesh = WorldMesh::new(tris.iter().map(|t| (t.v, t.flags)));
+        let mut c = SubCraft::new(attrs.clone(), half, spawn.pos, spawn.yaw, 0);
+        c.start_mission(spawn.dir, spawn.speed_factor);
+        let mut plain = c.clone();
+        let mut contacts = 0usize;
+        let mut contact_ticks = 0u32;
+        let mut max_strength = 0.0f32;
+        let mut damage = 0.0f32;
+        let mut stuck_ticks = 0u32;
+        let mut plain_cross: Option<usize> = None;
+        let mut path = 0.0f32;
+        for tick in 0..1200u32 {
+            let t = tick as f32;
+            let input = SubInput {
+                throttle: 1.0,
+                steer: (t * std::f32::consts::TAU / 240.0).sin(),
+                pitch: 0.6 * (t * std::f32::consts::TAU / 330.0).sin(),
+                ..Default::default()
+            };
+            let prev = c.body.pos;
+            let out = c.step_world(&input, &rigid, &building, &mesh, DT);
+            let p = c.body.pos;
+            assert!(p.iter().all(|x| x.is_finite()), "{viv}: tick {tick} {p:?}");
+            if let Some((ct, i)) = mesh.crossing(prev, p, QUERY_CLASS_MASK) {
+                panic!("{viv} {stem}: tick {tick} the centre crossed triangle {i} ({:?}) at t {ct}: {prev:?} -> {p:?}", tris[i].v);
+            }
+            path += ((p[0] - prev[0]).powi(2) + (p[1] - prev[1]).powi(2) + (p[2] - prev[2]).powi(2)).sqrt();
+            contacts += out.contacts.len();
+            contact_ticks += (!out.contacts.is_empty()) as u32;
+            stuck_ticks += out.nose_stuck as u32;
+            for ct in &out.contacts {
+                max_strength = max_strength.max(ct.strength);
+                damage += ct.damage.unwrap_or(0.0);
+            }
+            let pp = plain.body.pos;
+            plain.step(&input, &rigid, DT);
+            if plain_cross.is_none() && mesh.crossing(pp, plain.body.pos, QUERY_CLASS_MASK).is_some() {
+                plain_cross = Some(tick as usize);
+            }
+        }
+        plain_crossed += plain_cross.is_some() as u32;
+        eprintln!(
+            "{viv}: spawn vehicle {mission_vehicle} ({spawn_pass:?}), flown {stem} header half {half:.3?} (LOD box {lod:.3?}), start {speed} m/s; \
+             1200 ticks: path {path:.0} m, end {:.1?} |v| {:.1}, contacts {contacts} on {contact_ticks} ticks, max strength {max_strength:.2}, \
+             damage {damage:.0}, nose-stuck ticks {stuck_ticks}; plain step first crosses at {plain_cross:?}",
+            c.body.pos,
+            c.speed
+        );
+        ran += 1;
+    }
+    if ran == 0 {
+        eprintln!("skip: no /DRIVING/ extents in this image");
+        return;
+    }
+    assert!(plain_crossed > 0, "the plain step crossed no surface: the check would not see a pass-through");
+}

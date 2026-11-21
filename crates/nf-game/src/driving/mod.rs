@@ -48,6 +48,8 @@ pub mod sub_physics;
 // The player car's recovery: the engine's righting reset (FUN_00188200 → FUN_00187b00) and the
 // scripted placements (FUN_00187eb8).
 pub mod reset;
+// The SUB_PHYSICS hull against the track triangles (FUN_001fc2f0 pass B, FUN_001fb318, FUN_001fc198).
+pub mod sub_collide;
 // The weapon table, ammo/reload, projectiles and hit damage (FUN_0020f2b8 + the WeaponMan).
 pub mod weapons;
 // The 3-D listener, pan law, impacts, landings, horns, traffic engine (DRIVING.ELF audio).
