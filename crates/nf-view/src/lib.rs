@@ -616,12 +616,33 @@ fn face_other_aid(sim: &mut scene::Sim) -> bool {
     true
 }
 
+/// Test aid (NF_MP_PLACE="<slot>:x,y,z[;…]", mp-drops two-window check): at the online match start
+/// those slots' bodies stand at those points — identically on every machine (the env rides every
+/// window; the positions are in the lockstep hash), so a pickup across the arena is a short walk.
+fn place_aid(sim: &mut scene::Sim) {
+    let Ok(v) = std::env::var("NF_MP_PLACE") else { return };
+    let local = sim.mp_local_slot;
+    for part in v.split(';') {
+        let Some((sl, xyz)) = part.split_once(':') else { continue };
+        let Ok(sl) = sl.trim().parse::<usize>() else { continue };
+        let c: Vec<f32> = xyz.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        if c.len() != 3 || sl >= sim.mp_bonds.len() { continue; }
+        let yaw = if sl == local { sim.bond.yaw } else { sim.mp_bonds[sl].as_ref().map_or(0.0, |b| b.yaw) };
+        let b = nf_game::player::Bond::stand_at(&sim.world, [c[0], c[1], c[2]], yaw);
+        let bp = b.pos;
+        if sl == local { sim.bond = b; } else { sim.mp_bonds[sl] = Some(b); }
+        if let Some(m) = sim.mp.as_mut() { m.set_slot(sl, bp); }
+        eprintln!("[net] place aid: slot {sl} at {bp:?}");
+    }
+}
+
 /// Test aid (NF_MP_DUEL=<dist>, mp-combat-weapons): at the online match start slot 1's body is
 /// moved onto the first spot `dist` from slot 0 (16 headings) on the same floor with a clear line
 /// between the eyes — identically on every machine (the positions are in the lockstep hash, every
 /// window runs it with the same env) — so the two-window weapon check fires across open ground.
 /// Combine with NF_MP_FACE_OTHER=1.
 fn duel_aid(sim: &mut scene::Sim) {
+    place_aid(sim);
     let Some(dist) = std::env::var("NF_MP_DUEL").ok().and_then(|v| v.parse::<f32>().ok()) else { return };
     let local = sim.mp_local_slot;
     let body = |sim: &scene::Sim, s: usize| if s == local { Some(sim.bond.clone()) } else { sim.mp_bonds[s].clone() };
@@ -5745,7 +5766,18 @@ impl App {
                                 .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick))
                             {
                                 let b = &sim.bond;
-                                let mut live: Vec<[f32; 3]> = sim.drones.pickups.iter().filter(|p| !p.gone && !p.hidden)
+                                // NF_NET_AUTOPICK_ONLY="drop" | "<id>[,<id>…]" (mp-drops two-window check):
+                                // steer only at a dead player's drop (lifetime running, no respawn) or at
+                                // pickups of those weapon ids.
+                                let only = std::env::var("NF_NET_AUTOPICK_ONLY").ok();
+                                let ids: Vec<u16> = only.as_deref().unwrap_or("").split(',')
+                                    .filter_map(|t| { let t = t.trim(); t.strip_prefix("0x").map_or_else(|| t.parse().ok(), |h| u16::from_str_radix(h, 16).ok()) }).collect();
+                                let wanted = |p: &nf_game::pickup::Pickup| match only.as_deref() {
+                                    None => true,
+                                    Some("drop") => p.lifetime > 0 && p.respawn == 0,
+                                    Some(_) => ids.contains(&p.weapon),
+                                };
+                                let mut live: Vec<[f32; 3]> = sim.drones.pickups.iter().filter(|p| !p.gone && !p.hidden && wanted(p))
                                     .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]]).collect();
                                 let d2 = |p: &[f32; 3]| (p[0] - b.pos[0]).powi(2) + (p[2] - b.pos[2]).powi(2);
                                 live.sort_by(|x, y| d2(x).total_cmp(&d2(y)));
@@ -5757,7 +5789,8 @@ impl App {
                                     if dy < -std::f32::consts::PI { dy += std::f32::consts::TAU; }
                                     input.turn = dy.clamp(-0.08, 0.08);
                                     input.forward = if dy.abs() < 0.8 { 1.0 } else { 0.2 };
-                                    input.look = (-b.pitch).clamp(-0.05, 0.05);
+                                    // A small gain: the lockstep input delay turned the full-gain correction into a swing.
+                                    input.look = (-0.1 * b.pitch).clamp(-0.02, 0.02);
                                     input.jump = self.net_tick % 97 == 0;
                                 }
                             }
@@ -6047,6 +6080,46 @@ impl App {
                                     let c = self.net_clock.map_or(0.0, |c| c.elapsed().as_secs_f64());
                                     let (rtt, delay, bytes, pkts) = session.0.borrow().net_stats();
                                     eprintln!("[netrate] tick {} at {:.1} s ({:.1}/s), stalls {}, rtt {} ms, delay {} ticks, sent {} B / {} pkts", self.net_tick, c, self.net_tick as f64 / c.max(1e-3), NET_STALLS.swap(0, std::sync::atomic::Ordering::Relaxed), rtt.map_or("-".to_string(), |r| format!("{r:.0}")), delay, bytes, pkts);
+                                }
+                                // Test aid (NF_NET_DROPLOG=<n>, mp-drops two-window check): every pickup on
+                                // match tick 1; then every n ticks, and on any state / gone change, each dead
+                                // player's drop (lifetime running, no respawn): index, id, kind, rounds,
+                                // state, lifetime left, position, the spin heading; plus each human slot's
+                                // shared gate (held record, owned ids). Read-only.
+                                if let Some(n) = std::env::var("NF_NET_DROPLOG").ok().and_then(|v| v.parse::<u32>().ok()).filter(|&n| n > 0) {
+                                    static SEEN: std::sync::Mutex<Vec<(usize, u8, bool)>> = std::sync::Mutex::new(Vec::new());
+                                    let tick = self.net_tick;
+                                    if tick == 1 {
+                                        for (k, p) in sim.drones.pickups.iter().enumerate() {
+                                            eprintln!("[droplog] t {tick} arena pickup {k}: id {:#x} kind {} rounds {} respawn {} at ({:.2},{:.2},{:.2})", p.weapon, p.kind, p.rounds, p.respawn, p.m[3][0], p.m[3][1], p.m[3][2]);
+                                        }
+                                    }
+                                    let mut seen = SEEN.lock().unwrap();
+                                    let mut changed = false;
+                                    for (k, p) in sim.drones.pickups.iter().enumerate() {
+                                        if p.respawn != 0 || p.from.is_some() { continue; }
+                                        let is_drop = p.lifetime > 0 || seen.iter().any(|e| e.0 == k);
+                                        if !is_drop { continue; }
+                                        let prev = seen.iter().position(|e| e.0 == k);
+                                        let now = (k, p.state, p.gone);
+                                        let first = prev.is_none();
+                                        if prev.map_or(true, |i| seen[i] != now) {
+                                            changed = true;
+                                            match prev { Some(i) => seen[i] = now, None => seen.push(now) }
+                                        }
+                                        if first || changed || tick % n == 0 {
+                                            eprintln!("[droplog] t {tick} frame {} drop {k}: id {:#x} kind {} rounds {} state {} lifetime {} gone {} hidden {} spin {} at ({:.3},{:.3},{:.3}) heading {:.3}",
+                                                sim.drones.frame, p.weapon, p.kind, p.rounds, p.state, p.lifetime, p.gone, p.hidden, p.spin, p.m[3][0], p.m[3][1], p.m[3][2], p.m[2][0].atan2(p.m[2][2]));
+                                        }
+                                    }
+                                    if changed || tick % n == 0 {
+                                        for (s, g) in sim.mp_combat.gates.iter().enumerate().take(2) {
+                                            let owned: Vec<usize> = (0..g.inv.owned.len()).filter(|&i| g.inv.owned[i]).collect();
+                                            let carried: Vec<(usize, i32)> = g.inv.carried.iter().enumerate().filter(|(_, &c)| c != 0).map(|(i, &c)| (i, c as i32)).collect();
+                                            let clip: Vec<(usize, i32)> = g.inv.clip.iter().enumerate().filter(|(_, &c)| c != 0).map(|(i, &c)| (i, c as i32)).collect();
+                                            eprintln!("[droplog] t {tick} gate {s}: held {:#x} owned {:x?} clip {clip:x?} carried {carried:?} hp {:.0}", g.weapon, owned, sim.mp_hp.get(s).copied().unwrap_or(0.0));
+                                        }
+                                    }
                                 }
                                 // Render-check aid (NF_NET_SHOT=<tick>[,<tick>…] or <a>-<b>): the F12 capture at
                                 // those match ticks (a range catches the 2-tick muzzle flashes, mp-remote-fx).
