@@ -624,9 +624,9 @@ fn face_other_aid(sim: &mut scene::Sim) -> bool {
 /// those slots' bodies stand at those points — identically on every machine (the env rides every
 /// window; the positions are in the lockstep hash), so a pickup across the arena is a short walk.
 fn place_aid(sim: &mut scene::Sim) {
-    let Ok(v) = std::env::var("NF_MP_PLACE") else { return };
+    let v = std::env::var("NF_MP_PLACE").unwrap_or_default();
     let local = sim.mp_local_slot;
-    for part in v.split(';') {
+    for part in v.split(';').filter(|p| !p.is_empty()) {
         let Some((sl, xyz)) = part.split_once(':') else { continue };
         let Ok(sl) = sl.trim().parse::<usize>() else { continue };
         let c: Vec<f32> = xyz.split(',').filter_map(|x| x.trim().parse().ok()).collect();
@@ -637,6 +637,38 @@ fn place_aid(sim: &mut scene::Sim) {
         if sl == local { sim.bond = b; } else { sim.mp_bonds[sl] = Some(b); }
         if let Some(m) = sim.mp.as_mut() { m.set_slot(sl, bp); }
         eprintln!("[net] place aid: slot {sl} at {bp:?}");
+    }
+    // NF_MP_PLACE_OBJ="<slot>:<obj>:dx,dz[;…]" (mp-scenarios-full): the same, at a scenario
+    // object's position plus (dx, dz), obj = site | hill | bp | ge0 | ge1 | flag0 | flag1 |
+    // base0 | base1 | esp0 | esp1 | up<n>. The objects' places come from the shared seed, so a
+    // fixed point would miss them.
+    let Ok(v) = std::env::var("NF_MP_PLACE_OBJ") else { return };
+    for part in v.split(';') {
+        let mut it = part.split(':');
+        let (Some(sl), Some(obj), Some(off)) = (it.next(), it.next(), it.next()) else { continue };
+        let Ok(sl) = sl.trim().parse::<usize>() else { continue };
+        let d: Vec<f32> = off.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        if d.len() != 2 || sl >= sim.mp_bonds.len() { continue; }
+        let Some(m) = sim.mp.as_ref() else { return };
+        let o = &m.objects_rt;
+        let p = match obj.trim() {
+            "site" => o.site.as_ref().map(|x| x.pos),
+            "hill" => o.hill.as_ref().map(|x| x.pos),
+            "bp" => o.blueprint.as_ref().map(|x| x.pos),
+            "ge0" | "ge1" => o.ge[(obj.trim() == "ge1") as usize].as_ref().map(|x| x.pos),
+            "flag0" | "flag1" => o.flags[(obj.trim() == "flag1") as usize].as_ref().map(|x| x.pos),
+            "base0" | "base1" => o.bases[(obj.trim() == "base1") as usize],
+            "esp0" | "esp1" => o.esp_bases[(obj.trim() == "esp1") as usize],
+            u => u.strip_prefix("up").and_then(|n| n.parse::<usize>().ok()).and_then(|n| o.uplinks.get(n)).map(|x| x.pos),
+        };
+        let Some(p) = p else { eprintln!("[net] place aid: no {obj}"); continue };
+        let local = sim.mp_local_slot;
+        let yaw = if sl == local { sim.bond.yaw } else { sim.mp_bonds[sl].as_ref().map_or(0.0, |b| b.yaw) };
+        let b = nf_game::player::Bond::stand_at(&sim.world, [p[0] + d[0], p[1], p[2] + d[1]], yaw);
+        let bp = b.pos;
+        if sl == local { sim.bond = b; } else { sim.mp_bonds[sl] = Some(b); }
+        if let Some(m) = sim.mp.as_mut() { m.set_slot(sl, bp); }
+        eprintln!("[net] place aid: slot {sl} at {obj} {p:?} + {d:?} -> {bp:?}");
     }
 }
 
@@ -5838,6 +5870,76 @@ impl App {
                                     input.jump = self.net_tick % 97 == 0;
                                 }
                             }
+                            // Test aid (NF_NET_AUTOOBJ="a-b", mp-scenarios-full): on match ticks a..=b steer
+                            // this player at the scenario's objective the way the bots' objective scan
+                            // picks one (CTF: a carried own flag's carrier, a dropped own flag, else the enemy
+                            // flag, carrying → the own base; Uplink: the nearest
+                            // terminal the team does not own; KOTH: the hill; Demolition/Protection: the
+                            // site, fired at when close; Espionage: the blueprint, carrying → the own base;
+                            // GoldenEye: an item the team does not hold; the kill scenarios: the nearest
+                            // live opponent, fired at when close). Input only; the sim is untouched.
+                            if self.net.is_some() && std::env::var("NF_NET_AUTOOBJ").ok()
+                                .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
+                                .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick))
+                            {
+                                if let Some(m) = sim.mp.as_ref() {
+                                    use nf_game::mp::scenario as sc;
+                                    let b = &sim.bond;
+                                    let me = self.net_local_slot;
+                                    let team = m.settings.players[me].team;
+                                    let o = &m.objects_rt;
+                                    let d2 = |p: &[f32; 3]| (p[0] - b.pos[0]).powi(2) + (p[2] - b.pos[2]).powi(2);
+                                    let nearest = |v: Vec<[f32; 3]>| v.into_iter().min_by(|x, y| d2(x).total_cmp(&d2(y)));
+                                    let used = (m.settings.human_count + m.settings.bot_count) as usize;
+                                    let foe = |s: usize| s != me && s < used && !m.game.slots[s].dead
+                                        && (m.settings.team_game == 0 || m.settings.players[s].team != team)
+                                        // Assassination: the assassin hunts the target, everyone else the assassin.
+                                        && (m.settings.scenario != sc::ASSASSIN
+                                            || if m.assassin == Some(me) { m.assassin_target == Some(s) } else { m.assassin == Some(s) });
+                                    let opponent = || nearest((0..used).filter(|&s| foe(s)).filter_map(|s| m.game.slots[s].pos).collect());
+                                    let (tg, shoot) = match m.settings.scenario {
+                                        sc::CAPTURE_THE_FLAG => {
+                                            // The own flag first: carried → hunt the carrier, dropped → touch it (the return).
+                                            let carrying = o.flags.iter().flatten().any(|f| f.state == 1 && f.carrier == Some(me));
+                                            let own = o.flags[team as usize % 2].as_ref();
+                                            if let Some(c) = own.filter(|f| f.state == 1).and_then(|f| f.carrier).and_then(|c| m.game.slots[c].pos) { (Some(c), true) }
+                                            else if let Some(f) = own.filter(|f| f.state == 2) { (Some(f.pos), false) }
+                                            else if carrying { (o.bases[team as usize % 2], false) }
+                                            else { (o.flags[1 - team as usize % 2].as_ref().map(|f| f.pos), false) }
+                                        }
+                                        sc::UPLINK => (nearest(o.uplinks.iter().filter(|u| u.state as u32 != team).map(|u| u.pos).collect()), false),
+                                        sc::KOTH_FFA | sc::KOTH_TEAM => (o.hill.as_ref().map(|h| h.pos), false),
+                                        sc::DEMOLITION | sc::PROTECTION => {
+                                            let attacker = (m.settings.scenario == sc::DEMOLITION) == (team == 1);
+                                            let site = o.site.as_ref().filter(|s| s.sub == 0).map(|s| s.pos);
+                                            if attacker { (site, true) } else { (opponent().or(site), true) }
+                                        }
+                                        sc::BLUEPRINT => {
+                                            let carrying = o.blueprint.as_ref().is_some_and(|x| x.state == 1 && x.carrier == Some(me));
+                                            if carrying { (o.esp_bases[team as usize % 2], false) } else { (o.blueprint.as_ref().map(|x| x.pos), false) }
+                                        }
+                                        sc::GOLDENEYE => (nearest(o.ge.iter().flatten().filter(|g| g.state != 3
+                                            && g.carrier.map_or(true, |c| m.settings.players[c].team != team)).map(|g| g.pos).collect()), false),
+                                        _ => (opponent(), true),
+                                    };
+                                    if let Some(tg) = tg {
+                                        let want = (tg[0] - b.pos[0]).atan2(tg[2] - b.pos[2]);
+                                        let mut dy = (want - b.yaw) % std::f32::consts::TAU;
+                                        if dy > std::f32::consts::PI { dy -= std::f32::consts::TAU; }
+                                        if dy < -std::f32::consts::PI { dy += std::f32::consts::TAU; }
+                                        let dist = d2(&tg).sqrt();
+                                        input.turn = dy.clamp(-0.08, 0.08);
+                                        input.forward = if shoot && dist < 9.0 { 0.0 } else if dy.abs() < 0.8 { 1.0 } else { 0.2 };
+                                        input.look = (-0.1 * b.pitch).clamp(-0.02, 0.02);
+                                        input.jump = self.net_tick % 97 == 0;
+                                        if shoot && dist < 12.0 && dy.abs() < 0.12 && self.net_tick % 12 < 6 { input.fire = true; }
+                                        if self.net_tick % 120 == 0 {
+                                            eprintln!("[net] autoobj tick {} pos ({:.2},{:.2},{:.2}) target ({:.2},{:.2},{:.2}) dist {dist:.2}",
+                                                self.net_tick, b.pos[0], b.pos[1], b.pos[2], tg[0], tg[1], tg[2]);
+                                        }
+                                    }
+                                }
+                            }
                             // Test aid (NF_NET_SWITCH="tick:id,tick:id,…", ids hex 0x.. or decimal):
                             // mp-combat-weapons — on each listed match tick this machine equips the
                             // weapon (its local inventory: three clips, `Player_EquipWeapon`'s give as
@@ -6231,6 +6333,13 @@ impl App {
                                 if fresh_fe {
                                     let session = self.profile_session.clone();
                                     session.apply_to(fe);
+                                }
+                                // Test aid (NF_MP_OBJLOG=1, mp-scenarios-full): the board this window opens.
+                                if std::env::var_os("NF_MP_OBJLOG").is_some() {
+                                    let b = m.debriefing();
+                                    eprintln!("[mp-debrief] f{} result {:?} end {:?} hash {:#x} rows {:?}", sim.drones.frame, b.result, m.game.end_status,
+                                        nf_game::mp::debrief::board_hash(&b),
+                                        b.rows.iter().map(|r| (r.slot, r.rank, r.points, r.victories, r.deaths, r.total)).collect::<Vec<_>>());
                                 }
                                 fe.open_mp_debriefing(m);
                                 debrief_opened = true; // the grab waits for the sim borrow (below)

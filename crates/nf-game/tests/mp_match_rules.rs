@@ -204,8 +204,9 @@ fn top_agent_lives_round_end_and_no_kill_score() {
     join(&mut m, 1, 0);
     join(&mut m, 2, 0);
     m.player_killed(1, Some(0), false, false, &mut rng);
-    assert!((m.game.slots[1].score + 1.0).abs() < 1e-6, "the lives copy drops per death [M 0x188f70:96-98]");
-    assert_eq!(m.game.slots[0].score, 0.0, "kills never score in 0x10 (not one of the four)");
+    // The lives copy starts at the limit (2) [M MP_Init 0x183438:60-61] and drops per death.
+    assert!((m.game.slots[1].score - 1.0).abs() < 1e-6, "the lives copy drops per death [M 0x188f70:96-98]");
+    assert_eq!(m.game.slots[0].score, 2.0, "kills never score in 0x10 (not one of the four)");
     assert!(m.respawn_allowed(1), "still alive after 1 death of 2");
     m.player_killed(1, None, false, false, &mut rng);
     m.player_killed(2, None, false, false, &mut rng);
