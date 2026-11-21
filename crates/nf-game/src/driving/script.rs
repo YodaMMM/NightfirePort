@@ -348,8 +348,10 @@ pub enum Output {
     Immunity(bool),
     /// An event whose effect is not part of the mission rules, decoded for the system that owns
     /// it (camera, audio, movie, AI, traffic, props, ...; [`Effect`]); `trigger` = the trigger
-    /// whose list queued it (`DAT_0032e738`), `None` for rules and prop keyframes.
-    Effect { effect: Effect, trigger: Option<usize> },
+    /// whose list queued it (`DAT_0032e738`), `None` for rules and prop keyframes. `id` and
+    /// `action` keep the raw event and its argument block: the scripted control/camera layer
+    /// (`driving::intro`) runs these.
+    Effect { effect: Effect, trigger: Option<usize>, id: u32, action: TriggerAction },
 }
 
 /// One objective (`FUN_00208f50`, 0x14 bytes): id, two words, points, state [M].
@@ -1150,9 +1152,9 @@ impl DriveScript {
             // ESetSpecialWeapon 0x158df0: reported, and remembered for `player_fired`.
             0xc0 => {
                 self.special_weapon = Some(a.word(1) as i32);
-                self.output.push(Output::Effect { effect: script_effects::decode(a, ev.trigger, &self.map), trigger: ev.trigger });
+                self.output.push(Output::Effect { effect: script_effects::decode(a, ev.trigger, &self.map), trigger: ev.trigger, id: 0xc0, action: ev.action.clone() });
             }
-            _ => self.output.push(Output::Effect { effect: script_effects::decode(a, ev.trigger, &self.map), trigger: ev.trigger }),
+            id => self.output.push(Output::Effect { effect: script_effects::decode(a, ev.trigger, &self.map), trigger: ev.trigger, id, action: ev.action.clone() }),
         }
     }
 
@@ -1645,12 +1647,17 @@ mod tests {
         map.triggers.push(trig(0, [0.0; 3], 5.0, 2, 0x7, vec![act(0x78, &[3]), act(0xfb, &[0x3c, 0x12c, 1]), act(0xc0, &[0x14, 0, 0])]));
         let mut s = DriveScript::new(map);
         s.step(&at([0.0; 3]));
+        let got: Vec<(Effect, Option<usize>)> = s
+            .take_output()
+            .into_iter()
+            .filter_map(|o| match o { Output::Effect { effect, trigger, .. } => Some((effect, trigger)), _ => None })
+            .collect();
         assert_eq!(
-            s.take_output(),
+            got,
             vec![
-                Output::Effect { effect: Effect::MaxTraffic { max: 3 }, trigger: Some(0) },
-                Output::Effect { effect: Effect::CameraShake { time: 0x3c, power: 0x12c, affect_all: true }, trigger: Some(0) },
-                Output::Effect { effect: Effect::SpecialWeapon { weapon: 0x14, trigger: None, arg3: 0.0 }, trigger: Some(0) },
+                (Effect::MaxTraffic { max: 3 }, Some(0)),
+                (Effect::CameraShake { time: 0x3c, power: 0x12c, affect_all: true }, Some(0)),
+                (Effect::SpecialWeapon { weapon: 0x14, trigger: None, arg3: 0.0 }, Some(0)),
             ]
         );
         assert_eq!(s.special_weapon, Some(0x14));

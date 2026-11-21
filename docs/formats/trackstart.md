@@ -86,4 +86,11 @@ car as well. MIS13C's trigger 0 (the previous stand-in) lies 43 units from the s
   whether `Vol_foothillE`'s collision is live at that moment (the gather skips items whose `+0x1c`
   pointer is 0), the event dispatch order, and what `EControlToSpline` does with the car. Only a
   live read of the car position in the first frames of MIS13B can settle this.
+- `ground_height` tests every collision triangle instead of the grid cells `FUN_00217588`
+  gathers, and ignores the instance flag bit 0 that makes the query measure upward.
+- MIS13B's marker sits at y −16.9 while the ground found under it is 169 units lower (−185.8):
+  the code puts the car on that ground; whether the ultralight then behaves differently is not traced.
+  The trigger beside it (78, radius 2.5, 1.4 u from the marker) and the path it hands the car
+  (`path_BondMaster01`, first key 1.2 u from the marker) are both at the marker's height, so a
+  car on the found ground would never start the opening (driving-intros.md section 4).
 - The meaning of the argument beyond "× car `+0x4c` = start speed" (the `+0x4c` field is not named).
