@@ -388,6 +388,7 @@ fn load_car_into_scene(
     materials: &mut Vec<Material>,
     textures: &mut Vec<TextureImage>,
     attachments: &mut Vec<Attachment>,
+    light: Option<(&nf_formats::rendertun::LightEnv, &nf_formats::rendertun::CarRender)>,
 ) -> Option<u32> {
     let crp_raw = iso
         .read_bytes(viv_base + crp_off_sz.0 as u64, crp_off_sz.1 as u64)
@@ -422,15 +423,40 @@ fn load_car_into_scene(
     // model set [M DRIVING.ELF 0x1ad2e0 +0x1c], the vd lists hold placement indices [M 0x1ad758]),
     // every drawn part placed in car space; normals ride the vertex nrm (the car batches carry no
     // vertex colours [D]). The old reader stays as the fallback when the car file does not decode.
+    // The base-pass car light (docs/formats/car-model.md §10, bondrm.o microcode):
+    // min(255, 127·(D·L1·max(0,n·d1) + L2·max(0,n·d2) + Ground·max(0,n·up) + A·Sky)) with the strip's
+    // CarRender class (A, D) for this vehicle, PS2 scale (0x80 = 1.0). [S] the World light set, shade
+    // 1.0 (its writer is not traced), the normals at the car's own frame (the colours are baked once,
+    // not re-lit as the car turns); the specular and reflection passes are not drawn.
+    let entry = light.and_then(|(_, cr)| cr.entries.iter().find(|e| e.name.eq_ignore_ascii_case(car_stem)).or_else(|| cr.entries.iter().find(|e| e.name == "default")));
+    let mut strip_rgba: Vec<Vec<[u8; 4]>> = Vec::new();
     let strips: Vec<nf_formats::crp_mesh::MeshStrip> = match nf_formats::carmesh::car_mesh(&crp_bytes) {
-        Ok(car) => car.drawn(None).into_iter().filter(|part| !part.hidden()).flat_map(|part| {
-            part.strips.iter().map(move |st| nf_formats::crp_mesh::MeshStrip {
-                positions: st.positions.iter().map(|&q| part.apply(q)).collect(),
-                uvs: st.uvs.clone(),
-                colors: st.normals.iter().map(|n| [(n[0] * 127.0) as i8 as u8, (n[1] * 127.0) as i8 as u8, (n[2] * 127.0) as i8 as u8]).collect(),
-                texture: st.texture.clone(),
-            }).collect::<Vec<_>>()
-        }).collect(),
+        Ok(car) => {
+            let mut v = Vec::new();
+            for part in car.drawn(None).into_iter().filter(|part| !part.hidden()) {
+                for st in &part.strips {
+                    let rgba: Vec<[u8; 4]> = match (light, entry, st.lighting) {
+                        (Some((env, _)), Some(e), Some(class)) if st.normals.len() == st.positions.len() => {
+                            let pr = e.props(class);
+                            st.normals.iter().map(|&n| {
+                                let c = env.car_light(n, pr.ambient, pr.diffuse, 1.0);
+                                let b = |x: f32| ((127.0 * x).clamp(0.0, 255.0) * 2.0).min(255.0) as u8;
+                                [b(c[0]), b(c[1]), b(c[2]), 255]
+                            }).collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    strip_rgba.push(rgba);
+                    v.push(nf_formats::crp_mesh::MeshStrip {
+                        positions: st.positions.iter().map(|&q| part.apply(q)).collect(),
+                        uvs: st.uvs.clone(),
+                        colors: st.normals.iter().map(|n| [(n[0] * 127.0) as i8 as u8, (n[1] * 127.0) as i8 as u8, (n[2] * 127.0) as i8 as u8]).collect(),
+                        texture: st.texture.clone(),
+                    });
+                }
+            }
+            v
+        }
         Err(_) => car_mod.extract_car_mesh(&car_crp, car_stem),
     };
     if strips.is_empty() {
@@ -457,7 +483,7 @@ fn load_car_into_scene(
         pda_digit: None,
     });
 
-    for strip in strips {
+    for (si, strip) in strips.into_iter().enumerate() {
         if strip.positions.len() < 3 {
             continue;
         }
@@ -469,7 +495,7 @@ fn load_car_into_scene(
             vertices.push(Vertex {
                 pos: p,
                 uv,
-                rgba: [255, 255, 255, 255],
+                rgba: strip_rgba.get(si).and_then(|v| v.get(k)).copied().unwrap_or([255, 255, 255, 255]),
                 nrm: [n[0] as i8, n[1] as i8, n[2] as i8, 0],
             });
             char_verts.push(CharVertex {
@@ -780,6 +806,16 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     let char_vertex_start = vertices.len();
     let mut char_verts = Vec::new();
     let mut attachments = Vec::new();
+    // The mission's light set (Render/Lighting/<track>.tun, World) and the car material table
+    // (Render/CarRender/default.tun) for the base-pass car light.
+    let read_tun = |want: &str| -> Option<String> {
+        let e = bigf.entries.iter().find(|x| { let n = x.name.to_ascii_lowercase(); n.contains("render") && n.contains(want) && n.ends_with(".tun") })?;
+        let raw = iso.read_bytes(viv_base + e.offset as u64, e.size as u64).ok()?;
+        maybe_decompress(&raw).ok().map(|t| String::from_utf8_lossy(&t).into_owned())
+    };
+    let car_lighting = read_tun("lighting").and_then(|t| nf_formats::rendertun::Lighting::parse(&t).ok());
+    let car_render = read_tun("carrender").and_then(|t| nf_formats::rendertun::CarRender::parse(&t).ok());
+    let car_light_ref = car_lighting.as_ref().zip(car_render.as_ref()).map(|(l, c)| (&l.world, c));
     let p_stem = player_car_stem(&viv_upper);
     let player_attach_slot = find_car_entry(p_stem).and_then(|(c, s)| {
         load_car_into_scene(
@@ -794,6 +830,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             &mut materials,
             &mut textures,
             &mut attachments,
+            car_light_ref,
         )
     });
 
@@ -847,6 +884,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
                                 &mut materials,
                                 &mut textures,
                                 &mut attachments,
+                                car_light_ref,
                             ) {
                                 ai_cars.push((drv, slot));
                             }
