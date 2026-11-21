@@ -566,8 +566,8 @@ pub fn plane_height(t: &[[f32; 3]; 3], x: f32, z: f32) -> f32 {
         return v0[1];
     }
     v0[1] - (n[0] * (x - v0[0]) + n[2] * (z - v0[2])) / n[1]
-/// `MSet` — the Map window's mission set record [M 0x22faf8 :118 `FUN_002d5a10(map, 'MSet')`].
-pub const TAG_MSET: u32 = 0x4d53_6574;
+}
+
 
 /// The pvehicle name the player is spawned in: the C string that opens the `MSet` payload.
 /// The chain [M]: `FUN_0022faf8` passes the MSet record to `FUN_00205220`, which stores its
