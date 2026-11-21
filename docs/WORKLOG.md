@@ -20,3 +20,10 @@
   interactables_07000001_live = 10/0. The fast suite produced no total line (the foreground
   build exceeded the window; background jobs do not survive between tool calls here).
 - Report: docs/reports/retune-nb-01.md.
+
+### retune-nb-01-2 progress
+
+- Branch off master a128047d1 with s/retune-nb-01 merged in (it was not on master). Round 2 of
+  the 01 spawn-to-exit-with-the-contact real-damage walks; ledger + next levers are in the
+  ignore messages of walkreal_07000001_live.rs, report of round 1 at docs/reports/retune-nb-01.md.
+- Setup in progress: work-slim + ISO downloads, queue worktree, build tools.
