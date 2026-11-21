@@ -182,7 +182,24 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
                 break;
             }
             if !w.shoot(g2, &format!("ambush guard {g2}")) {
-                if w.resupply("ambush ammo") { w.shoot(g2, &format!("ambush guard {g2} retry")); }
+                // retune-nb-01 (d2, the 2026-11-21 run): the resupply box can feed a WHEEL
+                // pool while the held gun stays dry (clip 1 spare 9 before AND after the
+                // "successful" resupply [L the run trace: "resupply done (false)" then the
+                // retry fired at clip 1 spare 9]) — the retry then approached the walled
+                // 24-hp SMG captain #3 into the north lane at (-22.5,13.6) and Bond died
+                // there t14006 to the field's fire (#3 24.4, #7 33.6). A player does not
+                // push a walled captain with 10 rounds: at Agent the retry only runs when
+                // the HELD gun can actually finish him. d1 keeps the old shape (its ambush
+                // fights finish — byte-identical stream).
+                let held = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    (sim.gun.clip as i32) + (sim.gun.spare as i32)
+                };
+                if difficulty == 1 || held >= 12 {
+                    if w.resupply("ambush ammo") { w.shoot(g2, &format!("ambush guard {g2} retry")); }
+                } else {
+                    eprintln!("[01] ambush guard {g2}: held gun dry ({held}) — no retry push into the pocket lane");
+                }
             }
             if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
         }
@@ -1372,7 +1389,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             };
             let ka = if wa == 0x1c { 0 } else { 1 };
             let kb = if wb == 0x1c { 0 } else { 1 };
-            ka.cmp(&kb).then(zb.partial_cmp(&za).unwrap_or(std::cmp::Ordering::Equal))
+            // retune-nb-01 (d3, the 2026-11-21 run): the deeper-first tie-break lost the NEW
+            // stream's race — #7 (deep, 24 hp) took the first tap while #6 (the mouth, 12 hp)
+            // shot free, and both volleyed the lane (the head-box law landed one 12.0 head hit
+            // on #7 at t2264, but #7's 17 pellets for 70.0 still killed at t2324 [L the run]).
+            // A player kills the NEARER shotgunner first: 12 hp dies in one head tap, and each
+            // dead 0x1c guard halves the volley clock. d1/d2 keep agent_order (the sort is
+            // d3-gated).
+            ka.cmp(&kb).then(za.partial_cmp(&zb).unwrap_or(std::cmp::Ordering::Equal))
         });
     }
     // [01-hall-3, d3 only, READ-ONLY]: the door-phase flight-lane grid — for each virtual
@@ -1716,7 +1740,16 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                                 let heights: &[f32] = if sim.gun.weapon == 0x2 {
                                     &[0.9f32, 0.6, 0.3, 1.2, 1.5]
                                 } else {
-                                    &[0.05f32, 0.3, 0.6, 0.9, 1.2]
+                                    // retune-nb-01 (d3, the 2026-11-21 run): the 0.05-first
+                                    // ladder rode the FEET — the lane fight tapped #7's torso
+                                    // base at 0.9-1.2/hit (part 4, dy +0.11 on every hit) and
+                                    // lost the volley race 5:1 (#7 landed 70.0 in 17 pellets
+                                    // while 15 body taps left him 9 hp; dead t2324). On this
+                                    // stream the landings ride the aim ±0.36 (the run4/5 law),
+                                    // so dy 0.6 puts them 0.24-0.96 — the part-5 head box
+                                    // (dy ~0.3-0.5, the t491 kill) covered, and one 12.0 head
+                                    // hit ends the 24-hp captain in 2 taps.
+                                    &[0.6f32, 0.5, 0.9, 0.3, 0.05]
                                 };
                                 for dy in heights {
                                     let to = [d.pos[0], d.pos[1] + dy, d.pos[2]];
@@ -3769,6 +3802,54 @@ fn following_mayhew_down_completes_the_level() {
                     o.skin, o.pos[0], o.pos[1], o.pos[2], dd, o.state, o.health, o.weapon);
             }
         }
+    }
+    // retune-nb-01 (d1, the 2026-11-21 run): the plate lane's pocket pair — the survivors the
+    // stairwell holds left alive stand ON the plate approach lane (#17 0x5000039 SMG 12 hp at
+    // (-28.2,14.7) and the 0x5000036 melee guard #12 at (-29.2,13.5), the contact parked
+    // between them at (-28.3,14.3)), and the plate nav's return-fire fight vs #17 lost its
+    // exposure at keep_off 6.5 (backed east, the pocket wall re-occluded him) then flanked
+    // INTO the pair — #17's SMG at d 1.9 (48 hits, 50.8) and #12's punches at d 0.7 (36.8 in
+    // 65 hits) killed Bond at (-29.86,13.64) t28813 [L the run]. The stairwell fights LANDED
+    // on the pair from the east (12 -> 8 -> 3 on #12 at 5.7-6.4 u), so the east-lane lines
+    // are clear and the fight fails only through the keep-off backing. A player clears the
+    // lane he is about to walk, from the lane itself (nav 26 shot #17 at 5.2 exposed true
+    // [L the same run]), never crossing the pocket line x -27, with the fight band the
+    // ambush's own 4.2 (outside the TooClose 3.0 forced band [M 0x179740:100-110]) so the
+    // exposure holds while the head tap kills a 12-hp type-2 [M NDrone2_HitDamage 0x145558
+    // head ×100]. The melee 0x0 guard is LISTED (the armed filters skip him, and his punches
+    // were the 36.8): a player answers the fist guard on his lane like any other.
+    {
+        let prev_keep = w.keep_off;
+        let prev_back = w.dmg.back_off;
+        w.keep_off = Some(4.2);
+        w.dmg.back_off = Some(4.2);
+        for round in 0..3u32 {
+            w.walk_nav_to([-25.4, 6.4, 14.5], &format!("the plate-lane clear {round} (the east lane stand)"), 1.0);
+            let lane_guards: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| {
+                    let d = &sim.drones.list[i];
+                    i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                        && d.pos[0] < -26.0 && walker::dxz(d.pos, bp) < 10.0
+                        && ((2..0x47).contains(&d.weapon) || (0x6a..=0x71).contains(&d.weapon) || d.weapon == 0x0)
+                }).collect()
+            };
+            if lane_guards.is_empty() { break; }
+            eprintln!("[01] plate-lane clear {round}: fighting {lane_guards:?} from the east lane");
+            for g in lane_guards {
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                w.shoot_bounded(g, &format!("plate-lane guard {g} (round {round})"), 1800);
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            if {
+                let sim = w.scene.sim.as_ref().unwrap();
+                sim.gun.clip + sim.gun.spare < 8
+            } { w.resupply("plate-lane ammo"); }
+        }
+        w.keep_off = prev_keep;
+        w.dmg.back_off = prev_back;
     }
     // Bond takes the plate (the player's final step — the AND needs him in the volume).
     w.walk_nav_to(plate, "Bond onto the plate", 0.8);
