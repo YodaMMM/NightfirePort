@@ -350,3 +350,17 @@ skipping everything measured dead. Sandbox reset: full re-setup (clone, download
   walk), 171.09 s [L]. Next levers: the station-hall −48.0 cover stand (route/order/cover,
   upstream of the machine fight entirely), the volume's machine-powering live check, the
   chain-entry math. Report: docs/reports/retune-nb-08-16.md.
+
+## retune-nb-08-17 (2026-11-21)
+Round 17 of the 08 whole-mission 00 Agent real-damage walk
+(walk_the_whole_mission_on_real_input_real_damage_00agent). Branch s/retune-nb-08-17 from
+origin/master (b5278f0d1, which carries walks-1121-08-cabin's fusebox-pit sight-abort fix) with
+origin/s/retune-nb-08-16 merged in (08-16 was not on master; two conflicts in
+walkreal_07000008_live.rs resolved keeping both sides' complementary content — the excursion
+loop keeps master's leg_abort_on_sight with 08-16's dead-lever comment, the ignore line +
+ledger block kept as the 08-16 round-16 ledger). The driver's new direction: enumerate every
+hit from the walk's start (tick, source, amount), find the earliest segment that costs the
+most — even far upstream — and change it so Bond reaches the end fight with more health
+(the t29924 death has sat for three rounds; the 08-16 ledger measured the killer chain
+un-survivable at the 6.0 entry and survivable at ~10-12). Setup next, then the upstream
+hit-ledger measurement on the merged tree. Report: docs/reports/retune-nb-08-17.md.
