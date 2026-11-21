@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-11-21T13:30Z
+
+---
+## Report (done, 2026-11-21T14:15Z)
+
+Closed by the driver: the report is on `s/retune-nb-08-15` (docs/reports/retune-nb-08-15.md); the worker didn't run finish.sh.
