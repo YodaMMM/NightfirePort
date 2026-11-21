@@ -11,6 +11,7 @@ pub mod collision;
 pub mod controldef;
 pub mod crp;
 pub mod crp_mesh;
+pub mod gal;
 pub mod geoprim;
 pub mod disc;
 pub mod drone;
