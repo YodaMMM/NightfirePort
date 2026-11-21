@@ -2838,13 +2838,35 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // taken when the launcher's window is open. The sisters never read this block; their
         // timelines stay byte-exact. D3-GATED.
         if difficulty >= 3 && rocket.is_none() && sim.missile_cam.is_none() {
-            if zap_now && !sim.bond.crouched && burst_hold == 0 && cp[1] > 13.7 {
+            // retune-nb-08-13 lever-3 run: the SALVO OVERRIDE — TRIED and REVERTED on its own
+            // run: releasing the hold and standing for a closing salvo (salvo_close) walked
+            // Bond 2.3 u WEST onto the band corner — the dodge episodes' side pick ran him
+            // (113.08, −179.3) → (110.94, 13.50, −180.95), the round-11 mullion blast ground —
+            // and the walk died t29352 there, 449 ticks EARLIER than the plain west-gate state
+            // [L the lever-3 run]. The standing dodge needs its side pinned along the trench
+            // (the plate runs north-east to x 113.6 [L the round-6 walk logs]) — ledger
+            // material, its own run. The west-gate state below stays.
+            if zap_now && !sim.bond.crouched && burst_hold == 0 && (cp[1] > 13.7 || cp[0] > 111.0) {
                 burst_hold = 160;
             }
             if burst_hold > 0 {
                 burst_hold -= 1;
                 if !sim.bond.crouched { input.crouch = true; }
-            } else if sim.bond.crouched && cp[1] <= 13.7 {
+            } else if sim.bond.crouched && cp[1] <= 13.7 && cp[0] <= 111.0 {
+                // retune-nb-08-13 lever-2 run: the WEST gate on the stand. The first run stood
+                // Bond at the machine's late EAST dip (t2420, cp (150.2, 14.1, −202.7) — y 13.24
+                // crossed the band) and the standing state bought NOTHING: the east band stops
+                // every eye ray 0.3-0.5 u out (the t2400 dump: eye/gun stops t0.015-0.019 at
+                // x 113.6 [L the lever-1 run]) so no launch can fire east, and the machine's
+                // state-2 cannon pass chewed the standing capsule (w61 rounds at miss
+                // 0.38-0.68, the −2.00 rows t2445-t2493 closing the walk t28257 at (113.05,
+                // 13.47, −179.12) [L the same run]). Every landed launch of the whole retune
+                // fired at the machine WEST of the cabin (x 72.97-97.8 [L the ledger's rocket
+                // lines: t49 (72.97, 13.41, −208.87); the 11-15 ledger (83.4, −190.0), (91.2,
+                // −210.2), (85.2, −188.9)]). The gate stands Bond only for the machine's
+                // WESTERN low passes (x <= 111.0 — west of the west band x 110.4 [D the
+                // measured stops]); the eastern dips leave him crouched on the zap-free trench
+                // and the cannon chips chip the crouched capsule instead.
                 input.crouch = true;
             }
         }
