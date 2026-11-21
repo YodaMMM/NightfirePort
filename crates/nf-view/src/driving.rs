@@ -270,6 +270,14 @@ pub struct DriveWeapons {
     pub cycle: bool,
 }
 
+/// The track's placed glares (lamp glows, traffic lights, beacons: nf_game::driving::trackfx,
+/// FUN_001f2058) and the `flar` sheet they sample.
+pub struct DriveGlares {
+    pub fx: nf_game::driving::trackfx::TrackFx,
+    pub types: Vec<nf_game::driving::trackfx::GlareType>,
+    pub tex: usize,
+}
+
 /// Live driving mission simulation state.
 pub struct DrivingState {
     pub viv: String,
@@ -311,6 +319,7 @@ pub struct DrivingState {
     pub shine: Option<CarShine>,
     pub engine: Option<DriveEngine>,
     pub weapons: Option<DriveWeapons>,
+    pub glares: Option<DriveGlares>,
     /// A SUB_PHYSICS player vehicle (the sub, the ultralights: FUN_00190f88 + the hull against the
     /// track, nf_game::driving::sub_physics / sub_collide); the car mirrors its body each tick.
     pub sub: Option<(nf_game::driving::sub_physics::SubCraft, nf_game::driving::sub_collide::WorldMesh, nf_game::driving::sub_collide::Building)>,
@@ -585,6 +594,25 @@ impl DrivingState {
                 v.extend_from_slice(&[a, b, cc, a, cc, d]);
             }
             shine.push((None, true, v));
+        }
+        // The track glares: halo and spike sprites per kept glare, additive (ALPHA Cs*As + Cd
+        // [M FUN_001f14b0]) on the `flar` sheet [M FUN_001f2058].
+        if let (Some(g), Some(v)) = (self.glares.as_ref(), self.cam_view.as_ref()) {
+            let frame = g.fx.glares(self.ticks, v.eye, v.fwd, 1.0, &g.types, |_| true);
+            let mut out = Vec::new();
+            for sp in &frame.sprites {
+                let h = sp.width * 0.5;
+                let (sn, cs) = sp.rotation.sin_cos();
+                let ax = [0, 1, 2].map(|k| (right[k] * cs + up[k] * sn) * h);
+                let ay = [0, 1, 2].map(|k| (up[k] * cs - right[k] * sn) * h);
+                let c = |sx: f32, sy: f32| [0, 1, 2].map(|k| sp.centre[k] + ax[k] * sx + ay[k] * sy);
+                let rgba = [0, 8, 16, 24].map(|b| ((sp.rgba >> b) & 0xff) as u8);
+                let (u0, v0, sz) = (sp.cell[0], sp.cell[1], sp.cell[2]);
+                let q = |p: [f32; 3], u: f32, vv: f32| Vertex { pos: p, uv: [u, vv], rgba, nrm: [0; 4] };
+                let (a, b, cc, d) = (q(c(-1.0, 1.0), u0, v0), q(c(1.0, 1.0), u0 + sz, v0), q(c(1.0, -1.0), u0 + sz, v0 + sz), q(c(-1.0, -1.0), u0, v0 + sz));
+                out.extend_from_slice(&[a, b, cc, a, cc, d]);
+            }
+            if !out.is_empty() { shine.push((Some(g.tex), true, out)); }
         }
         let shine = shine;
         let Some(fx) = self.fx.as_mut() else { return shine };
@@ -1801,6 +1829,20 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         hud,
         shine,
         engine,
+        glares: (|| {
+            let placed = nf_formats::trackfx::placed_effects(&crp).ok()?;
+            let gt = read_any(&["Render", "Glare", "default.tun"].join("\\"))?;
+            let types = nf_game::driving::trackfx::glare_types(&nf_formats::drivefx::parse_glare(&String::from_utf8_lossy(&gt)));
+            let mut lib = nf_game::driving::effects::ParticleLib::default();
+            let fx = nf_game::driving::trackfx::TrackFx::new(&placed, |_| None, &mut lib);
+            if fx.glares.is_empty() { return None; }
+            let flar = ["partic01.ssh", "partic02.ssh", "ears_partic01.ssh", "sav_partic01.ssh", "common.ssh"].iter().find_map(|n| {
+                read_any(n).and_then(|b| Ssh::parse(&b).ok()).and_then(|sh| sh.textures.into_iter().find(|t| t.name == "flar"))
+            })?;
+            let tex = scene.textures.len();
+            scene.textures.push(TextureImage { key: (0, 0xfee2_0000 | tex as u32), width: flar.width, height: flar.height, rgba: flar.rgba, more: Vec::new(), rate: 1 });
+            Some(DriveGlares { fx, types, tex })
+        })(),
         weapons: Some({
             let mut sys = nf_game::driving::weapons::WeaponSystem::new(60, false);
             nf_game::driving::weapons::default_loadout(&mut sys, false);
@@ -1897,6 +1939,7 @@ mod tests {
             shine: None,
             engine: None,
             weapons: None,
+            glares: None,
             sub: None,
             intro: None,
         };
