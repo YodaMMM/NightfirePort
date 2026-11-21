@@ -1412,6 +1412,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             // hall's door plane is z 11.2; nothing beyond it is ever worth a fetch walk
             // (the west lanes own the interior ground). d1/d2 leave None (byte-identical).
             w.no_fetch_z_above = Some(11.2);
+            // retune-nb-01-2 (the ledger's ammo-economy lever): the zone's x-scope — the
+            // west-corridor ground (x < 0) is NOT hall interior, and the dead guards' drops
+            // there are the endgame's only ammo (the stairwell-head death held clip 1 spare
+            // 7 while the drops lay on the walked trail). The hall interior (x >= 0) stays
+            // banned (the west lanes own it — the run10/run12 ledgers).
+            w.no_fetch_zone_x_min = Some(0.0);
             w.leg_crouch = true;
             w.use_door_crouch = true;
             w.dmg.return_fire = false; // no return-fire stand in the mouth ray during the entry
@@ -3175,6 +3181,45 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             // (the walk stops on the exit tick) — the fight below would walk Bond off the plate
             // and drop ch 0x10 before the check reads it.
             if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break 'recovery; }
+            // retune-nb-01-2 (d3, the ledger's trade-posture lever): a POCKET guard
+            // (x <= -27) in the recovery is fought with the d1/d2 pocket tap loop's shape —
+            // the band-checked north-edge stand + the converged tap loop — never the shoot
+            // machinery: the v2 run's death rode `shoot`'s flank INTO the pack at the
+            // stairwell mouth (Bond at (-30.64,11.74), #3's 7.20 and #17's 3.60 lands at
+            // d 0.8-0.9 inside the ×2 TooClose band [M Drone_ModBulletDamage 0x139f50]). The
+            // x-scope ammo field admitted no fetchable drops on this stream (the corridor
+            // dead were fist guards — no drops), so the pool stays dry: the taps only fire
+            // when a part exposes, the pool is not burned. Real-damage d3 only: the top-up
+            // walks keep `shoot` (byte-identical) and d1/d2 keep their proven streams.
+            if !w.tops_up() && difficulty >= 3 && gpos[0] <= -27.0 {
+                let stand: [f32; 3] = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let live: Vec<V3> = (0..sim.drones.list.len()).filter(|&i| {
+                        let d = &sim.drones.list[i];
+                        i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                            && d.pos[0] < -26.0
+                    }).map(|i| sim.drones.list[i].pos).collect();
+                    drop(sim);
+                    let candidates = [[-28.5f32, 16.5], [-29.0, 16.5], [-28.0, 15.5], [-27.0, 16.0], [-26.5, 15.5], [-24.9, 14.5]];
+                    candidates.into_iter()
+                        .find(|c| live.iter().all(|p| walker::dxz(*p, [c[0], p[1], c[1]]) >= 3.05))
+                        .map(|c| [c[0], 6.4, c[1]])
+                        .unwrap_or([-24.9, 6.4, 14.5])
+                };
+                if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, stand) > 1.0 {
+                    let rf_walk = w.dmg.return_fire;
+                    w.dmg.return_fire = false;
+                    w.walk_nav_to(stand, &format!("stairwell guard {g} the north-edge stand (d3 tap posture)"), 1.0);
+                    w.dmg.return_fire = rf_walk;
+                }
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break 'recovery; }
+                plate_pocket_fight(&mut w, g, &format!("stairwell guard {g} (d3 tap)"));
+                let dead = w.scene.sim.as_ref().unwrap().drones.list[g].corpse
+                    || w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0;
+                if dead { cleared.insert(g); }
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x10) { break 'recovery; }
+                continue;
+            }
             {
                 let sim = w.scene.sim.as_ref().unwrap();
                 if sim.gun.clip + sim.gun.spare < 8 { drop(sim); w.resupply("ammo"); }
