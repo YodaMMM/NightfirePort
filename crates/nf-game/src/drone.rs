@@ -17803,7 +17803,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
         if flags70 & 2 != 0 {
             if let Some(id) = d.surfaces.and_then(|s| nf_formats::sfx::SurfaceSounds::get(&s.impact, m)) {
-                self.audio.play3d(id, hit, None);
+                self.play_impact(d, id, hit);
             }
         }
         let host = crate::world::HitHost::Object(crate::world::PANE_PART | pane as u64, matrix);
@@ -18253,7 +18253,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     fn impact_sound(&mut self, d: &Data, from: V3, to: V3) {
         let (Some(s), Some((t, _, m))) = (d.surfaces, d.world.segment_surface(from, to, false)) else { return };
         let p = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t];
-        if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m) { self.audio.play3d(id, p, None); }
+        if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m) { self.play_impact(d, id, p); }
+    }
+
+    /// `Effect_Bullet` 0x1ce8a8:86-90's impact sound: `Sound_Play3D(100.0, -1.0, -1.0,
+    /// EffectInfo[mat]+0x14, hit, 0, 0, 0)`: the default-radius arm (`param_8 == 0` takes the
+    /// inner/outer/weight of `SFXOutputData[id]` [M Sound_Play3D 0x1dd548:27-52, :96-98]) with no
+    /// `Sound_ModAlertness` after it (unlike `Effect_Body`'s half weight [M 0x1cf400:9-16]), so
+    /// the drones hear a round's impact at the bank's full weight (`Sound_Alertness` 0x1ddc48
+    /// walks the same node list). The impact rows are 20..50 weight, outer 15..30 u, none looped
+    /// [D SFXOutputData]. The port played these on the audio pool only, so a round striking a
+    /// wall beside an unaware guard went unheard (g041-effects).
+    fn play_impact(&mut self, d: &Data, id: u32, p: V3) {
+        Self::play_impact_on(&mut self.audio, &mut self.sounds, d, id, p);
+    }
+
+    /// `play_impact` over the two fields alone (the drone-bullet walk holds `self.bullets`).
+    fn play_impact_on(audio: &mut crate::sound::Sounds, sounds: &mut Vec<Sound>, d: &Data, id: u32, p: V3) {
+        audio.play3d(id, p, None);
+        let Some(t) = d.sfx else { return };
+        let h = t.get(id);
+        if !h.looped { sounds.push(Sound { id: h.id, pos: p, inner: h.inner, outer: h.outer, weight: h.weight }); }
     }
 
     /// `Sound_Play3D(id, pos, …)`: heard (the sound pool) and, unless looped, entered in the drones' hearing list.
@@ -24037,7 +24057,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 .map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
                             if flags70_p & 2 != 0 {
                                 if let Some(s) = d.surfaces.as_ref() {
-                                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, pm) { self.audio.play3d(id, pp, None); }
+                                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, pm) { Self::play_impact_on(&mut self.audio, &mut self.sounds, d, id, pp); }
                                 }
                             }
                             self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, pp, pn, pm, b.dir, flags70_p, b.bounces, false, 0, phost, self.rbodies.host_at(pp));
@@ -24086,7 +24106,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             let flags6c_d = d.weapons.records.get(b.weapon as usize)
                                 .map_or(0u32, |r| u32::from_le_bytes(r[0x6c..0x70].try_into().unwrap()));
                             if flags70 & 2 != 0 {
-                                if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m) { self.audio.play3d(id, p, None); }
+                                if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m) { Self::play_impact_on(&mut self.audio, &mut self.sounds, d, id, p); }
                             }
                             // `Bullet_CollisionHandler` 0x12ce80: the effects + ricochet. The shooter is a
                             // drone (not class 3), so `Effect_Bullet` draws its `Rand_Rand(2)` [M 0x1ce94c].
@@ -24122,7 +24142,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 hit_host = d.world.segment_surface_host(nxt, far, false).map_or(crate::world::HitHost::Cel(None), |h| h.4);
                                 pierce = crate::effect::penetration_roll(&mut self.rng, m2, b.weapon, flags6c_d);
                                 if flags70 & 2 != 0 {
-                                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m2) { self.audio.play3d(id, cur, None); }
+                                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m2) { Self::play_impact_on(&mut self.audio, &mut self.sounds, d, id, cur); }
                                 }
                             }
                             if let Some(nd) = ricochet_nd {
