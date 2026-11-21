@@ -124,3 +124,28 @@ levers 2/3).
 ## Usage
 
 not visible to me
+
+## Addendum — v3 (the round-13 lever 1(a) judged inside this round's window)
+
+After the finish steps were recorded, the work window still allowed one more lever run, so the
+round-13 lever 1(a) (the #51 near-guard pre-emption at node 23) was judged on its own real run:
+
+- **v3 [L 2026-11-21]**: an 8.0 u radius-gated scan at node 23 admitted #51 ALONE (d 3.2,
+  eyetrue guntrue — the far posts the road-blocker rank would pick first excluded by the gate,
+  the v2 disaster's shape avoided) and the fight killed him BEFORE his two-volley −7.0 exactly
+  as designed (`shooting drone 51 ... dist 3.2` → `killed true, health −1`).
+- The re-roll drew a WORSE chain: **#55 (0x500008c, 0x1a, hp 10 — silent on the v1 stream and
+  quietly killed by a leg fight at t37285) stood at his (8.7,−23.9) post and fired EIGHT
+  unanswered −3.50 volleys (t37352-37542)** — the leg fights never landed on him at d 14.9
+  (the gun-ray gate/geometry, the v1 stream's #55 never got to shoot because he died first) —
+  and Bond died at **t37542 (t38906 → t37542, −1364)**.
+- **Verdict: lever 1(a) MEASURED DEAD.** The tree was reverted to the v1 state (the scan stays
+  at node 24 only, the shipped laws; `git checkout HEAD` of the test file, the whole binaries
+  re-run green on the reverted tree). The ignore message records the verdict; the round-13
+  levers stand re-ordered: the crossbow switch at the room position next, then the second
+  trap's trigger, then the round-9 levers 2/3.
+
+Whole-binary runs on the reverted FINAL tree (--test-threads=1): **walkreal_07000014_live
+9 passed / 0 failed / 1 ignored (175.03 s); interactables_07000014_live 10 passed / 0 failed
+(16.08 s)** — the same counts as the main evidence section; the reverted file is byte-identical
+to the state the t38906 certification covered (git checkout of the committed file).
