@@ -293,3 +293,33 @@ the first killer salvo survived): the next untried lever is (1) THE SECOND-SALVO
 the dodge diagonal on keeping z inside the pocket band −179.6..−178.9 while preferring the east
 x, judged on its own real run. Helpers stay gated to 08 + d3. Progress appended below as it
 lands.
+
+## retune-nb-08-15 (2026-11-21, round 15) — continued
+
+Sandbox reset this round: the repo, the game files and the toolchain were re-set-up (clone,
+work-slim + ISO, rustup 1.100, the extracted libasound2 debs, cargo fetch). A stale remote
+`s/retune-nb-08-15` (an earlier session's setup-only branch, based on a master 16 commits old)
+was superseded by a force-push of the task branch rebased on current origin/master (ae5fc9219)
+with origin/s/retune-nb-08-14 merged in — the only conflict was the walk's ignore line, kept
+as the 08-14 ledger (master's run-12 census finding is the ledger's round-5 lockout answer,
+already recorded).
+
+- **The baseline reproduces round 14 byte-exact** on the merged tree: death t29924 (frame
+  29926) at (113.08,13.47,−178.98), 63 hits for 100.0 [L the baseline NF_DMG_TRACE run,
+  24.66 s]. The killer-salvo chain anatomy is now measured: 8 w62 rounds t3160−t4150 from 8
+  rotating bearings, the first ~6 pass CLEAN, the last two close on the wedge/lip rows.
+- **Ledger lever (1) variant (1a), the band-scored latch pick — TRIED and DEAD** (death
+  t29917, 7 ticks worse; the north-wedge row avoided but the exits flipped south, −1.34 +
+  −4.66, the same −6.0 total). **The upstream stalemate cannon dodge — TRIED in two steps and
+  DEAD** (step 1: the hold latched but the shipped d3 drive is w62-only, byte-identical
+  timeline; step 2: the crouched stalemate strafe drifted Bond onto the south-west rim,
+  death t27885, 2039 ticks worse). Both reverted; the shipped state is the final tree.
+- Fresh measurements in the ledger: the chain's detonation ring sits 2.5−3.5 u out on several
+  bearings around the 0.7-u pocket — two rows (−1.3..−4.7) are unavoidable from the pocket;
+  the chain is un-survivable at the 6.0 entry health, survivable at ~10−12.
+- Whole `walkreal_07000008_live` binary on the final tree: **6 passed / 1 failed (the target
+  walk), 177.54 s** — the d1/d2 sisters, the plain walks, the d2 Agent sister and both ally
+  tests byte-exact green [L the final-tree run]. The refreshed ledger + the next levers (the
+  walk-back family (1b)/(1c) with the per-pass drift cap note; the sustained-burst 3-row live
+  check; the carried trio/reply-cadence live checks) are in the ignore message. Report:
+  docs/reports/retune-nb-08-15.md.
