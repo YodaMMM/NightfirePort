@@ -7,8 +7,16 @@
 #[test]
 fn the_vanquish_paint_facing_up_is_127_times_its_light() {
     let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
-    let (scene, _) = nf_view::driving::load_driving_scene(&iso, "MIS01").expect("load MIS01");
-    let car: Vec<_> = scene.materials.iter().filter(|m| m.layer == nf_view::scene::Layer::Character && m.key.is_some()).collect();
+    let (scene, d) = nf_view::driving::load_driving_scene(&iso, "MIS01").expect("load MIS01");
+    // The Vanquish's own draws: its body slot and its posed parts (the traffic and the mission's
+    // AI vehicles draw on other slots with their own CarRender classes).
+    let mut mine: Vec<u32> = d.player_attach_slot.into_iter().collect();
+    if let Some(r) = &d.car_rig { mine.extend(r.parts.iter().map(|p| p.1)); }
+    let slot_of = |vi: usize| vi.checked_sub(scene.char_vertex_start).and_then(|k| scene.char_verts.get(k)).and_then(|c| c.attachment);
+    let car: Vec<_> = scene.materials.iter()
+        .filter(|m| m.layer == nf_view::scene::Layer::Character && m.key.is_some())
+        .filter(|m| m.index_count > 0 && slot_of(scene.indices[m.first_index as usize] as usize).is_some_and(|s| mine.contains(&s)))
+        .collect();
     assert!(!car.is_empty(), "the car's textured draws");
     let mut up = Vec::new();
     for m in car {
