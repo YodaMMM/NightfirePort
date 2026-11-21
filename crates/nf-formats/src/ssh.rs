@@ -264,6 +264,14 @@ impl Ssh {
         Ok(Self { tag, textures })
     }
 
+    /// One image record (and its palette attachment) at `off` in `data`, outside a `SHPS`
+    /// directory — the fonts keep their glyph sheet this way (`FUN_002a31d0` hands
+    /// `font + u32 at +0x1c` to the same record loader `FUN_0027cd68` [M]).
+    pub fn decode_record(data: &[u8], off: usize, name: String) -> Result<SshTexture> {
+        if off + 16 > data.len() { return invalid(format!("SHPS record {name} header OOB")); }
+        Self::decode(data, off, name)
+    }
+
     fn decode(data: &[u8], off: usize, name: String) -> Result<SshTexture> {
         let ty = data[off];
         let format = ty & 0x7f;

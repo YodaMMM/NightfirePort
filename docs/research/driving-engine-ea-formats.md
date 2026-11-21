@@ -110,7 +110,7 @@ Tools: unvivtool (GPL-3.0+), libbig (MIT, C&C BIGF/BIG4), QuickBMS (GPL-2.0). Se
 | `.atr` = attribute files (`sim/attrib/pvehicle/default.atr` overlaid by `<car>.atr`). `.tun` = tuning (`tuning/physics/...`, `tuning/Render/` fog and lighting). `drivecfg.def` and `camera.ini` use `[section]`, `KEY=value` / `KEY.f=value` (types f, i, u, b, s, v), with `//` comments. All eight level archives ship byte-identical `.tun`/`.def`. | *sourced:* https://github.com/Raikaru/nightfire-engine/blob/master/docs/driving.md , https://github.com/Raikaru/nightfire-engine/blob/master/docs/driving-physics.md |
 | `loading.sfn` is an `FNTS` font. | *sourced:* https://github.com/Raikaru/nightfire-engine/blob/master/docs/driving.md |
 | `.sfn` is associated generically with "EA SFN Font". | *sourced (low quality):* https://filext.com/de/dateiendung/SFN |
-| `.gal`, `.rel`, `.dir`, `.loc`, `.sub`, `.h`, `.dat` semantics. | *unverified:* no EA-specific documentation found. |
+| `.rel`, `.dir`, `.sub`, `.h`, `.dat` semantics (`.gal`, `.sfn`, `.loc`: measured, docs/formats/hud-gal.md, sfn.md, loc.md). | *unverified:* no EA-specific documentation found. |
 | EA "changes extensions from game to game", so the same structure can appear under different names. | *sourced:* https://wiki.multimedia.cx/index.php/Electronic_Arts_Formats |
 
 ## 3. DRIVING.ELF / DRIVING.SYM status
