@@ -258,6 +258,18 @@ pub struct DriveEngine {
     pub output: Option<nf_audio::Output>,
 }
 
+/// The player car's weapons: the game's weapon table and firing rules (nf_game::driving::weapons,
+/// FUN_0020f2b8 / FUN_0020de20), the projectiles in flight and the hits they land on AI cars.
+pub struct DriveWeapons {
+    pub sys: nf_game::driving::weapons::WeaponSystem,
+    pub shots: Vec<nf_game::driving::weapons::Projectile>,
+    /// Per AI car (ai_cars order): damage taken; 700 hit points wreck a car [D driving-damage.md].
+    pub ai_damage: Vec<f32>,
+    /// Edge-triggered inputs the window app sets before a step.
+    pub fire: bool,
+    pub cycle: bool,
+}
+
 /// Live driving mission simulation state.
 pub struct DrivingState {
     pub viv: String,
@@ -298,6 +310,7 @@ pub struct DrivingState {
     pub hud: Option<DriveHud>,
     pub shine: Option<CarShine>,
     pub engine: Option<DriveEngine>,
+    pub weapons: Option<DriveWeapons>,
     /// A SUB_PHYSICS player vehicle (the sub, the ultralights: FUN_00190f88 + the hull against the
     /// track, nf_game::driving::sub_physics / sub_collide); the car mirrors its body each tick.
     pub sub: Option<(nf_game::driving::sub_physics::SubCraft, nf_game::driving::sub_collide::WorldMesh, nf_game::driving::sub_collide::Building)>,
@@ -378,6 +391,7 @@ impl DrivingState {
             self.step_flat(&input);
         }
         self.step_fx();
+        self.step_weapons();
         self.step_engine(input.throttle);
         self.step_ai(&input);
     }
@@ -402,6 +416,52 @@ impl DrivingState {
         fx.veh.update(self.land.is_some(), &cin, &wheels, self.ticks, false, &fx.lib);
         fx.veh.tick(1, &fx.lib, &mut fx.rng, &mut fx.pool);
         fx.pool.run_steps(self.ticks, &fx.lib);
+    }
+
+    /// The weapons for one tick: cycle / fire the selected secondary (the game's switch delay,
+    /// refire interval and ammo), launch the projectiles from the car's nose along its forward
+    /// axis, fly them (homing onto the nearest AI car ahead for the seekers) and land hits on AI
+    /// cars within 2 u [S: the game's hit test is the car box; the sphere stands in].
+    fn step_weapons(&mut self) {
+        use nf_game::driving::weapons as w;
+        let now = self.ticks as i32;
+        let car_pos = self.car.pos;
+        let fwd = self.car.rot[2];
+        let speed = (self.car.vel[0].powi(2) + self.car.vel[1].powi(2) + self.car.vel[2].powi(2)).sqrt();
+        let ai: Vec<([f32; 3], [f32; 3])> = self.ai_cars.iter().map(|(d, _)| (d.car.pos, d.car.vel)).collect();
+        let Some(wp) = self.weapons.as_mut() else { return };
+        if std::mem::take(&mut wp.cycle) { wp.sys.select(true, now, 60, false); }
+        if std::mem::take(&mut wp.fire) {
+            let k = wp.sys.secondary.max(0) as usize;
+            if let w::FireResult::Fired { barrels, .. } = wp.sys.fire(k, now, &w::FireCtx { barrel_ready: true, ..Default::default() }) {
+                for _ in 0..barrels.len().max(1) {
+                    let pp = w::launch_params(k, speed, 0.0, 60, w::Launcher::Player);
+                    let pos = [car_pos[0] + fwd[0] * 2.5, car_pos[1] + fwd[1] * 2.5 + 0.5, car_pos[2] + fwd[2] * 2.5];
+                    wp.shots.push(w::Projectile::launch(k, pp, pos, fwd, now));
+                }
+            }
+        }
+        if wp.ai_damage.len() != ai.len() { wp.ai_damage.resize(ai.len(), 0.0); }
+        let mut keep = Vec::new();
+        for mut sh in std::mem::take(&mut wp.shots) {
+            let target = ai.iter().filter(|(p, _)| {
+                let d = [p[0] - sh.pos[0], p[1] - sh.pos[1], p[2] - sh.pos[2]];
+                d[0] * sh.fwd[0] + d[1] * sh.fwd[1] + d[2] * sh.fwd[2] > 0.0
+            }).min_by(|a, b| {
+                let da = (a.0[0] - sh.pos[0]).powi(2) + (a.0[2] - sh.pos[2]).powi(2);
+                let db = (b.0[0] - sh.pos[0]).powi(2) + (b.0[2] - sh.pos[2]).powi(2);
+                da.total_cmp(&db)
+            }).map(|(p, v)| w::Target { pos: *p, vel: *v, prox_kind: false });
+            sh.step(target, now, DT, 60);
+            let hit = ai.iter().position(|(p, _)| (p[0] - sh.pos[0]).powi(2) + (p[1] - sh.pos[1]).powi(2) + (p[2] - sh.pos[2]).powi(2) < 4.0);
+            if let Some(i) = hit {
+                wp.ai_damage[i] += sh.p.damage.max(1.0);
+                continue;
+            }
+            if sh.detonate || now - sh.born > sh.p.life.max(60) { continue; }
+            keep.push(sh);
+        }
+        wp.shots = keep;
     }
 
     /// Opens the audio output for the engine sound (the window app calls this; nothing else does).
@@ -451,7 +511,8 @@ impl DrivingState {
         let input = nf_game::driving_hud_draw::HudInput {
             dt: ticks.saturating_sub(h.last_tick) as f32 / 60.0,
             health: hp, health_max: hm, armour: ar, armour_max: am,
-            weapon: None, timer: None, health_always: false, grunt_on_hit: false, suppressed: false,
+            weapon: self.weapons.as_ref().and_then(|w| { let k = w.sys.secondary; (k >= 0).then(|| (k, w.sys.slots[k as usize].ammo)) }),
+            timer: None, health_always: false, grunt_on_hit: false, suppressed: false,
             ticks, paused: false,
         };
         h.last_tick = ticks;
@@ -1726,6 +1787,11 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         hud,
         shine,
         engine,
+        weapons: Some({
+            let mut sys = nf_game::driving::weapons::WeaponSystem::new(60, false);
+            nf_game::driving::weapons::default_loadout(&mut sys, false);
+            DriveWeapons { sys, shots: Vec::new(), ai_damage: Vec::new(), fire: false, cycle: false }
+        }),
         sub,
         intro: nf_formats::drivepath::map_paths(&crp).ok().map(|p| (nf_game::driving::intro::IntroState::new(60), p)),
         viv: viv_upper,
@@ -1816,6 +1882,7 @@ mod tests {
             hud: None,
             shine: None,
             engine: None,
+            weapons: None,
             sub: None,
             intro: None,
         };

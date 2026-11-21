@@ -3106,6 +3106,8 @@ struct App {
     sound: Option<nf_audio::sfx::Sound>,
     scene: scene::Scene,
     driving: Option<driving::DrivingState>,
+    /// The Q key's state last frame (the driving weapon cycle is edge-triggered).
+    prev_keys_q: bool,
     driving_end_ticks: Option<u32>,
     pending_drive_return: Option<nf_game::ptp::DriveReturn>,
     cam: Camera,
@@ -6279,6 +6281,13 @@ impl App {
                     let steer = if self.keys.contains(&KeyCode::KeyA) || self.keys.contains(&KeyCode::ArrowLeft) { -1.0 } else { 0.0 }
                         + if self.keys.contains(&KeyCode::KeyD) || self.keys.contains(&KeyCode::ArrowRight) { 1.0 } else { 0.0 };
                     let handbrake = self.keys.contains(&KeyCode::Space);
+                    // Weapons: Ctrl fires the selected weapon, Q cycles it (the shipped pad binds R1 /
+                    // d-pad; the keys are the port's) [controls doc: driving-input.md].
+                    if let Some(w) = drv.weapons.as_mut() {
+                        w.fire |= self.keys.contains(&KeyCode::ControlLeft);
+                        w.cycle |= self.keys.contains(&KeyCode::KeyQ) && !self.prev_keys_q;
+                    }
+                    self.prev_keys_q = self.keys.contains(&KeyCode::KeyQ);
                     for _ in 0..self.frame_ticks {
                         drv.step(throttle, brake, steer, handbrake);
                     }
@@ -7001,6 +7010,7 @@ impl App {
             sound,
             scene,
             driving: None,
+            prev_keys_q: false,
             driving_end_ticks: None,
             pending_drive_return: None,
             cam,
