@@ -54,3 +54,10 @@
   Bond into the mouth pack at d 0.8-0.9, inside the x2 band). The recovery tap posture is in
   (d3/real-damage gated) and engages once the walk posture holds. Report:
   docs/reports/retune-nb-01-2.md.
+
+## retune-nb-01-3 (2026-11-21)
+
+Round 3 on the 01 spawn-to-exit-with-the-contact 00 Agent real-damage walk. Branched from
+origin/master (d57c3fdac), merged origin/s/retune-nb-01-2 (af1a1dbf6) — one doc-comment conflict
+in walkreal_07000001_live.rs resolved keeping both sides' notes. Next: read retune-nb-01-2.md
+and the ignore message on walk_..._real_damage_00agent, then real-run levers.
