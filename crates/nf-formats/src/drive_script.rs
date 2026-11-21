@@ -43,6 +43,9 @@ pub const MAP: u32 = 0x4d61_7020;
 pub const CODE_EL: u16 = 0x656c;
 /// The 2-letter instance code of a string ("sr").
 pub const CODE_SR: u16 = 0x7372;
+/// The 2-letter instance code of a path track ("pt"): the keyed flight paths `AISp` records
+/// point at (`FUN_00230ab0` walks the `Map ` window for `pt  ` records by name) [M].
+pub const CODE_PT: u16 = 0x7074;
 
 /// One 32-bit reference word (see the module doc).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,6 +217,8 @@ pub struct MapScript {
     pub rules: Vec<RuleRecord>,
     /// Every other child chunk's payload by tag (`MSet`, `AIEl`, `AISp`, `Cams`, …).
     pub chunks: BTreeMap<String, Vec<u8>>,
+    /// The `pt  ` path tracks by instance index.
+    pub tracks: BTreeMap<u16, PathTrack>,
 }
 
 impl MapScript {
@@ -229,6 +234,7 @@ impl MapScript {
                         let end = pay.iter().position(|&b| b == 0).unwrap_or(pay.len());
                         s.strings.insert(idx, String::from_utf8_lossy(&pay[..end]).into_owned());
                     }
+                    CODE_PT => { s.tracks.insert(idx, PathTrack::parse(pay)?); }
                     _ => {}
                 }
                 continue;
@@ -265,6 +271,25 @@ impl MapScript {
         }).collect()
     }
 
+    /// The `AISp` record a `CARP::<<Map>>::{AISp}::<byte offset>` string names (offset / 0x70).
+    pub fn spline_of(&self, r: Ref) -> Option<usize> {
+        let (chunk, off) = parse_carp_ref(self.string(r)?)?;
+        (chunk == "AISp" && off % AI_SPLINE_SIZE == 0).then_some(off / AI_SPLINE_SIZE)
+    }
+
+    /// Every `AISp` record.
+    pub fn splines(&self) -> Vec<AiSplineRecord> {
+        self.chunks.get("AISp").map(|p| parse_ai_splines(p)).unwrap_or_default()
+    }
+
+    /// The path track an `AISp` record's +0x40 reference names (a `CARP::<<Map>>::{pt  nnnn}`
+    /// string, the index in hex [D]).
+    pub fn track_of_spline(&self, sp: &AiSplineRecord) -> Option<u16> {
+        let s = self.string(sp.track?)?;
+        let hex = s.strip_prefix("CARP::<<Map>>::{pt  ")?.strip_suffix('}')?;
+        u16::from_str_radix(hex, 16).ok()
+    }
+
     /// The trigger index a `CARP::<<Map>>::{Trgr}::<byte offset>` string names (offset / 0x40).
     pub fn trigger_of(&self, r: Ref) -> Option<usize> {
         let (chunk, off) = parse_carp_ref(self.string(r)?)?;
@@ -295,6 +320,120 @@ pub fn parse_ai_elements(p: &[u8]) -> Vec<AiElementRecord> {
         let end = name.iter().position(|&b| b == 0).unwrap_or(name.len());
         AiElementRecord { pos: [f(0x30), f(0x34), f(0x38)], vehicle: String::from_utf8_lossy(&name[..end]).into_owned() }
     }).collect()
+}
+
+/// The size of one `AISp` record: `FUN_002da590` walks the chunk at a 0x70 stride and fixes
+/// up the reference at +0x40 of each [M].
+pub const AI_SPLINE_SIZE: usize = 0x70;
+
+/// One `AISp` record [M `FUN_002da590` / `FUN_0013da80` / `FUN_002db690`; D the MIS01 records].
+#[derive(Clone, Debug, PartialEq)]
+pub struct AiSplineRecord {
+    /// +0x00: a 4x4 row matrix (rows 0-2 the axes, row 3 the position) [D: every MIS01 record
+    /// holds a rotation and a w = 1 position row]. The follower does not read it [M 0x13da80].
+    pub matrix: [[f32; 4]; 4],
+    /// +0x40: the path track (an `sr` reference); `EControlToSpline` acts only when the
+    /// fixed-up pointer is non-zero (`FUN_0014ae60`) [M].
+    pub track: Option<Ref>,
+    /// +0x44: the name; `FUN_0013da80` stores its address in the follower (+0xd0) [M].
+    pub name: String,
+    /// +0x6c: non-zero → the controller's offset matrix (+0x70) is the identity; zero → it
+    /// comes from the track's pose at time 0 through `FUN_002db478` (not decomposed)
+    /// [M `FUN_002db690`].
+    pub identity_offset: bool,
+}
+
+pub fn parse_ai_splines(p: &[u8]) -> Vec<AiSplineRecord> {
+    p.chunks_exact(AI_SPLINE_SIZE).map(|r| {
+        let f = |o: usize| f32::from_le_bytes(r[o..o + 4].try_into().unwrap());
+        let mut matrix = [[0.0; 4]; 4];
+        for (i, row) in matrix.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() { *v = f(i * 16 + j * 4); }
+        }
+        let w = u32::from_le_bytes(r[0x40..0x44].try_into().unwrap());
+        let name = &r[0x44..0x6c];
+        let end = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+        AiSplineRecord {
+            matrix,
+            track: (w != 0).then(|| Ref::from_word(w)),
+            name: String::from_utf8_lossy(&name[..end]).into_owned(),
+            identity_offset: r[0x6c] != 0,
+        }
+    }).collect()
+}
+
+/// One keyed channel of a path track (0x14 bytes at track +0x40 + i*0x14) [M: `FUN_002db320`
+/// reads the flags at channel +0x10, `FUN_002dae58` the time table at +0x04 and the key count
+/// at +0x0c, `FUN_002db080` the keys at +0x08; all offsets are from the track's start].
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackChannel {
+    /// +0x10: bit 0 → `FUN_002db188` (not ported), bit 1 → quaternion keys blended by
+    /// `FUN_002cc018`, bit 2 → one float per key, bit 3 → the `FUN_002bfb50` time mapping
+    /// (not ported).
+    pub flags: u32,
+    /// The name at the +0x00 offset (MIS01: "xform" / "xlate" [D]); no code reads it.
+    pub name: String,
+    pub times: Vec<f32>,
+    /// The keys, four floats each (a bit-2 channel's single float is repeated).
+    pub keys: Vec<[f32; 4]>,
+}
+
+/// A `pt  ` record: a keyed path, one rotation and one translation channel
+/// [M `FUN_002db370`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathTrack {
+    /// +0x00: the length in 60 Hz frames; `FUN_001b1840` returns it and the follower wraps
+    /// there [M `FUN_001b14b8`].
+    pub duration: f32,
+    /// +0x0c: the rotation channel (-1 none) [M `FUN_002db370`].
+    pub rot: Option<usize>,
+    /// +0x10: the translation channel (-1 none) [M `FUN_002db370`].
+    pub pos: Option<usize>,
+    /// +0x18: the name (`FUN_00230ab0` compares it).
+    pub name: String,
+    pub channels: Vec<TrackChannel>,
+}
+
+impl PathTrack {
+    pub fn parse(p: &[u8]) -> Result<PathTrack> {
+        let b = crate::buf::Buf(p);
+        let cstr = |o: usize| -> String {
+            let t = p.get(o..).unwrap_or(&[]);
+            let end = t.iter().position(|&c| c == 0).unwrap_or(t.len());
+            String::from_utf8_lossy(&t[..end]).into_owned()
+        };
+        let n = b.u32(4)? as usize;
+        if n > 16 { return invalid(format!("pt: {n} channels")); }
+        let idx = |o: usize| -> Result<Option<usize>> {
+            let v = b.u32(o)? as i32;
+            Ok((v >= 0).then_some(v as usize))
+        };
+        let mut channels = Vec::with_capacity(n);
+        for i in 0..n {
+            let c = 0x40 + i * 0x14;
+            let name = b.u32(c)? as usize;
+            let times_at = b.u32(c + 4)? as usize;
+            let keys_at = b.u32(c + 8)? as usize;
+            let count = b.u32(c + 12)? as usize;
+            let flags = b.u32(c + 16)?;
+            let times = (0..count).map(|k| b.f32(times_at + 4 * k)).collect::<Result<Vec<_>>>()?;
+            let keys = (0..count).map(|k| {
+                if flags & 4 != 0 {
+                    let v = b.f32(keys_at + 4 * k)?;
+                    Ok([v; 4])
+                } else {
+                    let o = keys_at + 16 * k;
+                    Ok([b.f32(o)?, b.f32(o + 4)?, b.f32(o + 8)?, b.f32(o + 12)?])
+                }
+            }).collect::<Result<Vec<_>>>()?;
+            channels.push(TrackChannel { flags, name: cstr(name), times, keys });
+        }
+        let t = PathTrack { duration: b.f32(0)?, rot: idx(0xc)?, pos: idx(0x10)?, name: cstr(0x18), channels };
+        for c in [t.rot, t.pos].into_iter().flatten() {
+            if c >= t.channels.len() { return invalid(format!("pt {}: channel {c} of {}", t.name, t.channels.len())); }
+        }
+        Ok(t)
+    }
 }
 
 #[cfg(test)]
@@ -368,5 +507,39 @@ mod tests {
         assert_eq!(t.radius, 2.5);
         assert_eq!(t.flags, 0x0407);
         assert_eq!(t.events, Some(686));
+    }
+
+    /// A two-channel track laid out like MIS01's `pt  0001`: header, the channel table at
+    /// +0x40 (stride 0x14: name, times, keys, count, flags), keys, times, names.
+    #[test]
+    fn path_track_reads_the_channel_table() {
+        let mut p = vec![0u8; 0x100];
+        let w = |p: &mut Vec<u8>, o: usize, v: u32| p[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        w(&mut p, 0, 120.0f32.to_bits());
+        w(&mut p, 4, 2);
+        w(&mut p, 0xc, 0);
+        w(&mut p, 0x10, 1);
+        p[0x18..0x1d].copy_from_slice(b"path0");
+        // channel 0: quaternions, 2 keys
+        for (o, v) in [(0x40, 0xf0u32), (0x44, 0xc0), (0x48, 0x70), (0x4c, 2), (0x50, 2)] { w(&mut p, o, v); }
+        // channel 1: positions, 2 keys
+        for (o, v) in [(0x54, 0xf6u32), (0x58, 0xc8), (0x5c, 0x90), (0x60, 2), (0x64, 0)] { w(&mut p, o, v); }
+        w(&mut p, 0x70 + 12, 1.0f32.to_bits());
+        w(&mut p, 0x80 + 12, 1.0f32.to_bits());
+        w(&mut p, 0x90, 5.0f32.to_bits());
+        w(&mut p, 0xa0, 7.0f32.to_bits());
+        w(&mut p, 0xc4, 120.0f32.to_bits());
+        w(&mut p, 0xcc, 60.0f32.to_bits());
+        p[0xf0..0xf5].copy_from_slice(b"xform");
+        p[0xf6..0xfb].copy_from_slice(b"xlate");
+        let t = PathTrack::parse(&p).unwrap();
+        assert_eq!((t.duration, t.rot, t.pos, t.name.as_str()), (120.0, Some(0), Some(1), "path0"));
+        assert_eq!((t.channels[0].name.as_str(), t.channels[0].flags), ("xform", 2));
+        assert_eq!(t.channels[0].keys[1], [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(t.channels[1].times, vec![0.0, 60.0]);
+        assert_eq!(t.channels[1].keys[1][0], 7.0);
+        // A channel index past the table fails.
+        w(&mut p, 0x10, 2);
+        assert!(PathTrack::parse(&p).is_err());
     }
 }

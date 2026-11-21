@@ -14,6 +14,8 @@ pub mod bounds;
 pub mod camera;
 // Effects: the particle pool, emitters, wheel smoke/spray/sparks, glare pulse (FUN_001f29d8 family).
 pub mod effects;
+// The MIS01 sniper phase's flight path, triggers, timers, view limits and shot test.
+pub mod flight;
 // G-057 suspension: the per-wheel spring–damper (sub_18FC00 + kind siblings).
 pub mod suspension;
 // 647 drive-mission-scripts: the mission state machine (objectives, fails, timers, the PTP end).
