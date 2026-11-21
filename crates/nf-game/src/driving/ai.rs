@@ -35,6 +35,10 @@ pub const PATTERN_ROAD: u32 = 3;
 /// other than 1 gets kind 1; FUN_00224e00 0x224e00:127-141 dispatches the next-segment chooser on
 /// it — 4 → 0x2235c8, 3/5 → 0x223a30, 1 → 0x223f98, 2 → 0x2247b0].
 pub const NAV_KIND_TRAFFIC: u32 = 1;
+/// The road follower's navigator: `FUN_0012e468` writes nav +0x00 = 4 for pattern 4 and joins
+/// it with `FUN_00225c48` ([`super::join::nav_for_pattern`]); its chooser is `FUN_002235c8`
+/// ([`next_segment_follow`]) [M 0x12e468].
+pub const NAV_KIND_FOLLOW: u32 = 4;
 
 /// Profile 0xc's target speed: the constant 0x40f00000 [M 0x12e808 `iVar2 == 0xc`].
 pub const TRAFFIC_SPEED: f32 = 7.5;
@@ -819,7 +823,7 @@ impl RoadNav {
                 self.blend_step((1.0 - self.t) * l);
                 let pick = match self.kind {
                     NAV_KIND_TRAFFIC => next_segment_traffic(net, self, rng)?,
-                    4 => {
+                    NAV_KIND_FOLLOW => {
                         let seg = next_segment_follow(net, self, &mut hint.dir, rng)?;
                         NextPick { seg, end: self.end, lane: self.lane, lane_off: self.lane_off, lane_change: false }
                     }
@@ -973,7 +977,8 @@ pub fn next_segment_chase(net: &RoadNet, nav: &mut RoadNav, hint: &mut [f32; 3],
 ///   list), slot cleared;
 /// - fewer than 2 links: stay, turn round;
 /// - no hint flag (+0xb1/+0xb2 clear), 2 links: the first link other than the current whose node
-///   at the travel end differs from the exit node (else the last non-current link);
+///   at the travel end differs from the exit node; none → the current piece, end kept (the loop
+///   at 0x2239b0 falls out to 0x2239f4, which returns s6 = the current piece);
 /// - no hint flag, 3+ links: one draw; of the n links that pass the same test the
 ///   `(n·rand) >> 16`-th is taken (the last passing one, or the current piece, if the count runs
 ///   out);
@@ -1001,18 +1006,13 @@ pub fn next_segment_follow(net: &RoadNet, nav: &mut RoadNav, hint: &mut [f32; 3]
     let cur_exit = node_at(&cur, nav.end);
     if !(nav.hint_toward || nav.hint_away) {
         if count < 3 {
-            let mut last = None;
             for i in 0..count {
                 let l = link(i)?;
-                if l == cur_id as usize {
-                    continue;
-                }
-                last = Some(l);
-                if cur_exit != node_at(&net.seg(l)?, nav.end) {
+                if l != cur_id as usize && cur_exit != node_at(&net.seg(l)?, nav.end) {
                     return Ok(l);
                 }
             }
-            return Ok(last.unwrap_or(cur_id as usize));
+            return Ok(cur_id as usize);
         }
         let mut n = count as u32;
         for i in 0..count {
