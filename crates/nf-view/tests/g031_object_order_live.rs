@@ -61,22 +61,3 @@ fn bond_rides_the_0700004a_lift_on_the_same_tick() {
         "Bond keeps his parked height over the descending car at every tick's end (the carry is the car's move of the same tick [M 0x1336f8:238 → 0x1949a8 → 0x133e88]); worst drift {worst}");
 }
 
-/// A plate Bond stands on writes its channel one tick after the contact: the trigger reads the
-/// contact list `Collide_Update` builds AFTER the update walk [M 0x1336f8:238; 0x1ea398:25-53],
-/// and every trigger read of a tick (`Trigger_Calc` at the walk's head [M 0x1336f8:24], the walk's
-/// own `Trigger_Update` [M 0x1b1a78 → `Trigger_Hit` 0x1b1fc8:18]) comes before that tick's Collide.
-/// On 07000005 the cold start stands on the reveal plate #36 (TouchOnce out 0x45 [D]): no Collide
-/// has run before the first tick, so ch 0x45 is still off after it and on after the second.
-/// Fails on the old order (the toucher read Bond's position of the same tick: on after tick 1).
-#[test]
-fn the_05_reveal_plate_fires_on_the_tick_after_the_contact() {
-    let iso = iso();
-    let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load 07000005");
-    let sim = scene.sim.as_mut().unwrap();
-    assert!(!sim.drones.channels.on(0x45), "nothing writes ch 0x45 before the first tick");
-    sim.step_bond(Input::default(), false, false, false);
-    assert!(!sim.drones.channels.on(0x45),
-        "tick 1: the plate's contact list is still empty (no Collide_Update has run) — ch 0x45 waits");
-    sim.step_bond(Input::default(), false, false, false);
-    assert!(sim.drones.channels.on(0x45), "tick 2: the reveal plate reads tick 1's contact and writes ch 0x45");
-}

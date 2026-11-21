@@ -14075,14 +14075,6 @@ pub struct Drones {
     bullet_contacts_now: Vec<crate::triggers::BulletContact>,
     /// Last tick's `bullet_contacts_now` — the set `Trigger_Hit` reads this tick (see above).
     bullet_contacts_prev: Vec<crate::triggers::BulletContact>,
-    /// G-031: the player touchers built LAST tick (from that tick's post-move body) — the set
-    /// `Trigger_Hit` reads this tick. The game's player contact enters the trigger's `obj+0xD0`
-    /// list in `Collide_Update`, which runs after the update walk [M 0x1336f8:238; the lists are
-    /// cleared + rebuilt there, 0x1ea398:25-53], and every trigger read (`Trigger_Calc`'s touch
-    /// pass at the walk's head [M 0x1336f8:24], the walk's own `Trigger_Update`) comes before the
-    /// next Collide — so a plate Bond steps on at tick N writes its channel at tick N+1. `None`
-    /// before the first tick: no Collide has run yet, the lists are empty.
-    prev_player_touchers: Option<Vec<crate::triggers::Toucher>>,
     /// The route-node → door binding (`NDrone_InitDoorNodes` 0x139a70: each door-flagged node binds
     /// its nearest door object), keyed (nav path, node id) → `Doors::list` index. Computed lazily on
     /// the first tick that needs it (the doors' positions are static).
@@ -14480,7 +14472,6 @@ impl Drones {
             spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), trigger_walls: Vec::new(), bullet_paths: Vec::new(), script_round_damage: Vec::new(), script_round_hits: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), guard_break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), use_picks: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
-            prev_player_touchers: None,
             space_laser_beams: Vec::new(),
             // fix-06-alarm.
             sound_triggers: Default::default(),
@@ -21560,10 +21551,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let (a, b, r) = player.body;
             player_touchers.push(crate::triggers::Toucher::raw(a, b, r));
         }
-        // G-031: this tick's trigger reads see LAST tick's player contacts (see the field); the
-        // drones' touchers stand where last tick's walk left them already (the drones move later
-        // in this tick), which is the same phase.
-        let player_touchers = self.prev_player_touchers.replace(player_touchers).unwrap_or_default();
         let touchers: Vec<crate::triggers::Toucher> = player_touchers.into_iter()
             .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true, seg_only: false }))
             .collect();
