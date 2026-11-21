@@ -12,9 +12,6 @@ use nf_formats::bigf::Bigf;
 use nf_formats::crp::Crp;
 use nf_formats::refpack;
 
-use nf_game::driving::ai::{
-    drive_control, target_speed_traffic, AiCar, SimCar, STATE_CHASE, STATE_TRAFFIC,
-};
 use nf_game::driving::road::{RoadNet, RSF_TURN_RESTR_A};
 
 // ---------------------------------------------------------------- the fixture builder
@@ -175,13 +172,6 @@ fn parse(buf: &[u8]) -> RoadNet<'_> {
     RoadNet::parse_crp(&crp).expect("fixture RNgp parses")
 }
 
-/// A car sitting on the segment start at `speed`, 60 Hz.
-fn sim_at(pos: [f32; 3], speed: f32) -> SimCar {
-    SimCar { pos, vel: [speed, 0.0, 0.0], forward: [1.0, 0.0, 0.0], alive: 1.0 }
-}
-
-const DT: f32 = 1.0 / 60.0;
-
 // ---------------------------------------------------------------- the tests
 
 #[test]
@@ -206,117 +196,9 @@ fn road_net_parses_the_fixture_counts_and_fields() {
     assert_eq!(net.seg(3).unwrap().car_group(), 7, "car group at +0x5a [M 0x225490:133]");
 }
 
-#[test]
-fn ai_car_follows_the_spline_at_the_segment_speed_limit() {
-    let buf = build_track();
-    let mut net = parse(&buf);
-    // The game units are the game's; the fixture's seg0 is 100 units long with the limit 25.
-    let mut car = AiCar::on_segment(0, 0, 0);
-    let mut sim = sim_at([0.0, 0.0, 0.0], 25.0);
-
-    let target = car.select_target_speed(&net, &sim).unwrap();
-    assert_eq!(target, 25.0, "the target speed IS the segment limit rs+0x4c [M 0x12e808:165]");
-
-    // 60 steps = 1 s at 60 Hz [M docs/atlas/driving-elf.md §1.3] → 25 units along +x.
-    for _ in 0..60 {
-        car.step(&mut net, &mut sim, DT).unwrap();
-    }
-    assert_eq!(car.segment, 0, "still on seg0 after 25 of 100 units");
-    let p = sim.pos;
-    assert!((p[0] - 25.0).abs() < 1e-3, "pos.x = 25 after 1 s at 25/s, got {}", p[0]);
-    assert!(p[1].abs() < 1e-6 && p[2].abs() < 1e-6, "dead on the spline line [M 0x222468]");
-
-    // 240 more steps = 4 s → 100 more units → seg0 ends, the walk takes seg1 (the clean link)
-    // and the position continues along it [M 0x2247b0].
-    for _ in 0..240 {
-        car.step(&mut net, &mut sim, DT).unwrap();
-    }
-    assert_eq!(car.segment, 1, "crossed at the shared node onto seg1");
-    assert_eq!(car.end, 0, "seg1 leaves n1 through its A side → driven A→B [M 0x225c48]");
-    let p = sim.pos;
-    assert!((p[0] - 125.0).abs() < 5e-2, "pos.x = 125 after 5 s total, got {}", p[0]);
-
-    // The position is exactly A + (B−A)·t [M 0x222468:12-20].
-    let t = car.t;
-    let exact = net.seg_point(car.segment, t).unwrap();
-    assert_eq!(sim.pos, exact, "the sim position is the segment evaluation");
-}
-
-#[test]
-fn ai_car_stops_inside_the_arrival_radius() {
-    let buf = build_track();
-    let net = parse(&buf);
-    // speed 20 → radius = max(10, 5) = 10; aim 8 units ahead → target forced 0 [M 0x133ab0:114-130]
-    let sim = sim_at([92.0, 0.0, 0.0], 20.0);
-    let aim = [100.0, 0.0, 0.0];
-    let cmd = drive_control(&sim, aim, 25.0, false);
-    assert_eq!(cmd.throttle, 0.0, "no throttle inside the arrival radius");
-    assert!(cmd.brake > 0.0, "braking to the stop: ramp = min(20,7.5)/7.5 = 1.0, got {}", cmd.brake);
-    assert_eq!(cmd.brake, 1.0, "the full-stop ramp saturates at 1.0 [M 0x133ab0:145-147]");
-
-    // outside the radius: the same target gives throttle [M 0x133ab0:148-151]
-    let sim = sim_at([80.0, 0.0, 0.0], 20.0);
-    let cmd = drive_control(&sim, aim, 25.0, false);
-    assert!(cmd.throttle > 0.0 && cmd.brake == 0.0, "throttle when the aim is far");
-}
-
-#[test]
-fn drive_control_matches_the_fun_00133ab0_numbers() {
-    // ramp = min(|Δ|, 7.5)/7.5, floor 0.05 [M 0x133ab0:145-147,170-171]
-    let sim = sim_at([0.0, 0.0, 0.0], 20.0);
-    let cmd = drive_control(&sim, [100.0, 0.0, 0.0], 30.0, false); // Δ=10 → saturate
-    assert_eq!(cmd.throttle, 1.0, "Δ=10 > 7.5 → full throttle");
-    let cmd = drive_control(&sim, [100.0, 0.0, 0.0], 25.0, false); // Δ=5 → 5/7.5
-    assert!((cmd.throttle - 5.0 / 7.5).abs() < 1e-6, "Δ=5 → 5/7.5, got {}", cmd.throttle);
-    let slow = sim_at([0.0, 0.0, 0.0], 20.0);
-    let cmd = drive_control(&slow, [100.0, 0.0, 0.0], 20.04, false); // Δ=0.04 → the 0.05 floor
-    assert_eq!(cmd.throttle, 0.05, "the 0.05 pedal floor [M 0x133ab0:170-171]");
-
-    // the target floor 0.5 [M 0x133ab0:100-102]: target 0 → target' = 0.5, speed 20 → the brake
-    // path with Δ = 19.5 → the span saturates → brake 1.0
-    let cmd = drive_control(&sim, [100.0, 0.0, 0.0], 0.0, false);
-    assert_eq!(cmd.brake, 1.0, "target 0 → target' floor 0.5 → braking hard, got {:?}", cmd);
-
-    // the brake-side early-outs [M 0x133ab0:153-168]: the span min(Δ,7.5) ≤ 1.0 with target ≥ 2.5
-    let cmd = drive_control(&sim, [100.0, 0.0, 0.0], 19.5, false); // Δ=0.5, target 19.5 ≥ 2.5
-    assert_eq!((cmd.throttle, cmd.brake), (0.0, 0.0), "no brake for a small overshoot");
-    let cmd = drive_control(&sim, [100.0, 0.0, 0.0], 15.0, false); // Δ=5 > 1.0 → brake 5/7.5
-    assert!((cmd.brake - 5.0 / 7.5).abs() < 1e-6, "real overshoot brakes, got {}", cmd.brake);
-
-    // the forced stop [M 0x133ab0:173-180]
-    let cmd = drive_control(&sim, [100.0, 0.0, 0.0], 30.0, true);
-    assert_eq!(cmd, nf_game::driving::ai::DriveCommand {
-        steer: 1.0,
-        throttle: 0.0,
-        brake: 0.0,
-        handbrake: true
-    }, "+0x19c → handbrake");
-
-    // the steer clamp ±1 [M 0x133ab0:135-137]
-    let off = sim_at([0.0, 0.0, 0.0], 0.0);
-    let cmd = drive_control(&off, [0.0, 0.0, 100.0], 10.0, false);
-    assert_eq!(cmd.steer, 0.0, "the aim perpendicular to the facing → the dot is 0");
-}
-
-#[test]
-fn target_speed_gates_zero_it_like_fun_0012e808() {
-    let buf = build_track();
-    let net = parse(&buf);
-    let limit = net.seg(0).unwrap().speed_limit();
-    let alive = sim_at([0.0, 0.0, 0.0], 0.0);
-    assert_eq!(target_speed_traffic(STATE_TRAFFIC, &alive, limit, 0, 0), 25.0);
-
-    let dead = SimCar { alive: 0.4, ..alive };
-    assert_eq!(target_speed_traffic(STATE_TRAFFIC, &dead, limit, 0, 0), 0.0,
-        "state 4 needs alive ≥ 0.5 [M 0x12e808:20-29]");
-    let dead5 = SimCar { alive: 0.0, ..alive };
-    assert_eq!(target_speed_traffic(STATE_CHASE, &dead5, limit, 0, 0), 0.0,
-        "state 5 needs alive > 0 [M 0x12e808:12-18]");
-    assert_eq!(target_speed_traffic(STATE_TRAFFIC, &alive, limit, 1, 0), 0.0,
-        "the vtbl+0x144 stop query ≠ 0 → 0 [M 0x12e808:41-45]");
-    assert_eq!(target_speed_traffic(STATE_TRAFFIC, &alive, limit, 0, 1), 0.0,
-        "the +0x170 byte ≠ 0 → 0 [M 0x12e808:48-52]");
-}
+// The rails-model tests (target = rs+0x4c, the car on the spline, steer = dot(dir, forward))
+// were removed: FUN_0012e808 gives live traffic 7.5 and FUN_00133ab0 steers by the side row —
+// see driving_ai_traffic.rs and docs/systems/driving-ai.md §9.
 
 #[test]
 fn next_segment_walks_and_filters_like_fun_002247b0() {
@@ -481,8 +363,8 @@ fn real_mis01_track_rngp_walks_when_nf_driving_is_set() {
     assert!(net.segs.len() >= net.nodes.len() / 2, "segments join nodes: {} segs vs {} nodes",
         net.segs.len(), net.nodes.len());
 
-    // Every segment's endpoints index real nodes, its direction is unit-length, and its limit
-    // is a positive number [M 0x2216b0 (unit dir), 0x12e808:165 (the limit the AI reads)].
+    // Every segment's endpoints index real nodes and its direction is unit-length
+    // [M 0x2216b0 (unit dir)].
     let mut unit_dirs = 0usize;
     let mut positive_limits = 0usize;
     for s in &net.segs {
@@ -498,15 +380,7 @@ fn real_mis01_track_rngp_walks_when_nf_driving_is_set() {
         }
     }
     assert!(unit_dirs * 2 > net.segs.len(), "most directions are unit: {unit_dirs}/{}", net.segs.len());
-    assert!(positive_limits * 9 > net.segs.len() * 8, "most limits are positive: {positive_limits}/{}", net.segs.len());
-
-    // An AI car walks the first segment's spline exactly [M 0x222468].
-    let mut net = net;
-    let mut car = AiCar::on_segment(0, 0, net.seg(0).unwrap().car_group());
-    let mut sim = sim_at(net.node(net.seg(0).unwrap().node_a() as usize).unwrap().pos(), 10.0);
-    for _ in 0..30 {
-        car.step(&mut net, &mut sim, DT).unwrap();
-    }
-    let exact = net.seg_point(car.segment, car.t).unwrap();
-    assert_eq!(sim.pos, exact, "the headless walk stays on the real spline");
+    // Paris carries rs+0x4c = 0 on 451 of its 811 pieces [D] — the traffic profile never reads
+    // it (FUN_0012e808 profile 0xc = 7.5), so no positivity is implied.
+    assert!(positive_limits > 0, "some limits are positive: {positive_limits}/{}", net.segs.len());
 }

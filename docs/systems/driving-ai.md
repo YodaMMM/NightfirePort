@@ -1,6 +1,7 @@
 # The driving missions' AI cars — road network, path following, speed, spawn
 
-Status: **ported** (2026-10-15). The port lives in
+Status: **reviewed against the decompile 2026-11-20 — §9 is the per-function table and
+supersedes §3.1, §5 and §8 wherever they differ** (first port 2026-10-15). The port lives in
 `crates/nf-game/src/driving/` (`road.rs` the RNgp/Wmap-side data model + `ai.rs` the AI car step) with the
 RNgp container decode on top of `nf_formats::crp`. Evidence tags: [M] code (function + address,
 DRIVING.ELF — EE address = file offset + 0x107080), [D] disc bytes, [L] EE snapshot, [S] suggested.
@@ -190,9 +191,11 @@ commands on the actor's +0x48 object; cooldowns +0x226/+0x22c tick down in frame
   GetFree) → **vtbl+0x24 FUN_00131508** (sets the +0x58/+0x5c enables and state 3 = teleport to the
   AIEl marker; config from record+0x50's linked target) [M].
 - **Deactivate**: FUN_0014c110 → vtbl+0x2c **FUN_00131590** → state 1 standby [M].
-- The traffic director **FUN_00126c98 0x126c98** (2,136 B) is the per-frame traffic spawner: picks a
+- **FUN_00126c98 0x126c98** (2,136 B) — earlier read as the traffic director; it serves a
+  different class (path state at +0x1d0, vtable at +0x140, animation calls FUN_0012aa20 /
+  FUN_0012a8f0), not the AIVehicle (§9). It picks a
   spawn segment by route occupancy (FUN_0013d3f0), updates rr+0x2e/0x2f, reads rs+0x59's trigger, and
-  teleports the car to `nodeB + rs dir·0.75` [M 0x126c98:134-208].
+  places its object at `nodeB + rs dir·0.75` [M 0x126c98:134-208].
 
 ## 5. The port
 
@@ -277,3 +280,73 @@ Tuning, Friction, SURFACES}` — the module test pins them). The wiring:
   acceleration numbers with a bit-exact bare-`Car` replay (the driver adds no physics of its
   own), the steering-angle falloff, the arrival rest, the forced-stop record, the clean-link
   crossing at the physics speed, standby.
+
+## 9. Function-by-function review (2026-11-20, branch `s/drive-ai-traffic`)
+
+Every row was read in `work/decomp/DRIVING.ELF/` (and the disassembly where the decompile drops a
+float argument). Verdicts: **correct** (the port matched), **wrong → fixed**, **added** (the
+port had nothing; ported now), **reviewed** (read, not ported — stated so nothing is claimed).
+Port = `crates/nf-game/src/driving/ai.rs` unless noted. Tests =
+`crates/nf-game/tests/driving_ai_traffic.rs`.
+
+### 9.1 Which car is "traffic"
+
+A live civilian car is an AIVehicle in **state 4, profile 0xc, pattern 3, navigator kind 1**:
+`FUN_0013f868` 0x13f868 creates it (state 4, +0x58/+0x5c enables); `FUN_00132ba8` 0x132ba8 parks
+it (profile 1, pattern 1, teleported far up, sim +0x6e = 3); each state-4 frame `FUN_00132d80`
+0x132d80 calls the respawn `FUN_00132808` 0x132808, which re-places a parked/out-of-range car
+and sets profile 0xc (`FUN_0012e6f8(ai, 0xc)` :130) and pattern 3 (`FUN_0012e468(ai, 3, 0)`
+:131); `FUN_0012e468` gives a state-4 car with pattern ≠ 1 navigator kind 1 [M].
+
+### 9.2 The table
+
+| function | address | verdict | fix / note |
+|---|---|---|---|
+| Update | 0x12e350 | correct | state 1 → spawn-delay (nothing driven), 4 → 0x132d80, 0x12e808, 0x130508; 2/5 add retarget/chase calls. |
+| target speed | 0x12e808 | **wrong → fixed** | The port returned the segment's rs+0x4c. Profile 0xc stores the constant **7.5** (0x40f00000); rs+0x4c is read only by profile 0xf (× AI +0x134, when +0x158 is clear). Paris has rs+0x4c = 0 on 451 of 811 pieces [D], so the old cars stood still on most roads. Gates (alive, stop query, +0x170) were right. Profiles 1, 0xd, 0xe and 0xf-with-target (the chase arms) return `None`: not ported. |
+| pattern + nav kind | 0x12e468 | added | constants only (`PATTERN_ROAD`, `NAV_KIND_TRAFFIC`). |
+| profile setter | 0x12e6f8 | reviewed | sets +0x84; profile 0xd also flags the actor (+0x244) for one model name. |
+| pattern dispatch | 0x130508 | **added** (pattern 3, state 4) | lookahead → carrot → drive control; the gated stop (all pedals 0, then `min(|v|, 0.25)` on the brake, or the throttle when rolling backwards, once `|v| ≥ 0.1`); a navigator that repeated its piece (+0x94) aims at the car itself. Not ported: patterns 1/2/4/5, the +0x198, +0xe4 (stop-and-wait) and +0x154 (avoidance 0x1377c8) arms — taken as clear [S]. |
+| lookahead | 0x132f80 | **added** | `max(|v|·0.35, box_z + 7.5)`, box_z = sim+0x5c→+0x4c8, the z extent `FUN_001f6e98` 0x1f6e98 stores (floored 0.001). The extent's source is not traced; the port defaults to the floor. |
+| carrot | 0x130140 | **added** (plain path) | The port aimed at the segment's far node. The game keeps a navigator point on the road: if `|car − carrot| < lookahead`, the carrot advances by the difference (one call). The +0x178 scripted path and the chase-target aim are not ported. |
+| drive control | 0x133ab0 | **wrong → fixed** | (1) steer was `dot(dir, forward)` — 1.0 with the aim on the nose, a full lock on a straight road; the game steers by `dot(dir, row0)`, the side row. (2) Missing: aim behind (`dot(forward, dir) ≤ −0.2`) → full lock to the side's sign. (3) The brake side: the game's first test is `dot(normalize(v), forward) ≤ 0` → **throttle(ramp)** (disassembly 0x133ea8 `c.olt.s 0, va` / `bc1fl` → 0x133f00); the port issued nothing at speed ≤ 0. (4) Missing the +0x178 guard (no command). Ramp, floors, arrival radius, brake hold, forced stop were right. |
+| clamp | 0x210510 | correct | clamp(x, ±1). |
+| road advance | 0x224e00 | **wrong → fixed** | The port moved t by the car's speed over the node-to-node length, dropped the leftover past a node (`t −= 1` in the old piece's scale), stopped after one crossing and snapped the car onto the line. The game moves the carrot (not the car) by a distance over `|P0 − P1|` (lane-offset points), carries `(dt − (1 − t))·len` into the next piece and recurses; within a piece t clamps to [0, 1]. The car is a free physics body. |
+| join | 0x2257c0 | **added** | kind 4 or `forward` → toward B (end 1, dir = rs+0x40, t); else toward A (end 0, −dir, `|1 − t|`); lane offset `±table[class][|lane|]`. The old port's comments had end 0 = A→B; the game's end is the exit node's slot (1 = toward B). |
+| lane points | 0x2267d8 / 0x226a28 | **added** | toward B: P0 = A + side_a·off, P1 = B + side_b·off; toward A: P0 = B − side_b·off, P1 = A − side_a·off. rs+0x20 / +0x30 are the side rows: unit length on every disc track [D]; on the Paris pieces sampled they are +0x40 turned 90° in the ground plane, `(dir.z, 0, −dir.x)` [D]. |
+| road class | 0x221e98 | added | flags 0x10 → 3, 0x820 → 2, 0x800 → 1, else 0 (`RoadSeg::road_class`). |
+| lane tables | .data 0x33a618 / 0x33a678 | added | [D, read from the disc's DRIVING.ELF by the test] Snow2a set for `snow2a_mis4` / `snow2a_race` (0x220c28's strcmp), Default set otherwise: class 0 = 0, 2, 6, 10, 14, 18 (Default) / 0, 2.5, 7.5, 12.5, 17.5, 22.5 (Snow2a). |
+| next piece, kind 1 | 0x223f98 | **wrong → fixed** | The port ran a reduced kind-2 walk (`RoadNet::next_segment`, modelled on 0x2247b0, which cars never run) with a car-group filter that is in neither function — the viewer passes groups 1..4, so its traffic cars stopped at the first node. Ported 0x223f98 whole: dead end → same piece, turn round; a plain link (flag bit 0 clear, `FUN_002270e8`) → take it, no draw; a junction → the slot rules, the lane-mask parity test on the road past each connector, the 0x1020/0x1000 lane rules, each eligible link taken on `rand/65536 < 0.3` (the last eligible one stands); the new lane offset raises the lane-change flag. The DAT_003c827c = 0 arms are dead (its only write sets 1, 0x220c28:63). |
+| next piece, kind 4 | 0x2235c8 | reviewed | the A→B-only chooser for pattern-4 cars (0x130e88's road-limit followers); not ported. |
+| next piece, kind 2 | 0x2247b0 | reviewed | not a car chooser; `RoadNet::next_segment` kept for its old test, unused by the AI. |
+| plain link / other node | 0x2270e8 / 0x222300 | added | helpers. |
+| lane blend | 0x227058 | reviewed | +0x98/+0x9c/+0xa0/+0xa4/+0xa8/+0xac blend of a lane change; idle outside a lane change (it returns 0 when +0x98 = +0xa0). Not ported. |
+| spawn lane | 0x13c5e8 | **added** | `spawn_lane`: k = (route occupancy + spawn count) % lanes, slot k → lane, rs+0x58 bit k = drives A→B, else the lane is negated and the car drives B→A. The random start t is the caller's (`AiDriver::on_segment` uses 0). |
+| spawn pick | 0x13ca60 | reviewed | picks from a 75..150 ring list (`FUN_0013d618(75, 150)`), route cap rr+0x2e < rr+0x2c, a 0.2-cell spacing check against live cars, a minimum player distance DAT_00327d68. Not ported. |
+| respawn | 0x132808 | reviewed | out-of-range test `FUN_0013c860(box_z, …)`, the live cap DAT_0032b750, the 5·DAT_00339f4c delay, teleport to the carrot facing nav+0x30. Not ported (the placement it ends with is what `on_segment` does). |
+| state-4 tick | 0x132d80 | reviewed | route occupancy rr+0x2e in/out, the +0xe4 stop flag (vtbl+0x17c, cleared at ≤ 0.2). Not ported. |
+| 0x126c98 | 0x126c98 | doc fixed | not the AIVehicle traffic director (see §4). |
+| generator | 0x17dc28 / 0x17db68 / 0x17dbb0 | added | `DriveRng`: `p = state·mult; state = p & 0xffff; out = (p >> 8) & 0xffff`; mult 0x075bcd15 (checked in the disc ELF); reset state 0xf874af01 + 39 warm-up draws. Every driving system draws from it; the position of the stream at a traffic pick is unproven. It is not the on-foot stream. |
+| retarget / chase | 0x131080, 0x133850, 0x131770, 0x133f60, 0x135f70, 0x137310, 0x1377c8 | reviewed, not ported | the hostile cars' pursuit, ramming and avoidance. The port had no code for them before this branch and has none now. |
+| weapons | 0x130050 / 0x12f730 / 0x12fa28 / 0x12fd58 | reviewed (§3.3), not ported | needs the actor/animation layer. |
+
+### 9.3 Stand-ins in `AiDriver` [S]
+
+`Car::step` (the port's physics) has no tyre lateral force and lets a brake push the car
+backwards through zero. `AiDriver::step` therefore (a) zeroes a brake-made backwards velocity
+and (b) turns the velocity onto the heading each tick. Both are port gaps, not game behaviour.
+The side-row sign is paired with `Car::step`'s steer sign so that the game's `steer = dot(dir,
+row0)` closes on the carrot; the game's own row-0 / SetSteer sign was not read.
+
+### 9.4 Open
+
+- The traffic car's physics numbers: civilian cars carry their own pvehicle `.atr`
+  (`hatchback.atr`, `sedan2.atr`, `suv1.atr`: MAXSTEERING 0.2, MAXACC 13.29 [D MIS01.VIV]); the
+  viewer builds AI cars from the player car's parameters (vanquish: MAXSTEERING 0.09, a ~21-unit
+  turning circle), which overshoots city corners.
+- The lane set needs the track name; `AiDriver::on_segment` uses `LaneSet::Default` (wrong only on
+  `snow2a_mis4` / `snow2a_race`, 2.0 vs 2.5 for lane 1).
+- Curved pieces (flags 0x4000 — 105 of Paris's 811 pieces; Paris also has 105 junction connectors, flag bit 0 [D counts]) are
+  evaluated straight; the curve object FUN_001a8380 / FUN_001a85d0 is not ported.
+- A live check worth doing: break on FUN_0012e808 in Paris and read +0x84 / +0x8c of a moving
+  civilian car (expect 0xc / 7.5).
