@@ -252,6 +252,12 @@ pub struct Walker {
     /// 40.6 frame 84 ticks later at 7301 while the leg kept walking [L the dance5 run]).
     /// `None` everywhere else; pure corpse/health reads, no RNG, no sim call.
     pub leg_abort_on_kill: Option<Vec<usize>>,
+    /// Opt-in sight abort for `walk_to` (walks-1121-08-cabin, the 07000008 d3 pit excursion):
+    /// `Some(di)` makes a leg return early (u32::MAX−1, not the wedge marker) the first loop head
+    /// where guard `di` is visible (`DamageLog::visible`, the eye rays the stands use) — the
+    /// excursion's stand must open the tick the line opens, not at the leg's end. `None`
+    /// everywhere else; pure ray reads, no RNG, no sim call.
+    pub leg_abort_on_sight: Option<usize>,
     /// Opt-in crouched legs for `walk_to` (real-health-00agent-01-hall-4, d3 only): the dance's
     /// RETREAT legs run crouched — the peek runs measured crouched Bond in the lane taking 0
     /// fire across 24 windows (the guards held z 13.5-19.4 [L]) — so the exit from the lane is
@@ -459,6 +465,7 @@ impl Walker {
             nav_tick_cap: None,
             leg_abort_on_wound: None,
             leg_abort_on_kill: None,
+            leg_abort_on_sight: None,
             leg_crouch: false,
             use_door_crouch: false,
             trail: Vec::new(),
@@ -1518,6 +1525,12 @@ impl Walker {
                     sim.drones.list.get(gi).is_some_and(|d| d.corpse || d.health <= 0.0)
                 }) {
                     eprintln!("[walk] {label}: the opt-in kill abort hit — a named guard is down — returning early (not a wedge)");
+                    return u32::MAX - 1;
+                }
+            }
+            if let Some(di) = self.leg_abort_on_sight {
+                if DamageLog::visible(sim, di) {
+                    eprintln!("[walk] {label}: the opt-in sight abort hit — guard #{di} is in sight — returning early (not a wedge)");
                     return u32::MAX - 1;
                 }
             }
