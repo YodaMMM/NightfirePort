@@ -14,6 +14,7 @@ pub mod crp_mesh;
 pub mod gal;
 pub mod geoprim;
 pub mod disc;
+pub mod drivefx;
 pub mod drone;
 pub mod ee;
 pub mod elf;
