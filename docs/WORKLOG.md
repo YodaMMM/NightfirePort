@@ -377,3 +377,4 @@ ride). Both reverted; the final tree is the merge itself. Whole binary 6 passed 
 (the target walk), 165.28 s [L the final-tree run]. The next lever (the PRE-FIGHT crouch +
 the ride-free survival path) and the fight-order item are in the ignore message. Report:
 docs/reports/retune-nb-08-17.md.
+## retune-nb-08-18
