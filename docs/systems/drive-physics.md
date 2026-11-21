@@ -392,3 +392,39 @@ the MIS13A/B/C player drives: the view picks `ultralight` for 13A/B and the patr
 and the player vehicle choice (`DAT_0033196c`, the profile's car name) is not traced. Inside
 one port tick the order is controller then integration; the game integrates at the top of the
 next frame, which gives the same sequence of values.
+## 10. The hull on the ground and the player's recovery (branch s/drive-reset)
+
+Pass C, `FUN_001f9500`, runs between the wall sweep and the integration [M FUN_001ff3d8]. Each
+hull point queries the ground plane under it (`FUN_001f6ae0`); a depth `w = (v0 − p)·n > 0`
+counts, the count lands in instance+0x6c [M 0x1f9804], and the body moves out along the deepest
+point's plane normal by that depth [M 0x1f983c-0x1f9894]. Upright (`up.y > 0.8`) only points
+8..11 are tested, tilted points 4..count [M 0x1f9670]. The points come from the car model's hull
+list, which the port does not read: `Car::hull_points` uses the 8 box corners when tilted and the
+4 bottom corners raised to the spring limit when upright [S]. The contact response
+(`FUN_001f91e8`, VU0 microcode) is not lifted; the port applies an inelastic impulse at the
+deepest point [S]. Without this pass a car on its roof had nothing under it and fell through the
+track (MIS01: y −425 after 1200 ticks).
+
+The recovery (`crates/nf-game/src/driving/reset.rs`):
+
+| piece | game | port | status |
+|---|---|---|---|
+| tip counter | `FUN_00188200` 0x188480: player (+0x2c8 == 0), `up·(0,1,0) < 0.3` and +0x6c != 0 → actor+0x3e8 += 1 (cap 30); else 0 | `reset::check`, `ResetState::tip_ticks` | [M] |
+| heading memory | same branch, when the counter drops: actor+0x3f0 += (fwd − it)·0.1 | `ResetState::heading` | [M]; its spawn value [S] |
+| fire | 0x188bb0: +0x3e8 == 30 → vtable +0x158 (`FUN_00187b00`, arg 0) | `check` returns `Respawn` | [M] |
+| righting | `FUN_00187b00`: state reset `FUN_00187350`; direction = toward the objective marker (`FUN_00207748(mgr, 0)`) else +0x3f0; matrix `FUN_00210540`; x/z kept; y = ground (`FUN_002151b8`, 0 if none) + TYRE_RADIUS + SPRING_REST_LENGTH + half height (model+0x4c4); `FUN_001f7880` zeroes the velocities | `reset::righting`, `Respawn::apply`, `Car::place` | [M]; the +0x2e4 path branch and the matrix row order [S] |
+| script placement | `EResetPlayerCarPos` 0x156460 → `FUN_001fee68` then vtable +0x160 `FUN_00187eb8`: per-wheel ground, spring memory 0.15·LIMIT, y = mean wheel height + the three offsets; velocity = unit dir × factor (momentum write 0x1565f0) | `reset::place_at` | [M]; no-plane wheels and the hidden normalise [S] |
+| `EResetPlayerCar` (kind 98) | `FUN_00156390`: player vtable +0x158 with 0, the same righting | (not wired in `script.rs`) | [M] |
+
+Not in the engine path [M-negative]: a fade, damage, a mission fail, a respawn at a road node or
+checkpoint, and a height or bounding-box kill test (a grep of the 0x18xxxx-0x20xxxx functions for
+`+0x14` compares against constants found only orientation tests; a narrow search). The water and fall recoveries are the
+tracks' scripts: MIS01 holds nine `EResetPlayerCarPos` trigger zones (radius 18-110, y −2.6 to
+−16.2, around (−1150, −1540)), MIS3 four, MIS4 two; `EPlayerLose` zones sit
+below the cliffs on MIS4 (y −158, −205) and RACE (y −265) [D]. The script machine already fires
+them (`script::Output::ResetPlayerCar` / `Lost`); the caller applies the placement with
+`reset::place_at` and the trigger's position and `+0x30` direction.
+
+The view calls, after `Car::step` on the land tracks: `reset::check(&car, ground.tris(), &mut
+state, marker)` and applies the result; and on `Output::ResetPlayerCar { trigger, speed_factor }`
+`reset::place_at(&car, &ground, ground.tris(), t.pos, t.dir, speed_factor).apply(&mut car)`.
