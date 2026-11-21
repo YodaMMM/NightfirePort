@@ -171,7 +171,7 @@ unit tests in `carmesh.rs`.
   group per car model (970 models) [D].
 
 **Batch layouts** [D]: A = `V3-32` positions + `V2-16` UV (u16 − 0x8000) / 1024 + `V3-8`
-normal (byte − 0x80) / 127 + two `V4-16` arrays (undecoded); B = five `V4-32` arrays
+normal byte / 127.5 − 1 [M §10] + two `V4-16` arrays (`DmgVec`/`DmgNrm`, §10); B = five `V4-32` arrays
 (position, normal, UV, two undecoded); positions-only. 249,532 of 249,596 normals have unit
 length ± 5 %; there is no colour upload in any car chain. Strip list: 3 bytes per vertex, 2 for
 positions-only batches, wrapping past 255.
@@ -185,6 +185,198 @@ places `as#k` with item k's matrix, drops mirrored items, decodes the batch behi
 vtable slot is not found; the constructor leaves none, which draws every item); the run-time
 `Skel` / 0xef matrices (identity at rest is not proven); the texture of 85 strips whose model
 sets none before them (GS state carried from an earlier draw, not traced); the ultralights'
-`blck` texture, which no sheet of their archives holds; the two undecoded per-vertex arrays; the
-car microcode (`MatCar*`, in the car module) is not disassembled, so the /1024 UV rule, the
-normal bias and the strip-list unit are data-proven only.
+`blck` texture, which no sheet of their archives holds; the two damage arrays' decode; the
+car microcode is read in §10: the /1024 UV rule, the normal rule and the strip-list unit 3 are
+[M] there; unit 2 of positions-only batches is data-proven only.
+
+## 10. Car shading: materials, CarRender, the lights and the microcode [M + D]
+
+Code: `carmesh::CarMaterial` / `CarStrip::{material, lighting}`, `crp_mesh::TrackModule::
+external_refs`, `rendertun::{CarRender, CarLightClass, light_direction, LightEnv::car_light}`.
+Tests: `crates/nf-formats/tests/carshade_disc.rs` and the unit tests in `rendertun.rs` /
+`carmesh.rs`. [M] here also covers the VU1 microcode, disassembled with `tools/vu1dis.py`.
+
+### 10.1 Where the car microcode is [D]
+
+`MISC.VIV` → `data\render\bondrm.o` (367,111 B, plain) is a MIPS ET_REL object with one `.data`
+section and no undefined symbols. It defines every name the car modules import: the render methods
+`MatCarTexture[Packed]`, `MatCarTextureDull[Packed]`, `MatCarTextureSwitchPacked`,
+`MatCarGouraud[Packed]`, `MatCarGouraudDull[Packed]`, `MatCarGlass[Packed]`, `MatCarChrome`,
+`MatCarDash`, `BondCarShadow`, `MatCarPerCar`. Each one has a `<name>0__EAGLMicroCode` block.
+- The render method object: `+0x00` is its render-list template, `+0x10` its parameter table of
+  `(name pointer, quadword count)` pairs. The template's unpack addresses give the VU1 layout of
+  `MatCarTexturePacked`: `Parameters` 0, `MyMatrix` 1-4, `WorldMatrix` 5-8,
+  `LightingProperties` 9, `Texture` 0x0a, `SpecularMap` 0x11, `ReflectionMap2` 0x18,
+  `SplitReg1-3` 0x1f-0x21, `Coordinates` 0x22, `STQ` 0x4e, `Normals` 0x7a, `DmgVec` 0xa6,
+  `DmgNrm` 0xd2, `ColourSlot` 0xfe, `ColourSet` 0xff, `EnvMapState` 0x107, `State` 0x10f. All of
+  these are relative to the double-buffer base `vi14` (XTOP), so the two `V4-16` arrays of
+  layout A are `DmgVec` / `DmgNrm`.
+- The microcode block: `+0x00` is the instruction count (MatCarTexturePacked 638) and `+0x08` is
+  the cache slot (−1 in the file). `+0x10` points at DMA chunks (`cnt` + `MPG`, then a `ref` tag to
+  256 instructions each) [M `FUN_002a3290` case 1: it uploads them, adding `0x100 × k` to the MPG
+  address]. The code itself sits just before the chunk table.
+- `MatCarChrome`'s microcode is byte-identical to `MatCarTexturePacked`'s. Chrome differs only in
+  its GS states (`modify=chromemap`) and the props it uploads.
+
+### 10.2 The material of each strip [D, all 58 car files]
+
+The material comes from the group entry's GeoPrim header (entry `+0` → header; header `+0` is the
+render list `FUN_002a3290` walks [M 0x2843a0]). The header's `+8` word is relocated against the
+render method symbol. The relocation's `r_offset` is `.data`-relative
+(`TrackModule::external_refs`). An independent check: all 1,843 op-1 microcode loads of the 7,263
+entries load the `<header method>0__EAGLMicroCode`.
+
+The lighting class comes from the render list's op 5 (copy `n` doublewords from the `+8` pointer,
+with `UNPACK V4-32` to VU1 9 = `LightingProperties`), relocated against
+`__COORD4:::GAME::CarLighting<X>Props`. `FUN_001a8930` resolves those names to `FUN_001c1778(k,
+current vehicle name)`, the 16-byte slot `k` of that vehicle's CarRender block:
+
+| k | props symbol | tuning section |
+|---|---|---|
+| 0 | `CarLightingGlassProps` | `[Glass]` |
+| 1 | `CarLightingSpecularProps` | `[SpecBump]` (no car module uses it) |
+| 2 | `CarLightingGlossyProps` | `[Paint]` |
+| 3 | `CarLightingDullProps` | `[Dull]` |
+| 4 | `CarLightingChromeProps` | `[Chrome]` |
+| 5 | `CarLightingDashProps` | `[Dash]` |
+
+Most entries after a model's first entry of a material have a render list that is a bare op 4.
+The strip then keeps the class the model last uploaded. That VU1 memory carries over is inferred,
+as it is for the texture.
+
+Strips by material (LOD 0 of the placed items, once per set; total 36,397) [D]:
+
+| material | class | strips |
+|---|---|---|
+| `MatCarTextureDullPacked` | Dull | 16,431 |
+| `MatCarTexturePacked` | Paint | 10,708 |
+| `MatCarDash` | Dash | 5,653 |
+| `MatCarChrome` | Chrome | 2,300 |
+| `MatCarTextureSwitchPacked` | Paint | 972 |
+| `MatCarGlassPacked` | Glass | 198 |
+| `MatCarGouraudDullPacked` | Dull | 135 |
+
+Each material carries exactly one class. No `BondCarShadow` strip and no positions-only strip is
+among them.
+
+### 10.3 The CarRender table [M `FUN_001c0930` 0x1c0930 + D]
+
+`Render\CarRender\default.tun` is the same file in all 8 archives [D]. It has 52 instances, which
+are the vehicle table, `Characters` and `Dynamic Objects` (`default` appears twice). Each instance
+has a 0x80-byte block in `RReflection` private data `+0xa0`:
+- `+0x00 + 16k`: class k as (Ambient, Diffuse, Specular, Reflect). This is the COORD4 that op 5
+  uploads, so the microcode reads `.x` = Ambient, `.y` = Diffuse, `.z` = Specular, `.w` = Reflect.
+  The constructor default is (0.5, 0.5, 1.0, 0.8).
+- `[Dull]` and `[SpecBump]` register only Diffuse/Ambient.
+- `+0x60` Fresnel, `+0x64` ReflectionWarp, `+0x68` SpecularSpot. `+0x6c` is written per car by
+  `FUN_001c1760` (`0.3 × shade + 0.7`, `FUN_001adea8`).
+- `+0x60..+0x6f` is `GAME::ReflectionInfo2` (`FUN_001c1828` per car). The car microcode never
+  reads its `.w` [M grep of the 12 `MatCar*` programs].
+
+The globals are `Sky bright` (u8 +0x00), `Sky blend` (u8 +0x02), `Desat` (+0x04, packed like
+FogColour), `Desat ?`, `Sky ?`, `Refl HEIGHT` and `Refl ANGLE`. Their consumers are not traced.
+`EAGL::EnvMapState2C` / `2G` (`FUN_001c1950`) hold GS `ALPHA` values: FIX = Paint / Glass
+Reflect × 255; mode `0x64` = (Cs − Cd)·FIX + Cd, or `0x68` = Cs·FIX + Cd when `DAT_00333e74` is set.
+No car file of the 8 archives references them [D, carshade_disc], so they do not set the car
+passes' blend.
+
+### 10.4 The per-car constants (`MatCarPerCar`, absolute VU1 addresses) [M]
+
+The per-car parameter object (`FUN_001ada20` / `FUN_001adea8`, `DAT_003337d0`) fills the slots of
+the `MatCarPerCar` method. Its bondrm.o template unpacks them to these absolute addresses:
+- `LightSources` → 0x49..0x4f (7 qw): `*(lm + 0x7c)`, the lighting environment that
+  `FUN_001aec20(lm, 0)` copies from `RLightManager + 0x80` (the `World` instance).
+- `SpecularMat` → 0x50..0x53 (lm + 0x20).
+- `ReflectionInfo1` → 0x54 (`DAT_00355ba0`).
+- `ReflectionInfo2` → 0x55.
+- `DamageZones` → 0x56.
+
+The LightSources layout (block offsets of `FUN_001ae630`'s registrations):
+
+| qw | content |
+|---|---|
+| 0-2 | rows x, y, z of the light matrix: column 0 = Light 1 dir, 1 = Light 2 dir, 2 = (0, 1, 0), 3 = `normalize(L1 − c)` |
+| 3 | `Light 1` RGBA × shade |
+| 4 | `Light 2` RGBA |
+| 5 | `Ambient Ground` RGBA × shade |
+| 6 | `Ambient Sky` RGBA × shade |
+
+- Column 3 is written by `FUN_001aefb8`. `c` is the vector at `+0x20` of the current view object;
+  what that vector is has not been traced.
+- **Angle convention** [M `FUN_001b0038`, `FUN_002d11c8`, `FUN_002d1920`]:
+  dir = `(cos X · sin Y, −sin X, cos X · cos Y)`, with X = `Angle X` and Y = `Angle Y` in degrees.
+  This is (0, 0, 1) rotated about +x by X, then about +y by Y, as a row vector. The tuner limits X
+  to −90..0, so dir points up towards the light. Column 2 (dual hemisphere) is overwritten with
+  (0, 1, 0) for World and Character (`FUN_001b0158`). Every track sets `DualHemiAngleX` = −90,
+  which gives the same vector anyway [D].
+- **shade** [M `FUN_001adea8` → `FUN_001af2d8`]: the car's `+0x1a` byte / 255 × `FUN_001af200`
+  (= 1.0). Light 1, Ground and Sky RGB are multiplied by it before the copy. For the sky the
+  factor is the value left in the first float argument register, which the call passes on
+  unchanged (inferred). Light 2 is not multiplied. What writes `+0x1a` is not traced.
+
+### 10.5 The vertex formula [M, bondrm.o `MatCar*` microcode]
+
+The programs set up with an `{I}`-pair convention: the immediate loaded by a pair is read by the
+*next* pair. Two readings support this. The set-up GIF tag then reads FLG = PACKED, NREG = 3,
+REGS = ST/RGBAQ/XYZ2. The normal unpack also comes out right: `ITOF0`, × 0x3c008080 (1/127.5), −1.
+Read the other way, it would scale normals by 1/1024. This convention is inferred, not taken
+from a manual.
+
+Per batch, in order:
+
+0. **Set-up.**
+   - Colour C = (127, 127, 127, 127) per vertex (`ColourSlot` buffer at vi14+0x11b).
+   - UV = raw/1024 − 32, normal = byte/127.5 − 1.
+   - Damage pass: position += DmgVec · DamageZones[zone].x, normal += DmgNrm · zone.x, and
+     C.rgb × (1 − DmgVec.w · zone.y). C.w × (1 − … zone.z) goes into DmgVec.w (call it C_w).
+     On an undamaged car this leaves 127. These damage terms are read off the code, but the
+     zone index and the clamps are not followed.
+1. **Base pass** (every `MatCar*`; textured unless Gouraud).
+   - n_w = the model normal rotated by the WorldMatrix with each row normalised (`ERLENG`).
+   - L = D·L1rgb·max(0, n_w·dir1) + L2rgb·max(0, n_w·dir2) + Ground·max(0, n_w·(0,1,0)) + A·Sky,
+     with A, D from `LightingProperties`. This is `LightEnv::car_light`.
+   - RGB = min(255, C·L), stored as integers. Then a positional-light term is added:
+     Σ_j col_j · max(0, 255 − k_j·|P_j − p_w|²) for 4 lights. The positions, k and colours sit at
+     VU1 0x40..0x47 (`GAME::PositionalLights` content, not traced). The result is clamped to 255.
+   - Output per vertex: ST, RGBAQ, XYZ2. The strip list values are 3 × vertex index; they set
+     the ADC bit on the XYZ2 of the two vertices that restart a strip.
+2. **Specular pass**: TexturePacked/Texture, Chrome, Glass[Packed], Gouraud[Packed] and Dash.
+   - ST = 0.5 + SpecularSpot · ((n · W · SpecularMat).x, (… ).y), Q = 1.
+   - RGB = Specular · C_w.
+   - Texture: `SpecularMap` (`GAME::SpecularMap` = `RReflection + 0xd0`). State: `EnvMapState`.
+   - SpecularMat is a basis built from `normalize(L1 − c)` and (0, 1, 0) by two cross products
+     (`FUN_001aefb8`). The exact signs are not followed.
+3. **Reflection pass**: the specular materials except Dash.
+   - v = ReflectionWarp · ((n + Fresnel · p) · W), where p = the (damaged) model position and W
+     is the WorldMatrix rotation rows, unnormalised.
+   - ST = (0.5 + v.x, 0.5 + v.z), Q = 1.
+   - RGB = min(Reflect · C_w, 100000 · max(0, v.y)): faces whose vector points down get no
+     reflection.
+   - Texture: `ReflectionMap2` (`GAME::ReflectionMap` = `RReflection + 0xbc`, a 256 × 256 texture
+     that `FUN_00291af0` binds to the reflection view; what that view draws is not traced).
+
+The Dull family (TextureDull[Packed], GouraudDull[Packed], TextureSwitchPacked) runs only the base
+pass. This matches the tuning: `[Dull]` has no Specular/Reflect. TextureSwitchPacked uploads
+`[Paint]` props, of which only A and D are used.
+
+For the vanquish's paint (A 0.79, D 0.42) under paris's World light with shade 1, an upward normal
+gives L ≈ (1.17, 1.18, 1.20): 0.30 from Light 1, 0.31 from Light 2 and 0.57 from the sky. The base
+vertex colour is then 149..153, which is above the GS's 128 = ×1.0 if the texture function is
+modulate.
+
+### 10.6 Unproven
+
+- The GS side of each pass: TFX (modulate assumed above), and the alpha blend of the specular and
+  reflection passes. These come from the `GeoPrimState` strings (`modify=envmap`, `chromemap`,
+  `specmap`, `texalpha=…`), which EAGL turns into register values; that step is not traced.
+- What the view vector `c` is, and the SpecularMat cross-product signs.
+- Whether the `.tun` angles are in place before `FUN_001b0158` computes the directions. It runs
+  once, from the light manager's constructor, and no other caller exists.
+- What uploads VU1 0x40..0x48 (positional lights, and 0x48 used by the clip/fog block).
+- The consumers of Desat, Sky blend/bright, Refl HEIGHT/ANGLE, and the writer of the car's `+0x1a`
+  shade byte.
+- The glass-damage pass of `MatCarGlass[Packed]`, and `MatCarTextureSwitchPacked`'s `SwitchData`.
+- The damage pass in detail.
+- Which `default` row the name lookup lands on.
+- Live check C-5: breakpoint `FUN_001c1778` during a paris drive. Expect k ∈ {0, 2, 3, 4, 5}, the
+  vehicle name `vanquish`, and a return of `block + 16k` (§10.2).

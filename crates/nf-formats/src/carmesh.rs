@@ -37,18 +37,23 @@
 //! driving archives; tests `crates/nf-formats/tests/carmesh_disc.rs`]:
 //! - layout A: `V3-32` positions (masked, w from the row), `V2-16` UV = (u16 − 0x8000) / 1024
 //!   (every textured batch spans 0..1024 raw — the track's /256 would put car UVs at 0..4),
-//!   `V3-8` normal = (byte − 0x80) / 127 (|n| = 127 ± 6 on 99.9% of them; these are NOT vertex
-//!   colours: car batches carry no colour upload), then two `V4-16` arrays (not decoded);
+//!   `V3-8` normal = byte / 127.5 − 1 (|n| = 1 ± 5 % on 99.9 % of them; these are NOT vertex
+//!   colours: car batches carry no colour upload), then two `V4-16` arrays, the microcode's
+//!   `DmgVec` / `DmgNrm` damage offsets (not decoded) [M bondrm.o parameter names, §10 of the doc];
 //! - layout B: five `V4-32` arrays: position (w = 1), normal, UV (u, v, 1, 1), two not decoded;
-//! - positions only (`V3-32`): the untextured shapes (e.g. the vanquish `{as  0002}` hull).
+//! - positions only (`V3-32`).
 //!
 //! Strip list: the `V4-8` bytes before the positions, as on the track, but in units of 3 per
 //! vertex when the batch carries any attribute besides positions and 2 for positions-only
 //! batches, and wrapping past 255 (lists of 160-vertex batches go 98, 128, …, 236, 24, 48) [D:
 //! with these two rules every list of every car batch is increasing and below the count; the
-//! track's fixed unit 3 refuses 70 car batches]. The unit is presumably the GIF quadwords the
-//! microcode writes per vertex (ST/RGBAQ/XYZ vs RGBAQ/XYZ) — not proven, the car microcode
-//! (`MatCar*` in the car module) is not disassembled.
+//! track's fixed unit 3 refuses 70 car batches]. Unit 3 is the output stride of the `MatCar*`
+//! microcode (ST, RGBAQ, XYZ2 per vertex; the `SplitReg` values index the XYZ2 quadwords whose ADC
+//! bit it sets) [M bondrm.o]; unit 2 for positions-only batches is data-proven only.
+//!
+//! Each strip carries its render method ([`CarMaterial`], the GeoPrim header's `+8` external
+//! symbol) and the CarRender class its render list uploads ([`CarLightClass`]); the shading those
+//! feed is docs/formats/car-model.md §10.
 //!
 //! Pure decoding: no drawing.
 
@@ -58,6 +63,7 @@ use crate::buf::{invalid, FormatError, Result};
 use crate::crp::{tag, Crp, Record};
 use crate::crp_mesh::TrackModule;
 use crate::geoprim::ModelIndex;
+pub use crate::rendertun::CarLightClass;
 
 /// `in  ` [M FUN_001d35d8: the car's item array].
 pub const TAG_IN: u32 = 0x696e_2020;
@@ -69,8 +75,103 @@ pub const TAG_SR: u32 = 0x7372_2020;
 pub const TAG_VD: u32 = 0x7664_2020;
 /// `Skel` — the named part table [M FUN_001c9980].
 pub const TAG_SKEL: u32 = 0x536b_656c;
-/// The car UV rule: `(u16 − 0x8000) / 1024` [D].
+/// The car UV rule: `(u16 − 0x8000) / 1024` [D; M every textured `MatCar*` microcode: `ITOF0`, then
+/// `× I (0x3a7ffff7 ≈ 1/1024) + (−32)`].
 pub const UV_SCALE: f32 = 1024.0;
+/// The car normal rule: `byte / 127.5 − 1` [M every `MatCar*` microcode's set-up loop: `ITOF0`,
+/// `× I (0x3c008080 = 1/127.5) + (−1)`; the I value an `{I}` pair loads is the one the next pair
+/// reads — read the other way the same loop would scale the normals by 1/1024].
+pub const NORMAL_SCALE: f32 = 127.5;
+
+/// The EAGL render method a car batch is drawn with: the undefined symbol its GeoPrim header's `+8`
+/// word is relocated against (the header = the group entry's `+0` word, the object whose `+0` is
+/// the render list `FUN_002a3290` walks [M 0x2843a0]) [D: every entry of every car module names
+/// one; `data\render\bondrm.o` (MISC.VIV) defines each with its `<name>0__EAGLMicroCode`, the block
+/// the render list's op 1 uploads (`FUN_002a3290` case 1)]. The passes each microcode sends are in
+/// docs/formats/car-model.md §10.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum CarMaterial {
+    Texture,
+    TexturePacked,
+    TextureDull,
+    TextureDullPacked,
+    TextureSwitchPacked,
+    Gouraud,
+    GouraudPacked,
+    GouraudDull,
+    GouraudDullPacked,
+    Glass,
+    GlassPacked,
+    /// Same microcode bytes as `MatCarTexturePacked` [D]; differs by its GS states and props.
+    Chrome,
+    Dash,
+    /// `BondCarShadow`: positions only, coloured by `EAGL::CarShadowColour`.
+    Shadow,
+}
+
+impl CarMaterial {
+    pub const ALL: [CarMaterial; 14] = [
+        CarMaterial::Texture,
+        CarMaterial::TexturePacked,
+        CarMaterial::TextureDull,
+        CarMaterial::TextureDullPacked,
+        CarMaterial::TextureSwitchPacked,
+        CarMaterial::Gouraud,
+        CarMaterial::GouraudPacked,
+        CarMaterial::GouraudDull,
+        CarMaterial::GouraudDullPacked,
+        CarMaterial::Glass,
+        CarMaterial::GlassPacked,
+        CarMaterial::Chrome,
+        CarMaterial::Dash,
+        CarMaterial::Shadow,
+    ];
+
+    /// The module symbol (`MatCarTexturePacked`).
+    pub fn symbol(self) -> &'static str {
+        match self {
+            CarMaterial::Texture => "MatCarTexture",
+            CarMaterial::TexturePacked => "MatCarTexturePacked",
+            CarMaterial::TextureDull => "MatCarTextureDull",
+            CarMaterial::TextureDullPacked => "MatCarTextureDullPacked",
+            CarMaterial::TextureSwitchPacked => "MatCarTextureSwitchPacked",
+            CarMaterial::Gouraud => "MatCarGouraud",
+            CarMaterial::GouraudPacked => "MatCarGouraudPacked",
+            CarMaterial::GouraudDull => "MatCarGouraudDull",
+            CarMaterial::GouraudDullPacked => "MatCarGouraudDullPacked",
+            CarMaterial::Glass => "MatCarGlass",
+            CarMaterial::GlassPacked => "MatCarGlassPacked",
+            CarMaterial::Chrome => "MatCarChrome",
+            CarMaterial::Dash => "MatCarDash",
+            CarMaterial::Shadow => "BondCarShadow",
+        }
+    }
+
+    pub fn from_symbol(s: &str) -> Option<CarMaterial> { CarMaterial::ALL.into_iter().find(|m| m.symbol() == s) }
+
+    /// The microcode draws a specular-map pass after the base pass [M bondrm.o: the block that
+    /// reads `SpecularMat` (VU1 0x50) and `ReflectionInfo2.z`].
+    pub fn specular_pass(self) -> bool {
+        !matches!(
+            self,
+            CarMaterial::TextureDull
+                | CarMaterial::TextureDullPacked
+                | CarMaterial::TextureSwitchPacked
+                | CarMaterial::GouraudDull
+                | CarMaterial::GouraudDullPacked
+                | CarMaterial::Shadow
+        )
+    }
+
+    /// The microcode draws the reflection-map pass [M bondrm.o: the block that reads
+    /// `ReflectionInfo2.x/.y` and `LightingProperties.w`]; every specular material but `Dash`.
+    pub fn reflection_pass(self) -> bool { self.specular_pass() && self != CarMaterial::Dash }
+
+    /// The base pass samples a texture (the `Texture` parameter slot) [M bondrm.o parameter names].
+    pub fn textured(self) -> bool {
+        !matches!(self, CarMaterial::Gouraud | CarMaterial::GouraudPacked | CarMaterial::GouraudDull | CarMaterial::GouraudDullPacked | CarMaterial::Shadow)
+    }
+}
 
 /// One decoded strip of a car model, in the model's frame.
 #[derive(Clone, Debug, PartialEq)]
@@ -78,6 +179,15 @@ pub struct CarStrip {
     /// The sheet entry name (the descriptor's +4 word, see `geoprim::ModelIndex::packet_texture`);
     /// `None` when the batch has no UVs or no texture was set yet in this model.
     pub texture: Option<String>,
+    /// The render method of the strip's group entry ([`CarMaterial`]).
+    pub material: CarMaterial,
+    /// The CarRender class whose COORD4 is in VU1 `LightingProperties` when the strip is drawn: the
+    /// `GAME::CarLighting<X>Props` the entry's render list uploads (op 5, 1 quadword to VU1 9)
+    /// [M `FUN_002a3290` case 5 copies from the op's `+8` pointer; `FUN_001a8930` resolves the
+    /// symbol]. An entry whose list uploads none keeps the previous entry's within the model (most
+    /// lists after a model's first entry of a material are a bare op 4 [D]; that VU1 memory carries
+    /// over is inferred, as for the texture). `None` for `Shadow` and before any upload.
+    pub lighting: Option<CarLightClass>,
     pub positions: Vec<[f32; 3]>,
     /// Empty for untextured batches.
     pub uvs: Vec<[f32; 2]>,
@@ -276,9 +386,10 @@ pub fn model_entries(ix: &ModelIndex<'_>, sym_value: u32) -> Result<Vec<usize>> 
     invalid(format!("model {sym_value:#x}: group table has no end"))
 }
 
-/// Decodes the VIF byte ranges of one car draw (a `draw_chain`) into strips (texture left `None`)
-/// [D, see the module docs]. `label` names the batch in errors.
-pub fn decode_car_vif(img: &[u8], ranges: &[(usize, usize)], label: usize) -> Result<Vec<CarStrip>> {
+/// Decodes the VIF byte ranges of one car draw (a `draw_chain`) into strips drawn with `material`
+/// (texture and lighting class left `None`) [D, see the module docs]. `label` names the batch in
+/// errors.
+pub fn decode_car_vif(img: &[u8], ranges: &[(usize, usize)], label: usize, material: CarMaterial) -> Result<Vec<CarStrip>> {
     let po = label;
     let mut mode = 0u32;
     let mut row = [0u32; 4];
@@ -375,7 +486,7 @@ pub fn decode_car_vif(img: &[u8], ranges: &[(usize, usize)], label: usize) -> Re
                                     normals = Some(
                                         (0..num)
                                             .map(|i| {
-                                                let c = |k: usize| (data[i * 3 + k] as f32 - 128.0) / 127.0;
+                                                let c = |k: usize| data[i * 3 + k] as f32 / NORMAL_SCALE - 1.0;
                                                 [c(0), c(1), c(2)]
                                             })
                                             .collect(),
@@ -418,6 +529,8 @@ pub fn decode_car_vif(img: &[u8], ranges: &[(usize, usize)], label: usize) -> Re
         .windows(2)
         .map(|w| CarStrip {
             texture: None,
+            material,
+            lighting: None,
             positions: positions[w[0]..w[1]].to_vec(),
             uvs: if uvs.is_empty() { Vec::new() } else { uvs[w[0]..w[1]].to_vec() },
             normals: if normals.is_empty() { Vec::new() } else { normals[w[0]..w[1]].to_vec() },
@@ -453,20 +566,54 @@ pub fn strip_starts(list: &[u8], count: usize, unit: usize) -> Option<Vec<usize>
 /// ([`ModelIndex::packet_texture`]). An entry whose list sets no texture keeps the previous entry's
 /// within the model — op 3 is the only texture upload of the interpreter [M FUN_002a3290 case 3;
 /// that the GS state carries over between entries is inferred]; batches without UVs get `None`.
-pub fn car_model_strips(ix: &ModelIndex<'_>, sym_value: u32) -> Result<Vec<CarStrip>> {
+pub fn car_model_strips(ix: &ModelIndex<'_>, ext: &HashMap<usize, String>, sym_value: u32) -> Result<Vec<CarStrip>> {
     let part = ix.model_part(sym_value)?;
     let mut out = Vec::new();
     let mut tex: Option<String> = None;
+    let mut lighting: Option<CarLightClass> = None;
     for po in model_entries(ix, sym_value)? {
         if let Some(t) = ix.packet_texture(po, part) {
             tex = Some(t);
         }
-        for mut s in decode_car_vif(&ix.module.image, &ix.draw_chain(po, part)?, po)? {
+        let material = entry_material(ix, ext, po)?;
+        if let Some(c) = entry_lighting(ix, ext, po)? {
+            lighting = Some(c);
+        }
+        for mut s in decode_car_vif(&ix.module.image, &ix.draw_chain(po, part)?, po, material)? {
             s.texture = if s.uvs.is_empty() { None } else { tex.clone() };
+            s.lighting = if material == CarMaterial::Shadow { None } else { lighting };
             out.push(s);
         }
     }
     Ok(out)
+}
+
+/// The render method of group entry `po`: the external symbol at its GeoPrim header + 8
+/// ([`CarMaterial`]); an error when the word names none or an unknown one.
+pub fn entry_material(ix: &ModelIndex<'_>, ext: &HashMap<usize, String>, po: usize) -> Result<CarMaterial> {
+    let hdr = ix.data_offset + u32_at(&ix.module.image, po)? as usize;
+    let sym = ext.get(&(hdr + 8)).ok_or_else(|| FormatError::Invalid(format!("entry {po:#x}: header {hdr:#x} +8 names no render method")))?;
+    CarMaterial::from_symbol(sym).ok_or_else(|| FormatError::Invalid(format!("entry {po:#x}: render method {sym} is not a car material")))
+}
+
+/// The `CarLighting<X>Props` class the entry's render list uploads, if any: an op 5 whose source
+/// pointer (`+8`) is relocated against `__COORD4:::GAME::CarLighting<X>Props` [M `FUN_002a3290`
+/// case 5: `puVar17 = puVar33[2]`, `*puVar32` doublewords copied]. Two different classes in one list
+/// are an error (none occurs [D]).
+pub fn entry_lighting(ix: &ModelIndex<'_>, ext: &HashMap<usize, String>, po: usize) -> Result<Option<CarLightClass>> {
+    let mut found = None;
+    for (at, o) in ix.render_ops(po)? {
+        if o >> 24 != 5 {
+            continue;
+        }
+        if let Some(c) = ext.get(&(at + 8)).and_then(|s| CarLightClass::from_props_symbol(s)) {
+            if found.is_some_and(|f| f != c) {
+                return invalid(format!("entry {po:#x}: render list uploads both {found:?} and {c:?}"));
+            }
+            found = Some(c);
+        }
+    }
+    Ok(found)
 }
 
 fn window(crp: &Crp<'_>, rec: &Record) -> Result<Vec<Record>> {
@@ -522,6 +669,7 @@ pub fn car_mesh(crp_bytes: &[u8]) -> Result<CarMesh> {
         return invalid(format!("in#0: payload {} < count {n} × 0x40", p.len()));
     }
     let module = TrackModule::load(&crp)?;
+    let ext = module.external_refs()?;
     let ix = ModelIndex::new(&module)?;
     let mut cache: HashMap<u32, Vec<CarStrip>> = HashMap::new();
     for i in 0..n {
@@ -532,7 +680,7 @@ pub fn car_mesh(crp_bytes: &[u8]) -> Result<CarMesh> {
         if let Some((_, Some(model))) = lods.first() {
             let sym = ix.model_symbol(model).ok_or_else(|| FormatError::Invalid(format!("in item {i}: no module symbol for {model}")))?;
             if !cache.contains_key(&sym) {
-                cache.insert(sym, car_model_strips(&ix, sym)?);
+                cache.insert(sym, car_model_strips(&ix, &ext, sym)?);
             }
             strips = cache[&sym].clone();
         }
@@ -553,7 +701,7 @@ mod tests {
     fn put(b: &mut Vec<u8>, w: u32) { b.extend_from_slice(&w.to_le_bytes()); }
 
     /// A layout-A batch: header, strip list, V3-32 masked positions (mode 1, row w), V2-16 UV,
-    /// V3-8 normals, two V4-16 arrays, MSCNT — the vanquish shape [D].
+    /// V3-8 normals, two V4-16 arrays (DmgVec, DmgNrm), MSCNT — the vanquish shape [D].
     fn batch_a(pos: &[[f32; 3]], list: [u8; 4], uv: &[[u16; 2]], nrm: &[[u8; 3]]) -> Vec<u8> {
         let n = pos.len() as u32;
         let mut v = Vec::new();
@@ -610,21 +758,25 @@ mod tests {
         let nrm = [[0x80, 0x80, 0xff], [0x80, 0xff, 0x80], [0x01, 0x80, 0x80], [0x80, 0x80, 0x01], [0xff, 0x80, 0x80]];
         // One break at vertex 3 (byte 9 = 3 × 3).
         let b = batch_a(&pos, [9, 0, 0, 0], &uv, &nrm);
-        let s = decode_car_vif(&b, &[(0, b.len())], 0).unwrap();
+        let s = decode_car_vif(&b, &[(0, b.len())], 0, CarMaterial::TexturePacked).unwrap();
         assert_eq!(s.len(), 2);
         assert_eq!(s[0].positions, pos[..3].to_vec());
         assert_eq!(s[1].positions, pos[3..].to_vec());
         assert_eq!(s[0].uvs[1], [1.0, 0.0]);
         assert_eq!(s[1].uvs[1], [0.5, 0.5]);
-        assert_eq!(s[0].normals[0], [0.0, 0.0, 1.0]);
-        assert_eq!(s[0].normals[2], [-1.0, 0.0, 0.0]);
+        // byte / 127.5 − 1 (the microcode's rule): 0xff → 1, 0x80 → 1/255, 0x01 → −253/255. The
+        // old (byte − 128) / 127 reading gave exactly 0 for 0x80 and −1 for 0x01.
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+        assert!(near(s[0].normals[0], [1.0 / 255.0, 1.0 / 255.0, 1.0]), "{:?}", s[0].normals[0]);
+        assert!(near(s[0].normals[2], [-253.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0]), "{:?}", s[0].normals[2]);
+        assert!(s.iter().all(|t| t.material == CarMaterial::TexturePacked && t.lighting.is_none()));
         // The track reader takes these bytes as colours and the UVs at /256 (0x8400 → 4.0).
         let t = crate::geoprim::decode_vif(&b, &[(0, b.len())], 0).unwrap();
         assert_eq!(t[0].colors[0], [0x80, 0x80, 0xff]);
         assert_eq!(t[0].uvs[1], [4.0, 0.0]);
         // A list byte that is not a multiple of 3 is refused.
         let bad = batch_a(&pos, [10, 0, 0, 0], &uv, &nrm);
-        assert!(decode_car_vif(&bad, &[(0, bad.len())], 0).is_err());
+        assert!(decode_car_vif(&bad, &[(0, bad.len())], 0, CarMaterial::TexturePacked).is_err());
     }
 
     #[test]

@@ -42,6 +42,7 @@
 
 use crate::buf::{invalid, FormatError, Result};
 use crate::crp::{tag, Crp, Record};
+use std::collections::HashMap;
 
 /// `Base` — an article's bounding-box record [D measured].
 pub const TAG_BASE: u32 = 0x4261_7365;
@@ -800,6 +801,39 @@ impl TrackModule {
             self.image[off..off + 4].copy_from_slice(&(sum as u32).to_le_bytes());
         }
         Ok(n)
+    }
+
+    /// The words the game fills from outside the module: image offset → the undefined symbol
+    /// (`shndx` 0) a `.rel.data` entry names, e.g. `MatCarChrome`, `__COORD4:::GAME::
+    /// CarLightingChromeProps` [M `FUN_0029e518` 0x29e518 resolves undefined symbols against the
+    /// other loaded modules (`data\render\bondrm.o` defines every `MatCar*` name [D]), then the
+    /// game resolver (`FUN_001a8930` for the `GAME::` names)]. The entry's `r_offset` is
+    /// `.data`-relative: the key is `.data`'s file offset + `r_offset` [D: with that rule every
+    /// car module's `<Mat>0__EAGLMicroCode` lands on a render-list op-1 word and every
+    /// `CarLighting…Props` on an op-5 source word; read image-relative they land on vertex data].
+    pub fn external_refs(&self) -> Result<HashMap<usize, String>> {
+        let rel = self
+            .sections
+            .iter()
+            .find(|s| s.sh_type == 9)
+            .ok_or_else(|| FormatError::Invalid("no .rel.data section in the module".into()))?;
+        let data = self
+            .sections
+            .iter()
+            .find(|s| s.name == ".data")
+            .ok_or_else(|| FormatError::Invalid("no .data section in the module".into()))?;
+        let ent = if rel.entsize == 0 { 8 } else { rel.entsize as usize };
+        let mut out = HashMap::new();
+        for i in 0..rel.size as usize / ent {
+            let o = rel.data_offset as usize + i * ent;
+            let off = u32_at(&self.image, o)? as usize;
+            let sym = (u32_at(&self.image, o + 4)? >> 8) as usize;
+            let s = self.symbols.get(sym).ok_or_else(|| FormatError::Invalid(format!("relocation {i}: symbol {sym} out of range")))?;
+            if s.shndx == 0 && !s.name.is_empty() {
+                out.insert(data.data_offset as usize + off, s.name.clone());
+            }
+        }
+        Ok(out)
     }
 
     /// The `__Model:::<article>::{as  0000}::Model[0].NN` symbols of one article, sorted by the
