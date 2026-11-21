@@ -138,6 +138,15 @@ pub struct Walker {
     /// Lenient walks bail (u32::MAX) at the 6000-tick cap instead of panicking — the caller
     /// decides (walkreal_0700000b_live's deck leg keeps the interactions real on a wedge).
     pub lenient: bool,
+    /// OPT-IN (the 0700000d 00 Agent walk's stand-first leg, retune-nb-0d-9): skip walk_to's
+    /// per-10-tick return-fire answer so the leg WALKS THROUGH the incoming fire on real input.
+    /// The measured wall: the converged yard garrison's fire pins the return-fire fights in
+    /// place (the acts cannot land kills from the container's landing spot — the container
+    /// blocks the rays and the rifle is nearly dry after the pit act) while the PERIODIC
+    /// live-wire hurt volume under the landing spot fires on its ~1300-tick cadence — Bond
+    /// died STANDING on the wire inside the fight answer (death t22479, position unchanged
+    /// [L the stand-first run 1]). False by default: every walk keeps the fight answer.
+    pub skip_return_fire: bool,
     /// The stuck ladder's player answers, OPT-IN (default off keeps every walk tuned on the old
     /// ladder): the E goes only to a door on Bond's own floor that is not locked (a set lock
     /// channel still off; the main walker's filter — a door 7 u up the stairwell, or a locked one, never
@@ -256,6 +265,7 @@ impl Walker {
             switch_gun_deep: false,
             record_inputs: None,
             record_states: None,
+            skip_return_fire: false,
         }
     }
 
@@ -926,7 +936,8 @@ impl Walker {
             // aimed stand from the stable lane instead, and strip_fights_resume() lifts this
             // after the #282 grab.
             if !riding && !ladder && self.total_ticks % 10 == 0
-                && !STRIP_NO_FIGHTS.with(|c| c.get()) {
+                && !STRIP_NO_FIGHTS.with(|c| c.get()) && !self.skip_return_fire
+            {
                 let t0 = self.total_ticks;
                 if self.return_fire(label) { start_ticks += self.total_ticks - t0; continue; }
             }
