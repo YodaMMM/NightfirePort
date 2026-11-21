@@ -3357,6 +3357,69 @@ impl CollisionWorld {
         self.los_walk(a, b, mask, None)
     }
 
+    /// `Collide_SphereIntersect` 0x1ec940's push: the sum of every picked object's `DeltaP`.
+    /// The query runs `Intersect_PointGeom` 0x1e92d8 per object (mode 0x101 [M 0x1ec940:94-96 →
+    /// `Collide_Intersect` 0x1ebaa8:186-191]) and `Collide_Intersect` adds that object's DeltaP to
+    /// the HITTEST push (+0x10), which the caller's centre receives [M 0x1ebaa8:353-373,
+    /// 0x1ec940:178-183]. Per object [M 0x1e92d8:206-246]: the accumulator starts at zero and the
+    /// test centre at the query centre; for each triangle whose plane distance of the CURRENT
+    /// centre is in (0, r] (the behind-face floor is 0: HITTEST+0x9a bit 8 is not set by this
+    /// query), the point-to-triangle distance d (one-sided, like `sphere_surface`) ≤ r adds
+    /// n·(r − |d|) to the accumulator, and the centre moves by the whole accumulator (the game's
+    /// `pos += accum`, :240-244). The object filters are `line_of_sight`'s (`pick_admits`, the
+    /// class arms, the 0x8/0x1/0x2/0x800 surface drops). Triangle order is the port's stored
+    /// order, not the game's box recursion [S]; it only matters where one object has two faces
+    /// pushing the same sphere.
+    pub fn sphere_push(&self, centre: V3, r: f32, mask: u32) -> V3 {
+        let dynamic = self.dynamic.read().unwrap();
+        let skip_cage = mask & 0x20 != 0;
+        let (drop_node, drop_surface, drop_de, drop_10) =
+            (mask & 0x8 != 0, mask & 0x800 != 0, mask & 0x1 != 0, mask & 0x2 != 0);
+        let lo = [centre[0] - r, centre[1] - r, centre[2] - r];
+        let hi = [centre[0] + r, centre[1] + r, centre[2] + r];
+        let mut total = [0f32; 3];
+        let sets: [Option<&Geo>; 3] = [Some(&self.stat), (!skip_cage).then_some(&self.missile), Some(&dynamic.geo)];
+        for g in sets.into_iter().flatten() {
+            let dyn_set = std::ptr::eq(g as *const Geo, &dynamic.geo as *const Geo);
+            let missile_set = !dyn_set && std::ptr::eq(g as *const Geo, &self.missile as *const Geo);
+            for o in overlapping(g, lo, hi) {
+                let (glist_obj, class_obj) = if dyn_set {
+                    dynamic.obj_index(o).map(|n| dynamic.pick_pair(n)).unwrap_or((0, 0))
+                } else if missile_set { (0x1000, 0) } else { (0, 0) };
+                if !pick_admits(mask, glist_obj) { continue; }
+                if mask & 0x400 != 0 && (class_obj == 3 || class_obj == 0x12) { continue; }
+                if mask & 0x100 != 0 && (class_obj == 2 || class_obj == 0x11) { continue; }
+                if mask & 0x200 != 0 && class_obj == 5 { continue; }
+                let mut acc = [0f32; 3];
+                let mut p = centre;
+                for k in o.tris.clone() {
+                    let m = g.mats[k];
+                    let low = m & 0x3f;
+                    if drop_node && (glist_obj & 0x40 != 0 || (!dyn_set && g.pass[k]) || m & 0x40 != 0 || m & 0x80 != 0) { continue; }
+                    if drop_surface && m & 0x40 != 0 { continue; }
+                    if drop_de && (low == 0xd || low == 0xe) { continue; }
+                    if drop_10 && low == 0x10 { continue; }
+                    let t = &g.tris[k];
+                    let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+                    let nl = dot(n, n).sqrt();
+                    if nl < 1e-12 { continue; }
+                    let n = [n[0] / nl, n[1] / nl, n[2] / nl];
+                    let sd = dot(n, sub(p, t[0]));
+                    if sd > r || sd <= 0.0 { continue; }
+                    let (q, _) = closest_on_triangle(p, t);
+                    let dv = sub(p, q);
+                    let dist = dot(dv, dv).sqrt();
+                    if dist > r { continue; }
+                    let s = r - dist;
+                    for a in 0..3 { acc[a] += n[a] * s; }
+                    for a in 0..3 { p[a] += acc[a]; }
+                }
+                for a in 0..3 { total[a] += acc[a]; }
+            }
+        }
+        total
+    }
+
     /// The masked `Collide_LineOfSight` walk with the ray's SUBJECT shapes excluded from the
     /// DYNAMIC set — `Collide_LineOfSight` 0x1edf50's subject-argument rule (args 4/5 are the
     /// ray's subject objects and a subject's own collision nodes never block its ray; the
