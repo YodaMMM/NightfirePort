@@ -319,3 +319,15 @@ every lever the ledger marks measured dead; helpers stay gated to the level and 
   fast runner: started once at setup (setsid) and killed between tool calls with suite.out
   empty (the rounds-1-13 signature); the four-crate build exceeds the rootfs left (3.4 GB free
   vs ~5.5 GB). Report: docs/reports/retune-nb-0d-14.md.
+
+## retune-nb-0d-15 (2026-11-21, sandbox1)
+
+Round 15 of the 0d arrival-to-C5-door 00-Agent real-damage walk. Branch s/retune-nb-0d-15
+from origin/master with origin/s/retune-nb-0d-14 merged in (0d-14 was not on master).
+Plan: read the round-14 report ledger and the ignore message on
+walk_arrival_to_the_c5_door_real_damage_00agent, skip the measured-dead levers, take the
+next untried one (round-14 pointer: the return-leg reshape and/or the #6 north act
+re-judged from the yard-south-1 stand). Helpers stay level+difficulty gated; real input
+only, no top-ups, never lower damage or health, never change guard code; each lever judged
+on its own real run. Whole walkreal_0700000d_live and interactables_0700000d_live before
+finishing. Report: docs/reports/retune-nb-0d-15.md.
