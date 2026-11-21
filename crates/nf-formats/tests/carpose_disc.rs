@@ -124,8 +124,9 @@ fn every_part_kind_on_the_disc_has_a_matrix_and_the_spin_keeps_wheels_in_place()
             }
             match (part_matrix(p, &rest), part_matrix(p, &spun)) {
                 (PartMatrix::Drawn(a), PartMatrix::Drawn(b)) => {
-                    // At rest every kind is the item's own matrix (identity Skel, frame 0, dials 0).
-                    let own = nf_formats::carpose::own_matrix(p);
+                    // At rest every kind but the camera-facing 0xee is the item's own matrix
+                    // (identity Skel, frame 0, dials 0); 0xee is rocked −0.05 turn at frame 0.
+                    let own = if let Attach::Other(0xee, v) = p.attach { nf_formats::carpose::facing_matrix(p, v, &rest) } else { nf_formats::carpose::own_matrix(p) };
                     assert!((0..4).all(|i| (0..4).all(|j| (a[i][j] - own[i][j]).abs() < 1e-6)), "{} {} item {}", c.viv, c.stem, p.index);
                     // Rotations act in the part frame: the part's origin does not move.
                     let (o0, o1) = (transform(&a, [0.0; 3]), transform(&b, [0.0; 3]));
@@ -150,7 +151,7 @@ fn every_part_kind_on_the_disc_has_a_matrix_and_the_spin_keeps_wheels_in_place()
         ])
     );
     assert_eq!(flag10, 0, "no item reads its value from the run-time entry");
-    assert_eq!(unported, 1, "only the camera-facing 0xee item (the MIS01 helicopter)");
+    assert_eq!(unported, 0, "every kind on the disc has its matrix (the MIS01 helicopter's 0xee item included)");
 }
 
 #[test]

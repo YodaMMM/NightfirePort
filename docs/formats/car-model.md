@@ -705,8 +705,13 @@ Which supersnow body looks like which form was not checked here.
 | 0xfb | 11 | `FUN_001bf458` | `R(s16(v)/256 · frame °, +z) · own` |
 | 0xef | 13 | `FUN_001bf598` | `R(dials[v] °, +z) · own` (`FUN_001befc8`: v ≥ 12 → dials[0]) |
 | 0xf3 | 16 | `FUN_001bf338` → `FUN_001a30c0` | own (the keyframe branch needs `+0x0d` < 100) |
-| 0xee | 1 | `FUN_001bfc20` | faces the camera; not ported |
+| 0xee | 1 | `FUN_001bfc20` | faces the camera, rocked about +z (§11.6) |
+| 0..0x63 | 0 | `FUN_001bf318` → `FUN_001a30c0` | keyframe track when the `as` set has one, else own (§11.6) |
 | 0x64 | 0 | `FUN_001bf5f8` | not drawn |
+
+The rest of the 256-entry table at 0x333a60 [D ELF .data] (0x65 `FUN_001bf1e0`, 0x66-0xec and
+0xf8 `FUN_001bf2d8`, 0xed, 0xf0-0xf2, 0xf4-0xf7, 0xf9, 0xfa, 0xfd) is used by no car file, and
+`part_matrix` leaves those kinds `Unported`.
 
 - `v` = the item's `+0x0e`, or the u16 at `+2` of its run-time entry when `+0x0c & 0x10`
   [M FUN_001bf048]. No item on the disc sets 0x10 [D].
@@ -777,7 +782,71 @@ drives the hinge (`FUN_001cc9b0`) is not traced, so those matrices stay identity
 - Which supersnow body is which form, and what the screen shows during each list: no render or
   live capture was made.
 - The `Base` pointer (§11.4), and the memory past the item array in the bus scans.
-- The 0xee camera-facing item (the MIS01 helicopter), the hinge parts, the LOD factor K, the
+- The hinge parts (§11.4, §11.6: the `an` / `qa` records), the LOD factor K, the
   run-time entry table of `+0x0c & 0x10`, and the player-pass roll variants.
 - The sin/cos are f32 `sin_cos` here; the game uses VU0 polynomials. The values agree to about
   1e-6, not bit for bit.
+
+### 11.6 The camera-facing item, the keyframe branch and the spawn vehicles [M + D]
+
+Code: `carpose::{facing_matrix, keyframe_matrix, KeyTrack, quat_rows, nlerp, rot_z_turns}`,
+`CarPose::{inv_fps, car_pos, camera}`, `CarPart::anim`. Tests: the unit tests in `carpose.rs`,
+`crates/nf-formats/tests/carpose_vehicles_disc.rs`, `crates/nf-game/tests/drive_jungle_vehicles_disc.rs`.
+
+**0xee, `FUN_001bfc20`** [M 0x1bfc20, disassembled; the decompile drops the VU field selects]:
+
+1. phase `x = v · 0x37800080 (1/65535) · frame · DAT_00333ff4`, with `v` the unsigned `+0x0e`
+   (`lhu`) and `DAT_00333ff4 = 1/fps` (`FUN_001d1ec0`); `f = x − floor(x)` (`FUN_002bfb50` is
+   fdlibm `floorf`); `w = 2(1 − f)` when `f > 0.5`, else `2f`;
+2. `d = (item origin + car position − camera position)` with y and w cleared, normalised. The car
+   position is the `car + 0x30` row `FUN_001ad498` passes; the camera is `*(DAT_00333760) + 0x40`;
+3. rows `[normalise(up × d), up, d, (0, 0, 0, 1)]`, up = (0, 1, 0): `VOPMULA.xyz ACC, up, d` then
+   `VOPMSUB.xyz r, d, up` = (d.z, 0, −d.x);
+4. `R_z((w − 0.5) · 0.1 turns) · rows` (`FUN_002cc610` = rows (c, s, 0) / (−s, c, 0), then
+   `FUN_002cbb88`), row 3 xyz = the item's own origin.
+
+So the item's +z points away from the camera, level, and it rocks ±0.05 turn (±18°) on a
+triangle wave of `65535 / v` seconds. `FUN_001ad498` then multiplies by the car's matrix, so the
+facing is exact only while the car is unrotated (the direction ignores the car's rotation). The
+one such item is MIS01 helicopter item 6, `v` = 1024: one rock cycle every 64 s.
+
+**Kinds below 100, `FUN_001a30c0`** [M 0x1a30c0, disassembled]: only when the `as` set's `+0x08`
+word is set and its entry `anim + kind · 0x10` has keys: `t = v · rate (byte +0xf) · 1/60`, key
+`i = floor(t)` held below the count (u16 +8), `j = i + 1` held the same, `f = t − i`; rows =
+`FUN_002cc0c8(FUN_002cc018(f, q_i, q_j))`, row 3 = `p_i + (p_j − p_i) · f` (keys 0x20 bytes,
+the position at +0x10); a mirrored item negates column 0. Without the reference the item's own
+matrix. No item on the disc has a kind below 100 [D], so the branch never runs on this data.
+The `as +0x08` word is an `an  #N` short tag on 648 items of the 63 files [D], on kinds 0xff,
+0xfe, 0xef, 0xf3, 0xfb and 0xfc only. An `an` payload is 16-byte entries: a `qa  #N` reference,
+two u16, a u16 count, bytes such as (8, 1, 2, 0x0f). The byte 8 matches the "type 8" entries
+`FUN_001cc6b0` turns into hinge bits (§11.4); that the `an` records are those hinges is not
+traced, and they are not decoded.
+
+**Sheets** [D, all 63 files]: every model's `ns#0` names `<stem>.ssh`, and that file is beside
+it in the same archive; no model needs a shared or another archive's sheet. Every strip texture
+resolves by name in that sheet except `blck` on the three ultralight models. The helicopter's
+sheet holds one 256 × 128 entry named `$$00` that every strip uses; the packed UVs already sit
+inside their part of it. Five helicopter `$$00` descriptors carry a (u0, u1, v0, v1)-like
+rectangle at `+0x08..+0x14` other than (0, 1, 0, 1) with `+0x1c` = 1, and some of those strips
+run past v = 1 (up to 1.34). How the GS samples them (a region clamp or repeat) is not traced.
+
+**The spawn vehicles** (`MSet`, docs/systems/drive-player-vehicles.md) [M FUN_00188200 + D]:
+
+| archive | vehicle | model | items | lists | drawn as the player | pass off / on a spline |
+|---|---|---|---|---|---|---|
+| MIS01 | helicopter | helicopter.crp | 10 (0xfc ×2, 0xee, 0xf3) | vd 1-4 = items 8, 9 | list 1 / 2 = items 8, 9, which have no model: nothing; under AutoDrive (no vd#5) all 10 | player land / path |
+| MIS13A | jungle_truck | jungle_truck.crp (also MISC) | 36 (13 `Skel`, one 0xf3, 24 hidden) | vd 2 only | every item but 24; interior view: vd 2 (drops 1-2, the `rearlicense` items) | player land / path |
+| MIS13C | fodbase | fodbase.crp | 1 | none | one strip of 3 vertices spanning 0.00004 units, texture `whit` | player land / path |
+
+The MIS01 sniper phase turns AutoDrive on with its first list (686, `ESetAutoDriveCamOn`,
+docs/systems/driving-mis01-opening.md §4), so during the phase the whole helicopter draws. The
+fodbase model draws nothing visible. The view's hand table uses other vehicles on these three
+missions; switching it is a view change and is not made here.
+
+The `.atr` readers [D, all pvehicle files]: every file but `default.atr` names a `RENDER_FILENAME`
+in the same archive (MIS13B `jungle_bombvan` → `paris_bombvan.crp`, MIS4 `vanquishalps` →
+`vanquish.crp`, RACE `cobra_player` → `paradis_car.crp`); boolean values appear only on
+`IS_HELICOPTER`, `NO_SHADOW` and `TYRES_INVUNERABLE`, none of which the pass reads. The pass per
+file is pinned in `drive_jungle_vehicles_disc.rs`: SUB_PHYSICS on alpha_sub, mini_sub,
+vanquishsub, the ultralights, subcopter and plane; IS_SNOWMOBILE on small_snowmobile and
+supersnow; the land passes for the rest, helicopter, jungle_truck and fodbase included.
