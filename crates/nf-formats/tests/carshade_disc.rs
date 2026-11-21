@@ -292,3 +292,76 @@ fn every_car_pass_finds_its_traced_state_and_textures() {
         }
     }
 }
+
+/// The reflection map's inputs on the disc (car-model.md §10.6.3) [D]:
+/// - the CarRender globals of every archive (`Sky ?` on, `Desat ?` off, Refl HEIGHT 0, ANGLE 120);
+/// - the sheet `cref` comes from: the track module's `sn #0` names the track's own sheet, which key 4
+///   holds; only five of the eight track sheets carry a `cref`, so the jungle tracks fall back to
+///   `ext.ssh`. Among every `.ssh` of the archives, `cref` sits only in those track sheets and in
+///   `ext.ssh`;
+/// - the track items' packed bounds word (`rendertun::item_bounds`): no item has radius 0, and the
+///   items the `+0x0c & 0x0d` test leaves out of the reflection.
+#[test]
+fn every_tracks_reflection_map_inputs_decode() {
+    use nf_formats::crp::Crp;
+    use nf_formats::rendertun::item_bounds;
+    let Some(iso) = iso() else { return };
+    // (archive, track sheet, has cref, Map in items, items left out by the flags test).
+    const TRACKS: &[(&str, &str, bool, usize, usize)] = &[
+        ("MIS01", "paris_mis01.ssh", true, 2552, 315),
+        ("MIS11", "uw_mis11.ssh", true, 1958, 54),
+        ("MIS13A", "junglea_mis13a.ssh", false, 3021, 35),
+        ("MIS13B", "jungleb_mis13b.ssh", false, 1412, 1404),
+        ("MIS13C", "junglec_mis13c.ssh", false, 371, 319),
+        ("MIS3", "snow1a_mis3.ssh", true, 3689, 15),
+        ("MIS4", "snow2a_mis4.ssh", true, 3331, 81),
+        ("RACE", "snow2a_race.ssh", true, 3314, 81),
+    ];
+    for &(viv, sheet, has_cref, n_items, n_out) in TRACKS {
+        let tun = members(&iso, viv, |n| n == r"data\tuning\render\carrender\default.tun").unwrap();
+        let c = CarRender::parse(&String::from_utf8_lossy(&tun[0].1)).unwrap();
+        assert_eq!((c.sky_on, c.desat_on, c.refl_height, c.refl_angle, c.desat), (true, false, 0.0, 120.0, 0x8091_9191), "{viv}: globals");
+        let crps = members(&iso, viv, |n| n.starts_with(r"data\track\") && n.ends_with(".crp")).unwrap();
+        assert_eq!(crps.len(), 1, "{viv}: one track module");
+        let crp = Crp::parse(&crps[0].1).unwrap();
+        let mut recs = crp.directory().unwrap();
+        recs.extend(crp.pool().unwrap());
+        let (mut sn, mut items) = (Vec::new(), Vec::new());
+        for r in &recs {
+            let mut all = vec![r.clone()];
+            all.extend(crp.record_window(r).unwrap_or_default());
+            for x in all {
+                if x.tag_code() == 0x736e_2020 {
+                    sn.push((x.instance(), String::from_utf8_lossy(crp.payload(&x).unwrap()).trim_end_matches('\0').to_owned()));
+                }
+            }
+            if r.tag_code() == 0x4d61_7020 {
+                for x in crp.record_window(r).unwrap() {
+                    if x.tag_code() == 0x696e_2020 {
+                        items.extend(crp.payload(&x).unwrap().chunks_exact(64).map(<[u8]>::to_vec));
+                    }
+                }
+            }
+        }
+        sn.sort();
+        sn.dedup();
+        assert_eq!(sn, vec![(Some(0), sheet.to_owned())], "{viv}: sn records");
+        let mut with_cref = Vec::new();
+        for (n, b) in members(&iso, viv, |n| n.ends_with(".ssh")).unwrap() {
+            let ssh = nf_formats::ssh::Ssh::parse(&b).unwrap();
+            if let Some(t) = ssh.textures.iter().find(|t| t.name == "cref") {
+                assert_eq!((t.width, t.height), (128, 128), "{viv}: {n} cref");
+                with_cref.push(n);
+            }
+        }
+        with_cref.sort();
+        let mut want = vec![r"data\render\ext.ssh".to_owned()];
+        if has_cref {
+            want.push(format!(r"data\track\{sheet}"));
+        }
+        assert_eq!(with_cref, want, "{viv}: sheets holding cref");
+        assert_eq!(items.len(), n_items, "{viv}: Map in items");
+        assert!(items.iter().all(|it| item_bounds(u32::from_le_bytes(it[0x3c..0x40].try_into().unwrap())).0 > 0.0), "{viv}: a zero radius");
+        assert_eq!(items.iter().filter(|it| it[0x0c] & 0x0d != 0).count(), n_out, "{viv}: items the flags test drops");
+    }
+}
