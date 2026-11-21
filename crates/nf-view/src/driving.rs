@@ -229,6 +229,10 @@ pub struct DriveHud {
     pub sheets: Vec<(u32, u32)>,
     pub health: nf_game::driving::damage::PlayerHealth,
     pub last_tick: u32,
+    /// The gallery's font (data\loading\loading.sfn) and the English string table (IDL_ENG.loc)
+    /// the text passes measure and resolve labels with.
+    pub font: nf_formats::sfn::Font,
+    pub loc: nf_formats::loc::Loc,
 }
 
 /// The player car's specular pass (bondrm.o `MatCar*` pass 2, docs/formats/car-model.md §10):
@@ -294,6 +298,9 @@ pub struct DrivingState {
     pub hud: Option<DriveHud>,
     pub shine: Option<CarShine>,
     pub engine: Option<DriveEngine>,
+    /// A SUB_PHYSICS player vehicle (the sub, the ultralights: FUN_00190f88 + the hull against the
+    /// track, nf_game::driving::sub_physics / sub_collide); the car mirrors its body each tick.
+    pub sub: Option<(nf_game::driving::sub_physics::SubCraft, nf_game::driving::sub_collide::WorldMesh, nf_game::driving::sub_collide::Building)>,
     /// The scripted control and camera layer (nf_game::driving::intro, docs/systems/driving-intros.md):
     /// the race countdown hold, scripted splines, letterbox. Fed by the mission script's events.
     pub intro: Option<(nf_game::driving::intro::IntroState, nf_formats::drivepath::MapPaths)>,
@@ -351,10 +358,18 @@ impl DrivingState {
             }
         }
         if let Some(r) = self.car_rig.as_mut() { r.tick(&self.car, input.steer); }
-        if let Some(g) = &self.land {
+        if let Some((c, mesh, b)) = self.sub.as_mut() {
+            let si = nf_game::driving::sub_physics::SubInput { throttle: input.throttle, brake: input.brake, steer: input.steer, handbrake: input.handbrake, ..Default::default() };
+            let _ = c.step_world(&si, &self.rigid, b, mesh, DT);
+            let r = c.body.rows;
+            self.car.pos = c.body.pos;
+            self.car.vel = c.body.vel;
+            self.car.rot = r;
+            self.car.yaw = r[2][0].atan2(r[2][2]);
+        } else if let Some(g) = &self.land {
             // The land pass owns the height, pitch and roll (its wheels stand on the triangles).
             self.car.step(&input, g, &self.rigid, DT);
-            if let Some((rs, tris)) = self.reset.as_mut() {
+            if let Some((rs, tris)) = self.reset.as_mut().filter(|_| self.sub.is_none()) {
                 if let Some(r) = nf_game::driving::reset::check(&self.car, tris, rs, None) {
                     r.apply(&mut self.car);
                 }
@@ -437,9 +452,10 @@ impl DrivingState {
             dt: ticks.saturating_sub(h.last_tick) as f32 / 60.0,
             health: hp, health_max: hm, armour: ar, armour_max: am,
             weapon: None, timer: None, health_always: false, grunt_on_hit: false, suppressed: false,
+            ticks, paused: false,
         };
         h.last_tick = ticks;
-        let out = h.draw.frame(&h.layout, &input);
+        let out = h.draw.frame(&h.layout, &input, nf_game::driving_hud_draw::HudStrings { font: &h.font, loc: &h.loc });
         let s = 2.0 / 640.0 * (4.0 / 3.0) / aspect.max(1e-3);
         let ndc = |x: f32, y: f32| [(x - 320.0) * s, 1.0 - y / 224.0];
         for d in out.draws {
@@ -693,7 +709,7 @@ impl DrivingState {
     /// Write player and AI car world transforms into `Scene` attachment palette slots.
     pub fn apply_to_palette(&self, attach_base: usize, pal: &mut [Mat4]) {
         if let Some(slot) = self.player_attach_slot {
-            let car_m: Mat4 = if self.land.is_some() {
+            let car_m: Mat4 = if self.land.is_some() || self.sub.is_some() {
                 let r = self.car.rot;
                 let c = self.car_box_centre;
                 let o = [0, 1, 2].map(|k| self.car.pos[k] - (r[0][k] * c[0] + r[1][k] * c[1] + r[2][k] * c[2]));
@@ -714,7 +730,7 @@ impl DrivingState {
                 }
             }
             if let Some(m) = pal.get_mut(attach_base + slot as usize) {
-                *m = if self.land.is_some() {
+                *m = if self.land.is_some() || self.sub.is_some() {
                     let r = self.car.rot;
                     let c = self.car_box_centre;
                     let o = [0, 1, 2].map(|k| self.car.pos[k] - (r[0][k] * c[0] + r[1][k] * c[1] + r[2][k] * c[2]));
@@ -1620,6 +1636,23 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             voices, playing: [false; 10], output: None,
         })
     })();
+    // A SUB_PHYSICS spawn vehicle (the mission set's MSet name [M 0x22faf8 -> FUN_00176658]):
+    // its own pass and the hull against the track (MIS11 vanquishsub, MIS13B ultralight [D]).
+    let sub = (|| {
+        let stem = nf_formats::trackstart::mission_vehicle(&crp).ok()??;
+        let want = ["data", "sim", "attrib", "pvehicle", &format!("{stem}.atr")].join("\\");
+        let e = bigf.entries.iter().find(|x| x.name.eq_ignore_ascii_case(&want))?;
+        let atr = maybe_decompress(&iso.read_bytes(viv_base + e.offset as u64, e.size as u64).ok()?).ok()?;
+        let attrs = nf_game::driving::sub_physics::VehicleAttrs::parse_atr(&String::from_utf8_lossy(&atr));
+        if nf_game::driving::sub_physics::drive_pass(&attrs, 0, false) != nf_game::driving::sub_physics::DrivePass::Sub { return None; }
+        let sp = nf_formats::trackstart::track_spawn(&crp, &col_tris).ok()?;
+        let mut c = nf_game::driving::sub_physics::SubCraft::new(attrs, car_params.half_extents, sp.pos, sp.yaw, 0);
+        c.start_mission(sp.dir, sp.speed_factor);
+        let mesh = nf_game::driving::sub_collide::WorldMesh::new(col_tris.iter().map(|t| (t.v, t.flags)));
+        Some((c, mesh, nf_game::driving::sub_collide::Building::game_defaults()))
+    })();
+    // The sub's body is its box centre and the model's Base box is centred on the origin.
+    let car_box_centre = if sub.is_some() { [0.0; 3] } else { car_box_centre };
     let car = Car::new(car_params, start_pos, start_yaw);
     let reset = land.is_some().then(|| (nf_game::driving::reset::ResetState::new(&car), col_tris.clone()));
     // The car's specular pass: its Specular-pass strips at rest (car space), the CarRender entry,
@@ -1653,6 +1686,19 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             .map(|t| { let i = scene.textures.len(); scene.textures.push(TextureImage { key: (0, 0xfee1_0000 | i as u32), width: t.width, height: t.height, rgba: t.rgba, more: Vec::new(), rate: 1 }); i });
         Some(CarShine { strips, entry, light, tex })
     })();
+    // A file from this mission's archive, else from MISC.VIV (the string tables live there [D]),
+    // matched by its path suffix.
+    let read_any = |suffix: &str| -> Option<Vec<u8>> {
+        let suf = suffix.to_ascii_lowercase();
+        let from = |g: &nf_formats::bigf::Bigf, base: u64| g.entries.iter().find(|x| x.name.to_ascii_lowercase().ends_with(&suf))
+            .and_then(|e| iso.read_bytes(base + e.offset as u64, e.size as u64).ok())
+            .and_then(|raw| maybe_decompress(&raw).ok());
+        from(&bigf, viv_base).or_else(|| {
+            let m = iso.find("/DRIVING/MISC.VIV")?;
+            let g = disc::read_bigf(&iso, m).ok()?;
+            from(&g, m.lba as u64 * 2048)
+        })
+    };
     // The HUD gallery (data\gfx\data\hudNTSC.gal, every driving archive [D]) and its sheets.
     let hud = (|| {
         let want = ["data", "gfx", "data", "hudNTSC.gal"].join("\\");
@@ -1670,7 +1716,9 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         }
         let set = mset_bytes.map(nf_game::driving::damage::HealthSet::parse).unwrap_or_default();
         let health = nf_game::driving::damage::PlayerHealth::start(&set, &nf_game::driving::damage::StartInputs { difficulty: 1, ..Default::default() });
-        Some(DriveHud { layout, draw: nf_game::driving_hud_draw::DriveHudDraw::new(), sheets, health, last_tick: 0 })
+        let font = nf_formats::sfn::Font::parse(&read_any(&["data", "loading", "loading.sfn"].join("\\"))?).ok()?;
+        let loc = nf_formats::loc::Loc::parse(&read_any("IDL_ENG.loc")?).ok()?;
+        Some(DriveHud { layout, draw: nf_game::driving_hud_draw::DriveHudDraw::new(), sheets, health, last_tick: 0, font, loc })
     })();
     let state = DrivingState {
         fx,
@@ -1678,6 +1726,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         hud,
         shine,
         engine,
+        sub,
         intro: nf_formats::drivepath::map_paths(&crp).ok().map(|p| (nf_game::driving::intro::IntroState::new(60), p)),
         viv: viv_upper,
         car,
@@ -1767,6 +1816,7 @@ mod tests {
             hud: None,
             shine: None,
             engine: None,
+            sub: None,
             intro: None,
         };
         state.step(1.0, 0.0, 0.0, false);
