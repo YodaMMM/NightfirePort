@@ -277,6 +277,10 @@ pub struct CarParams {
     pub spring_rest: f32,
     /// +0x64 SPRING_COMPRESSION_LIMIT
     pub spring_limit: f32,
+    /// TYRE_RADIUS, read by name (`FUN_00169d80(actor+0x5c, "TYRE_RADIUS", 0)`) by the righting
+    /// reset `FUN_00187b00` and the placement `FUN_00187eb8` for the placed height [M]
+    /// (vanquish.atr 0.065 [D])
+    pub tyre_radius: f32,
     /// +0x74 / +0x78 / +0x7c / +0x80 / +0x84 / +0x88 ACCEL / COAST / BRAKE / REVERSE /
     /// HANDBRAKE / REV_HANDBRAKE _FRW_RATIO (the front share of the tyre grip)
     pub accel_frw: f32,
@@ -377,6 +381,7 @@ impl CarParams {
             spring_damping: [400.0, 350.0],
             spring_rest: 0.24,
             spring_limit: 0.75,
+            tyre_radius: 0.065,
             accel_frw: 0.25,
             coast_frw: 0.35,
             brake_frw: 0.65,
@@ -457,6 +462,7 @@ impl CarParams {
                 "SPRING_DAMPING_REAR" => p.spring_damping[1] = v,
                 "SPRING_REST_LENGTH" => p.spring_rest = v,
                 "SPRING_COMPRESSION_LIMIT" => p.spring_limit = v,
+                "TYRE_RADIUS" => p.tyre_radius = v,
                 "ACCEL_FRW_RATIO" => p.accel_frw = v,
                 "COAST_FRW_RATIO" => p.coast_frw = v,
                 "BRAKE_FRW_RATIO" => p.brake_frw = v,
@@ -771,6 +777,10 @@ pub struct Car {
     pub spring_prev: [f32; 4],
     /// actor+0x299 — the contacting wheel count FUN_0018c1b0 returns
     pub contacts: u8,
+    /// instance+0x6c — the hull points below their ground plane this tick (pass C,
+    /// `FUN_001f9500` 0x1f9804 `sb s6, 0x6c(s0)`); the righting reset counts on it
+    /// (`driving::reset`)
+    pub hull_contacts: u8,
     /// actor+0x29a — the brake-hold counter (30 when the brake is up)
     pub brake_ticks: u8,
     /// actor+0x274 — the signed wheel-spin rate
@@ -799,7 +809,7 @@ impl Car {
             params, pos, yaw, vel: [0.0; 3], yaw_rate: 0.0, gear: 1, last_gear: 1, shift_inhibit: 0,
             steer_angle: 0.0, speed: 0.0, rpm: 0.0, reversing: false, grounded: false, gravity,
             rot: rot_from_yaw(yaw), ang_vel: [0.0; 3], acc_accum: [0.0; 3], torque_accum: [0.0; 3],
-            spring_prev: [0.0; 4], contacts: 0, brake_ticks: 0x1e, wheel_spin: 0.0,
+            spring_prev: [0.0; 4], contacts: 0, hull_contacts: 0, brake_ticks: 0x1e, wheel_spin: 0.0,
             counter_steering: false, slip: [0.0; 4], wheel_cache: [None; 4], last_yaw: yaw,
         }
     }
@@ -953,6 +963,7 @@ impl Car {
             self.ang_vel = [0.0; 3];
         }
         self.walls(world, dt);
+        self.hull_ground(world);
         self.integrate(rigid, dt);
         // E: the accumulators zero, the working gravity lands (0, g, 0) [M 0x1f7c60:55-60, :168].
         self.acc_accum = [0.0, self.gravity, 0.0];
@@ -989,6 +1000,90 @@ impl Car {
                 self.vel = sub(self.vel, scale(n, vn));
             }
         }
+    }
+
+    /// The hull points pass C tests, in the body frame [S: the game's points come from the car
+    /// model's hull list (`FUN_001f72d8`'s hull branch, points 4.. after the four wheel points),
+    /// which the port does not read]. Tilted (`up.y <= 0.8`) the game tests points 4..count;
+    /// upright only points 8..11 [M 0x1f9670-0x1f96a8]. The port's stand-ins: tilted = the 8
+    /// box corners; upright = the 4 bottom corners raised to where a wheel's spring reaches its
+    /// compression limit (a bump stop: they meet the ground only once the springs are spent).
+    pub fn hull_points(&self) -> Vec<[f32; 3]> {
+        let [hx, hy, hz] = self.params.half_extents;
+        let mut out = Vec::with_capacity(8);
+        if self.rot[1][1] > Self::HULL_UPRIGHT_Y {
+            let y = -hy + (self.params.spring_limit - self.params.spring_rest);
+            for (sx, sz) in [(-1.0, 1.0), (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
+                out.push([sx * hx, y, sz * hz]);
+            }
+        } else {
+            for k in 0..8 {
+                out.push([if k & 1 == 0 { -hx } else { hx }, if k & 4 == 0 { -hy } else { hy }, if k & 2 == 0 { hz } else { -hz }]);
+            }
+        }
+        out
+    }
+
+    /// `FUN_001f9500`'s split: up.y above this tests only the upright points [M 0x1f9670: `0.8 < up.y`].
+    pub const HULL_UPRIGHT_Y: f32 = 0.8;
+
+    /// Pass C — the hull against the ground (`FUN_001f9500`, run between the wall sweep and the
+    /// integration [M FUN_001ff3d8: the 0x1fc2f0 loop, then the 0x1f9500 loop, then 0x1f8ff0]).
+    /// Each hull point queries the ground plane under it (`FUN_001f6ae0`); a point whose depth
+    /// `w = (v0 − p)·n` is > 0 counts [M 0x1f9770 `c.olt.s 0, w`]; the count lands in +0x6c
+    /// [M 0x1f9804]; the body moves out along the deepest point's plane normal by that depth
+    /// [M 0x1f983c-0x1f9894: `pos += plane[fp].n · max w`]. The game's contact response
+    /// (`FUN_001f91e8`, VU0 microcode 0x1a0) is not lifted: the port removes the velocity into
+    /// that plane instead [S].
+    fn hull_ground<G: Ground + ?Sized>(&mut self, world: &G) {
+        let mut count = 0u8;
+        let mut deepest: Option<(f32, [f32; 3], [f32; 3])> = None;
+        for l in self.hull_points() {
+            let r = self.body_to_world(l);
+            let p = add(self.pos, r);
+            let Some(pl) = world.wheel_plane(p) else { continue };
+            let w = dot(sub(pl.v0, p), pl.normal);
+            if w > 0.0 {
+                count += 1;
+                if deepest.is_none_or(|(d, _, _)| w > d) { deepest = Some((w, pl.normal, r)); }
+            }
+        }
+        self.hull_contacts = count;
+        if let Some((w, n, r)) = deepest {
+            self.pos = add(self.pos, scale(n, w));
+            // [S] stand-in for FUN_001f91e8: an inelastic impulse along n at that point, so the
+            // point stops moving into the ground (linear and angular parts, I⁻¹ per mass).
+            let vp = add(self.vel, cross(self.ang_vel, r));
+            let vn = dot(vp, n);
+            if vn < 0.0 {
+                let ii = self.params.inv_inertia_per_mass();
+                let k_world = |t: [f32; 3]| {
+                    let b = self.world_to_body(t);
+                    self.body_to_world([b[0] * ii[0], b[1] * ii[1], b[2] * ii[2]])
+                };
+                let krn = k_world(cross(r, n));
+                let j = -vn / (1.0 + dot(n, cross(krn, r)));
+                self.vel = add(self.vel, scale(n, j));
+                self.ang_vel = add(self.ang_vel, scale(krn, j));
+            }
+        }
+    }
+
+    /// Put the body at `pos` with the orientation rows `rot`, at rest: `FUN_001f7880` zeroes the
+    /// velocity (+0x20), the angular velocity (+0x30), the momenta (+0x40/+0x50) and the hull
+    /// contact byte (+0x6c), and sets the position and matrix [M 0x1f7880].
+    pub fn place(&mut self, pos: [f32; 3], rot: [[f32; 3]; 3]) {
+        self.pos = pos;
+        self.rot = rot;
+        self.vel = [0.0; 3];
+        self.ang_vel = [0.0; 3];
+        self.acc_accum = [0.0; 3];
+        self.torque_accum = [0.0; 3];
+        self.hull_contacts = 0;
+        self.speed = 0.0;
+        self.yaw = rot[2][0].atan2(rot[2][2]);
+        self.last_yaw = self.yaw;
+        self.yaw_rate = 0.0;
     }
 
     /// Pass D [M setup FUN_001f89e0, S the VU0 body]: vel += acc·dt (|v| ≤ M_LIMIT), pos += vel·dt;
