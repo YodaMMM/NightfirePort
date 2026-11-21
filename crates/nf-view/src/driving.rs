@@ -231,6 +231,18 @@ pub struct DriveHud {
     pub last_tick: u32,
 }
 
+/// The player car's specular pass (bondrm.o `MatCar*` pass 2, docs/formats/car-model.md §10):
+/// per frame, ST = 0.5 + SpecularSpot·(n·W·basis).xy on the `carS` map, colour Specular·C_w,
+/// added over the base pass. The strips are baked at the parts' rest matrices (car space).
+pub struct CarShine {
+    /// (strip with car-space positions/normals, its CarRender props).
+    pub strips: Vec<(nf_formats::carmesh::CarStrip, nf_formats::rendertun::CarMaterialProps)>,
+    pub entry: nf_formats::rendertun::CarRenderEntry,
+    pub light: nf_formats::rendertun::LightEnv,
+    /// `carS` (data\render\common.ssh) in the scene's textures.
+    pub tex: Option<usize>,
+}
+
 /// Live driving mission simulation state.
 pub struct DrivingState {
     pub viv: String,
@@ -269,6 +281,7 @@ pub struct DrivingState {
     /// -> righted where it lies [M 0x188200]) and the triangles it reads.
     pub reset: Option<(nf_game::driving::reset::ResetState, Vec<CollisionTri>)>,
     pub hud: Option<DriveHud>,
+    pub shine: Option<CarShine>,
     /// The scripted control and camera layer (nf_game::driving::intro, docs/systems/driving-intros.md):
     /// the race countdown hold, scripted splines, letterbox. Fed by the mission script's events.
     pub intro: Option<(nf_game::driving::intro::IntroState, nf_formats::drivepath::MapPaths)>,
@@ -409,10 +422,33 @@ impl DrivingState {
         f
     }
 
+    /// The player car's specular triangles this frame (world space) for the additive overlay.
+    fn shine_group(&self, right: [f32; 3], up: [f32; 3]) -> Option<(Option<usize>, bool, Vec<Vertex>)> {
+        let sh = self.shine.as_ref()?;
+        let tex = sh.tex?;
+        // The view's forward axis (camera + 0x20, into the scene): up x right for this basis.
+        let f = [up[1] * right[2] - up[2] * right[1], up[2] * right[0] - up[0] * right[2], up[0] * right[1] - up[1] * right[0]];
+        let basis = sh.light.specular_basis(f);
+        let r = self.car.rot;
+        let c = self.car_box_centre;
+        let place = |q: [f32; 3]| [0, 1, 2].map(|k| self.car.pos[k] + r[0][k] * (q[0] - c[0]) + r[1][k] * (q[1] - c[1]) + r[2][k] * (q[2] - c[2]));
+        let mut out = Vec::new();
+        for (st, props) in &sh.strips {
+            let pv = st.pass_vertices(nf_formats::carmesh::CarPassKind::Specular, &r, &basis, &sh.entry, *props);
+            if pv.len() != st.positions.len() || pv.len() < 3 { continue; }
+            let vert = |k: usize| { let g = pv[k].rgb.min(255) as u8; Vertex { pos: place(st.positions[k]), uv: pv[k].st, rgba: [g, g, g, 128], nrm: [0; 4] } };
+            for k in 0..pv.len() - 2 {
+                out.extend_from_slice(&[vert(k), vert(k + 1), vert(k + 2)]);
+            }
+        }
+        Some((Some(tex), true, out))
+    }
+
     /// This frame's particle billboards, grouped by (texture, additive) for the renderer.
     pub fn particle_groups(&mut self, right: [f32; 3], up: [f32; 3]) -> Vec<(Option<usize>, bool, Vec<Vertex>)> {
-        let Some(fx) = self.fx.as_mut() else { return Vec::new() };
-        let mut groups: Vec<(Option<usize>, bool, Vec<Vertex>)> = Vec::new();
+        let shine = self.shine_group(right, up);
+        let Some(fx) = self.fx.as_mut() else { return shine.into_iter().collect() };
+        let mut groups: Vec<(Option<usize>, bool, Vec<Vertex>)> = shine.into_iter().collect();
         for d in fx.pool.draws(&fx.lib, |_| None) {
             let nf_game::driving::effects::ParticleDraw::Quad { centre, size, rotation, cell, rgba, additive } = d else { continue };
             let h = size * 0.5;
@@ -1509,6 +1545,37 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         });
     let car = Car::new(car_params, start_pos, start_yaw);
     let reset = land.is_some().then(|| (nf_game::driving::reset::ResetState::new(&car), col_tris.clone()));
+    // The car's specular pass: its Specular-pass strips at rest (car space), the CarRender entry,
+    // the World light and `carS` from data\render\common.ssh [M carmesh.rs CarMaterial::pass_slots].
+    let shine = (|| {
+        let light = car_lighting.as_ref()?.world.clone();
+        let cr = car_render.as_ref()?;
+        let entry = cr.entries.iter().find(|e| e.name.eq_ignore_ascii_case(p_stem)).or_else(|| cr.entries.iter().find(|e| e.name == "default"))?.clone();
+        let ((o, n), _) = find_car_entry(p_stem)?;
+        let mesh = nf_formats::carmesh::car_mesh(&maybe_decompress(&iso.read_bytes(viv_base + o as u64, n as u64).ok()?).ok()?).ok()?;
+        let state = nf_formats::carpose::DrawState { owner: nf_formats::carpose::DrawOwner::Vehicle { driver_kind: 0 }, interior_view: false, auto_drive: false };
+        let pose = nf_formats::carpose::CarPose::rest(&mesh);
+        let mut strips = Vec::new();
+        for part in mesh.list_for(&state).into_iter().filter(|p| !p.hidden()) {
+            let nf_formats::carpose::PartMatrix::Drawn(m) = nf_formats::carpose::part_matrix(part, &pose) else { continue };
+            for st in &part.strips {
+                let Some(class) = st.lighting else { continue };
+                if !st.passes().iter().any(|p| p.kind == nf_formats::carmesh::CarPassKind::Specular) { continue; }
+                let mut s2 = st.clone();
+                s2.positions = st.positions.iter().map(|&q| [0, 1, 2].map(|k| q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k] + m[3][k])).collect();
+                s2.normals = st.normals.iter().map(|&q| { let v = [0, 1, 2].map(|k| q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k]); let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6); v.map(|x| x / l) }).collect();
+                strips.push((s2, entry.props(class)));
+            }
+        }
+        let want = ["data", "render", "common.ssh"].join("\\");
+        let tex = bigf.entries.iter().find(|x| x.name.eq_ignore_ascii_case(&want))
+            .and_then(|e| iso.read_bytes(viv_base + e.offset as u64, e.size as u64).ok())
+            .and_then(|raw| maybe_decompress(&raw).ok())
+            .and_then(|b| Ssh::parse(&b).ok())
+            .and_then(|sh| sh.textures.into_iter().find(|t| t.name == "carS"))
+            .map(|t| { let i = scene.textures.len(); scene.textures.push(TextureImage { key: (0, 0xfee1_0000 | i as u32), width: t.width, height: t.height, rgba: t.rgba, more: Vec::new(), rate: 1 }); i });
+        Some(CarShine { strips, entry, light, tex })
+    })();
     // The HUD gallery (data\gfx\data\hudNTSC.gal, every driving archive [D]) and its sheets.
     let hud = (|| {
         let want = ["data", "gfx", "data", "hudNTSC.gal"].join("\\");
@@ -1532,6 +1599,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         fx,
         reset,
         hud,
+        shine,
         intro: nf_formats::drivepath::map_paths(&crp).ok().map(|p| (nf_game::driving::intro::IntroState::new(60), p)),
         viv: viv_upper,
         car,
@@ -1619,6 +1687,7 @@ mod tests {
             fx: None,
             reset: None,
             hud: None,
+            shine: None,
             intro: None,
         };
         state.step(1.0, 0.0, 0.0, false);
