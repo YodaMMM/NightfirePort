@@ -138,7 +138,15 @@ walk's green.
 
 not visible to me
 
-## ntfy
+## ntfy failed
 
-The three fallback attempts run after this report's push (the task's step 3); their exact
-outcomes follow in the queue transcript. [FILL_NTFY_FINAL]
+All three fallbacks failed (the exact output, 09:21-09:23 UTC — the same network block as
+rounds 12-13):
+1. curl: `curl: (28) Connection timed out after 20001 milliseconds`
+2. python3: the first attempt died on a SyntaxError from a non-ASCII byte literal in the
+   probe itself (`SyntaxError: bytes can only contain ASCII literal characters` — the
+   em dash in the payload); the clean ASCII retry timed out inside the wrapper (exit 124,
+   the 20 s urlopen deadline never returned).
+3. wget: DNS resolved (ntfy.sh → 159.203.148.75, 144.126.249.138, 129.212.146.227, …) but
+   the TCP connect to :443 hung — killed at the 45 s wrapper limit, exit 124, output ends
+   at `Connecting to ntfy.sh (ntfy.sh)|159.203.148.75|:443...`.
