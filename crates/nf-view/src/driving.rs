@@ -502,7 +502,8 @@ fn load_car_into_scene(
                             let pr = e.props(class);
                             st.normals.iter().map(|&n| {
                                 let c = env.car_light(n, pr.ambient, pr.diffuse, 1.0);
-                                let b = |x: f32| ((127.0 * x).clamp(0.0, 255.0) * 2.0).min(255.0) as u8;
+                                // GS RGBAQ = min(255, 127·L) as stored; Vertex.rgba keeps the PS2 scale (the shader maps 0x80 to 1.0).
+                                let b = |x: f32| (127.0 * x).clamp(0.0, 255.0) as u8;
                                 [b(c[0]), b(c[1]), b(c[2]), 255]
                             }).collect()
                         }
@@ -557,7 +558,12 @@ fn load_car_into_scene(
             vertices.push(Vertex {
                 pos: p,
                 uv,
-                rgba: strip_rgba.get(si).and_then(|v| v.get(k)).copied().unwrap_or([255, 255, 255, 255]),
+                rgba: {
+                    let c = strip_rgba.get(si).and_then(|v| v.get(k)).copied().unwrap_or([128, 128, 128, 255]);
+                    // An untextured strip (Gouraud/Dash, TME off) shows the vertex colour itself (255 = full),
+                    // not texture × colour/128: halve it so the shader's 0x80 = 1.0 scaling lands there.
+                    if strip.texture.is_none() { [c[0] / 2, c[1] / 2, c[2] / 2, c[3]] } else { c }
+                },
                 nrm: [n[0] as i8, n[1] as i8, n[2] as i8, 0],
             });
             char_verts.push(CharVertex {
@@ -691,7 +697,9 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             vertices.push(Vertex {
                 pos: p,
                 uv,
-                rgba: [255, 255, 255, 255],
+                // A strip with no colour upload: neutral 0x80 = 1.0 on the PS2 scale [S: what the
+                // microcode's colour slot holds without an upload is not traced].
+                rgba: [128, 128, 128, 255],
                 nrm: [n[0] as i8, n[1] as i8, n[2] as i8, 0],
             });
         }
@@ -778,8 +786,8 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         // PS2 scale, 0x80 = 1.0) [D docs/formats/geoprim.md; the microcode's pass-through is unproven].
         if !vcols.is_empty() && vertices.len() - v0 == vcols.len() {
             for (v, c) in vertices[v0..].iter_mut().zip(&vcols) {
-                let f = |x: u8| (x as u32 * 2).min(255) as u8;
-                v.rgba = [f(c[0]), f(c[1]), f(c[2]), 255];
+                // Vertex.rgba keeps the PS2 scale; the shader maps 0x80 to 1.0 (scene.rs module doc).
+                v.rgba = [c[0], c[1], c[2], 255];
             }
         }
         if sky {
