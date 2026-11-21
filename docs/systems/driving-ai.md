@@ -1,6 +1,6 @@
 # The driving missions' AI cars — road network, path following, speed, spawn
 
-Status: **reviewed against the decompile 2026-11-20 — §9 is the per-function table and
+Status: **§12 (2026-11-21) adds the road network logic: curves, the chase/follow choosers, the lights and the yield, traffic spawn and respawn.** **Reviewed against the decompile 2026-11-20 — §9 is the per-function table and
 supersedes §3.1, §5 and §8 wherever they differ** (first port 2026-10-15). The port lives in
 supersedes §3.1, §5 and §8 wherever they differ; §10 (2026-11-21) adds the hostile AI and the
 AI vehicle lifecycle and supersedes §3.3 and §4** (first port 2026-10-15). The port lives in
@@ -47,7 +47,10 @@ A segment joins node A to node B; a car drives it A→B or B→A. Measured field
 |---|---|---|---|
 | +0x0c | u16 | node A index | FUN_002215f8 0x2215f8:7-8 |
 | +0x0e | u16 | node B index | same |
-| +0x10 | 0x2c B | curve control data, only meaningful when flags&0x4000; FUN_00222d40 0x222d40:54 passes `rs+0x10` as the third control point into the 4-point spline init FUN_001a8380 0x1a8380 (P0=rs nodeA pos via param_3, P1=param_5=rs, P2=`rs+0x10`, P3=param_4) — a cubic 4-point path [M init + S exact interpolation order] |
+| +0x00 | 3× f32 | the Bezier control point beside node A (flags&0x4000): FUN_00222d40 passes the record itself as P1 of FUN_001a8380 (§12) | [M 0x222d40, 0x226538] |
+| +0x10 | 3× f32 | the Bezier control point beside node B: P2 (§12; the old "P2 = rs+0x10, quadratic" reading is superseded) | [M 0x222d40:54, 0x226538] |
+| +0x1c / +0x1e | s16 | the junction (`ri`) at node A / node B, −1 none | [M 0x223a30, 0x1377c8; D] |
+| +0x2c | f32 | the reference chord the lane control points scale against (= \|A−B\| on 33 of Paris's 105 curves, longer on the 0x4641 junction connectors) | [M 0x226538; D] |
 | +0x3c | s16 | route (rr) index | FUN_00126c98 0x126c98:137; FUN_0013d3f0 0x13d3f0:49 |
 | +0x3e | s16 | the segment's own id | compared as an id in FUN_002247b0 0x2247b0:105, FUN_002270e8 0x2270e8:16 |
 | +0x40..+0x4c | 3× f32 | unit direction A→B | FUN_002216b0 0x2216b0:8-10 |
@@ -65,10 +68,13 @@ A segment joins node A to node B; a car drives it A→B or B→A. Measured field
 ([M 0x220c28:201-202 init, FUN_002213d8 0x2213d8:25-26, 0x126c98:134/142]). The traffic spawner weighs
 routes by occupancy (FUN_0013d3f0 0x13d3f0). Rest of the record: unproven.
 
-### 1.4 `ri  `/`rj  ` [M-negative]
+### 1.4 `ri  ` junctions, `rj  ` [M + D]
 
-Arrays are built and freed (0x220c28) but no field reader is in the decompile (`ri` is read once at
-FUN_001377c8 0x1377c8:108, `rj` has none). Port keeps raw payloads.
+`ri` (48 B on every track [D]) is the junction record: +0x00 3× f32 position (the light check
+measures from it, FUN_0013efc8), +0x0c u16 own index, +0x0e u8 neighbour count with s16
+neighbour junctions at +0x10 (at most 4 on the disc), +0x18 u8 road count with s16 road pieces at
++0x1a (FUN_00223a30, FUN_001377c8) [M; D every listed road points back through rs+0x1c/+0x1e].
+`rj` has no reader in the decompile; the port keeps its raw payloads. §12 has the users.
 
 ## 2. How a car follows the road [M]
 
@@ -681,3 +687,109 @@ nearest piece with the traffic chooser; the path pose held at the AISp placement
 - Live checks worth doing: in MIS3 break on FUN_00138fa8 and read the record pointer (is
   record 14 ever applied, to which element); on FUN_001387a0 in MIS13A count shots per second.
 
+## 12. Road network logic (2026-11-21, branch `s/drive-roads`)
+
+Port: `crates/nf-game/src/driving/road.rs` (curve accessors, `bezier`, `Junction`, the route
+cap) and `crates/nf-game/src/driving/ai.rs` (the navigator's curves and lane blend, the kind-3/4
+choosers, the lights and the yield, the road grid, the spawn director, the respawn, a headless
+`TrafficWorld`). Tests: `crates/nf-game/tests/driving_roads.rs` (21; the last three read the
+disc). Every row was read in `work/decomp/DRIVING.ELF/`, with the disassembly where the
+decompile drops arguments (0x224e00's chooser calls, 0x130140's `FUN_0013dfc8` arguments,
+0x13c798's box subtraction, 0x1377c8's radius `max.s`). Verdicts as §9. The driving generator is
+the only random stream touched; nothing here draws from the on-foot stream.
+
+### 12.1 Curves [M + D]
+
+`FUN_00222468` evaluates a straight piece as `A + (B − A)·t`; a curved one (flags 0x4000) goes to
+`FUN_00222d40`, which calls `FUN_001a8380(curve, A, rs, B, rs + 0x10)`. 0x1a8380 stores its 2nd,
+3rd, 5th and 4th arguments as P0..P3, so the centre line is the cubic through A, rs+0x00,
+rs+0x10, B. `FUN_001a85d0` evaluates `[t³ t² t 1] · basis · P` with the basis chosen by the
+curve object's +0x60 (`FUN_001a7dd0`): every road curve is built by `FUN_001a7ba0` (+0x60 = 2),
+which selects .data 0x37e4a0, the Bezier matrix (read from the disc ELF by the test). The other
+basis (0x37e4e0, ×0.5, Catmull-Rom) belongs to kind 1, which no road curve uses.
+
+The navigator keeps its own curve (nav+0x90): P0/P3 are its lane points +0x50/+0x60, P1/P2 are
++0x70/+0x80 from `FUN_00226788` → `FUN_00226538`: the control point at the start (toward B:
+rs+0x00 by node A; toward A: rs+0x10 by node B) or the end, moved off its node by
+`n(ctrl − node) · |ctrl − node| / max(rs+0x2c / max(|P0 − P1|, 0.01), 0.01)` from the lane end
+point. The carrot's progress is still measured along the chord |P0 − P1| (`FUN_00224e00`).
+On Paris all 105 curved pieces are the junction connectors (flag bit 0) [D].
+
+### 12.2 The table
+
+| function | address | verdict | port / note |
+|---|---|---|---|
+| curve eval | 0x222468 / 0x222d40 / 0x1a8380 / 0x1a85d0 / 0x1a7dd0 / 0x2cbb88 | **wrong → fixed** | `RoadNet::seg_point` / `curve_point`: the port had a quadratic through rs+0x10 alone and the navigator evaluated curves straight. Now the Bezier through A, rs+0x00, rs+0x10, B. |
+| curve ctor | 0x1a7ba0 / 0x223338 | reviewed | +0x60 = 2 (Bezier); the navigator's curve object. |
+| lane controls | 0x226538 / 0x226788 | **added** | `lane_ctrl_point`, `RoadNav::c1` / `c2`. |
+| lane points | 0x226a28 / 0x2267d8 | correct | unchanged (§9). |
+| join | 0x2257c0 | **fixed** | the controls and the Bezier carrot on a curved piece; +0x9c/+0xa0 set with +0x98. |
+| road advance | 0x224e00 | **fixed** | the lane blend step on both paths (0x227058 with the rest of the piece before the pick, then with the step), the rebuilt controls, the Bezier carrot; the chooser by kind (1, 3/5, 4). Kind 2 (0x2247b0) stays unported. The chooser arguments (a1 = the hint vector, a2 = the target piece) are from the disassembly at 0x224e2c / 0x224e54 / 0x225128-0x225138. |
+| lane blend | 0x227058 | **added** | `RoadNav::blend_step`. |
+| lane change start | 0x226f18 | **added** | `RoadNav::start_lane_change`. |
+| kind-3/5 chooser | 0x223a30 | **added** | `next_segment_chase`: slot +0xb0, dead end, plain link, the target routing through the exit junction's neighbours and roads, else the best hint dot. |
+| kind-4 chooser | 0x2235c8 | **added** | `next_segment_follow`: slot, dead end, the 2-link and the one-draw 3+-link picks among links that keep the travel orientation, the hint pick when +0xb1/+0xb2 is set. |
+| hint source | 0x130140 | reviewed | the carrot passes AI +0x1fc as the target piece and, as the hint, `n(target − car)` (profile 0xd with a target), `n(target − car)` / `n(car − target)` for nav +0xb1 / +0xb2, else AI +0x1e0. The caller side is not wired (no chase brain drives a kind-3 navigator in the port yet). |
+| lights tick | 0x13ef40 | **added** | `JunctionLights::tick`: phase + 1 every 300 ticks; run once per world frame by 0x1472e0. |
+| lights test | 0x13efc8 | **added** | `JunctionLights::may_go`: objects within 50 and less than 5 below hold all roads; the last 150 ticks of a period are all red; else road `phase % n` goes. One phase is shared by every junction. |
+| lights reset | 0x13e688 / 0x13e840 | reviewed | phase 0, deadline now + 300 (`JunctionLights::new`). |
+| yield | 0x1377c8 | **added** | `traffic_yield`, called by `AiCar::step_with` when a world is given and +0x154 is set (the ctor default, 0x12ded8:58). |
+| blocked test | 0x135530 | **added** | `path_blocked`. |
+| stop short | 0x135978 | **added** | `stop_short`. |
+| state-4 drive | 0x130508 | **fixed** | the +0x198 carrot hold and the +0x154 yield on the aim before the repeat test and the drive control. The actor's vtbl+0x17c query is taken as 0. |
+| grid cell | 0x1f8908 | **added** | `cell_of`. |
+| road grid | 0x21cf30 / 0x21cf80 | **added** | `RoadGrid::parse_crp` / `cells_in_box`: CGrd +0x00 min x, +0x08 min z, +0x14 1/cell, +0x18 rows, +0x1c columns; cell = the `cn` record whose count field is its index; the road list at payload +0x07 (count) / +0x0e (byte offset from +0x10) [D Paris: 108 × 162 cells of 24 units]. |
+| spawn list | 0x13d618 | **added** | `TrafficDirector::refresh`: every 0x59 ticks, the pieces of the cells under the box player ± 150, deduplicated, filtered (flags 0x2/0x1/0x8/0x8000/0x80, 0x1020 both, 0x100 with a trigger id), at most 50. |
+| spawn pick | 0x13ca60 | **added** | `TrafficDirector::pick`: draw a piece, route cap rr+0x2e < rr+0x2c, `FUN_0013c5e8` (second draw for t), the scratch kind-1 join, the 4-cell (8 for non-traffic) spacing to enabled vehicles, ≥ 75 from the player, counter + 1. |
+| spawn lane | 0x13c5e8 | correct | `spawn_lane_occ` takes the runtime occupancy; the t draw is now in `pick`. |
+| out of range | 0x13c860 | **added** | `out_of_range`: > 150 with the view test off; > 75 and outside the 0.65 cone with it on; never within 75; never while spawning is off. |
+| placement | 0x13c798 | **added** | `placement_ok`: only beyond 150 + box_z of the player. Traffic therefore appears only outside the 150 ring and, with the view test on, out of view. |
+| respawn | 0x132808 | **added** | `respawn_step`: park a live car that is out of range past its hold, pick a spot below the cap, join it, keep it unless seen, place it when `placement_ok`, profile 0xc / pattern 3 / kind 1, live + 1, hold 5 s. |
+| park | 0x132ba8 | **added** | `TrafficDirector::park`: (0, 0, 40000 + slot), slot + 50 up to 5000, profile 1, pattern 1, live − 1, route count − 1. |
+| state-4 tick | 0x132d80 | **added** (route count) | `TrafficDirector::count_route`. The +0xe4 stop-and-wait needs the actor's vtbl+0x17c query (not read). |
+| traffic create | 0x13f868 | reviewed | state 4, enabled, nav kind 1, +0xd8 = 4 (3 for one model list), and parked at once (0x132ba8): `TrafficWorld::new` starts every car parked. |
+| pedestrian spawn | 0x13d3f0 / 0x14eea8 / 0x126c98 | reviewed | the other user of the list (rr+0x2d/+0x2f); not traffic. |
+| lane pick | 0x135f70 | reviewed, **not ported** | see 12.4. |
+| lane pick helpers | 0x135d88 / 0x135cf0 / 0x135b10 / 0x1351d0 / 0x222060 | reviewed, not ported | see 12.4. |
+
+### 12.3 The headless traffic world [S where noted]
+
+`TrafficWorld::step` runs one world frame: the lights tick (before the cars; the order against
+the cars is not proven), then each car in list order: the respawn, the route count, and for a live
+profile-0xc car the brain (with the yield) and `Car::step`. Parked cars are not driven (pattern 1's
+drive is not ported). The vehicle list the yield and the spacing read is updated car by car, as
+the game's list walk sees it. Stand-ins: the view test of the respawn (`FUN_001c65b0`, a sphere
+against the view frustum) is a caller closure; the two world flags (+0x350 view test, +0x3cc
+spawning off) are inputs; the vehicle extents +0x4c0/+0x4c8 keep the 0.001 floor. In
+`FUN_001862c0` the argument `FUN_001f6e98` copies them from is the output of `FUN_00210938`, an
+inverse-inertia triple, so they may well be that small in the game, but no live read backs it.
+
+Disc runs (Paris, 3600 ticks): with the director live and a player driving the network at 20/s,
+9 cars were placed (all outside 150 and out of view) and drove 249 units; with 20 cars put on
+pieces spread over the city and spawning off, the cars covered 3,669 units, entered 109 pieces
+and spent 22,374 of 72,000 car-ticks held at red lights (each road is green for 150 of every
+n·300 ticks, n = 3 or 4 at the Paris junctions). Every carrot stayed on a lane line (within the
+widest lane offset, 15.0). Car bodies stayed within 24.4 of a centre line; 1,490 car-ticks were
+more than 4 past the widest lane line: the rail physics turns no tighter than
+`wheelbase / tan(MAXSTEERING)` = 9.4 for the hatchback and swings wide at Paris's 4-to-8-unit
+connectors before the carrot pulls it back. That is the port's physics stand-in (§9.3), not the
+road logic.
+
+### 12.4 Not ported / unproven
+
+- The lane pick `FUN_00135f70` (pattern 3 off state 4 and pattern 4; not traffic): a 64-slot
+  lateral occupancy histogram at AI +0x98 (window width +0xd8), seeded from the road's lane
+  masks (`FUN_00222060`, 32 tables of 32 bytes at .data 0x33a6d8 / 0x33a818 chosen by the same
+  track test as the lane tables), decayed by distance from the current offset (`FUN_00135d88`),
+  marked by every conflicting car (`FUN_00135b10`: within 20..35, 15 when overtaking, and in
+  front) at its projected lateral offset (`FUN_001351d0`, a nearest-road join refreshed every 15
+  ticks), then the lowest-sum window (`FUN_00135cf0`) and a lane change of length `|Δ|·|v|·0.1`
+  (`FUN_00226f18`). It needs the nearest-road join (`FUN_00225c48` / `FUN_00225490`) and several
+  actor queries, none of which are ported. The blend it drives (`FUN_00226f18` /
+  `FUN_00227058`) is ported.
+- The caller side of the kind-3/4 choosers (which brain sets +0xb0/+0xb1/+0xb2 and +0x1fc).
+- The `DAT_003339a8` objects the lights check; `FUN_001c65b0`; the world flags +0x350 / +0x3cc;
+  the actor query vtbl+0x17c; AI +0x94 (gates the respawn and the lane pick; taken as 0).
+- `DAT_00339f54` (the world tick) and `DAT_00339f4c` (ticks per second) were not read live.
+- Live checks worth doing: in Paris, read DAT_003c828c / DAT_003c8290 over a few seconds (expect
+  +1 every 300 ticks), and break on FUN_0013c798 to see a placement distance (expect > 150).
