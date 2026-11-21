@@ -34,6 +34,7 @@ pub mod mp_lobby;
 pub mod menu_music;
 pub mod settings;
 pub mod stdio_guard;
+pub mod native_crash;
 pub mod movie;
 pub mod mpnet;
 pub mod mpfx;
@@ -493,7 +494,10 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
         // frame-hitches: the level bank's samples and its effects' streams decode on a worker now,
         // not in the frame that first plays them (the same PCM; a miss before it ends decodes as before).
         driver.predecode_in_background();
+        eprintln!("audio: opening the output device");
         let output = nf_audio::Output::open();
+        eprintln!("audio: {}", if output.is_some() { "output open" } else { "no output (silent)" });
+        native_crash::rearm();
         // Diagnostic sink note (unported-misc-10): the game's printf output sinks into
         // `deci2Putchar` 0x23cc90 — `_putchar` (OBJECT 0x2e7a58) swapped in by `scePrintf`
         // 0x23d570, emitting the boot banner "NFSV = 0x%\n" from `PS2FreshBoot` 0x120ab0 [M
@@ -2418,16 +2422,25 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     });
 }
 
+/// The instance options every port instance starts from: wgpu's defaults, except that `WGPU_BACKEND`
+/// (`vulkan`, `dx12`, `gl`, comma-separated) limits the backends tried. Unset, nothing changes; set, a PC whose
+/// driver faults while one backend starts can run on another.
+pub fn instance_desc() -> wgpu::InstanceDescriptor {
+    let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+    d.backends = d.backends.with_env();
+    d
+}
+
 /// Headless `wgpu::Instance` (no window), matching `gpu_instance`'s Vulkan indirect-validation opt-out.
 pub fn gpu_instance_headless() -> wgpu::Instance {
-    let default = || wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let default = || wgpu::Instance::new(instance_desc());
     let inst = default();
     if std::env::var_os("NF_INDIRECT_VALIDATION").is_some() { return inst; }
     let info = |i: &wgpu::Instance| pollster::block_on(i.request_adapter(&wgpu::RequestAdapterOptions::default()))
         .ok().map(|a| { let i = a.get_info(); (i.backend, i.name, i.vendor, i.device) });
     let Some(want) = info(&inst) else { return inst };
     if want.0 != wgpu::Backend::Vulkan { return inst; }
-    let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+    let mut d = instance_desc();
     d.backends = wgpu::Backends::VULKAN;
     d.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
     let inst2 = wgpu::Instance::new(d);
@@ -2447,7 +2460,7 @@ pub fn gpu_instance_headless() -> wgpu::Instance {
 /// `NF_INDIRECT_VALIDATION=1` keeps the check everywhere.
 pub fn gpu_instance(window: Option<&Arc<Window>>) -> (wgpu::Instance, Option<wgpu::Surface<'static>>) {
     let default = || {
-        let inst = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let inst = wgpu::Instance::new(instance_desc());
         let surf = window.map(|w| inst.create_surface(w.clone()).expect("create surface"));
         (inst, surf)
     };
@@ -2458,7 +2471,7 @@ pub fn gpu_instance(window: Option<&Arc<Window>>) -> (wgpu::Instance, Option<wgp
     let Some(want) = info(&inst, surf.as_ref()) else { return (inst, surf) };
     if want.0 != wgpu::Backend::Vulkan { return (inst, surf); }
     drop(surf);
-    let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+    let mut d = instance_desc();
     d.backends = wgpu::Backends::VULKAN;
     d.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
     let inst2 = wgpu::Instance::new(d);
@@ -2485,6 +2498,9 @@ pub async fn device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_
     eprintln!("gpu: requesting the device (features {:?})", desc.required_features);
     let (device, queue) = adapter.request_device(&desc).await?;
     eprintln!("gpu: device ready");
+    // A driver may have put its own unhandled-exception filter in place while the device opened: ours goes back
+    // on top and chains to it (native_crash.rs).
+    native_crash::rearm();
     Ok((adapter, device, queue))
 }
 
@@ -7364,7 +7380,9 @@ impl ApplicationHandler for App {
             .with_fullscreen(disp.fullscreen.then_some(winit::window::Fullscreen::Borderless(None)));
         // The saved windowed size (Alt+PageUp/PageDown presets or a dragged edge, kept on close).
         if let Some((w, h)) = disp.size { attrs = attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h)); }
+        eprintln!("start: creating the window");
         let window = Arc::new(el.create_window(attrs).expect("create window"));
+        eprintln!("gpu: creating the instance and choosing an adapter");
         let (instance, surface) = gpu_instance(Some(&window));
         let surface = surface.expect("create surface");
         let (adapter, device, queue) = pollster::block_on(device(&instance, Some(&surface))).expect("GPU device");
@@ -7729,6 +7747,8 @@ pub fn run() -> Result<()> {
     let (iso, level) = match pos.as_slice() {
         [iso, level] => (iso.to_string(), level.to_string()),
         [iso] if lone_iso => (iso.to_string(), "07000048".to_string()),
+        // A lone path that names no file is a missing disc image, not a level (another front end may pass a stale path).
+        [p] if p.contains(['/', '\\']) || p.to_ascii_lowercase().ends_with(".iso") => bail!("the disc image {p} was not found"),
         [level] => (std::env::var("NF_ISO").map_err(|_| anyhow::anyhow!("NF_ISO is not set and no <iso> was given\n{USAGE}"))?, level.to_string()),
         [] => (std::env::var("NF_ISO").map_err(|_| anyhow::anyhow!("NF_ISO is not set and no <iso> was given\n{USAGE}"))?, "07000048".to_string()),
         _ => bail!("{USAGE}"),
@@ -7809,6 +7829,7 @@ pub fn run() -> Result<()> {
         for (d, slot) in drv.hostile_draws() { eprintln!("[driving] hostile element {} {} ({}) slot {slot} at {:?}", d.element, d.name, d.model, d.matrix[3]); }
         return shot(&scene, &cam, out, None, ticks as f32, opts, args.iter().any(|a| a == "--no-tex"), args.iter().any(|a| a == "--no-fog"), None, None);
     }
+    eprintln!("start: loading {level} from the disc image");
     let scene = if dev { load_dev(&iso, &level, all)? }
         else if !give_ids.is_empty() { load_weapons(&iso, &level, all, &give_ids)? }
         else if let Some(i) = args.iter().position(|a| a == "--mp-match") {
