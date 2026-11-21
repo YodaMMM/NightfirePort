@@ -67,8 +67,31 @@ and not jumping → vertical velocity 0. The camera (`Player_PositionCamera`) la
 
 ## Crouch [M]
 
-Action 8 (toggle by default, `PlayerSetting+4` = 1 [L]); lockout 60 ticks; standing up needs a clear line from pos to
-the previous pos + 0.95 up; speed × 0.75; the eye drops 0.45 at 0.0225 / tick (20 ticks).
+Action 8 (toggle by default, `PlayerSetting+4` = 1 [L]); speed × 0.75; the eye drops 0.45 at 0.0225 / tick (20 ticks).
+The crouch is the game's substate 4 (`Player_SSCrouch` 0x1924c0); the port folds it into the walk as
+`Bond::crouched` (s-crouch-latch, 2026-11-21).
+
+- **Crouching** (`Player_HandleJump` 0x1916b0:89-95, walk only, jump state 0): the crouch PRESS edge
+  (`Input_Action(p, 8, 4)`) with the lockout clear → `ChangeSubState(4)`. Both Crouch options use the edge. A press
+  inside the lockout is lost (nothing buffers it) and falls through to the jump test.
+- **Standing** (`Player_SSCrouch` :84-105): Toggle = a press edge of action 8 or action 7 (jump); Hold = action 8
+  not held (`Input_Action(p, 8, 1) == 0`). Also needed: the head-bump bit (AnimObj+0x60 & 0x20) clear, the lockout
+  clear, and a clear line from pos to the previous pos + 0.95 up. The jump press only stands Bond: the crouch
+  handler never calls `Player_HandleJump`, so no jump comes out of a crouch.
+- **The lockout** `BL+0x960`: `ChangeSubState` sets it to `(u8)FRAME_RATE` (60) on 0 → 4 and 4 → 0 only
+  (0x190630:42-56), and plays the transition script (SP class 3: 0x060001dc stand→crouch, 0x060001dd crouch→stand,
+  each 50 frames, non-looping [D every SP level except 07000048, which carries neither], speed 4). `SSWalk`/`SSCrouch`
+  (0x192310:34-44 / 0x1924c0:45-55) count it down each tick and zero it once `AnimScriptIsStopped` sees the script
+  past its end, or when the count reaches 1. The script stops on its 13th clock tick (`AnimObjectUpdate` at the end
+  of `Player_Update`, 0x193600:358), so the next stance press works on the **13th tick** after a change (59 is the
+  fallback). Swim and zero-g do not run it down.
+- **Leaving the crouch another way**: any `ChangeSubState` out of 4 drops the crouch. `ChangeSubState(0)` from 4 (the
+  cut-scene hand-back `Player_Cam2Mode` 0x195fc8, script event 9) stands Bond with the transition and the lockout; a
+  ladder, wire, zipline, grapple, creep or swim entry leaves it with no lockout, and those substates hand back a
+  standing walk (`ChangeSubState(0)` from a non-4 substate plays nothing).
+- Unproven: the port does not rebuild the transition script on a weapon change during the lockout
+  (`Player_SetWeaponAnim` → `PlayerAnimSetInit` replaces it with the 2-frame SP set script 0x06000a00, which may
+  end the lockout early); the crouched root height `cc` still snaps to 0.55 instead of following the script's root track.
 
 ## Camera [M, L checked]
 
