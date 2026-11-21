@@ -513,6 +513,12 @@ pub struct Sim {
     /// arena on every machine → the same table.
     pub mp_bot_weapons: Option<nf_game::mp::botweap::BotWeaponTable>,
     pub mp_dead_ticks: [u32; nf_net::MAX_AGENTS],
+    /// g053: this tick's local-body contact with a hurt volume (class 0x27) of type 5..7 — the
+    /// `Hurt_GetType` arm `MP_PlayerKilled` 0x188f70 reads off the dying body's hit list
+    /// (`4 < type < 8` → `iStack_c0 = 1` [M :190-195]) to preload the carried objects' return
+    /// counters [M :281-283]. Set by the offline hurt deliveries in `step_bond_sim`, read and
+    /// cleared by `step_mp_death_respawn`.
+    pub mp_bond_hurt_explosive: bool,
     /// mp-world-sync (agent 9): the session's input row for the tick `step_bond` is about to run
     /// (the caller sets it — the live loop and `nf_view::net_tick`; `step_bond` consumes it). With
     /// it, `step_bond` moves the remote bodies BEFORE the local body (the same collision world for
@@ -3549,6 +3555,7 @@ impl Sim {
                     let k = (id & !nf_game::world::HURT_PART) as usize;
                     delivered.insert(k);
                     let Some((dmg, ty)) = self.hurts.get_mut(k).and_then(|h| h.deliver_contact()) else { continue };
+                    if (5..=7).contains(&ty) { self.mp_bond_hurt_explosive = true; } // g053 [M 0x188f70:190-195]
                     if self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, ty as u32) {
                         let p = self.bond.pos;
                         self.drones.play_pain_grunt(p);
@@ -3564,12 +3571,16 @@ impl Sim {
                     let applied = match ki.map(|i| (i, self.hurts[i].deliver_contact())) {
                         Some((i, Some((dmg, ty)))) => {
                             delivered.insert(i);
+                            if (5..=7).contains(&ty) { self.mp_bond_hurt_explosive = true; } // g053
                             self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, ty as u32)
                         }
                         // No Hurt entry (a fold outside the main map) or a state-refused hit
                         // (disabled/fired): the raw pair only delivers in the first case.
                         Some((_, None)) => false,
-                        None => self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, kind as u32),
+                        None => {
+                            if (5..=7).contains(&kind) { self.mp_bond_hurt_explosive = true; } // g053
+                            self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, kind as u32)
+                        }
                     };
                     if applied {
                         let p = self.bond.pos;
@@ -3594,6 +3605,7 @@ impl Sim {
             for (k, h) in self.hurts.iter_mut().enumerate().filter(|_| net_row.is_none()) {
                 if delivered.contains(&k) { continue; }
                 if let Some((dmg, ty)) = h.update(self.drones.channels.on(h.gate as u32), self.bond.pos) {
+                    if (5..=7).contains(&ty) { self.mp_bond_hurt_explosive = true; } // g053
                     if self.drones.health.pain_generic(&mut self.drones.rng, dmg, self.drones.difficulty, self.level, ty as u32) {
                         let p = self.bond.pos;
                         self.drones.play_pain_grunt(p);
@@ -11034,6 +11046,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             mp_bot_weapons: None,
             mp_armour: [0.0; nf_net::MAX_AGENTS],
             mp_dead_ticks: [0; nf_net::MAX_AGENTS],
+            mp_bond_hurt_explosive: false,
             net_row: None,
             net_remotes_done: false,
             net_gun_busy: [false; nf_net::MAX_AGENTS],
@@ -13907,6 +13920,9 @@ impl Sim {
     ///   humans have no death pipeline in the port (their slots never die here).
     pub fn step_mp_death_respawn(&mut self, death_was_active: bool) {
         if self.mp.is_none() { return; }
+        // g053: the hurt-volume contact is this tick's (the game reads the dying body's hit list
+        // once, at `MP_PlayerKilled` [M 0x188f70:121-195]).
+        let hurt_explosive = std::mem::replace(&mut self.mp_bond_hurt_explosive, false);
         if !death_was_active && self.drones.death.active {
             // The death start: score it. The killer word 0..8 is a slot id (self-damage credits
             // the victim — `player_killed`'s self-kill path [M 0x188f70:151-155,167-169]).
@@ -13917,7 +13933,7 @@ impl Sim {
             // strike's `player_killed` [M 0x187568:98-108]) is already counted — the body's death
             // sequence only follows it (`step_mp_scenario_sync`).
             if !m.game.slots[0].dead {
-                m.player_killed(0, killer, false, false, &mut self.drones.rng);
+                m.player_killed(0, killer, hurt_explosive, false, &mut self.drones.rng);
             }
         }
         // The 5 s respawn gate [M 0x190bb0:41-54: `FRAME_RATE_INT * 5 <= GameState+0x34 -
@@ -14519,6 +14535,51 @@ impl Sim {
         for (i, (idx, t)) in stamps {
             if let Some(p) = pickups.get_mut(idx) { if i < p.visit.len() { p.visit[i] = t; } }
         }
+        // g053: the bots' hurt-volume contacts. `NDrone2_DealWithObjHit` 0x13fff0's class-0x27
+        // MP arm (`MPSettings+0x184 != 0`): a bot not in a type-10 (dead) state takes
+        // `Hurt_GetDamage` straight off its health (no armour, no multipliers), barks trigger
+        // 0x1f, and at health <= 0 enters 0xF2 — the death whose `MP_PlayerKilled` 0x188f70
+        // finds the volume in the hit list: no player credit, and a type 5..7 volume preloads
+        // the carried objects' return counters [M 0x13fff0:320-335, 0x188f70:190-195,281-283].
+        // Before, the bots' only world damage was the blasts: a bot that walked into an arena's
+        // kill floor (0700004b/07000025/07000026, type 6, 1000 [D]) never died there. The
+        // contact capsule is the SP drones' (root − 1.0 … the eye, r 0.4 — the port's drone
+        // contact law above, the root BOT_EYE below the eye) [S].
+        {
+            let mut deaths: Vec<(usize, bool)> = Vec::new();
+            for j in 0..m.bots.len() {
+                if m.bots[j].dead || m.bots[j].health <= 0.0 { continue; }
+                let e = m.bots[j].brain.pos;
+                // the body root is BOT_EYE below the eye; the drones' capsule law runs from
+                // root − 1.0 (the floor) to the head
+                let foot = [e[0], e[1] - BOT_EYE - 1.0, e[2]];
+                let mut explosive = false;
+                let mut touched = false;
+                for h in self.hurts.iter_mut() {
+                    let gate_on = self.drones.channels.on(h.gate as u32);
+                    if let Some((dmg, ty)) = h.update_touch(gate_on, foot, e, 0.4, true) {
+                        m.bots[j].health -= dmg; // [M 0x13fff0:327-328]
+                        touched = true;
+                        if (5..=7).contains(&ty) { explosive = true; }
+                    }
+                }
+                if !touched { continue; }
+                let vs = m.bots[j].slot;
+                Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, vs, 0x1f); // [M :330-331]
+                if m.bots[j].health <= 0.0 { deaths.push((j, explosive)); }
+            }
+            for (j, explosive) in deaths {
+                let victim_slot = m.bots[j].slot;
+                m.bots[j].health = 0.0;
+                m.bots[j].dead = true;
+                m.bots[j].deaths += 1;
+                m.bots[j].respawn_at = frame + 180;
+                Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, victim_slot, 1);
+                nf_game::mp::reset_pickup_bot_visit_times(&mut pickups, j);
+                m.player_killed(victim_slot, None, explosive, false, &mut self.drones.rng);
+                if std::env::var_os("NF_BOTLOG").is_some() { eprintln!("[botlog] f{frame} slot {victim_slot} died in a hurt volume"); }
+            }
+        }
         self.mp_bot_pickups = pickups;
     }
 
@@ -14977,8 +15038,9 @@ impl Sim {
     /// old shape applied is not in it], only the Player Mods options [M :51-82] and the type's
     /// armour fraction (types 1..7 take the health whole [M :84-104]) with the below-1.0 floor
     /// [M :131-133]. A death goes through `MP_PlayerKilled` 0x188f70 like the combat's (the credit
-    /// is the attacker when another slot caused it; `explosive` = pain types 4..7).
-    fn net_world_pain(&mut self, slot: usize, damage: f32, pain_type: u32, killer: Option<usize>) {
+    /// is the attacker when another slot caused it; `hurt_explosive` = this tick's contact with a
+    /// type 5..7 hurt volume [M 0x188f70:190-195], g053).
+    fn net_world_pain(&mut self, slot: usize, damage: f32, pain_type: u32, killer: Option<usize>, hurt_explosive: bool) {
         if self.mp_dead_ticks[slot] > 0 || self.mp_hp[slot] <= 0.0 || damage <= 0.0 { return; }
         use nf_game::mp::combat::{self as cb, PainRules};
         let Some(m) = self.mp.as_ref() else { return };
@@ -14998,8 +15060,7 @@ impl Sim {
         if self.mp_hp[slot] <= 0.0 {
             self.mp_dead_ticks[slot] = 1;
             let k = killer.filter(|&k| k != slot);
-            let explosive = (4..=7).contains(&pain_type);
-            if let Some(m) = self.mp.as_mut() { m.player_killed(slot, k, explosive, false, &mut self.drones.rng); }
+            if let Some(m) = self.mp.as_mut() { m.player_killed(slot, k, hurt_explosive, false, &mut self.drones.rng); }
             eprintln!("[mp] slot {slot} died to the world (pain type {pain_type}, frame {})", self.drones.frame);
         }
     }
@@ -15082,19 +15143,26 @@ impl Sim {
         }
         // 2. The world damage, slot order.
         let mut hits: Vec<(usize, f32, u32, Option<usize>)> = Vec::new();
+        // g053: which slots touched a hurt volume (class 0x27) of type 5..7 this tick — the one
+        // source `MP_PlayerKilled` 0x188f70:190-195 reads for the carried objects' counter
+        // preload (`Hurt_GetType` off the hit list). Fall and drown damage are no hit-list
+        // object, so they never preload (the port's old `4..=7` pain-type test did both, and
+        // took type 4 the game's `4 < type` excludes).
+        let mut hurt_explosive = [false; nf_net::MAX_AGENTS];
         for slot in 0..nf_net::MAX_AGENTS {
             if self.mp_dead_ticks[slot] > 0 { continue; }
             let Some(b) = self.net_body(slot) else { continue };
             let (pos, fall, drown) = (b.pos, b.fall_damage, b.drown_damage);
             for h in self.hurts.iter_mut() {
                 if let Some((dmg, ty)) = h.update(self.drones.channels.on(h.gate as u32), pos) {
+                    if (5..=7).contains(&ty) { hurt_explosive[slot] = true; }
                     hits.push((slot, dmg, ty as u32, None));
                 }
             }
             if let Some(d) = fall { hits.push((slot, d, 6, None)); }
             if let Some(d) = drown { hits.push((slot, d, 7, None)); }
         }
-        for (slot, d, ty, k) in hits.drain(..) { self.net_world_pain(slot, d, ty, k); }
+        for (slot, d, ty, k) in hits.drain(..) { self.net_world_pain(slot, d, ty, k, hurt_explosive[slot]); }
         // 3. The shots at the breakables / destroyables.
         let frame = self.drones.frame;
         for shooter in 0..nf_net::MAX_AGENTS {
@@ -15185,7 +15253,7 @@ impl Sim {
                 let Some(v) = self.net_body(slot) else { continue };
                 let hits = nf_game::explode::propagate(c, radius, blast_damage, shooter,
                     &nf_game::explode::Targets { drones: &[], player: v.sphere_centre(), breaks: &[], destroys: &[], copters: &[] });
-                if let Some(ph) = hits.player { self.net_world_pain(slot, ph, 0, Some(shooter)); }
+                if let Some(ph) = hits.player { self.net_world_pain(slot, ph, 0, Some(shooter), false); }
             }
             let hits = nf_game::explode::propagate(c, radius, blast_damage, shooter,
                 &nf_game::explode::Targets { drones: &bots, player: [0.0, -1.0e9, 0.0], breaks: &[], destroys: &[], copters: &[] });
