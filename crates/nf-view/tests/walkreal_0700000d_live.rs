@@ -2900,11 +2900,33 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         let _ = kill_guard_certain_at(&mut w, [137.1, -275.5], [6.0, 6.0], 10.0, "the north-band kill (the C5-door corner back-fire)", 260);
     }
     // Leg 2: the yard south to the ST-3 plate (the nav web [D path 7]) — walked.
+    // retune-nb-0d-14, THE NORTH-WEST KILL (the run 14-e ledger): #4 (0x500007e, weapon 0x12)
+    // chipped 14.4 across the legs (8 x 1.8) and killed the run 14-e return leg at t24195
+    // (the plate arrival zone, a 5 x 1.8 burst) — and it sits 5.5 u from the shooting stand,
+    // where the same cadence would ride the whole door kill. It MOVES: at the landing it
+    // stands at (133.1, 5.0, -273.8) [census] and parks at (129.6, 5.0, -282.1) by its first
+    // chip (frame 22935) — so the certain box act rides THREE stands (the yard-south-1 d
+    // ~10.5 early catch, the plate d ~27.2, the shooting stand d ~5.5 before the door kill);
+    // each act returns at once when the box is empty (the run 14-f proof: zero ticks, the
+    // timeline byte-identical). NF_0D_NW_KILL=1 arms it (the run variant only; unset =
+    // byte-identical). NF_0D_NW_KILL=1 arms the fixed-box acts; =2 arms the INDEX-tracking
+    // acts (kill_guard_index_certain — the mover catch; the same three stands).
+    let nw_kill: u32 = if yard_run { std::env::var("NF_0D_NW_KILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) } else { 0 };
     if yard_fast {
         fast_leg(&mut w, [136.5, 4.5, -290.0], 2.0, "the yard south 1");
+        if nw_kill == 2 {
+            let _ = kill_guard_index_certain(&mut w, 4, 0x500007e, 20.0, 8.0, "the north-west armed #4 (the early catch, index)", 260);
+        } else if nw_kill == 1 {
+            let _ = kill_guard_certain_at(&mut w, [129.6, -282.1], [4.0, 4.0], 8.0, "the north-west armed #4 (the early catch)", 260);
+        }
         fast_leg(&mut w, [136.0, 4.5, -308.5], 1.2, "the plate");
     } else {
         w.walk_to(Wp::new(136.5, 4.5, -290.0).r(2.0), "the yard south 1");
+        if nw_kill == 2 {
+            let _ = kill_guard_index_certain(&mut w, 4, 0x500007e, 20.0, 8.0, "the north-west armed #4 (the early catch, index)", 260);
+        } else if nw_kill == 1 {
+            let _ = kill_guard_certain_at(&mut w, [129.6, -282.1], [4.0, 4.0], 8.0, "the north-west armed #4 (the early catch)", 260);
+        }
         w.walk_to(Wp::new(136.0, 4.5, -308.5).r(1.2), "the plate");
     }
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x1d),
@@ -2931,6 +2953,14 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     if yard_run && std::env::var("NF_0D_PLATE_ROOF_KILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0 {
         let _ = kill_guard_certain_at(&mut w, [138.9, -325.3], [3.5, 3.5], 11.0, "the roof shooter above the trench (the plate act)", 300);
     }
+    // retune-nb-0d-14: the #4 plate act (the parked spot, d ~27.2 over the open yard — the
+    // plate act's own far class, the roof act landed at +26 from the same stand). Mode 2
+    // tracks the index wherever the mover is within 34 u.
+    if nw_kill == 2 {
+        let _ = kill_guard_index_certain(&mut w, 4, 0x500007e, 34.0, 8.0, "the north-west armed #4 (the plate act, index)", 260);
+    } else if nw_kill == 1 {
+        let _ = kill_guard_certain_at(&mut w, [129.6, -282.1], [5.0, 5.0], 8.0, "the north-west armed #4 (the plate act, the parked spot)", 260);
+    }
     if yard_fast { fast_leg(&mut w, [137.0, 5.2, -320.0], 1.5, "the display trench"); }
     else { w.walk_to(Wp::new(137.0, 5.2, -320.0).r(1.5), "the display trench"); }
     // The trench pair (level-0d-real-health-crossfire-5): #25/#26 sleep at (134.5/129.6,
@@ -2951,7 +2981,11 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // each act's world gate holds fire on a blocked line and the cap bounds the exposure.
     if yard_run {
         // retune-nb-0d-14: the trench certain acts run CROUCHED under the knob (the drain
-        // halves during the aim phases); the stand press follows. Unset = byte-identical.
+        // halves during the aim phases) — but ONLY the LEVEL-pitch acts: the round-13
+        // addendum's refinement (the crouch law). The crouched UP-PITCH aim degenerated
+        // (run 14-c: cd(snap) 248, the cursor flew off at +95), so the STAND press (the same
+        // 5-tick idiom, which toggles back) precedes the roof act and the yard-east act; the
+        // yard legs stay standing either way. Unset = byte-identical.
         let trench_crouch = std::env::var("NF_0D_STAND_CROUCH").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
         if trench_crouch && !w.scene.sim.as_ref().unwrap().bond.crouched {
             for _ in 0..5 {
@@ -2961,13 +2995,28 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         }
         let _ = kill_guard_certain_at(&mut w, [134.5, -325.7], [4.0, 4.0], 8.0, "the trench sleeper #25 (the certain box act, the run legs' drain)", 300);
         let _ = kill_guard_certain_at(&mut w, [129.6, -325.6], [4.0, 4.0], 8.0, "the trench sleeper #26 (the certain box act)", 300);
-        let _ = kill_guard_certain_at(&mut w, [138.9, -325.3], [3.5, 3.5], 11.0, "the roof shooter above the trench (the certain box act, the run-10-f roof drain)", 300);
-        let _ = kill_guard_certain_at(&mut w, [154.0, -291.0], [6.0, 6.0], 8.0, "the yard-east armed (the certain box act, the #1 0x12 cadence)", 300);
+        // THE STAND PRESS before the up-pitch acts (the crouch law: LEVEL pitch only).
         if trench_crouch && w.scene.sim.as_ref().unwrap().bond.crouched {
             for _ in 0..5 {
                 w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
                 w.total_ticks += 1;
             }
+        }
+        let _ = kill_guard_certain_at(&mut w, [138.9, -325.3], [3.5, 3.5], 11.0, "the roof shooter above the trench (the certain box act, the run-10-f roof drain)", 300);
+        let _ = kill_guard_certain_at(&mut w, [154.0, -291.0], [6.0, 6.0], 8.0, "the yard-east armed (the certain box act, the #1 0x12 cadence)", 300);
+    }
+    // retune-nb-0d-14, THE PHOTOGRAPH CROUCH (the run 14-e ledger): the photograph phase
+    // (~1000 ticks standing at the trench: the camera switch, the holster, the shoot_at) ate
+    // ~16-18 of the 14-e roll's health (~26 -> ~9 by frame 23978) — the thinned pack's
+    // residual chips ride it. The display is a LEVEL-pitch stand (the trench y 5.2 vs the
+    // display 5.1), so the crouch law allows it: the 5-tick press before the camera switch,
+    // the stand press after the photograph (the yard legs stay standing). NF_0D_PHOTO_CROUCH=1
+    // arms it (the run variant only; unset = byte-identical).
+    let photo_crouch = yard_run && std::env::var("NF_0D_PHOTO_CROUCH").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+    if photo_crouch && !w.scene.sim.as_ref().unwrap().bond.crouched {
+        for _ in 0..5 {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
         }
     }
     {
@@ -2986,6 +3035,13 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         let sim = w.scene.sim.as_mut().unwrap();
         for _ in 0..2 { sim.step_bond(nf_game::player::Input::default(), false, false, false); }
         assert_eq!(sim.drones.mission.states[12][1], 4, "objective 5 completes [M 0x1827d8:88-99]");
+    }
+    // THE STAND PRESS after the photograph (the crouch law: the yard legs stay standing).
+    if photo_crouch && w.scene.sim.as_ref().unwrap().bond.crouched {
+        for _ in 0..5 {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+            w.total_ticks += 1;
+        }
     }
 
     // Leg 4: north to the shooting stand — the yard face of bigdoor02 #96 (bounds
@@ -3008,6 +3064,13 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // The camera leg left the camera up: back to the rifle (the holster takes ~110 ticks).
         w.scene.sim.as_mut().unwrap().gun.switch_request = 0x1e;
         for _ in 0..300 { if w.scene.sim.as_ref().unwrap().gun.weapon == 0x1e { break; } w.wait(1); }
+        // retune-nb-0d-14: the #4 stand act (d ~5.5 from the shooting stand) — the last catch
+        // before the door kill rides its cadence.
+        if nw_kill == 2 {
+            let _ = kill_guard_index_certain(&mut w, 4, 0x500007e, 10.0, 8.0, "the north-west armed #4 (the stand act, index)", 260);
+        } else if nw_kill == 1 {
+            let _ = kill_guard_certain_at(&mut w, [129.6, -282.1], [5.0, 5.0], 8.0, "the north-west armed #4 (the stand act, before the door kill)", 260);
+        }
         // retune-nb-0d-10: the run variant skips the gunner kill (the door kill's mounted
         // laser out-ranges his chip cadence; the fights are the drain the run dodges).
         if !yard_run { for _ in 0..3 {
@@ -3282,6 +3345,34 @@ fn walk_arrival_to_the_c5_door_real_damage_00agent() {
 /// False (and a log line) when no such guard lives — the caller treats that as "already dead".
 fn kill_guard_at(w: &mut Walker, at: [f32; 2], tol: [f32; 2], label: &str) -> bool {
     kill_guard_at_cap(w, at, tol, label, 600)
+}
+
+/// retune-nb-0d-14, THE INDEX-TRACKING CERTAIN ACT: the same certain machinery as
+/// `kill_guard_certain_at` (the box aim + the aim-drain skip + the line-hit gate) but the
+/// pick is the drone's own INDEX (the list is fixed at load [D placements]) within a range
+/// cap — for a MOVER whose parked spot is only known after the fact (#4 walked
+/// (133.1,-273.8) -> (128.5,-282.5) across the round-14 runs' first ~900 ticks; the fixed
+/// boxes missed it at every stand). The aim and the box-centre gate read the guard's live
+/// boxes each tick, so a slow mover (~0.026 u/tick) is tracked like a parked one. The
+/// skin check guards the index against list drift. Returns false (a log line) when the
+/// index is dead, absent or out of range — the caller treats that as "already dead".
+fn kill_guard_index_certain(w: &mut Walker, idx: usize, expect_skin: u32, d_max: f32, y_max: f32, label: &str, cap: u32) -> bool {
+    let ok = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.list.get(idx).map_or(false, |d| {
+            d.skin == expect_skin && d.enabled && d.present && !d.corpse && d.health > 0.0
+                && d.pos[1] < y_max && walker::dxz(sim.bond.pos, d.pos) < d_max
+        })
+    };
+    if ok { shoot_far_aim(w, idx, label, cap, -1.0, true, 0.0, true, true) }
+    else {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if let Some(d) = sim.drones.list.get(idx) {
+            eprintln!("[0d] {label}: g{idx} skin {:#x} pos ({:.2},{:.2},{:.2}) d {:.1} — no clean shot (alive {}, d_max {d_max})",
+                d.skin, d.pos[0], d.pos[1], d.pos[2], walker::dxz(sim.bond.pos, d.pos), d.health > 0.0 && !d.corpse);
+        }
+        false
+    }
 }
 
 /// The PRESENT variant (level-0d-real-health-crossfire-3): drops the `enabled` gate — the bay
