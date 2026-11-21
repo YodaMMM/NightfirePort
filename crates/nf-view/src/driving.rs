@@ -555,12 +555,6 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     let mut bmin = [f32::MAX; 3];
     let mut bmax = [f32::MIN; 3];
 
-    let mut art_strips: HashMap<String, Vec<nf_formats::crp_mesh::MeshStrip>> = HashMap::new();
-    for art in &articles {
-        let strips = module.extract_article_mesh(&art.name, art.bbox_min, art.bbox_max);
-        art_strips.insert(art.name.clone(), strips);
-    }
-
     let push_strip = |strip: &nf_formats::crp_mesh::MeshStrip,
                       inst: Option<&nf_formats::crp_mesh::MapInstance>,
                       vertices: &mut Vec<Vertex>,
@@ -637,111 +631,16 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     };
 
     let map_instances = crp.extract_map_instances().unwrap_or_default();
-    if !map_instances.is_empty() {
-        let mut seen_inst = std::collections::HashSet::new();
-        for inst in &map_instances {
-            if inst.article.to_ascii_lowercase().starts_with("sky") || inst.inv_scale2 > 10.0 {
-                continue;
-            }
-            let key = (
-                inst.article.as_str(),
-                (inst.tr[0] * 10.0).round() as i32,
-                (inst.tr[1] * 10.0).round() as i32,
-                (inst.tr[2] * 10.0).round() as i32,
-            );
-            if !seen_inst.insert(key) {
-                continue;
-            }
-            if let Some(strips) = art_strips.get(&inst.article) {
-                for strip in strips {
-                    push_strip(strip, Some(inst), &mut vertices, &mut indices, &mut materials, &mut bmin, &mut bmax);
-                }
-            }
-        }
-    } else {
-        for art in &articles {
-            if let Some(strips) = art_strips.get(&art.name) {
-                for strip in strips {
-                    push_strip(strip, None, &mut vertices, &mut indices, &mut materials, &mut bmin, &mut bmax);
-                }
-            }
-        }
+    // The track's drawn geometry: every Map in#0 placement's baked model, road, ground, props
+    // and sky alike (nf_formats::geoprim, docs/formats/geoprim.md; the forward placement
+    // matrices [M DRIVING.ELF 0x22faf8]).
+    let geometry = nf_formats::geoprim::track_geometry(&crp_bytes)?;
+    for ws in geometry.strips {
+        let strip = nf_formats::crp_mesh::MeshStrip { positions: ws.positions, uvs: ws.uvs, colors: Vec::new(), texture: ws.texture };
+        push_strip(&strip, None, &mut vertices, &mut indices, &mut materials, &mut bmin, &mut bmax);
     }
 
-    // Build CDat collision grid and emit upward-facing road/street terrain triangles
-    // (GeoPrim road strips are runtime-generated in eaglrm.o, so CDat provides the full
-    // drivable street/bridge/ramp mesh).
     let col_tris = crp.extract_collision_tris().unwrap_or_default();
-    {
-        let first_i = indices.len() as u32;
-        for t in &col_tris {
-            let e1 = [t.v[1][0] - t.v[0][0], t.v[1][1] - t.v[0][1], t.v[1][2] - t.v[0][2]];
-            let e2 = [t.v[2][0] - t.v[0][0], t.v[2][1] - t.v[0][1], t.v[2][2] - t.v[0][2]];
-            let nx = e1[1] * e2[2] - e1[2] * e2[1];
-            let ny = e1[2] * e2[0] - e1[0] * e2[2];
-            let nz = e1[0] * e2[1] - e1[1] * e2[0];
-            let len = (nx * nx + ny * ny + nz * nz).sqrt();
-            if len < 1e-5 || (ny.abs() / len) < 0.45 {
-                continue;
-            }
-            let shade = if (ny.abs() / len) > 0.92 {
-                [68, 72, 78, 255]
-            } else {
-                [96, 100, 106, 255]
-            };
-            let bv = vertices.len() as u32;
-            for p in t.v {
-                let wp = [p[0], p[1] - 0.03, p[2]];
-                for a in 0..3 {
-                    bmin[a] = bmin[a].min(wp[a]);
-                    bmax[a] = bmax[a].max(wp[a]);
-                }
-                vertices.push(Vertex {
-                    pos: wp,
-                    uv: [0.0, 0.0],
-                    rgba: shade,
-                    nrm: [0, 127, 0, 0],
-                });
-            }
-            indices.push(bv);
-            indices.push(bv + 1);
-            indices.push(bv + 2);
-        }
-        let index_count = indices.len() as u32 - first_i;
-        if index_count > 0 {
-            let centre = [
-                0.5 * (bmin[0] + bmax[0]),
-                0.5 * (bmin[1] + bmax[1]),
-                0.5 * (bmin[2] + bmax[2]),
-            ];
-            let radius = ((bmax[0] - centre[0]).powi(2)
-                + (bmax[1] - centre[1]).powi(2)
-                + (bmax[2] - centre[2]).powi(2))
-            .sqrt()
-            .max(1000.0);
-            materials.push(Material {
-                layer: Layer::World,
-                draw: Draw {
-                    pass: 1,
-                    blend: 0,
-                    zwrite: true,
-                    atest: 0,
-                    fog: 0,
-                },
-                centre,
-                radius,
-                cel: None,
-                chain: u32::MAX,
-                node: u32::MAX,
-                key: None,
-                lflags: 0,
-                skin: None,
-                sky_slot: None,
-                first_index: first_i,
-                index_count,
-            });
-        }
-    }
 
     if bmin[0] > bmax[0] {
         bmin = [-100.0; 3];
