@@ -1120,6 +1120,31 @@ fn window(crp: &Crp<'_>, rec: &Record) -> Result<Vec<Record>> {
     crp.window_records(s, e)
 }
 
+/// The half extents of a car model's header box, the box the vehicle's inertia and world-collision
+/// hull are built from: `FUN_001c9778` takes `(max − min)·0.5` from `*(model+0xc)` + 0x10 (min) /
+/// + 0x20 (max) [M]; `FUN_001c7940` sets `model+0xc` to the first word behind the first `in#0`
+/// item's `as` reference [M :18-21], and every car's `as` payload opens with the full tag `Base`
+/// (0x42617365) whose record holds that layout: +0x10 min (w 1.0), +0x20 max (w 1.0) [D: all the
+/// sub and ultralight models; the reading of that word as the loader's `Base` pointer is [D], the
+/// loader's relocation of it is not traced]. vanquishsub (0.919, 0.578, 2.317), ultralight
+/// (5.344, 1.190, 2.998), ultralightbig (10.688, 2.379, 5.995) [D].
+pub fn header_half_extents(crp_bytes: &[u8]) -> Result<[f32; 3]> {
+    let crp = Crp::parse(crp_bytes)?;
+    let arti = crp
+        .pool()?
+        .into_iter()
+        .find(|r| r.tag == tag::ARTI)
+        .ok_or_else(|| FormatError::Invalid("no Arti in the car .crp pool".into()))?;
+    let base = window(&crp, &arti)?
+        .into_iter()
+        .find(|r| r.tag == crate::crp_mesh::TAG_BASE)
+        .ok_or_else(|| FormatError::Invalid("no Base record in the car article".into()))?;
+    let p = crp.payload(&base)?;
+    let f = |o: usize| f32_at(p, o);
+    let (lo, hi) = ([f(0x10)?, f(0x14)?, f(0x18)?], [f(0x20)?, f(0x24)?, f(0x28)?]);
+    Ok([(hi[0] - lo[0]) * 0.5, (hi[1] - lo[1]) * 0.5, (hi[2] - lo[2]) * 0.5])
+}
+
 /// Decodes a car `.crp` (decompressed bytes): every `in#0` item with its LOD-0 strips.
 pub fn car_mesh(crp_bytes: &[u8]) -> Result<CarMesh> {
     let crp = Crp::parse(crp_bytes)?;
