@@ -635,9 +635,23 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     // and sky alike (nf_formats::geoprim, docs/formats/geoprim.md; the forward placement
     // matrices [M DRIVING.ELF 0x22faf8]).
     let geometry = nf_formats::geoprim::track_geometry(&crp_bytes)?;
+    let placements = nf_formats::geoprim::map_placements(&crp).unwrap_or_default();
     for ws in geometry.strips {
-        let strip = nf_formats::crp_mesh::MeshStrip { positions: ws.positions, uvs: ws.uvs, colors: Vec::new(), texture: ws.texture };
+        // The sky articles (`sky*`) are a small dome (paris: +-30 u as placed, docs/formats/geoprim.md):
+        // drawn around the viewer like the on-foot camera skies (Layer::SkyCamera, before the world,
+        // no depth write) with their vertices relative to their placement [S: the driving engine's
+        // sky pass is not traced].
+        let sky = ws.article.to_ascii_lowercase().starts_with("sky");
+        let origin = if sky { placements.get(ws.placement).map_or([0.0; 3], |p| p.origin) } else { [0.0; 3] };
+        let positions = if sky { ws.positions.iter().map(|q| [q[0] - origin[0], q[1] - origin[1], q[2] - origin[2]]).collect() } else { ws.positions };
+        let strip = nf_formats::crp_mesh::MeshStrip { positions, uvs: ws.uvs, colors: Vec::new(), texture: ws.texture };
+        let n = materials.len();
+        let (b0, b1) = (bmin, bmax);
         push_strip(&strip, None, &mut vertices, &mut indices, &mut materials, &mut bmin, &mut bmax);
+        if sky {
+            (bmin, bmax) = (b0, b1); // the dome does not widen the track bounds
+            for m in &mut materials[n..] { m.layer = Layer::SkyCamera; m.draw.pass = 0; m.draw.zwrite = false; m.radius = 1.0e6; }
+        }
     }
 
     let col_tris = crp.extract_collision_tris().unwrap_or_default();
