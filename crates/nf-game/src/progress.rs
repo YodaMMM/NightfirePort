@@ -363,6 +363,34 @@ pub fn has_gold_medal(bits: u64, hash: u32) -> bool {
     medal_set(bits, hash, 3)
 }
 
+/// `Menu_SetBonus` 0x1ff898's rebuild of one player's `Upgrades` row (0x2beea8 + slot·9) from
+/// that player's bonus word: `ResetUpgrade(slot)` [M :73], then for each of the 12 `sp_level`
+/// hashes (+0xC) and counters 1..4 `PlrStarts_ProcessRewardCounter(&bonus[slot], hash, counter,
+/// 0, &info)` and, when `info.has` and `info.kind == 4`, `Set_Upgrade(slot, info.bit,
+/// info.count)` [M :74-98] — `Upgrades[bit / 3] = count`, the kind-4 group's set-bit count
+/// [M 0x199210:46-66: `param_5[1]` = the BASE bit, `param_5[2]` = the count of the group's
+/// widened bits set; `has` tests the entry's own widened bit; Set_Upgrade 0x1a98a8 stores
+/// `(bit / 3 < 9)`]. Every bonus writer (the save load, the results award, the codename and
+/// cheat paths) runs it, so the row always follows the word. `Upgrade_Weapon` 0x1a8f30 reads
+/// row 0 in single player: [0] handguns, [2] the 0x54 zoom, [3] snipers, [4] dart guns,
+/// [5] decryptors, [6] stunners, [7] lasers [M the jump table at 0x2fc9a0 + the `lbu` of each
+/// arm, 0x1a8f5c-0x1a8ff8].
+pub fn upgrades_from_bonus(bits: u64) -> [u8; 9] {
+    let mut row = [0u8; 9];
+    for &hash in SP_LEVEL_HASHES.iter() {
+        let Some(idx) = REWARDS_TABLE.iter().position(|e| e.hash == hash) else { continue };
+        for counter in 1..5 {
+            let d = REWARDS_TABLE[idx].desc[counter];
+            if d.kind != 4 || d.bit >= 0x3f { continue; }
+            let set = |b: u16| b < 64 && bits & (1u64 << b) != 0;
+            if !set(gold_group(idx, counter).0) { continue; }
+            let count = gold_group_bits(idx, counter).into_iter().filter(|&b| set(b)).count();
+            if let Some(slot) = row.get_mut((d.bit / 3) as usize) { *slot = count as u8; }
+        }
+    }
+    row
+}
+
 /// The kind-4 group's widened bits in scan order (entry-major, counter 1..4 minor) — the bits the
 /// game tests for the group's set count [M 0x199210:53-55 `1 << (bit + iVar9)`].
 fn gold_group_bits(entry_idx: usize, counter: usize) -> Vec<u16> {
@@ -985,6 +1013,24 @@ impl Progress {
 
 #[cfg(test)]
 mod tests {
+    /// g029: `Menu_SetBonus` 0x1ff898's `Upgrades` rebuild [M :73-98 + 0x199210 + 0x1a98a8]: a
+    /// kind-4 (gold) reward sets `row[bit / 3]` to its group's set count. The handgun group is
+    /// bits 0..2 (07000005, 07000009, 07000011 gold [L RewardsTable 0x2bc920]); the stunner
+    /// group is bit 18 (09000003); the 0x54 zoom byte is bit 6 (09000006).
+    #[test]
+    fn gold_rewards_fill_the_upgrade_row() {
+        assert_eq!(super::upgrades_from_bonus(0), [0; 9], "a fresh profile has no upgrades");
+        assert_eq!(super::upgrades_from_bonus(1 << 0)[0], 1, "one handgun gold → level 1");
+        assert_eq!(super::upgrades_from_bonus((1 << 0) | (1 << 2))[0], 2, "two of the three → level 2");
+        assert_eq!(super::upgrades_from_bonus(0b111)[0], 3, "all three → level 3");
+        assert_eq!(super::upgrades_from_bonus(1 << 18)[6], 1, "the 09000003 gold → the stunner byte");
+        assert_eq!(super::upgrades_from_bonus(1 << 6)[2], 1, "the 09000006 gold → the 0x54 byte");
+        let r = super::upgrades_from_bonus(1 << 18);
+        assert_eq!((r[0], r[7]), (0, 0), "sister: the stunner reward leaves the other bytes at 0");
+        // Bronze/silver bits are kind 0..2 rewards: no upgrade.
+        assert_eq!(super::upgrades_from_bonus(1 << 26), [0; 9], "a kind-0 reward bit is not an upgrade");
+    }
+
     use super::*;
 
     /// The MSSN block for a fresh table is bit-counted like the game's: 64 header bits + 32 + 8 +

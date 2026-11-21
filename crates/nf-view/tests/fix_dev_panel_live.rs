@@ -227,7 +227,7 @@ fn panel_give_spawns_exactly_the_record() {
             // (the unlock tables, slot 0 without the shop [L ee_start_05.bin]); every other id is
             // identity. 10 → 0xC only with the game-complete byte `GameState[0x52]` [M 0x1a8f30].
             clock = sim.drones.progress.game_complete as u32;
-            fp = sim.weapons.first_person(nf_game::pickup::Inventory::upgrade_weapon(id as u16, 0, clock) as usize);
+            fp = sim.weapons.first_person(nf_game::pickup::Inventory::upgrade_weapon(id as u16, &[0; 9], clock) as usize);
         }
         let q = [("do".to_string(), "weapon".to_string()), ("id".to_string(), format!("{id}"))];
         let (status, switch) = panel::apply(&mut scene, &q);
@@ -244,7 +244,7 @@ fn panel_give_spawns_exactly_the_record() {
         // The take landed on the remapped record (6 → 2, 10 → 0xC [M 0x18e650:142]); ownership
         // lands on ITS base (`Player_EquipWeapon` 0x1a8a58 — a variant shares the base's owned
         // flag and clip slot; 0x03 gives owned[2] + clip[2] = 7 [M]).
-        let given = nf_game::pickup::Inventory::upgrade_weapon(id as u16, 0, clock) as usize;
+        let given = nf_game::pickup::Inventory::upgrade_weapon(id as u16, &[0; 9], clock) as usize;
         let base = wd.base(given) as usize;
         assert!(sim.drones.inventory.owned.get(base).copied().unwrap_or(false), "giving {id:#04x} (gave {given:#04x}): base {base:#04x} not owned ({status})");
         // The record's own clip slot (base's when shared) is filled to the record's clip size.

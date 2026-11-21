@@ -258,6 +258,20 @@ impl WeaponData {
         self.records.get(weapon).map_or(1.0, |r| f32::from_le_bytes(r[0x88..0x8c].try_into().unwrap()))
     }
 
+    /// `Upgrade_Weapon` 0x1a8f30's 0x54 arm: `weapon_data[0x54]+0x88` and `weapon_data[0x55]+0x88`
+    /// (the zoom) = 16.0 when the player-0 upgrade byte `Upgrades[2]` (0x2beeaa) is non-zero, else
+    /// 8.0 [M 0x1a8ff4-0x1a9020: `lbu 0x2beeaa` → `lui 0x4100` / `lui 0x4180`, `swc1 0x5984` and
+    /// `swc1 0x5878` off weapon_data 0x2bf150]. The disc value is 8.0 [L ee_start_05 records
+    /// 0x54/0x55 +0x88]. The game writes it whenever an SP `Player_EquipWeapon(0x54)` runs (the kits
+    /// of 05/07/0c/14 and the default arm, and 0x54 pickups); the port applies it once per level
+    /// load from the profile's row.
+    pub fn apply_upgrade_zoom(&mut self, upgraded: bool) {
+        let z = if upgraded { 16.0f32 } else { 8.0 };
+        for w in [0x54usize, 0x55] {
+            if let Some(r) = self.records.get_mut(w) { r[0x88..0x8c].copy_from_slice(&z.to_le_bytes()); }
+        }
+    }
+
     /// `+0x8C`: the camera swing amount — the game loads it per tick in `Player_Update`
     /// 0x193600:439-441 (`weapon_data[weapon·0x10c + 0x8c]`, `lwc1 f12, 140(a1)` [M
     /// 0x194134]) and hands it to `Camera_ApplySwing` 0x1bbf40 as the sway amplitude
