@@ -1081,6 +1081,9 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     scene.char_vertex_start = char_vertex_start;
     scene.char_verts = char_verts;
     scene.attachments = attachments;
+    // The driving engine's world is left-handed against the on-foot renderer (the car's number plate
+    // and the track's sign text read mirrored otherwise): the view mirrors screen x.
+    scene.mirror_x = true;
     // The mission's fog (the Render/Fog/<track>.tun tuning text, nf_formats::rendertun): its colour is the
     // frame's background where nothing draws (the open sky overhead, past the sky bands), as the
     // on-foot levels clear to theirs. The track's draws keep fog 0, so only the background changes.

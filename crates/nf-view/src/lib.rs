@@ -437,6 +437,13 @@ impl Camera {
         let view = |e: Vec3| Mat4::from_cols_array_2d(&[[s.x, u.x, -fw.x, 0.0], [s.y, u.y, -fw.y, 0.0], [s.z, u.z, -fw.z, 0.0], [-s.dot(e), -u.dot(e), fw.dot(e), 1.0]]);
         ((proj * view(self.pos)).to_cols_array_2d(), (proj * view(Vec3::ZERO)).to_cols_array_2d())
     }
+
+    /// `view_proj` with clip x negated when `mirror` (a driving scene, `Scene::mirror_x`).
+    pub fn view_proj_for(&self, aspect: f32, mirror: bool) -> ([[f32; 4]; 4], [[f32; 4]; 4]) {
+        let (mut a, mut b) = self.view_proj(aspect);
+        if mirror { for c in 0..4 { a[c][0] = -a[c][0]; b[c][0] = -b[c][0]; } }
+        (a, b)
+    }
 }
 
 fn start_camera(scene: &scene::Scene) -> Camera {
@@ -2983,7 +2990,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     // the window path feeds it from the front end's AV widescreen row) — see cutscene_frame.
     let game_aspect = scene.sim.as_ref().map_or(4.0 / 3.0, |s| s.view_aspect);
     let (proj_aspect, band) = if cut { cutscene_frame(w as f32, h as f32, game_aspect) } else { (w as f32 / h as f32, [0.0; 4]) };
-    let (vp_shot, _) = cam.view_proj(proj_aspect);
+    let (vp_shot, _) = cam.view_proj_for(proj_aspect, scene.mirror_x);
     // The doors' `Door_IsClosed` snapshot for the walk's portal gate (fix-door-portal-links).
     let door_closed = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
     // Render aid (NF_NO_PORTAL_CULL): draw every cel — the dev panel's portal-culling OFF — for shots from a `--bond`
@@ -3037,7 +3044,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     });
     let view = target.create_view(&Default::default());
     let depth = gpu::depth_view(&device, w, h);
-    let (vp, vp_rot) = cam.view_proj(proj_aspect);
+    let (vp, vp_rot) = cam.view_proj_for(proj_aspect, scene.mirror_x);
     let snow = snow_for(scene, cam);
     let hud_owned = shot_hud(scene, proj_aspect, menu, movie.is_some());
     let hud = &hud_owned;
@@ -6402,7 +6409,7 @@ impl App {
                 let game_aspect = self.game_aspect;
                 if let Some(sim) = self.scene.sim.as_mut() { sim.view_aspect = game_aspect; }
                 let (proj_aspect, band) = if cutscene { cutscene_frame(g.config.width as f32, g.config.height as f32, game_aspect) } else { (aspect0, [0.0; 4]) };
-                let (vp0, _) = draw_cam.view_proj(proj_aspect);
+                let (vp0, _) = draw_cam.view_proj_for(proj_aspect, self.scene.mirror_x);
                 // One visibility walk per frame, shared by the palette's object cull and render's
                 // World cull (fix-portal): the eye's cel from `Camera_CheckLocation` 0x1bae90's
                 // persistent state, the walk from it [M 0x1e86e8].
@@ -6483,7 +6490,7 @@ impl App {
                 };
                 let view = frame.texture.create_view(&Default::default());
                 let aspect = proj_aspect;
-                let (_, vp_rot) = draw_cam.view_proj(aspect);
+                let (_, vp_rot) = draw_cam.view_proj_for(aspect, self.scene.mirror_x);
                 let vp = vp0;
                 let snow = snow_for(&self.scene, &draw_cam);
                 // fix-menus: a menu page up → the menu overlay replaces the HUD. fix-menu-movies2:
@@ -7510,7 +7517,11 @@ pub fn run() -> Result<()> {
         let ticks: u32 = args.iter().position(|a| a == "--frame").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0) as u32;
         for _ in 0..ticks { drv.step(0.0, 0.0, 0.0, false); }
         let (p, yaw, pitch) = drv.chase_camera();
-        let cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV };
+        let mut cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV };
+        if let Some(i) = args.iter().position(|a| a == "--cam") {
+            let v: Vec<f32> = args[i + 1..i + 6].iter().map(|s| s.parse()).collect::<Result<_, _>>()?;
+            cam = Camera { pos: Vec3::new(v[0], v[1], v[2]), yaw: v[3], pitch: v[4], fov: GAME_FOV };
+        }
         let opts = scene::ViewOpts { reinforcements: false, firing: false, right: [1.0, 0.0, 0.0], up: [0.0, 1.0, 0.0] };
         let (layout, _) = scene.skin_layout();
         let (mut pal, _) = scene.skin_palette(&layout, None, ticks as f32, opts, None);
