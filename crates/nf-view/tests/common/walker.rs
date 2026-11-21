@@ -53,6 +53,49 @@ pub fn zero_g_errs(sim: &nf_view::scene::Sim, at: V3) -> Option<(f32, f32)> {
 
 pub fn dxz(a: V3, b: V3) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
 
+/// `Walker::shield_boxes`: would a tap from `eye` at `at` put a round into drone `s`'s posed hit
+/// boxes? The centre ray and 8 rays on 1.5x the held gun's one-tap cone, each run to twice the
+/// target's range, against every box (`damage::ray_box`, the test Bond's own rounds use).
+pub fn shield_cone_hits(sim: &nf_view::scene::Sim, s: usize, eye: V3, at: V3) -> bool {
+    let Some(sd) = sim.drones.list.get(s) else { return false };
+    let data = nf_game::drone::Data {
+        tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+        world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+        skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+        hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+        ai_points: &sim.ai_points,
+    };
+    let boxes = sd.hit_boxes(&data);
+    let spread = sim.weapons.records.get(sim.gun.weapon as usize).map_or(176.0, |w| {
+        let f = |o: usize| f32::from_le_bytes(w[o..o + 4].try_into().unwrap());
+        let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().unwrap());
+        nf_game::bullet::player_spread(f(0x24), f(0x98), 1, 1000, flags68, sim.aiming)
+    });
+    let ang = spread * 0.0014 * 1.5;
+    let d = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-3);
+    let f = [d[0] / l, d[1] / l, d[2] / l];
+    // two axes across the ray
+    let up = if f[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+    let cr = |a: V3, b: V3| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let nz = |v: V3| { let m = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-9); [v[0] / m, v[1] / m, v[2] / m] };
+    let u = nz(cr(f, up));
+    let v = cr(u, f);
+    let reach = 2.0 * l;
+    let mut rays = vec![f];
+    for k in 0..8 {
+        let th = k as f32 * std::f32::consts::FRAC_PI_4;
+        let (sn, cs) = th.sin_cos();
+        let off = ang.tan();
+        rays.push(nz([f[0] + (u[0] * cs + v[0] * sn) * off, f[1] + (u[1] * cs + v[1] * sn) * off, f[2] + (u[2] * cs + v[2] * sn) * off]));
+    }
+    rays.iter().any(|r| {
+        let ray = [r[0] * reach, r[1] * reach, r[2] * reach];
+        boxes.iter().any(|b| nf_game::damage::ray_box(eye, ray, b).is_some())
+    })
+}
+
 fn walker_dx(a: V3, b: [f32; 3]) -> f32 { dxz(a, [b[0], b[1], b[2]]) }
 
 /// What to do once the waypoint is reached (or while approaching it).
@@ -282,6 +325,17 @@ pub struct Walker {
     /// game's spread cap (0.2464 rad — bullet::player_spread's 176-unit cap) so a moving volley
     /// whose pellets would cross the shielded contact is refused before it fires.
     pub shield_bloom: bool,
+    /// walk-01-agent (opt-in; the 01 Agent walk sets it): the shield test is the held gun's own
+    /// cone against the contact's posed hit boxes instead of the 0.9 u + bloom-cap cylinder.
+    /// Bond's round hits a drone iff its ray enters one of the drone's boxes [M Collide_Jointy
+    /// 0x1ec180 via Bullet_update 0x12e7b0's pick], and a player round leaves the muzzle inside
+    /// the record's cone: deviation <= (+0x24 + one tap's +0x98 bloom) x 0.0014 rad [M Bullet_init
+    /// 0x12c5a0:139-180, bullet::player_spread / bullet::cone]. The tap is refused when the centre
+    /// ray or any of 8 rays on 1.5x that cone's edge enters a contact box within twice the
+    /// target's range. The cylinder over-refused: on 01 the settled contact stands ~0.74 u off
+    /// the line to the pocket guards and the cylinder cone (1.1-1.7 u there) held the trigger
+    /// for the whole fight while the guards' rounds passed him.
+    pub shield_boxes: bool,
     /// courtyard-lamps: the channel-rise watch (opt-in; empty by default). Each tick a listed
     /// channel turns on, `rises` records (channel, walker tick, Bond's feet, the placement indices
     /// of the not-yet-deleted triggers writing that channel whose volume Bond's capsule touches) —
@@ -375,7 +429,7 @@ impl Walker {
             alarm_last: Vec::new(),
             drone_watch, watch_last,
             health_last: Vec::new(),
-            shield: None, shield_bloom: false,
+            shield: None, shield_bloom: false, shield_boxes: false,
             fighting_blocker: false,
             body_block_response: false,
             bridge_wedged_nav: false,
@@ -1072,7 +1126,10 @@ impl Walker {
                 let mut shield_block = false;
                 if let Some(s) = self.shield {
                     if let Some(sd) = sim.drones.list.get(s) {
-                        if !sd.corpse && sd.health > 0.0 {
+                        if !sd.corpse && sd.health > 0.0 && self.shield_boxes {
+                            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+                            shield_block = shield_cone_hits(sim, s, eye, at);
+                        } else if !sd.corpse && sd.health > 0.0 {
                             let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
                             let ds = dxz(sd.pos, eye);
                             let dtg = dxz(dp, eye).max(1e-3);

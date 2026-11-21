@@ -185,6 +185,20 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
                 }
                 break;
             }
+            // Agent: a pocket guard Bond CAN see is fought from the band's west end (~4.7 u), not
+            // from the mouth at 7+ u. The contact waits in the pocket ~1.3 u from the guard's post,
+            // and the walk's friendly-fire cone (the bloom cap 0.2464 rad x distance) covers him
+            // from the mouth on every line, so the trigger never fired while the guard's SMG
+            // landed (the t26967 death: aim exposed on every tick, shield_block on every tick).
+            // From the west end the cone is narrow enough to clear him.
+            if difficulty == 2 && gpos[0] < -27.0 && walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), g2) {
+                // The return fire stays off for the step in: it would answer him from where Bond
+                // stands, which is the cone the step leaves.
+                let rf = w.dmg.return_fire;
+                w.dmg.return_fire = false;
+                w.walk_nav_to([-25.8, 6.4, 14.9], &format!("the pocket stance for guard {g2}"), 0.5);
+                w.dmg.return_fire = rf;
+            }
             if !w.shoot(g2, &format!("ambush guard {g2}")) {
                 if w.resupply("ambush ammo") { w.shoot(g2, &format!("ambush guard {g2} retry")); }
             }
@@ -904,6 +918,11 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // contact 9.8 u behind him (d#1 10.0 -> 5.5 at t8329, by_player) and #17's three rounds in
     // the west hall then finished him.
     w.shield_bloom = true;
+    // Agent (walk-01-agent): the shield is the held gun's cone against the contact's own hit
+    // boxes (Walker::shield_boxes). In the ch-0xF pocket the settled contact stands ~0.7-1.3 u
+    // off the line to the pocket guards; the cylinder cone held the trigger through the whole
+    // pocket fight while the guards' SMG rounds reached Bond past him (t26967, t42850).
+    if difficulty == 2 { w.shield_boxes = true; }
     let guards: Vec<usize> = {
         let sim = w.scene.sim.as_ref().unwrap();
         (0..sim.drones.list.len()).filter(|&i| {
@@ -3936,8 +3955,14 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
 /// the backed-off return fire dropped #12/#3/#17 for 3.1 health on the fix run, and a guard
 /// parked west of x -27 (the walled pocket — no clear eye ray from any mouth stand [L]) is
 /// fought SHOOT-ONLY, never approached into the 0.4-u corner where the pre-fix run died.
+/// UN-IGNORED (walk-01-agent): the t26967 death was the walk's own friendly-fire gate, not a
+/// sight fault. Every #17 round that landed flew muzzle -> Bond with no world contact (flat and
+/// cel-scoped traces both clear) and every one of his 16 hit boxes was clear from Bond's eye on
+/// the same ticks [L the hit probe]; the shoot loop held the trigger because the settled contact
+/// (-30.0, 13.6) sat inside the shield's 0.9 u + bloom-cap cylinder. The fix is a walk plan: the
+/// gun-cone-vs-hit-box shield (Walker::shield_boxes, Agent only) and the pocket stance at the
+/// band's west end for a pocket guard Bond can see. Green, 53.8 health at the exit.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond died t14006 at (-22.47,6.47,13.64) on clip 1 spare 9 at the ch-0xF mouth; ignored-walks-1121 added the west armour box (50.0) and a full clip before the slab, and the walk now dies t26967 at (-23.31,6.48,14.20): the pocket guard #17 (-30.5,6.3,14.9) lands 52.3 in 49 hits from 7.2 u while every eye ray to his parts is blocked (no exposed part, three holds per window) and the band-edge windows on the walled #2/#4 spend the clock; re-tune the mouth fight (a stance that sees into the pocket, or fight #17 first) and un-ignore"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));
 }
