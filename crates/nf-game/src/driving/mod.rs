@@ -31,4 +31,7 @@ pub mod weapons;
 // directory would collide, rustc E0761). The re-export keeps every public path the tests and
 // callers use: `nf_game::driving::{Car, CarInput, CarParams,
 // FlatWorld, Rigid, Tuning, DT, Friction, SURFACES}`.
-pub use physics::{Car, CarInput, CarParams, DT, FlatWorld, Friction, Rigid, SURFACES, Tuning};
+pub use physics::{
+    Car, CarInput, CarParams, CollisionGround, DT, FlatGround, FlatWorld, Friction, Ground, Rigid, SURFACES,
+    Tuning, WallHit, WheelPlane,
+};

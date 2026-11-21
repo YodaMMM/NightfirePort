@@ -2,7 +2,7 @@
 //! the drive/brake/reverse accelerations, the gravity bodge, and the flat-surface run — every
 //! assertion cites the DRIVING.ELF address (docs/systems/drive-physics.md is the map).
 
-use nf_game::driving::{Car, CarInput, CarParams, FlatWorld, Rigid, Tuning, DT};
+use nf_game::driving::{Car, CarInput, CarParams, FlatGround, FlatWorld, Rigid, Tuning, DT};
 
 fn vanquish() -> Car {
     Car::new(CarParams::vanquish(), [0.0; 3], 0.0)
@@ -151,111 +151,101 @@ fn drive_accel_uses_the_gear_ratio_and_brake_subtracts() {
 }
 
 /// The reverse speed cutoff [M FUN_0018cef8:401-407]: MAXREVACC decays by
-/// (speed − SPEED_CUTOFF_REVERSE)·SPEED_CUTOFF_RATE_REVERSE below zero at the cutoff+1/0.075.
+/// (speed − SPEED_CUTOFF_REVERSE)·SPEED_CUTOFF_RATE_REVERSE, floored at 0. In the reverse state the
+/// decayed value is the BRAKE term (the brake pedal drives backwards); the throttle keeps the
+/// engine term [M :425-429].
 #[test]
 fn reverse_accel_decays_past_the_cutoff() {
     let mut car = vanquish();
     car.reversing = true;
     car.speed = 5.0; // below the 10 m/s cutoff — full MAXREVACC
-    let input = CarInput { throttle: 1.0, brake: 0.0, steer: 0.0, handbrake: false };
-    assert!((car.drive_accel(&input) - 2.4).abs() < 1e-6);
+    let input = CarInput { throttle: 0.0, brake: 1.0, steer: 0.0, handbrake: false };
+    assert!((car.drive_accel(&input) + 2.4).abs() < 1e-6);
     car.speed = 20.0; // cut = 10 → 2.4 − 10·0.075 = 1.65
-    assert!((car.drive_accel(&input) - 1.65).abs() < 1e-5, "the decay line, got {}", car.drive_accel(&input));
+    assert!((car.drive_accel(&input) + 1.65).abs() < 1e-5, "the decay line, got {}", car.drive_accel(&input));
     car.speed = 42.0; // cut = 32 → 2.4 − 2.4 < 0 → floored at 0
     assert_eq!(car.drive_accel(&input), 0.0, "the reverse cutoff floors at 0 [M :405-407]");
 }
 
 /// The gravity bodge [M FUN_001f7c60:136-144 + the strings 0x396578/0x396588]: cars integrate
-/// under BODGE_PLAYER_GRAVITY (−13); the jungle_truck name alone takes GRAVITY (−34). Sister:
-/// the two values differ — a port that hard-codes −34 fails the player-car fall.
+/// under BODGE_PLAYER_GRAVITY (−13); the jungle_truck name alone takes GRAVITY (−34). The game
+/// integrates (pass D) before it adds gravity (pass E) [M FUN_001ff3d8], so a fresh car's first
+/// tick moves nothing and after N ticks vy = g·(N−1)·dt. Sister: −34 fails the player-car fall.
 #[test]
 fn player_car_gravity_is_the_bodge_minus_13() {
     let r = Rigid::game_defaults();
     assert_eq!(r.bodge_player_gravity, -13.0);
     assert_eq!(r.gravity, -34.0, "and jungle_truck's full gravity [M :140]");
     let mut car = vanquish();
-    car.grounded = false;
     car.pos = [0.0, 20.0, 0.0];
-    let world = FlatWorld::paved();
+    let world = FlatGround::paved(0.0);
     let input = CarInput::default();
     for _ in 0..60 {
         car.step(&input, &world, &r, DT);
     }
-    assert!((car.vel[1] - (-13.0 * 1.0)).abs() < 1e-3, "one second of the bodge gravity, vy = {}", car.vel[1]);
-    assert!((car.pos[1] - (20.0 - 13.0 * (60.0 * 61.0 / 2.0) * DT * DT)).abs() < 1e-2,
-            "the semi-implicit Euler sum: y = 20 − g·dt·Σk = 13.392, got {}", car.pos[1]);
-    assert!(!car.grounded, "still airborne at 13.5 m");
-    for _ in 0..120 {
+    assert!((car.vel[1] - (-13.0 * 59.0 * DT)).abs() < 1e-3, "59 ticks of the bodge gravity, vy = {}", car.vel[1]);
+    assert!((car.pos[1] - (20.0 - 13.0 * (59.0 * 60.0 / 2.0) * DT * DT)).abs() < 1e-2,
+            "the semi-implicit Euler sum y = 20 − g·dt²·Σ(k−1), got {}", car.pos[1]);
+    assert!(!car.grounded, "still airborne");
+    for _ in 0..300 {
         car.step(&input, &world, &r, DT);
     }
-    assert_eq!(car.pos[1], 0.0, "the flat surface catches the car");
-    assert!(car.grounded);
+    assert!(car.grounded && car.contacts == 4, "the wheels catch the car on the plane");
+    assert!(car.pos[1] > 0.6 && car.pos[1] < car.rest_height(), "on its springs, y = {}", car.pos[1]);
     // The jungle_truck case: the name check swaps the working gravity [M :140].
     let mut truck = vanquish();
     truck.gravity = r.gravity;
-    truck.grounded = false;
     truck.pos = [0.0, 20.0, 0.0];
     for _ in 0..60 {
         truck.step(&input, &world, &r, DT);
     }
-    assert!((truck.vel[1] - (-34.0)).abs() < 1e-3, "one second of GRAVITY, vy = {}", truck.vel[1]);}
+    assert!((truck.vel[1] - (-34.0 * 59.0 * DT)).abs() < 1e-3, "GRAVITY, vy = {}", truck.vel[1]);
+}
 
-/// The tyre grip boost curve [M FUN_00190f88:395-397] and the ±12.5 lateral clamp [M :506-508]:
-/// the port's yaw rate is limited so the lateral acceleration stays inside
-/// 12.5·boost·surface. Sister: the boost reaches exactly 1.0 at 15 m/s.
+/// The rail stand-in the AI driver uses (`Car::step_rail`, [S]) keeps the earlier flat model:
+/// its yaw rate stays inside the 12.5·boost lateral clamp it carries.
 #[test]
-fn lateral_grip_boost_and_the_12_5_clamp() {
+fn rail_step_keeps_its_lateral_clamp() {
     let boost = |speed: f32| (1.0 - (speed / 15.0).min(1.0)) * 2.5 + 1.0;
-    assert!((boost(0.0) - 3.5).abs() < 1e-6, "the rest boost [M :396-397]");
-    assert!((boost(7.5) - 2.25).abs() < 1e-6, "half speed, half boost");
-    assert!((boost(15.0) - 1.0).abs() < 1e-6, "the 15 m/s crossover [M]");
-    assert!((boost(30.0) - 1.0).abs() < 1e-6, "and it never goes below 1");
-    // The clamp: sweep speeds and steer inputs, the lateral acceleration never exceeds
-    // 12.5·boost·friction [M :506-508 with the surface table at 1.0 [M .data 0x3319d8]].
-    let r = Rigid::game_defaults();
+    assert!((boost(0.0) - 3.5).abs() < 1e-6);
+    assert!((boost(15.0) - 1.0).abs() < 1e-6);
     let world = FlatWorld::paved();
     for speed in [2.0f32, 8.0, 15.0, 25.0, 40.0, 60.0] {
         for steer in [-1.0f32, -0.5, 0.5, 1.0] {
             let mut car = vanquish();
             car.vel = [speed, 0.0, 0.0];
             car.update_rpm_gear(0.0, true);
-            car.update_steering(steer);
-            car.step(&CarInput { throttle: 0.0, brake: 0.0, steer, handbrake: false }, &world, &r, DT);
+            car.step_rail(&CarInput { throttle: 0.0, brake: 0.0, steer, handbrake: false }, &world, DT);
             let lat = (car.yaw_rate * speed).abs();
-            let limit = 12.5 * boost(speed);
-            assert!(lat <= limit + 1e-3, "speed {speed} steer {steer}: lateral {lat} > limit {limit}");
+            assert!(lat <= 12.5 * boost(speed) + 1e-3, "speed {speed} steer {steer}");
         }
     }
 }
 
-/// A scripted flat run through the real step path [M 0x159d10's once-per-tick physics]: full
-/// throttle reaches and crosses every vanquish shift point in order; rolling resistance keeps
-/// the coast-down gentle (the ROLLING_RESISTANCE 0.1 reading, doc §5's open question).
+/// A flat run through the land step [M 0x159d10's once-per-tick physics]: full throttle walks the
+/// box 1 → 2 → 3 and tops out in gear 3 (the drive/rolling balance, drive_land_physics.rs); the
+/// coast-down is the per-wheel rolling vector (0.4·v per unit mass on four wheels), not a cliff.
 #[test]
 fn flat_run_shifts_through_every_gear_in_order() {
     let mut car = vanquish();
+    car.pos[1] = car.rest_height();
     let r = Rigid::game_defaults();
-    let world = FlatWorld::paved();
+    let world = FlatGround::paved(0.0);
     let input = CarInput { throttle: 1.0, brake: 0.0, steer: 0.0, handbrake: false };
     let mut seen = [false; 6];
-    let mut top = 0.0f32;
-    for _ in 0..60 * 90 {
+    for _ in 0..60 * 30 {
         car.step(&input, &world, &r, DT);
         seen[car.gear as usize] = true;
-        top = top.max(car.speed);
-        if car.speed > 60.0 { break; }
     }
-    assert!(seen[1] && seen[2] && seen[3] && seen[4] && seen[5], "every gear visited: {seen:?}");
-    assert!(car.speed >= 54.0, "the run reaches gear 5's territory, speed {}", car.speed);
-    assert!(top > 54.0);
-    // Coast: throttle off, the car decelerates but keeps rolling (no per-tick ×0.8 cliff).
+    assert_eq!(seen, [false, true, true, true, false, false], "gears 1-3, never 4 without boost: {seen:?}");
     let coast = CarInput::default();
     let v0 = car.speed;
     for _ in 0..60 {
         car.step(&coast, &world, &r, DT);
     }
     assert!(car.speed < v0, "rolling resistance slows the car");
-    assert!(car.speed > v0 * 0.8, "…gently (v0 {v0} → {}), not the 0.8-per-tick cliff", car.speed);
+    // v(1 s) ≈ v0·e^(−0.4) = 0.67·v0 under the 0.4/s rolling decay.
+    assert!((car.speed / v0 - (-0.4f32).exp()).abs() < 0.02, "coast {v0} → {}", car.speed);
 }
 
 // --- The real-file tests: the mission VIVs' own tuning data (no game bytes in the repo) ---

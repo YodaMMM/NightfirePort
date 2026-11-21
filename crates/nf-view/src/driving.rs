@@ -197,6 +197,14 @@ pub struct DrivingState {
     /// The driving engine's chase camera (nf_game::driving::camera, `FUN_001b2b48`) and its last view.
     pub cam: Option<(nf_game::driving::camera::ChaseCamera, nf_game::driving::camera::HeliParams, nf_game::driving::camera::ArmParams)>,
     pub cam_view: Option<nf_game::driving::camera::CamView>,
+    /// The land car's ground: the track's collision triangles for `Car::step`'s four sprung wheels
+    /// (the DRIVING.ELF land pass, docs/systems/drive-physics.md §8). `None` (the watercraft, unit
+    /// tests) keeps the flat model + the view's own 4-wheel height follow.
+    pub land: Option<nf_game::driving::CollisionGround>,
+    /// The player model's bbox centre in car space: the body the land step moves is that box
+    /// (`CarParams::half_extents` = the model bbox half extents [M FUN_001c9778]), so the model draws
+    /// at `pos − rot·centre`.
+    pub car_box_centre: [f32; 3],
 }
 
 const IDENT_MAT: Mat4 = [
@@ -240,8 +248,18 @@ impl DrivingState {
             steer: steer.clamp(-1.0, 1.0),
             handbrake,
         };
+        if let Some(g) = &self.land {
+            // The land pass owns the height, pitch and roll (its wheels stand on the triangles).
+            self.car.step(&input, g, &self.rigid, DT);
+        } else {
+            self.step_flat(&input);
+        }
+        self.step_ai(&input);
+    }
+
+    fn step_flat(&mut self, input: &CarInput) {
         let y_before = self.car.pos[1];
-        self.car.step(&input, &self.world, &self.rigid, DT);
+        self.car.step(input, &self.world, &self.rigid, DT);
         // `Car::step` floors the height at 0 (its flat-ground model); on tracks that lie below 0
         // (MIS13C's river at y ~-587) that snaps the car up out of the world, out of the ground
         // follow's -12..+3 window. Keep the height the car had; the collision follow below sets it.
@@ -292,7 +310,9 @@ impl DrivingState {
             }
             self.car.pos[1] = best_y;
         }
+    }
 
+    fn step_ai(&mut self, input: &CarInput) {
         // Step AI traffic cars.
         if !self.ai_cars.is_empty() {
             if let Ok(crp) = Crp::parse(&self.crp_bytes) {
@@ -372,7 +392,14 @@ impl DrivingState {
     pub fn apply_to_palette(&self, attach_base: usize, pal: &mut [Mat4]) {
         if let Some(slot) = self.player_attach_slot {
             if let Some(m) = pal.get_mut(attach_base + slot as usize) {
-                *m = yaw_pos_mat(self.car.pos, self.car.yaw);
+                *m = if self.land.is_some() {
+                    let r = self.car.rot;
+                    let c = self.car_box_centre;
+                    let o = [0, 1, 2].map(|k| self.car.pos[k] - (r[0][k] * c[0] + r[1][k] * c[1] + r[2][k] * c[2]));
+                    [[r[0][0], r[0][1], r[0][2], 0.0], [r[1][0], r[1][1], r[1][2], 0.0], [r[2][0], r[2][1], r[2][2], 0.0], [o[0], o[1], o[2], 1.0]]
+                } else {
+                    yaw_pos_mat(self.car.pos, self.car.yaw)
+                };
             }
         }
         for (drv, slot) in &self.ai_cars {
@@ -398,6 +425,11 @@ impl DrivingState {
         ];
         (cam_pos, yaw, -0.14)
     }
+}
+
+/// The lowest car-space y of attachment `slot`'s vertices.
+fn scene_char_min_y(cv: &[CharVertex], slot: u32) -> Option<f32> {
+    cv.iter().filter(|v| v.attachment == Some(slot)).map(|v| v.pos[1]).reduce(f32::min)
 }
 
 fn maybe_decompress(raw: &[u8]) -> Result<Vec<u8>> {
@@ -1103,6 +1135,29 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         }
     }
 
+    // The land pass for land vehicles (the watercraft MIS11/MIS13C and the aerial MIS13A/MIS13B keep
+    // the flat model and their own passes: their SUB_PHYSICS steps are not ported).
+    let land = (!matches!(viv_upper.as_str(), "MIS11" | "MIS13C" | "MIS13A" | "MIS13B")).then(|| nf_game::driving::CollisionGround::new(col_tris.clone()));
+    // The body box = the player model's article `Base` bbox (model+0xc [M FUN_001c9778], the
+    // half extents the land step's hull, wheel points and inertia use); the model draws at
+    // `pos − rot·centre`. Falls back to the .atr-side defaults when the box does not read.
+    let mut car_params = car_params;
+    let mut car_box_centre = [0.0f32; 3];
+    let model_box = find_car_entry(p_stem)
+        .and_then(|((o, n), _)| iso.read_bytes(viv_base + o as u64, n as u64).ok())
+        .and_then(|raw| maybe_decompress(&raw).ok())
+        .and_then(|b| Crp::parse(&b).ok().and_then(|c| c.track_articles().ok()))
+        .and_then(|arts| arts.into_iter().find(|a| (0..3).all(|k| a.bbox_max[k] > a.bbox_min[k])));
+    if let Some(a) = model_box {
+        car_params.half_extents = [0, 1, 2].map(|k| (a.bbox_max[k] - a.bbox_min[k]) * 0.5);
+    }
+    // Where the drawn model sits on that body [S: the game's render offset is not traced]: its
+    // lowest vertex at the body's rest contact (`pos.y − rest height`), so the tyres touch the
+    // road when the springs rest.
+    if let Some(slot) = player_attach_slot {
+        let vmin = scene_char_min_y(&scene.char_verts, slot);
+        if let Some(v) = vmin { car_box_centre = [0.0, v + car_params.half_extents[1] + car_params.spring_rest, 0.0]; }
+    }
     let car = Car::new(car_params, start_pos, start_yaw);
     let state = DrivingState {
         viv: viv_upper,
@@ -1125,6 +1180,8 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         ticks: 0,
         cam: None,
         cam_view: None,
+        land,
+        car_box_centre,
     };
     Ok((scene, state))
 }
@@ -1182,6 +1239,8 @@ mod tests {
             ticks: 0,
             cam: None,
             cam_view: None,
+            land: None,
+            car_box_centre: [0.0; 3],
         };
         state.step(1.0, 0.0, 0.0, false);
         assert_eq!(state.progress, 1);
