@@ -1,6 +1,6 @@
 # The driving missions' AI cars — road network, path following, speed, spawn
 
-Status: **§12 (2026-11-21) adds the road network logic: curves, the chase/follow choosers, the lights and the yield, traffic spawn and respawn.** **Reviewed against the decompile 2026-11-20 — §9 is the per-function table and
+Status: **§12 (2026-11-21) adds the road network logic: curves, the chase/follow choosers, the lights and the yield, traffic spawn and respawn; §12.5 the nearest-road join, the chasers' lane pick and the car box.** **Reviewed against the decompile 2026-11-20 — §9 is the per-function table and
 supersedes §3.1, §5 and §8 wherever they differ** (first port 2026-10-15). The port lives in
 supersedes §3.1, §5 and §8 wherever they differ; §10 (2026-11-21) adds the hostile AI and the
 AI vehicle lifecycle and supersedes §3.3 and §4** (first port 2026-10-15). The port lives in
@@ -749,8 +749,8 @@ On Paris all 105 curved pieces are the junction connectors (flag bit 0) [D].
 | state-4 tick | 0x132d80 | **added** (route count) | `TrafficDirector::count_route`. The +0xe4 stop-and-wait needs the actor's vtbl+0x17c query (not read). |
 | traffic create | 0x13f868 | reviewed | state 4, enabled, nav kind 1, +0xd8 = 4 (3 for one model list), and parked at once (0x132ba8): `TrafficWorld::new` starts every car parked. |
 | pedestrian spawn | 0x13d3f0 / 0x14eea8 / 0x126c98 | reviewed | the other user of the list (rr+0x2d/+0x2f); not traffic. |
-| lane pick | 0x135f70 | reviewed, **not ported** | see 12.4. |
-| lane pick helpers | 0x135d88 / 0x135cf0 / 0x135b10 / 0x1351d0 / 0x222060 | reviewed, not ported | see 12.4. |
+| lane pick | 0x135f70 | **added** (§12.5) | `join::lane_pick`. |
+| lane pick helpers | 0x135d88 / 0x135cf0 / 0x135b10 / 0x1351d0 / 0x222060 | **added** (§12.5) | `lane_costs` / `best_window` / `makes_room_for` / `scratch_join` / `lane_mask`. |
 
 ### 12.3 The headless traffic world [S where noted]
 
@@ -760,9 +760,10 @@ profile-0xc car the brain (with the yield) and `Car::step`. Parked cars are not 
 drive is not ported). The vehicle list the yield and the spacing read is updated car by car, as
 the game's list walk sees it. Stand-ins: the view test of the respawn (`FUN_001c65b0`, a sphere
 against the view frustum) is a caller closure; the two world flags (+0x350 view test, +0x3cc
-spawning off) are inputs; the vehicle extents +0x4c0/+0x4c8 keep the 0.001 floor. In
-`FUN_001862c0` the argument `FUN_001f6e98` copies them from is the output of `FUN_00210938`, an
-inverse-inertia triple, so they may well be that small in the game, but no live read backs it.
+spawning off) are inputs; the vehicle extents +0x4c0/+0x4c8 are the model's `Base` half box once
+`TrafficWorld::set_extents` is called (§12.5; the earlier reading of them as `FUN_00210938`'s
+inverse inertia was wrong: that triple (sp+0x90, copied to sp+0x20) is param_9; param_10 is sp+0x30, which
+`FUN_001c9778` fills).
 
 Disc runs (Paris, 3600 ticks): with the director live and a player driving the network at 20/s,
 9 cars were placed (all outside 150 and out of view) and drove 249 units; with 20 cars put on
@@ -777,19 +778,51 @@ road logic.
 
 ### 12.4 Not ported / unproven
 
-- The lane pick `FUN_00135f70` (pattern 3 off state 4 and pattern 4; not traffic): a 64-slot
-  lateral occupancy histogram at AI +0x98 (window width +0xd8), seeded from the road's lane
-  masks (`FUN_00222060`, 32 tables of 32 bytes at .data 0x33a6d8 / 0x33a818 chosen by the same
-  track test as the lane tables), decayed by distance from the current offset (`FUN_00135d88`),
-  marked by every conflicting car (`FUN_00135b10`: within 20..35, 15 when overtaking, and in
-  front) at its projected lateral offset (`FUN_001351d0`, a nearest-road join refreshed every 15
-  ticks), then the lowest-sum window (`FUN_00135cf0`) and a lane change of length `|Δ|·|v|·0.1`
-  (`FUN_00226f18`). It needs the nearest-road join (`FUN_00225c48` / `FUN_00225490`) and several
-  actor queries, none of which are ported. The blend it drives (`FUN_00226f18` /
-  `FUN_00227058`) is ported.
-- The caller side of the kind-3/4 choosers (which brain sets +0xb0/+0xb1/+0xb2 and +0x1fc).
+- The lane pick and the nearest-road join are ported in §12.5. The caller side of the kind-3/4
+  choosers is ported there in part: +0xb0/+0xb1/+0xb2 come from the AICo command (+0x7e/+0x84/
+  +0x85, `FUN_00145ff8`), +0x1fc from `FUN_00131770` (`chase_target_piece`); the rest of
+  `FUN_00131770` (its tracking flag) is not.
 - The `DAT_003339a8` objects the lights check; `FUN_001c65b0`; the world flags +0x350 / +0x3cc;
   the actor query vtbl+0x17c; AI +0x94 (gates the respawn and the lane pick; taken as 0).
 - `DAT_00339f54` (the world tick) and `DAT_00339f4c` (ticks per second) were not read live.
 - Live checks worth doing: in Paris, read DAT_003c828c / DAT_003c8290 over a few seconds (expect
   +1 every 300 ticks), and break on FUN_0013c798 to see a placement distance (expect > 150).
+
+### 12.5 The nearest-road join, the lane pick and the car box (branch `s/drive-road-join`)
+
+Port: `crates/nf-game/src/driving/join.rs`; tests `crates/nf-game/tests/driving_road_join.rs`
+(27; four read the disc). Verdicts as §9. Nothing here draws a random number. The disassembly was
+read wherever the decompile drops VU lanes or `max.s`/`min.s` (R5900 words `4601xx28` / `29`).
+
+| function | address | verdict | port / note |
+|---|---|---|---|
+| nearest piece | 0x225490 | **added** | `nearest_piece`: one grid cell only (`nearest_cell`: x on the columns, z on the rows, truncation, a negative or overflowed index to 0, past the end to the last cell); pieces below the RNhd count, once each; 0x100 never; kind 4 only flag-8 pieces of its group (nav +0x04 against rs+0x5a), other kinds never flag 8; kind 5 only flag-0x8000 pieces, other kinds never; the clamped chord projection, moved onto the Bezier on a curved piece; 3-D distance, first of equals. An empty cell returns piece **0** with no point (the game then joins piece 0 with a stale t; the port reports `EmptyCell`). |
+| chord point | 0x222968 / 0x222a30 / 0x2223b0 / 0x221888 | **added** | `project_clamped`. |
+| join | 0x225c48 | **added** | `RoadNav::join_nearest`: the end by `dot(dir, rs+0x40) ≥ 0` (a zero dir counts as 1; kind 4 without +0xb1/+0xb2 always toward B); the offset = the distance to the piece (lateral only when behind P0), signed against `(d.z, d.y, −d.x)`; kind 1 `snap_lane(max(2.5, off))` (`max.s` at 0x2263e8), so traffic always joins a lane on its own side; kind 2 past the outer lane; kind 4 clamped to the road widths (`max.s` 0x22627c, `min.s` 0x226294); kinds 3/5 keep the offset; param_4 = 1 keeps the centre line. Then the lane points, the controls, t on the lane line, the carrot. |
+| lane snap | 0x221f20 | **added** | `snap_lane`. |
+| road widths | 0x221ac8 / 0x221cb0 | **added** | `road_width`: flag 0x8008 reads rs+0x00 / +0x04; a connector takes the widest plain link at either node; else 5 (0x10) + 2.5 (0x800) + 5 (0x200 / 0x400) + 5 per lane (0x1000: 2.5 per lane of both sides); 0 becomes 5. |
+| cleared nav | 0x2233d0 | **added** | `RoadNav::cleared`. |
+| reverse | 0x225358 | **added** | `RoadNav::reverse`. |
+| pattern set-up | 0x12e468 | **added** | `nav_for_pattern`: state 4 → kind 1 (pattern 1 → 0); pattern 3 → kind 3 + join; pattern 4 → kind 4 + join, on the centre line when +0x154 is off; 1 / 5 → kind 0; 2 leaves the kind. The +0x124/+0x128 writes and the pattern-5 path `FUN_0013dfd8` are not ported. |
+| target piece | 0x131770 (lines 466-517) | **added** | `chase_target_piece`: −1 unless tracking, pattern 3 and a profile other than 0xe/0xf; unchanged while +0x94 holds; no target car: the scratch nav +0x114 (kind 3, or 4 for a kind-4 car) joins the goal +0x1c0; with one: that car's kind-3 scratch piece. The `FUN_00226c88` rejoin when the piece differs from the car's own is not ported. `chase_hint` = +0x1e0 = n(+0x1c0 − own position). |
+| nav slot / hints | 0x145ff8 | reviewed | AICo +0x7e → nav +0xb0 (when ≥ 0), +0x7f → nav +0x04 (the group), +0x84 → +0xb1, +0x85 → +0xb2; no other writer of +0xb1/+0xb2 in the decompile besides the clear in 0x2233d0. |
+| other car's road | 0x1351d0 | **added** | `scratch_join`: re-joined at `pos + vel·0.25` when the stamp is 0 or 15 ticks old (kind 4: or a new group), turned to the asker's heading, and kept turned. |
+| lane mask | 0x222060 | **added** | `lane_mask` / `lane_mask_index`; the tables [D .data 0x33a6d8 snow2a, 0x33a818 the other tracks, ten of 32 bytes; the test reads them from the disc ELF]. |
+| cost map | 0x135d88 | **added** | `lane_costs`: the mask + `round(5·|slot − c|)`, capped at 255; 0xff slots kept. |
+| best window | 0x135cf0 | **added** | `best_window` (its second argument is dead). |
+| room test | 0x135b10 | **added** | `makes_room_for`: 3-D distance within clamp(2v, 20, 35), 15 for a car at least 1 faster, height within 5 unless both overtake, not behind. |
+| lane pick | 0x135f70 | **added** | `lane_pick` (the doc comment lists every weight). The speeds are horizontal (`vmul.xz` at 0x136058). The other car's offset rounds half away from zero (`floorf` 0x2bfb50, `ceilf` 0x2bf970, the double floor 0x2bf460). AI +0xb7..+0xb9 are cost-map slots 31..33. |
+| car box | 0x1862c0 / 0x1c9778 / 0x1f6e98 / 0x1c7940 | **fixed** | `car_half_extents` + `floored_extents`; `TrafficWorld::set_extents`. +0x4c0/+0x4c4/+0x4c8 are half the model box (min +0x10, max +0x20 of the object at model +0xc = `*in#0[+0x1c]`), floored at 0.001. On the disc that reference is the article's `Base` record [D every car: the `as` payload +0x00 is the `Base` tag]; that the loader resolves it to the `Base` payload is read from the layout, not from the loader. Traffic: hatchback (0.817, 0.776, 1.952) [D]. |
+
+Disc: 200 points near Paris roads (DriveRng picks a piece, t, a side offset within ±12 and a
+heading), each joined as kind 1 and as kind 3: all 400 join; each lands on a lane line of the
+piece that a brute-force search of the cell also names; every traffic offset is a table lane of
+the piece's own side; 138 of the 400 land on another piece than the one the point was made from
+(a parallel piece or a connector nearer at that offset).
+
+Unproven / not ported here: whether the player's own controller answers the lane pick's AI reads
+(the vehicle list holds every vehicle); the actor queries vtbl+0x14c / +0x9c the weights read;
+the writers of AI +0x148 / +0x204 / +0x208 / +0x118 / +0xd8; the tracking flag of
+`FUN_00131770`; `FUN_00226c88`; nav +0x96. No live capture backs any of §12.5. Nothing in the
+port calls `lane_pick` or `nav_for_pattern` per frame yet (no chase brain drives a kind-3/4
+navigator).
