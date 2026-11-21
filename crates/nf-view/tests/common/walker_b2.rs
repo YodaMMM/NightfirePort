@@ -661,7 +661,7 @@ impl Walker {
     /// line cannot eat minutes of the walk. Same loop, the caller's cap; false on give-up.
     /// (level-09-live-guards-walk; behaviour-identical for the 10800 callers.)
     pub fn shoot_bounded(&mut self, di: usize, label: &str, cap: u32) -> bool {
-        self.shoot_gated(di, label, cap, 0.02, 0.028)
+        self.shoot_gated(di, label, cap, 0.02, 0.028, 16, true)
     }
 
     /// `shoot_bounded` with the aim gate LOOSENED (±0.07 yaw / ±0.10 pitch ≈ the torso box at
@@ -669,10 +669,20 @@ impl Walker {
     /// sweeps ±0.1+ rad between ticks: the tight gate never settles and the taps stop (the
     /// first run's 15-dart miss at 1.8u). The loose gate trades spray for rate at close range.
     pub fn shoot_loose(&mut self, di: usize, label: &str, cap: u32) -> bool {
-        self.shoot_gated(di, label, cap, 0.07, 0.10)
+        self.shoot_gated(di, label, cap, 0.07, 0.10, 16, true)
     }
 
-    fn shoot_gated(&mut self, di: usize, label: &str, cap: u32, err_tol: f32, perr_tol: f32) -> bool {
+    /// retune-nb-14-5 (the 07000014 door-face scans only): the fights' 8-tick tap family at 4
+    /// (the sim's own refire clamps what the gun cannot do) and the REPOSITION SLIDE OFF — the
+    /// shipped slide's first-60-tick strafe dragged Bond 3 u off the corridor line into the
+    /// blocked geometry (the measured parks (−58.4, 36.6) put #32 0.23 u onto the #33 line) [L
+    /// the 2026-11-19 runs]. The door squad are STATIONARY posts: the aim settles, the park is
+    /// the law. Every other call site keeps the shipped 16 + slide.
+    pub fn shoot_bounded_fast(&mut self, di: usize, label: &str, cap: u32) -> bool {
+        self.shoot_gated(di, label, cap, 0.02, 0.028, 4, false)
+    }
+
+    fn shoot_gated(&mut self, di: usize, label: &str, cap: u32, err_tol: f32, perr_tol: f32, tap_spacing: u32, allow_slide: bool) -> bool {
         let mut hp0 = self.scene.sim.as_ref().unwrap().drones.list[di].health;
         let mut repositions = 0i32;
         let mut last_progress = 0u32;
@@ -695,7 +705,7 @@ impl Walker {
                 // Tap only when the view is ON the torso (the boxes are ~0.3 wide; the fixed-period
                 // taps sprayed ammo at a drifting aim). The caller's gate widths (the loose
                 // point-blank variant trades precision for rate on a moving close guard).
-                let on_target = err.abs() < err_tol && perr.abs() < perr_tol && t.saturating_sub(last_tap) > 15;
+                let on_target = err.abs() < err_tol && perr.abs() < perr_tol && t.saturating_sub(last_tap) > tap_spacing - 1;
                 let trigger = !clip_empty && on_target;
                 if trigger { last_tap = t; }
                 let input = Input {
@@ -703,13 +713,49 @@ impl Walker {
                     look: perr.clamp(-0.08, 0.08),
                     // Repositioning: slide sideways when the rounds are not landing (a column or a
                     // nook swallows the ray).
-                    strafe: if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
+                    // retune-nb-14-5 (door_face): the slide is the caller's opt-in — a
+                    // stationary-post fight holds the park (the slide's 60-tick strafe IS the
+                    // park wreck the door face measured).
+                    strafe: if !allow_slide { 0.0 } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
                     ..Default::default()
                 };
                 // replay-parity-walker-side-effects: the fight's step is a real walker-stepped
                 // tick — through `tick_inner` like every other (the old direct `step_bond` here
                 // skipped the walker's per-tick work, and a recorded walk fell through it).
                 self.tick_inner(input, false, trigger, reload);
+            }
+            // retune-nb-14-10 (the round-9 ledger's unanswered-race shape; OPT-IN on the
+            // `switch_on_first_blood && finish_fights` pair — both set only by the 07000014 00
+            // Agent walk [L 2026-11-20 runs v1-v3 of retune-nb-14-9 + this round's v2
+            // NF_RF_TRACE run]): the `finish_fights` determined pass (damage_log.rs's
+            // shoot_bounded 1800 arm) is a single-target fight with NO visibility break — the
+            // v2 trace measured it holding the machinery 752 ticks on #43 (hp 6, aim None
+            // behind cover, zero rounds landed both ways after his t35707 volley) while #62
+            // (0x14, fixed post (−30.4,1.0,22.1), hp 10 FULL) raced 28.0 in 11 hits
+            // UNANSWERED to the death at t36527 — `fighting=true` blocked the return-fire gate
+            // the whole stretch. The player's own read: the blocker he cannot hit is not the
+            // shooter killing him — break the pass when the target has dealt NO damage over
+            // the 240-frame window (the switch law's own window) while ANOTHER shooter HAS,
+            // and let the leg's own gate re-pick (the unseen fallback finds the new shooter;
+            // the broken target takes the wrapper's 240-tick cooldown). Every 10th tick;
+            // flags off = the first condition short-circuits, byte-identical.
+            if self.dmg.switch_on_first_blood && self.dmg.finish_fights && t % 10 == 0 {
+                let sim = self.scene.sim.as_ref().unwrap();
+                let now = sim.drones.frame;
+                let dmg_of = |i: usize| -> f32 {
+                    sim.drones.player_hits.iter().rev()
+                        .take_while(|h| now.saturating_sub(h.0) <= 240)
+                        .filter(|h| h.1 == i)
+                        .map(|h| h.2).sum::<f32>()
+                };
+                let other_blood = sim.drones.player_hits.iter().rev()
+                    .take_while(|h| now.saturating_sub(h.0) <= 240)
+                    .any(|h| h.1 != di && h.2 > 0.0);
+                if dmg_of(di) <= 0.0 && other_blood {
+                    drop(sim);
+                    eprintln!("[walk] {label}: the pass's target {di} went silent while another shooter drew blood — breaking the pass at +{t}");
+                    return false;
+                }
             }
             // Out of ammo: give up (the caller resupplies and retries).
             if self.scene.sim.as_ref().unwrap().gun.clip == 0
