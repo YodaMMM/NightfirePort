@@ -108,3 +108,16 @@
 ## Usage
 
 not visible to me
+
+## ntfy
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` — the same failure as
+   rounds 5-16.
+2. python3 urllib: returned rc 0 within the 35 s outer timeout, no output, no traceback —
+   not verifiable as delivered (the round-5-16 pattern was rc 124; this run's rc 0 is
+   ambiguous).
+3. wget: rc 0, quiet mode, no output — also ambiguous.
+
+The intended text: `retune-nb-08-17: merged-tree baseline ledgered (death t28183 reshaped
+to #25 + the pre-fight burst); jiggle-fights and post-launch crouch levers measured dead
+on their own runs and reverted; whole binary 6/1; next: the pre-fight crouch`.
