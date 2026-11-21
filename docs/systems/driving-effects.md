@@ -320,9 +320,22 @@ Per frame `FUN_001d9560` -> `FUN_001d9920` for every type but 4: with t = now - 
 `DAT_00334000`, the tick as a float), a piece born before t is dropped (the last piece takes its
 slot and is looked at next); any other gets alpha = round(alpha x t / birth), read from and
 written to its own colour each frame (so the fade compounds and depends on the absolute tick).
-**Not traced**: how the pieces move and turn (the VU1 program reads pos, velocity, birth, axis,
-spin and `DAT_00334000`; it is not disassembled), who handles type 4 (kind-0 bursts), and the
-draw. The port keeps the pieces where they spawned.
+
+**Motion** [M disassembly of the VU1 program, D ELF bytes; `DebrisPiece::pose`]. `FUN_001d9920`
+draws through `FUN_00285388` with the render list at 0x348c60, named `BondDebris` (parameters
+`Parameters`, `viewProjection`, `Texture`, `ControlData`, `Coordinates`, `UV`, `State`,
+`SimTick`, `SplitReg1`, `Offsets`, `Quats`, `InstCols`, `Velocity`). Its op 1 loads the
+microprogram at 0x349020 (209 instructions; DMA chain 0x3496e0: MPG to micro 0, REF 0x68 qwords).
+`SimTick` is the qword at 0x334000: x = the tick, y = 0x334004 = -0.002 (ELF .data, no writer).
+Per piece (micro 0x019-0x036): t = now - birth; a = spin x t - 3.95; q.xyz = axis x ESIN(a), q.w =
+ESIN(a + pi/2) (the VU sine series, used outside -pi/2..pi/2 as is). Then (micro 0x045-0x06a):
+pos = p0 + v t, pos.y += -0.002 t^2 (no 1/2), the standard rotation matrix of q, and the model
+(table 0x338e28: `+0x00` coordinates, `+0x04` UVs, `+0x0c` vertex count, all in the ELF) is drawn
+by it. There is no ground test, bounce or drag anywhere in the program or in `FUN_001d9920`: a
+piece falls through the road until its 70 ticks end (9.8 below its straight line by then). The
+size word `+0xd10` is uploaded as `SimTick.w` and not read by the program. A fresh piece is
+already turned (q.w = -0.69 at t = 0), and q is not unit length (the series is not exact).
+Type 4 (kind-0 bursts) is never faded, expired or drawn: no other pass handles it.
 
 ## 11. Event-started effects: blocks, hits, explosions [M]
 
@@ -347,9 +360,13 @@ accumulated bits, off otherwise; a Giotto one with no handle is marked anyway. 1
 animations only. Out of range (`FUN_001ca340`, when the keep-alive has passed): within 170 of
 the camera, 600 more ticks; else running Giotto entries without flags 0x14 stop.
 
-**Who sends what** [M]: a smackable hit (`FUN_0019b5a8`): damage (>= 0) comes off the hit
-points; still standing, health = hp / start hp: event 10 above 0.15, event 9 (all bits) above
-0.75; destroyed: event 10 only. A car panel hit (`FUN_00189598`): per panel the larger of its
+**Who sends what** [M]: a smackable hit (`FUN_0019e8c0`, `Smackable` vtable 0x37cec4 slot 3):
+damage (>= 0) comes off the hit points; still standing, with f = damage taken / start: event 10
+above 0.15, event 9 (all bits) above 0.75, part anims 0x13..0x16 by f and 4/5/6/0x19 by the
+hit's size; knocked down (or hit again at 0): part anims 2, 6/7, 0x13..0x16, 4..6, 0x19 and
+event 10 only. A sentry hit (`FUN_0019b5a8`, `Sentry` vtable 0x37c260 slot 3; earlier listed
+here as the smackable) reads health left instead: event 10 above 0.15, event 9 above 0.75. A
+car panel hit (`FUN_00189598`): per panel the larger of its
 two damage words; event 10 bit above 0.35, event 9 bit above 0.75. The car step
 (`FUN_00188200`) sends event 0 / 4 with its `+0x6c` / `+0x70` bits (x 0x10000) and with 0x800000
 by speed; the writer of `+0x6c` is not traced. On the disc's car models the panel bits start
@@ -360,11 +377,23 @@ by speed; the writer of `+0x6c` is not traced. On the disc's car models the pane
 (flags 0x14, the only block entry, lit at build) and `Wd_Sprk` x 2 and `Wd_Glass` with flags 0;
 the bench `Sm_Wsplinter`, newsbox `Sm_Debris`, the mall glass and the university arch debris are
 flags 0 too (only the hydrant's spray, flags 0x00020002, and its sound, flag 4, are block
-entries). Flags-0 entries never enter a block, so no object event starts them; the explosion
-actions do: `ESpawnExplosionStatic` (`FUN_0015b2f8`) starts an entry outside the filter by its
-own name (`Ex_Snow` on surface 9 / `Ex_Small` when it has none) and sends event 1 with the id for
-an entry inside it; `FUN_00153f80` does the same. Which trigger records name the street lights'
-entries, and whether a car knocking a lamp over reaches them another way, is not traced.
+entries). Flags-0 entries never enter a block, so no object event starts them. The calls that
+start a Giotto effect (every caller of `FUN_00232af8`'s wrappers `FUN_002330b0`, `FUN_00233108`,
+`FUN_00232f70`): the block (`FUN_001ca198`), world load (`FUN_0022faf8`, `FUN_00230730`),
+`EPlayEffect` (`FUN_00153f80`, an entry named by the action), `EPlayActorEffect`
+(`FUN_00153560`), `EPlayGiottoEffect` (`FUN_001543e8`), `EPowerUp` (`Pr_Dstry`),
+`ESpawnForceEffect` (`FUN_0015b2f8`: an entry outside the filter by its own name, `Ex_Snow` on
+surface 9 / `Ex_Small` without one, else event 1 with the id), the explosion handler, the
+collision event `ECollision` (`FUN_00149ed8`: `bigsplash`, `Cr_Dirt`, `CR_Wasm`, `CR_WasmS` and
+`Un_SandCar` and `Un_DebrisW` on underwater tracks), the window hit `EHitWindow` (`FUN_0014f480`: `Wd_Glass` and `Wd_Wsmk` by
+name at the pane, for shots and missiles through `FUN_002153b0`, not for cars) and the bullet
+impact `FUN_0019d5a8`. `FUN_0015b2f8` was listed here as `ESpawnExplosionStatic`: it is
+`ESpawnForceEffect` (vtable 0x370468), action 0x8d, which no script on the eight tracks uses;
+`ESpawnExplosionStatic` is 0x9a (`FUN_0015b010`, spawns an `ESpawnExplosion`) [D]. On the disc
+the 14 `EPlayEffect` actions all name hydrant entries, and no action argument names a street
+light [D `no_script_action_starts_a_street_light_effect`]. So a lamp a car knocks over plays its
+part animations and never starts its `Wd_Sprk` / `Wd_Glass` entries: no path in DRIVING.ELF
+reaches them (only a live capture can say whether anything outside these paths does).
 
 **Explosions** (`ESpawnExplosion`, fields stored by `FUN_00159fb8`, handler `FUN_0015a098`): the
 effect = the explicit name; weapon 0x1e `FODHitEffect`; surface 9 `snowspecificexplosion`;
@@ -375,12 +404,24 @@ car was hit, `Ex_Small..3` otherwise, by a shared 0, 1, 2 counter. Then the scor
 `SFX_LrgExp`, `SFX_MedExp`, `SFX_SmallExp` (rotating; a name is skipped while its clock time +
 30 has not passed; none free = no sound) in `Explosions`, near / far 100 / 400 (x5 on
 `jungleb_mis13b`), and `SFX_DistExp` in `ExplosionBass` (3 / 350). A missile or rocket ground
-hit (`FUN_00182978`): weapon 0xe makes nothing; else the hit decal `FUN_0019ddb8(damage, damage
-x 0.008, .., 5)` (through `FUN_001ea8e8`, not ported) and `FUN_00200088` -> `ESpawnExplosion`
-with the weapon, the damage and the ground's surface byte, no car. **Not traced**: which call
-spawns a destroyed car's explosion (the car-death branch of `FUN_00189598` sends event 10 and
-part animations only), the radius damage `FUN_00200200`, the light `FUN_001afa88`, the unit of
-the sound clock `FUN_00261038`.
+hit (`FUN_00182978`): weapon 0xe makes nothing; else the hit mark `FUN_0019ddb8(damage, damage
+x 0.008, .., 5)` (section 12) and `FUN_00200088` -> `ESpawnExplosion` with the weapon, the
+damage and the ground's surface byte, no car.
+
+**A destroyed car** [M]: no code path spawns an explosion when a car's hit points reach 0. The
+code callers of `FUN_00200088` are weapon and projectile paths (`FUN_00155ea8`, `FUN_0017e8b8`,
+`FUN_0017ffc8`, `FUN_001802e0`, `FUN_00180620`, `FUN_00182978`, `FUN_00199f88`,
+`FUN_0019a710`, `FUN_0019d080`, `FUN_0020ea60`), and `FUN_00159fb8` is reached only from
+`FUN_00200088` and the script actions `ESpawnExplosion` (`FUN_0015ae90`) and
+`ESpawnExplosionStatic` (`FUN_0015b010`). The car step `FUN_00188200` at hit points <= 0 calls
+vtable +0x7c (`FUN_0018adc0`: clears its group's `+0x40`) and, for a category-2 car (`+0x2c8`) outside the
+`tunnel` / `openheli` / `redheli` models with no part animation running, credits the kill
+(vtable +0x16c = `FUN_00193140`). The damage virtual's wreck branch sends part animations and
+model event 10. What a player sees of a wreck is the panel damage entries (`Ex_Glass`, `Cr_Dmg*`
+by event 9) and event 0 bits (`Cr_Dmg4` on bit 31); the writer of the car's `+0x6c` bits is still
+not traced. Scripted wrecks use `ESpawnExplosionStatic` (MIS01 names `cr_Dmg3big` and
+`parisendexplosion` [D]). **Not traced**: the radius damage `FUN_00200200`, the light
+`FUN_001afa88`, the unit of the sound clock `FUN_00261038`.
 
 ## 12. The decal ring [M]
 
@@ -395,8 +436,30 @@ except for record 4, the points x + r, x - r, then x - r with z + r and z - r mu
 triangles within 0.15 of the height, the last not surface 9; size = r - (pos.y - height) / 2
 must be positive; the decal sits at height + 0.025, 2 size square, up (0, 0, 1). Callers:
 explosions (radius 8, record 5: delay 5, alpha 0x28 [D]), Q-Slick (`FUN_0020de20` case 10:
-radius 4.2, record 4). `FUN_001ea8e8` (bullet and missile hit decals, probing the ground with
-`FUN_00215cc8`) is not ported.
+radius 4.2, record 4).
+
+**Hit marks** (`FUN_0019ddb8` -> `FUN_001ea8e8`, `smashfx::hit_decal`) [M + disassembly]: a
+mark only when the hit's `+0x52` byte is 0, its surface is not 0x70 (glass) and its `+0x51` bit
+1 is clear; the struck scene object gets part anims 0x16 / 0x15 / 0x14 / 0x13 at damage >= 500 /
+250 / 50 / 10. Callers: `FUN_00199f88` radius 0.0625 (0.3125 for weapon 0x1d), record 2;
+`FUN_0019d080` its `+0x70` x 0.005, record 5; the missile ground hit damage x 0.008, record 5.
+Placement: refused on surface 6 or the ground's `+0x2d` bit 1; r = min(radius, 6); reference
+axis (0, 1, 0), or (0, 0, -1) when |normal.y| > 0.85; side = normal x axis. Above r 0.33 three
+segments through the surface (pos +/- normal / 4) offset by + side r, - side r, - side r + axis
+r must hit something other than surface 6; on a miss r halves, two tries. Centre = pos + normal
+x (|(1 - normal.y) 0.05| + 0.035); nothing on a flagged object; the mark is `2r` square
+(normal, up = side) unless the last segment hit had flag bit 1. A wall hit (|normal.y| <= 0.85)
+within r above a ground triangle also gets a `2r` x `8r` streak at the wall's foot (moved back
+4 x the drop, at the plane height + the lift), when the ground normal has |y| >= 0.98.
+
+**Bullet impact** (`FUN_0019d5a8`, `smashfx::bullet_impact`) [M]: the Giotto effect `Henbult`
+(surface or material 0x80), `bullethe` (the player's car, unless its `+0xc0` flag), `bulletcar`
+(cars of kind 1 / 10, surface 0xd), `snowbullethit` (9, 8, 0x30, 0x40), `bulletsplash` (6),
+`bulletHut` (0xc), by weapon with no car `bulletrockH` (0x1b), `bulletrock` (0x1d), `Bullgat`
+(0x1a), else `bullet`; two `BKPS` spark particles unless snow or the flagged player car; a voice:
+one draw under 0.25 picks `SFX_Ricochet1..3` in turn (`Bullet Ricochet`), else metal (5 by a
+second draw), wood, dirt, glass, flesh or concrete 1 / 2 alternating by the surface nibbles
+(`Bullet Impact`).
 
 ## 13. Not covered
 

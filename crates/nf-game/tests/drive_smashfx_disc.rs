@@ -222,3 +222,162 @@ fn explosion_scorch_on_the_disc_decal_records() {
     for _ in 0..5 { ring.draw_tick(); }
     assert_eq!(ring.slots[0].unwrap().rgba, 0x287f_7f7f, "the scorch shows after five decal draws");
 }
+
+/// DRIVING.ELF from the image, read by EE address through its program headers.
+struct Elf(Vec<u8>, Vec<[u32; 8]>);
+
+impl Elf {
+    fn load(iso: &IsoImage) -> Option<Elf> {
+        let d = iso.read_file(iso.find("/DRIVING.ELF")?).ok()?;
+        let w = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
+        let (ph, n) = (w(0x1c) as usize, u16::from_le_bytes([d[0x2c], d[0x2d]]) as usize);
+        let segs = (0..n).map(|i| std::array::from_fn(|k| w(ph + i * 32 + k * 4))).collect();
+        Some(Elf(d, segs))
+    }
+    fn bytes(&self, va: u32, n: usize) -> &[u8] {
+        let s = self.1.iter().find(|s| s[2] <= va && va < s[2] + s[4]).expect("mapped");
+        let o = (s[1] + va - s[2]) as usize;
+        &self.0[o..o + n]
+    }
+    fn u32(&self, va: u32) -> u32 { u32::from_le_bytes(self.bytes(va, 4).try_into().unwrap()) }
+    fn cstr(&self, va: u32) -> String {
+        let b = self.bytes(va, 64);
+        String::from_utf8_lossy(&b[..b.iter().position(|&c| c == 0).unwrap()]).into_owned()
+    }
+    /// VU1 micro instruction `i` of the program at `base`: (upper, lower).
+    fn micro(&self, base: u32, i: u32) -> (u32, u32) { (self.u32(base + i * 8 + 4), self.u32(base + i * 8)) }
+}
+
+/// The `BondDebris` microprogram and the words the port's debris motion, hit virtuals and
+/// action names rest on, read from the disc's DRIVING.ELF [D; the M reading is in smashfx.rs].
+#[test]
+fn bonddebris_program_and_hit_constants_in_the_disc_elf() {
+    let Ok(path) = std::env::var("NF_ISO") else { return };
+    let iso = IsoImage::open(&path).unwrap();
+    let Some(elf) = Elf::load(&iso) else { return };
+    // The render method: list 0x348c60 -> microcode descriptor 0x349730 (209 instructions), the
+    // DMA chain 0x3496e0: MPG 209 at 0, then REF 0x68 qwords from 0x349020.
+    assert_eq!(elf.cstr(0x348fec), "BondDebris");
+    let params: Vec<String> = (0..13).map(|i| elf.cstr(elf.u32(0x348f80 + i * 8))).collect();
+    eprintln!("BondDebris parameters {params:?}");
+    assert_eq!(params[7], "SimTick");
+    assert_eq!(params[12], "Velocity");
+    assert_eq!((elf.u32(0x348c60), elf.u32(0x348c64)), (0x0100_0000, 0x0034_9730));
+    assert_eq!((elf.u32(0x349730), elf.u32(0x34973c), elf.u32(0x349740)), (0xd1, 0x0034_96b0, 0x0034_96e0));
+    assert_eq!((elf.u32(0x3496fc), elf.u32(0x349700), elf.u32(0x349704)), (0x4ad1_0000, 0x3000_0068, 0x0034_9020));
+    // SimTick = the qword at 0x334000 (the render method's +0x40 pointer [M FUN_001d9720]): y is
+    // the fall term, and no code writes it.
+    assert_eq!(elf.u32(0x334004), DEBRIS_GRAVITY.to_bits());
+    assert_eq!(DEBRIS_GRAVITY, -0.002);
+    let p = 0x0034_9020;
+    // micro 0x020/0x021: I = 3.95, SUBi.w vf14 (spin x age - I); 0x024: I = pi/2 before ESIN.
+    assert_eq!(elf.micro(p, 0x020), (0x8000_02ff, DEBRIS_SPIN_PHASE.to_bits()));
+    assert_eq!(elf.micro(p, 0x021).0, 0x0020_73a6);
+    assert_eq!(elf.micro(p, 0x024), (0x8000_02ff, DEBRIS_QUARTER_TURN.to_bits()));
+    assert_eq!(elf.micro(p, 0x025).1, 0x8060_77fc, "ESIN vf14.w");
+    // micro 0x045 MULw.xyz vf19 (v x age), 0x046 MUL.w (age^2), 0x04c MULw.y vf20 (SimTick.y x
+    // age^2), 0x04d ADD.xyz vf13 (+ v t), 0x055 ADD.y vf13 (+ fall).
+    let up: Vec<u32> = [0x045, 0x046, 0x04c, 0x04d, 0x055].iter().map(|&i| elf.micro(p, i).0).collect();
+    assert_eq!(up, [0x01d3_9cdb, 0x0033_9cea, 0x0093_a51b, 0x01d3_6b68, 0x0094_6b68]);
+    // No ground read anywhere in the program: its only loads are from VU data (LQ/LQI/ILW).
+    // The debris type table 0x338e28 (stride 0x14): model words and vertex counts.
+    let names: Vec<String> = (0..23).map(|i| String::from_utf8_lossy(elf.bytes(0x338e38 + i * 0x14, 4)).into_owned()).collect();
+    assert_eq!(names, DEBRIS_MODELS);
+    // The hit virtuals: Sentry (vtable 0x37c260, slot 3) is FUN_0019b5a8, Smackable (0x37cec4,
+    // slot 3) is FUN_0019e8c0; their typeinfo names.
+    assert_eq!((elf.u32(0x37c27c), elf.u32(0x37ced4 + 8)), (0x0019_b5a8, 0x0019_e8c0));
+    assert_eq!((elf.cstr(0x37c2a8), elf.cstr(0x37cf08)), ("6Sentry".to_owned(), "9Smackable".to_owned()));
+    // The thresholds both read (0x332068..0x332090).
+    let th: Vec<f32> = [0x332068u32, 0x33206c, 0x332070, 0x332074, 0x332080, 0x332084, 0x332088, 0x33208c, 0x332090].iter().map(|&a| f32::from_bits(elf.u32(a))).collect();
+    assert_eq!(th, [0.75, 0.5, 0.25, 0.001, 0.15, 0.35, 0.65, 0.85, 0.75]);
+    // Action 0x8d's creator builds ESpawnForceEffect (FUN_0015b7d8 -> FUN_0015b248, vtable
+    // 0x370468 whose destructor is FUN_0015b2f8).
+    assert_eq!((elf.u32(0x36fda0 + 0x8d * 4), elf.u32(0x370468 + 12)), (0x0015_b7d8, 0x0015_b2f8));
+    // The bullet impact names and the hit-mark wall streak's 0.98.
+    assert_eq!(elf.cstr(0x37cb40), "Henbult");
+    assert_eq!(elf.cstr(0x36f680), "Wd_Glass");
+}
+
+/// Glass from a smash, through the `BondDebris` motion: every piece falls by 0.002 x age^2 below
+/// its straight line and is gone after 70 ticks; none is held by the ground.
+#[test]
+fn wd_glass_pieces_fall_through_their_life() {
+    let Ok(path) = std::env::var("NF_ISO") else { return };
+    let iso = IsoImage::open(&path).unwrap();
+    let Some(misc) = viv_files(&iso, "MISC") else { return };
+    let gal = gallery(&misc, "gall1.gal");
+    let (mut lib, mut types) = (ParticleLib::default(), GiottoTypes::default());
+    let (mut rng, mut grng, mut pool) = (DriveRng::seeded(0), giotto_rng(), ParticleSystem::default());
+    let e = giotto_effect(&gal, "Wd_Glass").unwrap();
+    let mut run = GiottoRun::new(&e, [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], &mut types, &mut lib);
+    let mut debris = DebrisPool::default();
+    run.tick(1, [0.0, 1.0, 5.0], &lib, &mut rng, &mut grng, &mut pool, &mut debris, 1000);
+    let born = debris.poses(1000.0);
+    assert_eq!(born.len(), 21);
+    let mut lowest = f32::MAX;
+    for t in [10.0f32, 35.0, 70.0] {
+        debris.update(1000.0 + t);
+        let now = debris.poses(1000.0 + t);
+        assert_eq!(now.len(), 21, "all alive at age {t}");
+        for (k, (ty, p, _)) in now.iter().enumerate() {
+            let piece = debris.types[*ty].pieces.iter().find(|q| q.pose(1000.0 + t).pos == p.pos).unwrap();
+            let straight = piece.pos[1] + piece.vel[1] * t;
+            assert!((p.pos[1] - (straight - 0.002 * t * t)).abs() < 1e-3, "piece {k} at {t}");
+            lowest = lowest.min(p.pos[1]);
+        }
+    }
+    eprintln!("Wd_Glass: 21 pieces, lowest at age 70: y {lowest}");
+    assert!(lowest < 0.0, "the pieces fall below the road plane (y 0) under a lamp at y 1");
+    debris.update(1071.0);
+    assert!(debris.poses(1071.0).is_empty(), "gone after 70 ticks");
+}
+
+/// Nothing a script runs names a street light's sparks or glass: the eight tracks' `EPlayEffect`
+/// actions all name hydrant entries, and `ESpawnForceEffect` (0x8d) is used by none [D].
+#[test]
+fn no_script_action_starts_a_street_light_effect() {
+    let Ok(path) = std::env::var("NF_ISO") else { return };
+    let iso = IsoImage::open(&path).unwrap();
+    let mut play = Vec::new();
+    let mut force = 0;
+    let mut light_refs = 0;
+    for viv in ["MIS01", "MIS11", "MIS13A", "MIS13B", "MIS13C", "MIS3", "MIS4", "RACE"] {
+        let Some(c) = track_crp(&iso, viv) else { return };
+        let crp = Crp::parse(&c).unwrap();
+        let m = nf_formats::trackstart::map_script(&crp).unwrap();
+        let lists = m.triggers.iter().flat_map(|t| t.actions.iter()).chain(m.rules.iter().flat_map(|r| r.actions.iter()));
+        for a in lists {
+            let refs: Vec<String> = (1..8).filter_map(|i| m.ref_path(a.word(i)).map(str::to_owned)).collect();
+            light_refs += refs.iter().filter(|r| r.contains("streetlight")).count();
+            match a.id {
+                0x9 => play.push((viv, refs[0].clone())),
+                0x8d => force += 1,
+                _ => {}
+            }
+        }
+    }
+    eprintln!("EPlayEffect: {play:?}");
+    assert_eq!(play.len(), 14);
+    assert!(play.iter().all(|(_, r)| r.starts_with("CARP::P_hydrant::{ef  000")));
+    assert_eq!((force, light_refs), (0, 0));
+}
+
+/// The hit marks with the disc's decal records 2 (bullet ray) and 5 (gun, missile).
+#[test]
+fn hit_marks_on_the_disc_decal_records() {
+    let Ok(path) = std::env::var("NF_ISO") else { return };
+    let iso = IsoImage::open(&path).unwrap();
+    let Some(files) = viv_files(&iso, "MIS01") else { return };
+    let d = &files.iter().find(|(n, _)| n.ends_with("decal.dat")).unwrap().1;
+    let rec = parse_decals(d).unwrap();
+    let ground = |p: [f32; 3]| GroundHit { hit: 1, tri: [[p[0], 0.0, p[2]], [p[0] + 1.0, 0.0, p[2]], [p[0], 0.0, p[2] + 1.0]], height: 0.0, surface: 1, no_decal: false, on_object: false };
+    let all = |_: [f32; 3], _: [f32; 3]| SegHit { hit: true, surface: 1, flags: 0 };
+    let mut ring = DecalRing::new();
+    assert_eq!(hit_decal(&mut ring, &rec, HIT_MARK_RAY.0, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], HIT_MARK_RAY.2, ground, all), 1);
+    assert_eq!(hit_decal(&mut ring, &rec, 300.0 * HIT_MARK_MISSILE_SCALE.0, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0], HIT_MARK_MISSILE_SCALE.1, ground, all), 1);
+    let (b, m) = (ring.slots[0].unwrap(), ring.slots[1].unwrap());
+    eprintln!("bullet hole: delay {} alpha {:#x} uv {:?}; missile mark: delay {} alpha {:#x} uv {:?}", b.delay, b.alpha, b.uv[0], m.delay, m.alpha, m.uv[0]);
+    assert_eq!((m.delay, m.alpha), (5, 0x28), "record 5 is the scorch record");
+    assert_eq!((b.record, b.delay, b.alpha, b.uv[0]), (2, 1, 0x20, [0.0, 0.25, 1.0, 1.0]), "record 2: shows on the first draw");
+    assert!(rec.len() > 5);
+}

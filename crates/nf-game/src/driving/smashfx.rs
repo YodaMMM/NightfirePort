@@ -15,24 +15,27 @@
 //!   separate from the engine stream (0x333e60, `effects::DriveRng`) the debris spawn draws from;
 //! - the debris pool (`FUN_001d94a8`: 23 types x 64 pieces; spawn `FUN_001d9bb8`, the
 //!   per-frame fade and expiry `FUN_001d9920`, walked by `FUN_001d9560` for every type but 4);
+//!   how a piece moves and turns: the `BondDebris` VU1 program at 0x349020, disassembled
+//!   (`DebrisPiece::pose`: ballistic, -0.002 x age squared, no ground contact);
 //! - a scene object's effect block (`FUN_001a1f58`, the entry filter `FUN_001a1bc8`), its events
 //!   (`FUN_001caba8`: 0-3 start/stop by mask or id `FUN_001ca4b0`, 9 the damage bits
 //!   `FUN_001ca7a0`), the start/stop of one entry `FUN_001ca198`, the build-time starts
 //!   `FUN_001ca048`, the 600-tick out-of-range stop `FUN_001ca340`;
-//! - which events a hit sends: smackables `FUN_0019b5a8` (with `FUN_00195a58`), car panels
-//!   `FUN_00189598`;
+//! - which events a hit sends: smackables `FUN_0019e8c0`, sentries `FUN_0019b5a8` (both with
+//!   `FUN_00195a58`), car panels `FUN_00189598`;
 //! - the explosion's effect and sound choice (`ESpawnExplosion`, handler `FUN_0015a098`; the
-//!   static-entry route of `ESpawnExplosionStatic`, `FUN_0015b2f8`); what a missile's ground
-//!   hit passes (`FUN_00182978` -> `FUN_00200088` -> `FUN_00159fb8`);
+//!   entry route of `ESpawnForceEffect`, `FUN_0015b2f8`); what a missile's ground hit passes
+//!   (`FUN_00182978` -> `FUN_00200088` -> `FUN_00159fb8`);
 //! - the decal ring (`FUN_001da6c8` add, `FUN_001da978` the per-draw fade-in) and the flat
 //!   ground decal placement `FUN_001eb078` (explosion scorch: radius 8, record 5; Q-Slick oil:
-//!   radius 4.2, record 4).
+//!   radius 4.2, record 4); the hit marks on any surface `FUN_001ea8e8` behind the gate
+//!   `FUN_0019ddb8` (bullet holes, missile marks), and the bullet impact's effect, sparks and
+//!   sound choice `FUN_0019d5a8`.
 //!
-//! Not traced (stated, not guessed): how the debris pieces move and turn (the VU1 program that
-//! draws them reads pos, velocity, birth tick, axis and spin; it is not disassembled), who
-//! walks debris type 4, what `FUN_002331e8` (intensity) and `FUN_002331c0` (events 4/5) do to
-//! a running effect, the units of the explosion sound clock `FUN_00261038`, the readers of the
-//! `gs` voice words +0x5c/+0x60/+0x70, and the bullet-hole decal `FUN_001ea8e8`.
+//! Not traced (stated, not guessed): who handles debris type 4 (kind-0 bursts: no pass in
+//! DRIVING.ELF fades, expires or draws it), what `FUN_002331e8` (intensity) and `FUN_002331c0`
+//! (events 4/5) do to a running effect, the units of the explosion sound clock `FUN_00261038`,
+//! the readers of the `gs` voice words +0x5c/+0x60/+0x70.
 
 use nf_formats::drivefx::Decal;
 use nf_formats::gal::argb_to_gs;
@@ -241,6 +244,103 @@ impl DebrisPool {
     }
 
     pub fn count(&self) -> usize { self.types.iter().map(|t| t.pieces.len()).sum() }
+
+    /// Every piece `FUN_001d9920` hands to the draw this frame, with its pose: all types but 4
+    /// (type 4 is neither faded, expired nor drawn by this pass) [M]. Call after [`update`].
+    ///
+    /// [`update`]: DebrisPool::update
+    pub fn poses(&self, now: f32) -> Vec<(usize, DebrisPose, u32)> {
+        let mut out = Vec::new();
+        for (k, t) in self.types.iter().enumerate() {
+            if k == DEBRIS_UNWALKED {
+                continue;
+            }
+            out.extend(t.pieces.iter().map(|p| (k, p.pose(now), p.rgba)));
+        }
+        out
+    }
+}
+
+// How a piece moves: the `BondDebris` VU1 program [M disassembly].
+//
+// The draw (`FUN_001d9920` -> `FUN_00285388` -> the render list at 0x348c60) uploads the
+// type's arrays and runs the microprogram at 0x349020 (209 instructions, MPG to micro 0 by the
+// DMA chain at 0x3496e0; the render method is named `BondDebris`, its parameters `Coordinates`,
+// `UV`, `State`, `SimTick`, `Offsets` (pos), `Quats` (axis, spin), `InstCols` and `Velocity`).
+// `SimTick` is the qword at 0x334000: x = `DAT_00334000` (the tick, as the spawn's birth), y =
+// 0x334004 = -0.002 (no code writes it: ELF .data). Per piece, micro 0x019-0x036:
+//   t = now - birth; a = spin x t - 3.95 (I = 0x407ccccd); q.xyz = axis x ESIN(a);
+//   q.w = ESIN(a + pi/2) (I = 0x3fc90ff9); the age t is written over the birth (VU copy only).
+// Then micro 0x045-0x06a: pos = p0 + v x t, pos.y += -0.002 x t x t; the rotation matrix of q
+// (the standard one, its columns the images of the model's x, y, z axes); then the vertex loop
+// transforms the type's model (the ELF table 0x338e28 `+0x00` coordinates, `+0x04` UVs,
+// `+0x0c` vertex count) by it. Nothing in the program or in `FUN_001d9920` reads the ground: no
+// bounce, no contact, no drag; a piece falls through the road until its 70 ticks run out. The
+// type's size word (`+0xd10`, `SimTick.w`) is uploaded but the program does not read it.
+
+/// `SimTick.y` (0x334004 = 0xbb03126f): the debris fall term, x age squared [D ELF .data; M
+/// micro 0x04c `MULw.y vf20, vf20, vf19.w`]. Literal: there is no 1/2.
+pub const DEBRIS_GRAVITY: f32 = f32::from_bits(0xbb03_126f);
+/// The spin phase micro 0x020 loads into I and 0x021 subtracts (0x407ccccd = 3.95) [M].
+pub const DEBRIS_SPIN_PHASE: f32 = f32::from_bits(0x407c_cccd);
+/// The I value at micro 0x024 (0x3fc90ff9), added before the second ESIN to get the cosine [M].
+pub const DEBRIS_QUARTER_TURN: f32 = f32::from_bits(0x3fc9_0ff9);
+
+/// The VU `ESIN` (the EFU sine): the five-term series x - x^3/3! + x^5/5! - x^7/7! + x^9/9!
+/// with the coefficients of PCSX2's interpreter (`_vuESIN`, VUops.cpp; Sony's VU manual gives
+/// the same series). The debris program feeds it arguments in -3.95 .. 2.33 (outside
+/// -pi/2 .. pi/2, where the series drifts from the true sine): literal, not reduced. Whether the
+/// real EFU rounds the series the same way is not measured.
+pub fn vu_esin(x: f32) -> f32 {
+    const C: [f64; 5] = [1.0, -0.166_666_567_325_592, 0.008_333_025_500_178, -0.000_198_074_136_279, 0.000_002_601_886_990];
+    let p = x as f64;
+    let r = C[0] * p + C[1] * p.powi(3) + C[2] * p.powi(5) + C[3] * p.powi(7) + C[4] * p.powi(9);
+    r as f32
+}
+
+/// A piece's pose for one draw [M `BondDebris` micro 0x019-0x06a].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DebrisPose {
+    pub pos: [f32; 3],
+    /// (axis x sin, cos) as the program builds it; not renormalised (the series is not exact).
+    pub quat: [f32; 4],
+    /// The rotation's columns: where the model's x, y and z axes go.
+    pub axes: [[f32; 3]; 3],
+}
+
+impl DebrisPose {
+    /// A model vertex placed in the world: x c0 + y c1 + z c2 + pos.
+    pub fn apply(&self, v: [f32; 3]) -> [f32; 3] {
+        let [c0, c1, c2] = self.axes;
+        std::array::from_fn(|k| c0[k] * v[0] + c1[k] * v[1] + c2[k] * v[2] + self.pos[k])
+    }
+}
+
+impl DebrisPiece {
+    /// Where the `BondDebris` program draws this piece at tick `now` [M], VU rounding
+    /// (`ps2float`, toward zero) in the program's operation order.
+    pub fn pose(&self, now: f32) -> DebrisPose {
+        use nf_formats::ps2float::{add as fadd, mul as fmul, sub as fsub};
+        let t = fsub(now, self.birth);
+        let a = fsub(fmul(self.spin, t), DEBRIS_SPIN_PHASE);
+        let s = vu_esin(a);
+        let c = vu_esin(fadd(a, DEBRIS_QUARTER_TURN));
+        let q = [fmul(self.axis[0], s), fmul(self.axis[1], s), fmul(self.axis[2], s), c];
+        let mut pos: [f32; 3] = std::array::from_fn(|k| fadd(self.pos[k], fmul(self.vel[k], t)));
+        pos[1] = fadd(pos[1], fmul(DEBRIS_GRAVITY, fmul(t, t)));
+        // vf15..vf18 = q x q.x .. q x q.w, each doubled (micro 0x048-0x052).
+        let m = |i: usize, j: usize| {
+            let v = fmul(q[i], q[j]);
+            fadd(v, v)
+        };
+        let (xx, yy, zz) = (m(0, 0), m(1, 1), m(2, 2));
+        let (xy, xz, yz) = (m(0, 1), m(0, 2), m(1, 2));
+        let (xw, yw, zw) = (m(0, 3), m(1, 3), m(2, 3));
+        let c0 = [fsub(fsub(1.0, yy), zz), fadd(xy, zw), fsub(xz, yw)];
+        let c1 = [fsub(xy, zw), fsub(fsub(1.0, xx), zz), fadd(yz, xw)];
+        let c2 = [fadd(xz, yw), fsub(yz, xw), fsub(fsub(1.0, xx), yy)];
+        DebrisPose { pos, quat: q, axes: [c0, c1, c2] }
+    }
 }
 
 /// `FUN_00235810(key, pos, orientation, centre = 0)` [M], one `gd` burst:
@@ -756,12 +856,16 @@ impl EffectBlock {
     }
 }
 
-/// The events a smackable hit sends to its scene object [M `FUN_0019b5a8`, `FUN_00195a58`]:
+/// The events a sentry hit sends to its scene object [M `FUN_0019b5a8`, `FUN_00195a58`]:
 /// nothing unless hit points remain before the hit; the damage (negative counts as 0) comes
 /// off, floored at 0. Still standing: health = hp x (1 / start hp) (`+0x8c`); event 10 (part
 /// animations) when health > 0.15, event 9 with all bits when health > 0.75. Destroyed: event
 /// 10 with all bits only. Returns (hp after, events).
-pub fn smackable_hit(hp: f32, inv_start_hp: f32, damage: f32) -> (f32, Vec<(u32, u32)>) {
+///
+/// `FUN_0019b5a8` is the damage virtual of `Sentry` (vtable 0x37c260 slot 3, typeinfo
+/// `6Sentry` [D ELF]); an earlier version of this module named it the smackable hit. The
+/// smackable's own virtual is [`smackable_hit`].
+pub fn sentry_hit(hp: f32, inv_start_hp: f32, damage: f32) -> (f32, Vec<(u32, u32)>) {
     if hp <= 0.0 {
         return (hp, Vec::new());
     }
@@ -779,6 +883,106 @@ pub fn smackable_hit(hp: f32, inv_start_hp: f32, damage: f32) -> (f32, Vec<(u32,
         ev.push((10, 0xffff));
     }
     (hp, ev)
+}
+
+/// What a smackable hit does [M `FUN_0019e8c0`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SmackableHit {
+    pub hp: f32,
+    pub destroyed: bool,
+    /// Model part-animation events in call order: (event, `true` for `FUN_001a2868` (every
+    /// channel), `false` for `FUN_001a2b50` with mask 0xffff).
+    pub anims: Vec<(u32, bool)>,
+    /// Scene-object events (vtable +0x84): (event, bits).
+    pub events: Vec<(u32, u32)>,
+    /// A kind-2 hit of at most 10: the push `FUN_00195728` gets.
+    pub push: Option<[f32; 3]>,
+    /// The value the rigid body (`+0x4c`, when there is one) gets through its vtable +0x34:
+    /// 0.9 destroyed or first hit, else 0.5 above half damage, else 0.1.
+    pub body: f32,
+}
+
+/// `Smackable`'s damage virtual (vtable 0x37cec4 slot 3, typeinfo `9Smackable` [D ELF]),
+/// `FUN_0019e8c0` [M]. `hp` is the hit-point word (`FUN_00195a30`), `start` the type's start
+/// value (`+0x78 -> +8`), `was_full` = `+0x74` equals `start` before the hit, `kind` the hit's
+/// kind argument, `at` / `from` its two points.
+/// - Hit points left: the damage comes off (`FUN_00195a58`: negative counts as 0, floored at 0).
+///   A smackable already at 0 takes the destroyed branch again on every hit.
+/// - Kind 2 and damage <= 10: push = normalise(from - at) x damage x 1600 with
+///   y = 2 max(y, damage x 160).
+/// - Destroyed: anims 2 (all), 7 for kind 3 else 6 (all), then 0x16, 0x15, 0x14, 0x13, 6, 5, 4,
+///   0x19 (mask 0xffff); event 10 with all bits.
+/// - Standing: severity = damage / start x 32 -> anim 6 / 5 / 4 / 0x19 above 0.75 / 0.5 / 0.25 /
+///   0.001 (0x332068..74); the damage taken so far f = (start - hp) / start -> anim 0x16 / 0x15 /
+///   0x14 / 0x13 at f >= 0.85 / 0.65 / 0.35 / 0.15 (0x33208c down to 0x332080, the first that
+///   holds); event 10 (all bits) when f > 0.15 (0x332080), event 9 (all bits) when f > 0.75
+///   (0x332090).
+///
+/// So a street light (or any smackable) starts its damage-mask block entries once it has taken
+/// three quarters of its hit points, and when knocked down sends event 10 only: nothing here
+/// starts a Giotto effect by name.
+pub fn smackable_hit(hp: f32, start: f32, was_full: bool, damage: f32, kind: u32, at: [f32; 3], from: [f32; 3]) -> SmackableHit {
+    let mut r = SmackableHit { hp, ..Default::default() };
+    let mut destroyed = true;
+    if hp > 0.0 {
+        r.hp = (hp - damage.max(0.0)).max(0.0);
+        if r.hp > 0.0 {
+            destroyed = false;
+        }
+    }
+    if kind == 2 && damage <= 10.0 {
+        let d = sub(from, at);
+        let l = len(d);
+        let n = if l > 0.0 { scale(d, 1.0 / l) } else { d };
+        let mut v = scale(n, damage * 1600.0);
+        let lo = damage * 1600.0 * 0.1;
+        let y = if lo < v[1] { v[1] } else { lo };
+        v[1] = y + y;
+        r.push = Some(v);
+    }
+    r.destroyed = destroyed;
+    if destroyed {
+        r.anims.push((2, true));
+        r.anims.push((if kind == 3 { 7 } else { 6 }, true));
+        for e in [0x16, 0x15, 0x14, 0x13, 6, 5, 4, 0x19] {
+            r.anims.push((e, false));
+        }
+        r.events.push((10, 0xffff));
+        r.body = f32::from_bits(0x3f66_6666);
+        return r;
+    }
+    let inv = 1.0 / start;
+    let sev = damage * inv * 32.0;
+    let sev_anim = if sev > 0.75 {
+        Some(6)
+    } else if sev > 0.5 {
+        Some(5)
+    } else if sev > 0.25 {
+        Some(4)
+    } else if sev > f32::from_bits(0x3a83_126f) {
+        Some(0x19)
+    } else {
+        None
+    };
+    if let Some(e) = sev_anim {
+        r.anims.push((e, false));
+    }
+    let f = (start - r.hp) * inv;
+    const STAGES: [f32; 4] = [f32::from_bits(0x3e19_999a), f32::from_bits(0x3eb3_3333), f32::from_bits(0x3f26_6666), f32::from_bits(0x3f59_999a)];
+    for k in (0..4).rev() {
+        if STAGES[k] <= f {
+            r.anims.push((0x13 + k as u32, false));
+            break;
+        }
+    }
+    if f > STAGES[0] {
+        r.events.push((10, 0xffff));
+    }
+    if f > 0.75 {
+        r.events.push((9, 0xffff));
+    }
+    r.body = if was_full { f32::from_bits(0x3f66_6666) } else if f > 0.5 { 0.5 } else { f32::from_bits(0x3dcc_cccd) };
+    r
 }
 
 /// A car's panel hit [M `FUN_00189598`]: panel i's damage is the larger of its two words
@@ -850,7 +1054,10 @@ pub fn explosion_effect(a: &ExplosionArgs, tick: u32, counter: &mut u32) -> Stri
     n.into()
 }
 
-/// What `ESpawnExplosionStatic` (`FUN_0015b2f8`) does with an entry of a scene object [M]: an
+/// What `ESpawnForceEffect` (`FUN_0015b2f8`, vtable 0x370468 typed `17ESpawnForceEffect`; action id
+/// 0x8d, creator `FUN_0015b7d8`, which no script on the eight tracks uses [D]) does with an entry
+/// of a scene object [M] (an earlier version named it `ESpawnExplosionStatic`, which is action
+/// 0x9a, handler `FUN_0015b010`, and spawns an `ESpawnExplosion`): an
 /// entry outside the block filter (flags & 0x109e == 0) starts its own effect directly
 /// (`Ex_Snow` on surface 9 / `Ex_Small` when it names none); an entry in the block gets event 1
 /// with its id.
@@ -1063,6 +1270,235 @@ pub const SCORCH: (f32, usize) = (8.0, 5);
 /// The Q-Slick's oil: `FUN_001eb078(4.2, .., record 4)` [M `FUN_0020de20` case 10].
 pub const OIL_SLICK: (f32, usize) = (4.2, 4);
 
+// ---------------------------------------------------------------------------------------------
+// Hit marks: bullet holes and missile marks on any surface
+// ---------------------------------------------------------------------------------------------
+
+/// What the segment query `FUN_00215cc8` returns that the hit-mark placement reads [M]: the
+/// hit byte (`+0x53`), the surface byte (`+0x50`) and the flag byte (`+0x51`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SegHit {
+    pub hit: bool,
+    pub surface: u8,
+    pub flags: u8,
+}
+
+/// The hit-mark radii and records the three callers of `FUN_0019ddb8` pass [M]:
+/// `FUN_00199f88` 0.0625 (0x3d800000; 0.3125 = 0x3ea00000 for weapon 0x1d), record 2.
+pub const HIT_MARK_RAY: (f32, f32, usize) = (0.0625, 0.3125, 2);
+/// `FUN_0019d080`: radius = its `+0x70` value x 0.005, record 5 [M].
+pub const HIT_MARK_GUN_SCALE: (f32, usize) = (0.005, 5);
+/// `FUN_00182978` (missile and rocket ground hit, not weapon 0xe): radius = damage x 0.008,
+/// record 5 [M].
+pub const HIT_MARK_MISSILE_SCALE: (f32, usize) = (0.008, 5);
+
+/// `FUN_0019ddb8`'s gate [M]: a mark only when the hit record's `+0x52` byte is 0, its surface
+/// (`+0x50`) is not 0x70 (glass) and its `+0x51` bit 1 is clear.
+pub fn hit_mark_allowed(hit_52: u8, surface: u8, flags: u8) -> bool { hit_52 == 0 && surface != 0x70 && flags & 2 == 0 }
+
+/// `FUN_0019ddb8`'s part-animation events on the object the hit names (`+0x58`, when it is a
+/// scene object), all through `FUN_001a2868` (every channel), in order [M]: 0x16 at damage >=
+/// 500, 0x15 at >= 250, 0x14 at >= 50, 0x13 at >= 10 (each that holds).
+pub fn hit_object_anims(damage: f32) -> Vec<u32> {
+    [(500.0, 0x16), (250.0, 0x15), (50.0, 0x14), (10.0, 0x13)].into_iter().filter(|&(t, _)| t <= damage).map(|(_, e)| e).collect()
+}
+
+/// The unit normal of a ground triangle as `FUN_001ea8e8` / `FUN_002327a0` build it [M]:
+/// (v1 - v0) x (v0 - v2) normalised, (0, 1, 0) when it is zero; turned to y >= 0; y capped at
+/// 0.9999 (not renormalised).
+fn ground_normal(tri: &[[f32; 3]; 3]) -> [f32; 3] {
+    let [v0, v1, v2] = *tri;
+    let c = cross(sub(v1, v0), sub(v0, v2));
+    let mut n = if c == [0.0; 3] { [0.0, 1.0, 0.0] } else { scale(c, 1.0 / len(c)) };
+    if n[1] < 0.0 {
+        n = scale(n, -1.0);
+    }
+    if n[1] >= 0.9999 {
+        n[1] = f32::from_bits(0x3f7f_f972);
+    }
+    n
+}
+
+/// `FUN_001ea8e8(radius, ground, pos, normal, record)` [M + disassembly 0x1ead30..0x1eb030]:
+/// the bullet hole or missile mark at a hit `pos` on a surface with `normal` (walls, road,
+/// anything the ray struck). Returns the number of decals added (0, 1 or 2).
+/// - `tri_at(p)` is `FUN_002322c8(ground, p, 1)`: refused when its `+0x2d` bit 1 is set or its
+///   surface is 6.
+/// - r = min(radius, 6). The reference axis s = (0, 1, 0), or (0, 0, -1) when |normal.y| > 0.85
+///   (a floor); side = normal x s (not normalised).
+/// - Above r 0.33 the mark must fit: three segments of length 0.5 through the surface (from
+///   pos + normal/4 to pos - normal/4) offset by + side r, - side r, then - side r + s r must
+///   each hit something other than surface 6; on a miss r halves and it tries once more (two
+///   tries, then nothing).
+/// - The centre is pos + normal x (|(1 - normal.y) x 0.05| + 0.035). Nothing on an object
+///   whose `+0x1c -> +0x0c` byte is set. The mark: `FUN_001da6c8(2r, 2r, centre, normal, side)`
+///   unless the last segment hit's flag bit 1 is set.
+/// - A wall (|normal.y| <= 0.85) also gets a streak on the ground at its foot when the ground
+///   under the centre is a triangle (no `+0x2d` bit 1) less than r below it: the centre moves
+///   back along the normal by 4 x that drop, sits at the triangle's plane height there + the
+///   same lift, and when the ground's normal has |y| >= 0.98 a `2r` x `8r` decal goes there
+///   (normal = the ground's, up = the wall's normal).
+pub fn hit_decal(
+    ring: &mut DecalRing, records: &[Decal], radius: f32, pos: [f32; 3], normal: [f32; 3], record: usize, tri_at: impl Fn([f32; 3]) -> GroundHit,
+    segment: impl Fn([f32; 3], [f32; 3]) -> SegHit,
+) -> u32 {
+    let t = tri_at(pos);
+    if t.no_decal || t.surface == 6 {
+        return 0;
+    }
+    let mut r = if radius > 6.0 { 6.0 } else { radius };
+    let floor = (normal[1].abs() as f64) > (0.85f32 as f64);
+    let s = if floor { [0.0, 0.0, -1.0] } else { [0.0, 1.0, 0.0] };
+    let side = cross(normal, s);
+    let mut fits = true;
+    let mut last_flags = 0u8;
+    if r > f32::from_bits(0x3ea8_f5c3) {
+        fits = false;
+        for _ in 0..2 {
+            let a = add(pos, scale(normal, 0.25));
+            let b = add(pos, scale(normal, -0.25));
+            let mut p = add(a, scale(side, r));
+            let mut q = add(b, scale(side, r));
+            let ok = |h: SegHit| h.hit && h.surface != 6;
+            let h2 = segment(p, q);
+            p = add(p, scale(side, r * -2.0));
+            q = add(q, scale(side, r * -2.0));
+            let h1 = segment(p, q);
+            p = add(p, scale(s, r));
+            q = add(q, scale(s, r));
+            let h3 = segment(p, q);
+            last_flags = h3.flags;
+            if ok(h1) && ok(h2) && ok(h3) {
+                fits = true;
+                break;
+            }
+            r *= 0.5;
+        }
+    }
+    let lift = ((1.0 - normal[1]) * 0.05).abs() + 0.035;
+    let centre = add(pos, scale(normal, lift));
+    if !fits {
+        return 0;
+    }
+    if tri_at(pos).on_object {
+        return 0;
+    }
+    let mut n = 0;
+    if last_flags & 2 == 0 {
+        ring.add(r + r, r + r, centre, normal, side, records, record);
+        n += 1;
+    }
+    if !floor {
+        let g = tri_at(centre);
+        if g.hit == 1 && !g.no_decal {
+            let drop = centre[1] - nf_formats::trackstart::plane_height(&g.tri, centre[0], centre[2]);
+            if drop < r && 0.0 < drop {
+                let mut c = sub(centre, scale(normal, drop * 4.0));
+                c[1] = lift + nf_formats::trackstart::plane_height(&g.tri, c[0], c[2]);
+                let gn = ground_normal(&g.tri);
+                if f32::from_bits(0x3f7a_e148) <= gn[1].abs() {
+                    ring.add(r + r, r * 8.0, c, gn, normal, records, record);
+                    n += 1;
+                }
+            }
+        }
+    }
+    n
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bullet impacts
+// ---------------------------------------------------------------------------------------------
+
+/// What a bullet impact (`FUN_0019d5a8`) starts besides the hit mark [M].
+#[derive(Clone, Debug, PartialEq)]
+pub struct BulletImpact {
+    /// The Giotto effect started at the hit (`FUN_00233108`), by name.
+    pub effect: Option<&'static str>,
+    /// Two `BKPS` spark particles along the hit normal (`FUN_001e6330(.., 2)`).
+    pub sparks: bool,
+    /// The one-shot voice: (sound, group).
+    pub sound: (&'static str, &'static str),
+}
+
+/// Who a bullet hit, for [`bullet_impact`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BulletTarget {
+    /// The world (no car).
+    World,
+    /// The player's car; `flag_c0` = its `vtable +0x1d4 -> +0xc0` word is set.
+    Player { flag_c0: bool },
+    /// Another car with its `+0x40` kind.
+    Car { kind: u32 },
+}
+
+/// `FUN_0019d5a8(pos, normal, .., weapon, surface, flesh, target)` [M], the choices:
+/// - effect: `Henbult` when the flesh argument or the surface is 0x80; the player's car:
+///   `bullethe` unless its `+0xc0` flag is set (then none); another car of kind 1 or 10, or
+///   surface 0xd: `bulletcar`; surfaces 9, 8, 0x30, 0x40 `snowbullethit`; 6 `bulletsplash`
+///   (upright); 0xc `bulletHut`; else with no car by weapon: 0x1b `bulletrockH`, 0x1d
+///   `bulletrock`, 0x1a `Bullgat`; else `bullet`.
+/// - sparks unless the surface is 9, 8, 0x30 or 0x40, or the target is the player's car with
+///   its `+0xc0` flag set.
+/// - the sound: one draw r; r / 65536 < 0.25 -> `SFX_Ricochet1..3` in turn (`ricochet`, the
+///   0x333588 counter) in `Bullet Ricochet`; else by the surface's high (h) and low (l) nibble
+///   in `Bullet Impact`: h 0x90 or 0x10 or l 0xd -> `SFX_BulletMetal1..5` by a second draw
+///   (r x 5 >> 16); l 7 or h 0x20 wood; l 5 or h 0x50 dirt; h 0x70 glass; h 0x80 flesh; else
+///   `SFX_BulletConcrete1` / `2` alternating (`concrete`, 0x333584).
+pub fn bullet_impact(weapon: u32, surface: u8, flesh: u8, target: BulletTarget, ricochet: &mut u32, concrete: &mut u32, rand: &mut dyn FnMut() -> u16) -> BulletImpact {
+    let snow = matches!(surface, 9 | 8 | 0x30 | 0x40);
+    let effect = if flesh == 0x80 || surface == 0x80 {
+        Some("Henbult")
+    } else {
+        match target {
+            BulletTarget::Player { flag_c0 } => (!flag_c0).then_some("bullethe"),
+            BulletTarget::Car { kind: 1 | 10 } => Some("bulletcar"),
+            _ if snow => Some("snowbullethit"),
+            _ if surface == 6 => Some("bulletsplash"),
+            _ if surface == 0xc => Some("bulletHut"),
+            _ if surface == 0xd => Some("bulletcar"),
+            BulletTarget::World => Some(match weapon {
+                0x1b => "bulletrockH",
+                0x1d => "bulletrock",
+                0x1a => "Bullgat",
+                _ => "bullet",
+            }),
+            BulletTarget::Car { .. } => Some("bullet"),
+        }
+    };
+    let sparks = !snow && !matches!(target, BulletTarget::Player { flag_c0: true });
+    let (h, l) = (surface & 0xf0, surface & 0xf);
+    let r = rand() as f32 * 1.525_878_9e-5;
+    let sound = if r < 0.25 {
+        const RICO: [&str; 3] = ["SFX_Ricochet1", "SFX_Ricochet2", "SFX_Ricochet3"];
+        let s = RICO[(*ricochet as usize).min(2)];
+        *ricochet += 1;
+        if *ricochet > 2 {
+            *ricochet = 0;
+        }
+        (s, "Bullet Ricochet")
+    } else {
+        let s = if h == 0x90 || h == 0x10 || l == 0xd {
+            const METAL: [&str; 5] = ["SFX_BulletMetal1", "SFX_BulletMetal2", "SFX_BulletMetal3", "SFX_BulletMetal4", "SFX_BulletMetal5"];
+            METAL[(rand() as usize * 5) >> 16]
+        } else if l == 7 || h == 0x20 {
+            "SFX_BulletWood"
+        } else if l == 5 || h == 0x50 {
+            "SFX_BulletDirt"
+        } else if h == 0x70 {
+            "SFX_BulletGlass"
+        } else if h == 0x80 {
+            "SFX_BulletFlesh"
+        } else {
+            let k = *concrete & 1;
+            *concrete += 1;
+            if k == 0 { "SFX_BulletConcrete1" } else { "SFX_BulletConcrete2" }
+        };
+        (s, "Bullet Impact")
+    };
+    BulletImpact { effect, sparks, sound }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1272,12 +1708,12 @@ mod tests {
 
     #[test]
     fn smackable_and_panel_thresholds() {
-        assert_eq!(smackable_hit(10.0, 0.1, 1.0), (9.0, vec![(10, 0xffff), (9, 0xffff)]));
-        assert_eq!(smackable_hit(10.0, 0.1, 3.0), (7.0, vec![(10, 0xffff)]), "0.7 is not above 0.75");
-        assert_eq!(smackable_hit(10.0, 0.1, 9.0), (1.0, vec![]), "0.1 is not above 0.15");
-        assert_eq!(smackable_hit(10.0, 0.1, 20.0), (0.0, vec![(10, 0xffff)]));
-        assert_eq!(smackable_hit(0.0, 0.1, 1.0), (0.0, vec![]));
-        assert_eq!(smackable_hit(10.0, 0.1, -5.0).0, 10.0);
+        assert_eq!(sentry_hit(10.0, 0.1, 1.0), (9.0, vec![(10, 0xffff), (9, 0xffff)]));
+        assert_eq!(sentry_hit(10.0, 0.1, 3.0), (7.0, vec![(10, 0xffff)]), "0.7 is not above 0.75");
+        assert_eq!(sentry_hit(10.0, 0.1, 9.0), (1.0, vec![]), "0.1 is not above 0.15");
+        assert_eq!(sentry_hit(10.0, 0.1, 20.0), (0.0, vec![(10, 0xffff)]));
+        assert_eq!(sentry_hit(0.0, 0.1, 1.0), (0.0, vec![]));
+        assert_eq!(sentry_hit(10.0, 0.1, -5.0).0, 10.0);
         let mut p = [[0.0f32; 2]; 16];
         p[0] = [0.8, 0.1];
         p[3] = [0.1, 0.5];
@@ -1430,5 +1866,162 @@ mod tests {
         let x90 = [h, 0.0, 0.0, h];
         let q = quat_mul(z90, x90);
         assert!((q[0] - 0.5).abs() < 1e-6 && (q[1] - 0.5).abs() < 1e-6 && (q[2] - 0.5).abs() < 1e-6 && (q[3] - 0.5).abs() < 1e-6, "{q:?}");
+    }
+
+    fn piece(pos: [f32; 3], vel: [f32; 3], birth: f32, axis: [f32; 3], spin: f32) -> DebrisPiece { DebrisPiece { pos, vel, birth, axis, spin, rgba: 0x7f00_0000 } }
+
+    #[test]
+    fn vu_esin_is_the_five_term_series() {
+        assert!((vu_esin(0.5) - 0.5f32.sin()).abs() < 1e-6);
+        // Outside -pi/2..pi/2 the series is used as is: at -3.95 it gives 0.67142, sin gives 0.72436.
+        assert!((vu_esin(-3.95) - 0.671_421_9).abs() < 1e-5, "{}", vu_esin(-3.95));
+        assert!((vu_esin(-3.95 + DEBRIS_QUARTER_TURN) + 0.690_733_4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn debris_falls_and_spins_as_the_bonddebris_program() {
+        let p = piece([1.0, 2.0, 3.0], [0.1, 0.2, -0.1], 100.0, [0.0, 1.0, 0.0], 0.022_439_947);
+        let at = p.pose(110.0);
+        // pos = p0 + v t + (0, -0.002 t^2, 0) with t = 10: no 1/2 on the fall term.
+        assert!((at.pos[0] - 2.0).abs() < 1e-5 && (at.pos[2] - 2.0).abs() < 1e-5, "{:?}", at.pos);
+        assert!((at.pos[1] - 3.8).abs() < 1e-5, "{:?}", at.pos);
+        // a = spin t - 3.95 = -3.7256: q = (0, ESIN(a), 0, ESIN(a + pi/2)).
+        assert!(at.quat[0] == 0.0 && at.quat[2] == 0.0);
+        assert!((at.quat[1] - 0.525_413_9).abs() < 1e-5 && (at.quat[3] + 0.834_278_3).abs() < 1e-5, "{:?}", at.quat);
+        // A fresh piece is already turned by the phase (q.w = ESIN(-3.95 + pi/2) = -0.6907).
+        let born = p.pose(100.0);
+        assert_eq!(born.pos, p.pos);
+        assert!((born.quat[3] + 0.690_733_4).abs() < 1e-5);
+        // The axes are the standard rotation of q: about y, c0 = (1 - 2yy, 0, -2yw), c2 = (2yw, 0, 1 - 2yy).
+        let (y, w) = (at.quat[1], at.quat[3]);
+        assert!((at.axes[0][0] - (1.0 - 2.0 * y * y)).abs() < 1e-5 && (at.axes[0][2] + 2.0 * y * w).abs() < 1e-5, "{:?}", at.axes);
+        assert!((at.axes[2][0] - 2.0 * y * w).abs() < 1e-5 && (at.axes[1][1] - 1.0).abs() < 1e-6);
+        let v = at.apply([1.0, 0.0, 0.0]);
+        assert!((v[0] - (at.pos[0] + at.axes[0][0])).abs() < 1e-6 && (v[2] - (at.pos[2] + at.axes[0][2])).abs() < 1e-6);
+        // Nothing stops the fall: 70 ticks after birth the piece is 9.8 below its straight path.
+        let late = piece([0.0; 3], [0.0; 3], 0.0, [1.0, 0.0, 0.0], 0.0).pose(70.0);
+        assert!((late.pos[1] + 9.8).abs() < 1e-4, "{:?}", late.pos);
+    }
+
+    #[test]
+    fn poses_skip_type_four() {
+        let mut d = DebrisPool::default();
+        let mut r = DriveRng::seeded(0);
+        d.spawn(0.1, 0, [0.0; 3], [0.0; 3], 0xff00_0000, 1, 10, &mut r);
+        d.spawn(0.1, 4, [0.0; 3], [0.0; 3], 0xff00_0000, 1, 10, &mut r);
+        d.spawn(0.1, 7, [0.0; 3], [0.0; 3], 0xff00_0000, 1, 10, &mut r);
+        let p = d.poses(12.0);
+        assert_eq!(p.iter().map(|x| x.0).collect::<Vec<_>>(), [0, 7]);
+    }
+
+    #[test]
+    fn smackable_hit_follows_fun_0019e8c0() {
+        let (o, x) = ([0.0; 3], [1.0, 0.0, 0.0]);
+        // Start 100, a first hit of 10: 10% taken, no stage, severity 3.2 -> anim 6.
+        let h = smackable_hit(100.0, 100.0, true, 10.0, 1, o, x);
+        assert_eq!((h.hp, h.destroyed, h.events.clone(), h.anims.clone(), h.body), (90.0, false, vec![], vec![(6, false)], f32::from_bits(0x3f66_6666)));
+        // 20% taken: stage 0x13 and event 10.
+        let h = smackable_hit(100.0, 100.0, false, 20.0, 1, o, x);
+        assert_eq!((h.events.clone(), h.anims.clone()), (vec![(10, 0xffff)], vec![(6, false), (0x13, false)]));
+        assert_eq!(h.body, f32::from_bits(0x3dcc_cccd));
+        // 80% taken: stage 0x15 and events 10 and 9 (damage taken, not health left as on a sentry).
+        let h = smackable_hit(100.0, 100.0, false, 80.0, 1, o, x);
+        assert_eq!((h.events.clone(), h.anims.clone(), h.body), (vec![(10, 0xffff), (9, 0xffff)], vec![(6, false), (0x15, false)], 0.5));
+        assert_eq!(sentry_hit(100.0, 0.01, 80.0).1, vec![(10, 0xffff)], "the sentry reads health left");
+        // Severity below 0.001 and nothing taken: no anim at all.
+        let h = smackable_hit(100_000.0, 100_000.0, false, 0.001, 1, o, x);
+        assert!(h.anims.is_empty() && h.events.is_empty());
+        // Knocked down: the wreck anims and event 10 only; again on the next hit at 0 hp.
+        let want = vec![(2, true), (6, true), (0x16, false), (0x15, false), (0x14, false), (0x13, false), (6, false), (5, false), (4, false), (0x19, false)];
+        let h = smackable_hit(10.0, 100.0, false, 20.0, 1, o, x);
+        assert_eq!((h.hp, h.destroyed, h.anims.clone(), h.events.clone()), (0.0, true, want.clone(), vec![(10, 0xffff)]));
+        let h = smackable_hit(0.0, 100.0, false, 0.0, 3, o, x);
+        assert!(h.destroyed && h.anims[1] == (7, true), "kind 3 sends 7");
+        // Kind 2 at most 10: the push.
+        assert_eq!(smackable_hit(100.0, 100.0, true, 1.0, 2, o, x).push, Some([1600.0, 320.0, 0.0]));
+        assert_eq!(smackable_hit(100.0, 100.0, true, 11.0, 2, o, x).push, None);
+    }
+
+    fn ground_y0(p: [f32; 3]) -> GroundHit { GroundHit { hit: 1, tri: [[p[0], 0.0, p[2]], [p[0] + 1.0, 0.0, p[2]], [p[0], 0.0, p[2] + 1.0]], height: 0.0, surface: 1, no_decal: false, on_object: false } }
+
+    #[test]
+    fn hit_decal_on_a_wall_and_its_foot() {
+        let rec = records();
+        let all = |_: [f32; 3], _: [f32; 3]| SegHit { hit: true, surface: 1, flags: 0 };
+        let mut ring = DecalRing::new();
+        // A wall facing +x hit 1 above the road: one 0.125 square, lifted 0.085 off the wall.
+        assert_eq!(hit_decal(&mut ring, &rec, HIT_MARK_RAY.0, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], 2, ground_y0, all), 1);
+        let q = ring.slots[0].unwrap();
+        let c: Vec<f32> = (0..3).map(|k| (q.verts[0][k] + q.verts[5][k]) * 0.5).collect();
+        assert!((c[0] - 0.085).abs() < 1e-6 && (c[1] - 1.0).abs() < 1e-6, "{c:?}");
+        assert!((len(sub(q.verts[1], q.verts[0])) - 0.125).abs() < 1e-6);
+        // 0.05 above the road (less than r): the streak at the foot, 0.2 back, 2r x 8r.
+        let mut ring = DecalRing::new();
+        assert_eq!(hit_decal(&mut ring, &rec, HIT_MARK_RAY.0, [0.0, 0.05, 0.0], [1.0, 0.0, 0.0], 2, ground_y0, all), 2);
+        let s = ring.slots[1].unwrap();
+        let c: Vec<f32> = (0..3).map(|k| (s.verts[0][k] + s.verts[5][k]) * 0.5).collect();
+        assert!((c[0] + 0.115).abs() < 1e-5 && (c[1] - 0.085).abs() < 1e-5, "{c:?}");
+        let (e0, e1) = (len(sub(s.verts[1], s.verts[0])), len(sub(s.verts[2], s.verts[0])));
+        assert!((e0 - 0.125).abs() < 2e-4 && (e1 - 0.5).abs() < 2e-4, "{e0} {e1}");
+    }
+
+    #[test]
+    fn hit_decal_fit_probes_and_refusals() {
+        let rec = records();
+        let all = |_: [f32; 3], _: [f32; 3]| SegHit { hit: true, surface: 1, flags: 0 };
+        let up = [0.0, 1.0, 0.0];
+        let mut ring = DecalRing::new();
+        // A floor hit of radius 0.5 probes; all hit -> a 1.0 square (side = (-1, 0, 0)).
+        assert_eq!(hit_decal(&mut ring, &rec, 0.5, [0.0, 0.0, 0.0], up, 5, ground_y0, all), 1);
+        let q = ring.slots[0].unwrap();
+        assert!((len(sub(q.verts[1], q.verts[0])) - 1.0).abs() < 1e-6);
+        // Probes past 0.3 miss: r halves once (0.25 fits) -> a 0.5 square.
+        let near = |a: [f32; 3], _: [f32; 3]| SegHit { hit: a[0].abs() < 0.3 && a[2].abs() < 0.3, surface: 1, flags: 0 };
+        assert_eq!(hit_decal(&mut ring, &rec, 0.5, [0.0; 3], up, 5, ground_y0, near), 1);
+        assert!((len(sub(ring.slots[1].unwrap().verts[1], ring.slots[1].unwrap().verts[0])) - 0.5).abs() < 1e-6);
+        // Two halvings are all it tries.
+        let tiny = |a: [f32; 3], _: [f32; 3]| SegHit { hit: a[0].abs() < 0.15 && a[2].abs() < 0.15, surface: 1, flags: 0 };
+        assert_eq!(hit_decal(&mut ring, &rec, 0.5, [0.0; 3], up, 5, ground_y0, tiny), 0);
+        let water = |a: [f32; 3], b: [f32; 3]| SegHit { surface: 6, ..all(a, b) };
+        assert_eq!(hit_decal(&mut ring, &rec, 0.5, [0.0; 3], up, 5, ground_y0, water), 0, "probes on surface 6 do not count");
+        // Under 0.33 nothing is probed.
+        assert_eq!(hit_decal(&mut ring, &rec, 0.33, [0.0; 3], up, 5, ground_y0, tiny), 1);
+        let flagged = |a: [f32; 3], b: [f32; 3]| SegHit { flags: 2, ..all(a, b) };
+        assert_eq!(hit_decal(&mut ring, &rec, 0.5, [0.0; 3], up, 5, ground_y0, flagged), 0, "the last probe's flag bit 1");
+        assert_eq!(hit_decal(&mut ring, &rec, 0.1, [0.0; 3], up, 5, |p| GroundHit { surface: 6, ..ground_y0(p) }, all), 0);
+        assert_eq!(hit_decal(&mut ring, &rec, 0.1, [0.0; 3], up, 5, |p| GroundHit { no_decal: true, ..ground_y0(p) }, all), 0);
+        assert_eq!(hit_decal(&mut ring, &rec, 0.1, [0.0; 3], up, 5, |p| GroundHit { on_object: true, ..ground_y0(p) }, all), 0);
+        // Radius capped at 6 (a 1000-damage missile: 8).
+        let mut ring = DecalRing::new();
+        hit_decal(&mut ring, &rec, 1000.0 * HIT_MARK_MISSILE_SCALE.0, [0.0; 3], up, 5, ground_y0, all);
+        assert!((len(sub(ring.slots[0].unwrap().verts[1], ring.slots[0].unwrap().verts[0])) - 12.0).abs() < 1e-4);
+        assert!(hit_mark_allowed(0, 1, 0) && !hit_mark_allowed(0, 0x70, 0) && !hit_mark_allowed(1, 1, 0) && !hit_mark_allowed(0, 1, 2));
+        assert_eq!(hit_object_anims(600.0), [0x16, 0x15, 0x14, 0x13]);
+        assert_eq!(hit_object_anims(50.0), [0x14, 0x13]);
+        assert!(hit_object_anims(9.9).is_empty());
+    }
+
+    #[test]
+    fn bullet_impact_effect_and_sound_choice() {
+        let (mut ri, mut co) = (0u32, 0u32);
+        let seq = |v: Vec<u16>| { let mut i = 0; move || { i += 1; v[i - 1] } };
+        let mut r = seq(vec![0x8000, 0x8000, 0x8000]);
+        let b = bullet_impact(0, 0x01, 0, BulletTarget::World, &mut ri, &mut co, &mut r);
+        assert_eq!((b.effect, b.sparks, b.sound), (Some("bullet"), true, ("SFX_BulletConcrete1", "Bullet Impact")));
+        let b = bullet_impact(0x1b, 0x01, 0, BulletTarget::World, &mut ri, &mut co, &mut r);
+        assert_eq!((b.effect, b.sound.0), (Some("bulletrockH"), "SFX_BulletConcrete2"));
+        let b = bullet_impact(0, 0x9d, 0, BulletTarget::World, &mut ri, &mut co, &mut seq(vec![0x8000, 0xcccd]));
+        assert_eq!(b.sound.0, "SFX_BulletMetal5", "0xcccd x 5 >> 16 = 4");
+        let b = bullet_impact(0, 0x09, 0, BulletTarget::World, &mut ri, &mut co, &mut seq(vec![0x1000]));
+        assert_eq!((b.effect, b.sparks, b.sound), (Some("snowbullethit"), false, ("SFX_Ricochet1", "Bullet Ricochet")));
+        assert_eq!(bullet_impact(0, 0x09, 0, BulletTarget::World, &mut ri, &mut co, &mut seq(vec![0])).sound.0, "SFX_Ricochet2");
+        assert_eq!(bullet_impact(0, 0x01, 0, BulletTarget::Car { kind: 10 }, &mut ri, &mut co, &mut seq(vec![0x8000])).effect, Some("bulletcar"));
+        assert_eq!(bullet_impact(0, 0x01, 0, BulletTarget::Car { kind: 2 }, &mut ri, &mut co, &mut seq(vec![0x8000])).effect, Some("bullet"));
+        let b = bullet_impact(0, 0x01, 0, BulletTarget::Player { flag_c0: true }, &mut ri, &mut co, &mut seq(vec![0x8000]));
+        assert_eq!((b.effect, b.sparks), (None, false));
+        assert_eq!(bullet_impact(0, 0x06, 0, BulletTarget::World, &mut ri, &mut co, &mut seq(vec![0x8000])).effect, Some("bulletsplash"));
+        assert_eq!(bullet_impact(0, 0x80, 0, BulletTarget::Car { kind: 1 }, &mut ri, &mut co, &mut seq(vec![0x8000])).sound.0, "SFX_BulletFlesh");
+        assert_eq!(bullet_impact(0, 0x01, 0, BulletTarget::World, &mut ri, &mut co, &mut seq(vec![0x6000])).sound.1, "Bullet Impact", "0.375 is not a ricochet");
+        assert_eq!(bullet_impact(0, 0x27, 0, BulletTarget::World, &mut ri, &mut co, &mut seq(vec![0x8000])).sound.0, "SFX_BulletWood");
     }
 }
