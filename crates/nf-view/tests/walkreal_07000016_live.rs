@@ -3267,7 +3267,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// 2 hits (every delta within the game's chain [D record 99; M 0x1d4424/0x139fac]), ch 0xbf
 /// at +8428, the lift-out hand-back at +9490, the button, end health 17.0 (the pool spent,
 /// 37 hits for 83.0 across the whole walk).
-#[ignore = "stream batch 1121b: Bond dies in the pocket fight near (20.5, 0.9, -92) at t2200-5600; no stop of 37 swept completes it"]
+#[ignore = "stream batch 1121b: Bond dies in the pocket fight near (20.5, 0.9, -92) at t2200-5600; no stop of 37 swept completes it. walks-1121-06-16: the pocket is NOT out of sight, its south face is a glass pane (z -96.67) the 0x1a rounds pass [M Bullet_update 0x12e7b0 glass mask; Collide_Update 0x1ea398:216-229], so the south lane hunter #1 hits Bond in the pocket from 19 u; 190 more stop sets (single to triple, also with a reshaped dash) never complete, the best reaching the pit squad (t22534)"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles; the ninja's
     // NinjaStand start): the pocket's close four took 72 -> 12.5 and Bond reached the blast

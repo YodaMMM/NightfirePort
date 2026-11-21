@@ -1373,7 +1373,7 @@ fn walk_the_castle_interior_to_the_party_real_damage_agent() {
 /// [M 0x1ae1f8:67-69]. Real input only — the
 /// load path is the only difference; no health, ammo or channel writes, no teleports.
 #[test]
-#[ignore = "stream batch 1121b: Bond dies near (32.4, 39.1, -6.2) at about t2900 on the joined stream; no stop of 37 swept (50-10000 ticks, 30-200 long, single and double) completes it; also red on s/auto-aim alone"]
+#[ignore = "stream batch 1121b: Bond dies near (32.4, 39.1, -6.2) at about t2900 on the joined stream; no stop of 37 swept (50-10000 ticks, 30-200 long, single and double) completes it; also red on s/auto-aim alone. walks-1121-06-16: 330 more stop sets (first stop 100-2600 x 15-700, second/third 3000-14000) never complete; the runs that pass the guardhouse court all die at the strip approach (5.97, 42.03, -32.77) at about 20 health to the tower post #11 and the pair #19/#20; the court dealers #3/#4 have a clear world line (window/doorway), not a wall shot"]
 fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the
     // guardhouse pair #3 / #4 fired from the balcony as Bond reached door #47 (80.8 -> 9.2,

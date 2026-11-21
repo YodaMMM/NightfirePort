@@ -87,6 +87,13 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
     let band = if difficulty >= 2 { 4.2 } else { 6.5 };
     let prev_hold = w.flank_hold_x;
     if difficulty >= 2 { w.flank_hold_x = Some(-27.0); }
+    // 00 Agent (walks-1121): the gun-cone-vs-hit-box shield the Agent walk runs from the start
+    // (Walker::shield_boxes), for the ambush only. The settled contact stands ~1 u from the
+    // pocket guard #12 (contact (-30.3, 13.6), #12 (-30.9, 13.5)); the cylinder cone held the
+    // trigger on every tick of the back-off's return fire while #12 landed 67.0 on Bond
+    // [L the 2026-11-21 kill trace: blocked true from +0 to +600, aim exposed].
+    let prev_boxes = w.shield_boxes;
+    if difficulty >= 3 { w.shield_boxes = true; }
     w.keep_off = Some(band);
     w.dmg.back_off = Some(band);
     // 00 Agent: the pop fight at x1.2 pain is long; a player tops up the gun before he trips it
@@ -94,6 +101,11 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
     if difficulty >= 3 {
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.gun.clip + sim.gun.spare < 30 { let _ = sim; w.resupply("pre-ambush ammo"); }
+        // walks-1121: the pool test above reads the HELD gun only — the walk arrived holding the
+        // shotgun at clip 3 spare 6 with the SMG's 21+31 and the pistol's 2+33 in the wheel
+        // [L the 2026-11-21 inventory dump at the ambush entry], fought the whole pocket on the
+        // shotgun's 9 rounds and died dry at t124246. A player draws his fullest gun first.
+        d3_switch_to_deepest_gun(w, "pre-ambush re-arm");
     }
     // Agent (real damage): a full clip first — the d2 real-damage run opened
     // the mouth fight on clip 1 / spare 9 and never fired a full burst at the 24-health
@@ -106,7 +118,13 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
         w.wait(1);
     }
     // Out FIRST (the pop volley's reaction window), then the mouth fight.
-    w.walk_nav_to([-22.3, 6.4, 14.8], "back off the popped ambush", 1.0);
+    // 00 Agent (walks-1121): the back-off runs to x -19 (the corridor's middle, 6.5 u east of
+    // the slab), not the mouth's -22.3. From the mouth the return fire on #12 stood in his lane
+    // and traded (77.2 -> 6.6); from -19 he steps out after Bond and dies to the return fire at
+    // ZERO cost [L the 2026-11-21 retreat sweep: -12/-16.5/-19 all kill him free; -12 leaves
+    // the whole pocket within reach of the stairwell legs].
+    let back_x = if difficulty >= 3 { -19.0 } else { -22.3 };
+    w.walk_nav_to([back_x, 6.4, 14.8], "back off the popped ambush", 1.0);
     // 00 Agent: crouched at the mouth, and the shots BOUNDED (300 ticks, then the round re-picks
     // the exposed guard; 16 rounds, no hold waits): the unbounded shot spent 900 ticks on the
     // walled #2 while #17's SMG landed from 4.3 u. Measured: #17 dies, death t18846 -> t19729
@@ -115,6 +133,53 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
     if difficulty >= 3 && !w.scene.sim.as_ref().unwrap().bond.crouched {
         w.tick(Input { crouch: true, ..Default::default() }, false);
         w.wait(20);
+    }
+    // 00 Agent (walks-1121): the POCKET LANE fight. The pocket is a north-south lane at x -30.8
+    // that the mouth never sees: #3 (the 24-hp captain, SMG) at z 10.8, #17 at z 7.9, #4 at
+    // z 5.0, all on the y-5.34 floor — the bullet rays to their chests clear ONLY from the lane's
+    // own line (x -30..-31, z 13.4..16.6); every stand east of x -29.5, the mouth and the band
+    // edge included, reads none [L the 2026-11-21 stand grid]. The mouth rounds held there for
+    // 100k ticks while the pocket waited them out. The player steps into the lane's north end,
+    // fullest gun drawn, and fights down it nearest first (bounded stands; the pocket's flank
+    // hold moves west of the lane so the stand can square up); the stairwell sniper #2 (y 10.2)
+    // stays for the rounds below. The lane fight is NOT a margin win: the 2026-11-21 sweep
+    // (back-off x -18..-20 x lane z 16.0..17.0) completed at (-19, 16.5) only — the captain's
+    // charge down the lane wins the trade on its neighbours.
+    if difficulty >= 3 {
+        d3_switch_to_deepest_gun(w, "the pocket lane re-arm");
+        let prev_head = w.prefer_head;
+        w.prefer_head = true;
+        let prev_fh = w.flank_hold_x;
+        w.flank_hold_x = Some(-33.0);
+        // The plain cylinder shield in the lane: the contact settles IN it, between Bond and the
+        // captain — never a tap through him.
+        let lane_boxes = w.shield_boxes;
+        w.shield_boxes = false;
+        w.keep_off = None;
+        w.dmg.back_off = None;
+        w.walk_nav_to([-30.4, 6.4, 16.5], "the pocket lane mouth (d3)", 0.5);
+        let lane: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            let mut v: Vec<usize> = (0..sim.drones.list.len()).filter(|&i| {
+                let d = &sim.drones.list[i];
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                    && walker::dxz(d.pos, bp) < 14.0 && (d.pos[1] - bp[1]).abs() < 2.0
+            }).collect();
+            v.sort_by(|a, b| walker::dxz(sim.drones.list[*a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[*b].pos, bp)));
+            v
+        };
+        for g in lane {
+            if !w.switch_to_armed("the pocket lane fight") { break; }
+            let k = w.shoot_bounded(g, &format!("the pocket lane guard {g} (d3)"), 600);
+            eprintln!("[01] pocket lane guard {g}: killed {k} at tick {} health {:.1}", w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+            if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+        }
+        w.prefer_head = prev_head;
+        w.flank_hold_x = prev_fh;
+        w.shield_boxes = lane_boxes;
+        w.keep_off = Some(band);
+        w.dmg.back_off = Some(band);
     }
     let ambush_rounds = if difficulty >= 3 { 16 } else { 5 };
     for ambush_round in 0..ambush_rounds {
@@ -216,6 +281,7 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
     w.keep_off = prev_keep;
     w.dmg.back_off = prev_back;
     w.flank_hold_x = prev_hold;
+    w.shield_boxes = prev_boxes;
 }
 
 /// The south-lower-hall far field (≈(-7.9, 6.3, -0.4)) covering the hall door mouth from
@@ -2816,7 +2882,11 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     w.walk_nav_to(plate, "the plate", 1.2);
     w.flank_hold_x = prev_flank_hold;
     let sim = w.scene.sim.as_ref().unwrap();
-    let on_plate = sim.bond.pos[0] < -32.0 && sim.bond.pos[2] > 12.0;
+    // The AND fired is the plate reached: ch 0x10 rises only with Bond inside the touch volume,
+    // and the exit then stops the walk where he stands (the 00 Agent walk's AND fired with his
+    // root at z 11.96, 0.2 u short of the volume's lo z 12.17 — the capsule overlapping it).
+    let on_plate = (sim.bond.pos[0] < -32.0 && sim.bond.pos[2] > 12.0)
+        || (sim.drones.channels.on(0x10) && sim.drones.level_exit == Some(0x0700_0002));
     if !on_plate {
         let ci2 = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).unwrap();
         let c = &sim.drones.list[ci2];
@@ -4184,7 +4254,14 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// machinery (d3_aperture_fight + the lane grid + the diag counters) is on the branch, d3-
 /// gated; d1/d2 byte-identical.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): start room fixed (pulsed pre-clear, #0 shot closing); Bond now dies t2324 at the hall lane stand (7.04,6.19,9.67): #7's shotgun volleys 62.8 -> 5.2 in ~14 ticks on arrival [L 2026-11-18 run]; re-tune and un-ignore"]
+/// UN-IGNORED (walks-1121, 2026-11-21 [L the runs on this branch]): on the stream-batch-1121b
+/// master the hall phase passes and the walk reached the ch-0xF ambush with 77.2, then died
+/// DRY at t124246 — the ambush fought the pocket on the held shotgun (clip 3 spare 6) with
+/// 52 SMG rounds in the wheel, from stands that see none of the pocket lane. The d3 ambush now
+/// re-arms the fullest gun, shields by the contact's hit boxes, backs off to x -19 (#12 steps
+/// out and dies free) and fights the pocket lane from its north end (#3/#17/#4); the walk
+/// completes at 8.4 health, t63360. The lane fight is a narrow pass, not a margin: see the
+/// sweep note in run_slab_ambush.
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }

@@ -763,8 +763,11 @@ fn drop_aim_z(w: &Walker) -> f32 {
     // lies in the band at (32.2, 33.2); the 34.0 line then wedges under the overhang at
     // (33.71, 1.20, 34.23) while the 33.4 line clears to the low floor [L the 11-13 runs].
     // Every walk shoots him now (his alt attack holds the band); his body falls up to x 33.3.
+    // walks-1121-14: the 00 Agent stream's #6 fell at (34.1, 1.0, 33.3) after the band fight and
+    // the 34.0 line wedged on the same overhang (33.71, 1.20, 34.23) [L this branch's run]: a body
+    // east to x 34.4 takes the 33.4 line too.
     if sim.drones.list.iter().any(|d| d.corpse
-        && (31.0..33.6).contains(&d.pos[0]) && (32.8..34.6).contains(&d.pos[2])) { return 33.4; }
+        && (31.0..34.4).contains(&d.pos[0]) && (32.8..34.6).contains(&d.pos[2])) { return 33.4; }
     let blocked = sim.drones.list.iter().any(|d| d.present && !d.corpse && d.health > 0.0 && d.pos[1] < 2.3
         && (31.0..33.2).contains(&d.pos[0]) && (33.0..34.6).contains(&d.pos[2]));
     if blocked { 34.9 } else { 34.0 }
@@ -851,7 +854,14 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
         w.walk_to(Wp::new(34.63, 2.80, 37.94).r(1.0), "the pad west");
         w.walk_to(Wp::new(34.57, 2.80, 37.18).r(0.9), "the pad's south-west step head");
         open_the_pad_lid(&mut w);
-        w.walk_to(Wp::new(33.09, 2.37, 35.38).r(0.8), "the 1.72 landing");
+        // walks-1121-14 (00 Agent): the r(0.8) arrival can fire MID-STEP over the landing's east
+        // edge — Bond off the pad at (34.31, 2.73, 35.88), "arrived" airborne at (33.89, 2.29,
+        // 35.36), touched the edge at x 33.83 with no input left and slid down to the 0.60 floor
+        // under the band guard #6 (0x4 → 0xa3 → fire, 32.5 in 13 hits) [L this branch's position
+        // trace]. The d3 walk walks onto the landing proper; the shared r(0.8) stays for the
+        // other callers (their tuned runs pass on it).
+        let r_landing = if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() { 0.3 } else { 0.8 };
+        w.walk_to(Wp::new(33.09, 2.37, 35.38).r(r_landing), "the 1.72 landing");
         // The drop west: the low floor's east margin sits under the landing slab's overhang (the
         // slab top is the 1.72 landing; the walk's grounded wedge at (33.68, 1.15, 35.20) with a
         // clear segment to the target is the overhang catch), so the westing is the player's own
@@ -1263,13 +1273,15 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// walked infiltration → sabotage → Rook → delta-exit route at the menu's 00 Agent pick —
 /// GameState+0x28 = 3 through the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 →
 /// load_with_carry_difficulty; GameState+0x28 → Drones::difficulty, asserted at load]. The pick
-/// scales Bond's pain by Plr_DMod_Hard 1.0 (Easy 0.6, Agent 0.7 [M Player_HandlePain 0x1902c8;
-/// ReadTuningVars 0x1d3a80; L the d2-sisters report's rows]) and the guards' hit chance by
-/// DroneFiring_Accuracy_Hard 1.3 (Easy 0.8, Normal 0.9 [M DroneWeap_DoBulletAccuracy
-/// 0x179740:74-88]); the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49].
+/// scales Bond's pain by Plr_DMod_Hard 1.0 (Easy 0.4, Agent 0.6) and the guards' hit chance by
+/// DroneFiring_Accuracy_Hard 1.0 (Easy 0.5, Agent 0.7): the 0x7000014-16 group of
+/// ReadTuningVars [M 0x1d3a80:177-188; Player_HandlePain 0x1902c8; DroneWeap_DoBulletAccuracy
+/// 0x179740:74-88] (the 1.3 / 0.6 / 0.7 an older note gave are the 0x7000005-08 group's); the
+/// min-difficulty placements pass Drone_Create's gate [M 0x136be0:49].
 /// The Agent grind (back_off 4.0 + lane_fights) and the path-clear stands run behind
 /// `difficulty >= 2` gates in the body, so the d3 run inherits them; the fights HEAD-HUNT (the
-/// 05-07 sisters' law: at 1.3 accuracy every stood tick is a tick of bursts); the d3-only
+/// 05-07 sisters' law; their Hard accuracy is 1.3, this level's 1.0, and inside 3.0 u every
+/// round hits on any difficulty [M 0x179740:113-115]); the d3-only
 /// deaths get their own d3-gated blocks. Real input only; no health, ammo or channel writes.
 ///
 /// IGNORED with the retune-nb-14-3 measured runs (each lever its own real run, all d3-gated,
@@ -1319,10 +1331,15 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// land nothing at that range (the "rounds die on the corridor corners" shape the 07000013
 /// chain measured) — the squad must be pulled closer or the stands moved south first.
 #[test]
-#[ignore = "nb-scan-all round 3 (retune-nb-14-3): the deepest run v13 CROSSED the doorway and died in the Kiko corridor, t25995 at (−48.78,1.06,42.58), 26 hits for 100.0, 28 fights — 50.0 health at the door face (v10: 12.5) [L 2026-11-19]; the bill: #33 45.4/5 (he converged through the opened doorway to d 0.9, the 35.44 blast landed while his fight ran dry; the fights killed #34/#32) + the Kiko squad #28/#20 7.06 at d 9.6-9.9 (the shipped stands/hold landed ZERO at that range, clip-3 windows); the levers that stand: the loop's dry-gun scoop (clip+spare < 10, 4.0 u, the peace gate — the v13 run measured the #14/#15 window 22.5 → ZERO) + the node-by-node loop with route_scan stops (the ascent-base scan MEASURED #16 eyetrue+guntrue d 4.2 / #17 guntrue d 7.3 from the x −30 lane — the fight ran dry and lost; the foot/door-crossing/ascent-top scans measured NO-OP — the rays die); MEASURED DEAD ENDS: the no-scoop variant (v12 — the loop crossed clean but the door face was reached DRY, clip 0+0, death during walk 2 to #33/#34's doorway bursts), the un-gated scoop (v14 — a dry gun mid-scoop fired the fights' resupply and dragged Bond into #1's convergence zone, 45.0/10), the re-rolled stream wedge (v15 — node 5, the fights' backpedal onto the hover cells); NEXT: arm the ascent-base fight (10+ rounds into the x −30 lane — a second scoop pass keyed on the ascent-base approach), win #33's doorway fight (ammo before walk 1 — a scoop pass at the switch band), pull the Kiko squad inside the fights' landing band — see the doc comment"]
+#[ignore = "walks-1121-14 (stream batch 1121b): deepest run dies on Rook's wake legs, t65108 at (−15.11,1.12,−22.83) with 28.4 health after the hand-back hold [L 2026-11-21]; fixed this round: the 1.72-landing arrival mid-step (fell under the band guard #6, death t5849), the band guard's body east of the 33.4-line band (overhang wedge), the scans' strafe-off-line fights (stand_fire: #16 killed in 18 ticks, #20 in 66, was 300-tick zero-land windows into a wall), guard grenades walked onto (round_dodge steps away; #33's 0x34 blast 42.5 → 11.6); the budget is the problem: 45 lost in the descent corridor (t5000-8300, 12 guards converge), ~25 on the south loop nodes 36-63, the 0x1a squad on the wake route (#43 7.0 a round inside 3 u); both route-side armours ((−27.29,0.87,30.96), (−41.29,1.53,36.48)) measured unreachable (behind doors that never open); NEXT: the descent corridor tax, then the wake legs' node-by-node answers"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
+
+/// The 00 Agent walk's stand-stills (tick, idle ticks), in tick order: shared-stream re-rolls
+/// a player who stopped for a moment makes, measured on this stream [L walks-1121-14: 4400/90
+/// kept 55 health past the descent (none: 15); 39500/60 and 55000/60 the deepest of ~40 sweeps].
+const D3_PAUSES: &[(u32, u32)] = &[(4400, 90), (39500, 60), (55000, 60)];
 
 fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     let iso = iso();
@@ -1342,7 +1359,12 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     // real-health-00agent-14-landing-6: one 120-tick stand-still at tick 37000 (inside the east
     // lane's lenient leg) - a shared-stream roll the 00 Agent walk measured [L idles of 60-200
     // ticks at t35800-38200: this one keeps 29.1 health into the wake legs]. 00 Agent only.
-    if difficulty >= 3 && !w.tops_up() { w.pause_at = Some((37000, 120)); }
+    // walks-1121-14: the stream batch 1121b re-rolled the whole walk (death t5849 at the drop
+    // band's overhang); the stops below are this stream's measured re-rolls (the old 37000/120
+    // stop was the previous stream's). NF_WALK_PAUSE (the sweep knob) replaces them when set.
+    if difficulty >= 3 && !w.tops_up() && std::env::var_os("NF_WALK_PAUSE").is_none() {
+        w.pause_rest = D3_PAUSES.to_vec();
+    }
     if difficulty >= 2 {
         // The Agent grind: the first sister run died at tick 4297 with drone #6 (skin
         // 0x5000093, 28 health, d 1.4) dealing 95.5 in 32 hits while the plain fights gave
@@ -1496,7 +1518,7 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
             };
             let Some(di) = pick else { break };
             if !walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), di) { break; }
-            let _ = w.shoot_bounded(di, "the Kiko corridor's guards", 300);
+            let _ = stand_fire(&mut w, di, 300, "the Kiko corridor's guards");
         }
     }
     // 00 Agent: the squad (#20/#22/#23/#28/#29/#31/#61) converges on the escape-touch legs. A
@@ -1604,6 +1626,16 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
                 sim.gun.weapon, sim.gun.clip, sim.gun.spare,
                 sim.weapons.bullet_contact_damage(sim.gun.weapon as u16), owned);
         }
+        // walks-1121-14: the escape scene hands Bond back ~4.5 u from the wake route's first
+        // node, and a squad guard holding at (−30.2, 25.1) beside it shot the node-0 leg inside
+        // his 3.0 auto-hit band (4 × 5.0 + 5.86 at d 2.1, the death at t62127; the sister run's
+        // #28 at d 1.0 the same way) [L this branch's runs; M 0x179740:113-115]. A player
+        // answers him from the hand-back first (the stand-still scan, gun rays only).
+        route_scan(&mut w, [20.3, 0.9, -23.5], "the escape hand-back scan");
+        // Then a 1200-tick hold on the hand-back spot: the squad (#26/#29/#43/#61/#62) keeps
+        // converging on the first wake nodes; held answers killed #61/#62/#29 at no cost and the
+        // death moved t63412 → t65108 (hold 600: t63348, 1800: t65885 nearer the start) [L].
+        kiko_hold(&mut w, 1200, "the hand-back hold");
         let wake_pts = {
             let sim = w.scene.sim.as_ref().unwrap();
             nav_route(sim, w.cur_pos(), [20.3, 0.9, -23.5])
@@ -2963,10 +2995,62 @@ fn route_scan(w: &mut Walker, dest: V3, label: &str) {
         // ZERO rounds — the gate sprays past the 0.3-wide torso box at that range — and the
         // guard converged into the 3.0 auto-hit band during the failed fight: -23.06). The
         // bounded tight gate killed every scan fight it won (run 4: #36 at 4.0, #43 at 16.8).
-        let killed = w.shoot_bounded(di, &label, 300);
+        // walks-1121-14: the stand-still aimed fight (`stand_fire`): the shared fight's opening
+        // strafe stepped off the measured line — the ascent-base scan's #16 (eyetrue guntrue
+        // d 4.2) took a whole 300-tick window, clip 13 → 0, health 10 unchanged [L this
+        // branch's run], the shape the Kiko stand's geom dump measured.
+        // The d1 real-damage walk's node-21 delta scan keeps the shipped fight (its tuned run
+        // passes on it); the stand is the d3 walk's.
+        let killed = if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+            stand_fire(w, di, 300, label)
+        } else {
+            w.shoot_bounded(di, label, 300)
+        };
         eprintln!("[014] {label}: drone {di} fight over (killed {killed}, health {:.0})",
             w.scene.sim.as_ref().unwrap().drones.list[di].health);
     }
+}
+
+/// A stand-still aimed fight (walks-1121-14): the view on the guard's gun-ray-clear part, a tap
+/// each 8 ticks once on it, the reload when the clip runs dry, no step. `shoot_bounded` opens
+/// every fight with a 60-tick strafe — at the Kiko corridor's east stand that strafe carried
+/// Bond 1.3 u west off the line the pick measured clear, and the whole 300-tick window (18
+/// rounds) hit the room wall at z 36.53 in front of the AmbushWait #20 [L this branch's
+/// geom dump: every spine ray stops at (−51.29, 1.66, 36.51), owner 37]. Gives up after 20
+/// ticks with no clear part. True when the guard died.
+fn stand_fire(w: &mut Walker, di: usize, cap: u32, label: &str) -> bool {
+    let mut lost = 0u32;
+    let mut last_tap = 0u32;
+    for t in 0..cap {
+        let (part, dead, dry, err) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[di];
+            let part = walker::DamageLog::exposed_part_gun_rays(sim, di);
+            let err = part.map(|p| {
+                let b = &sim.bond;
+                let e = [b.pos[0], b.pos[1] + b.eye - b.crouch_drop, b.pos[2]];
+                let v = tv_sub(p, e);
+                let l = tv_len(v).max(1e-4);
+                (wrap_pi(v[0].atan2(v[2]) - b.yaw).abs(), ((v[1] / l).atan() / std::f32::consts::FRAC_PI_2 - b.pitch).abs())
+            });
+            (part, d.corpse || d.health <= 0.0, sim.gun.clip == 0 && sim.gun.spare > 0, err)
+        };
+        if dead { eprintln!("[014] {label}: #{di} killed at +{t}"); return true; }
+        if dry { w.reload_full(); continue; }
+        let Some(p) = part else {
+            lost += 1;
+            if lost > 20 { eprintln!("[014] {label}: #{di} out of the gun rays at +{t}"); return false; }
+            w.tick(nf_game::player::Input::default(), false);
+            continue;
+        };
+        lost = 0;
+        let on = err.is_some_and(|(y, q)| y < 0.02 && q < 0.03);
+        let fire = on && t.saturating_sub(last_tap) >= 8;
+        if fire { last_tap = t; }
+        steer_aim(w, p, fire, false);
+    }
+    eprintln!("[014] {label}: #{di} still alive after {cap} ticks");
+    false
 }
 
 fn kiko_hold(w: &mut Walker, hold: u32, label: &str) {
@@ -2990,7 +3074,7 @@ fn kiko_hold(w: &mut Walker, hold: u32, label: &str) {
                 w.tick(nf_game::player::Input { forward: f.clamp(-1.0, 1.0), strafe: sd.clamp(-1.0, 1.0), ..Default::default() }, false);
                 continue;
             }
-            if let Some(g) = pick { let _ = w.shoot_bounded(g, label, 90); continue; }
+            if let Some(g) = pick { let _ = stand_fire(w, g, 90, label); continue; }
             if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, home) > 1.5 {
                 w.lenient = true; w.walk_to(Wp::new(home[0], home[1], home[2]).r(0.8), "back to the hold spot"); w.lenient = false;
             } else { w.tick(nf_game::player::Input::default(), false); }
