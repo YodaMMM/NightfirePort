@@ -7550,7 +7550,10 @@ pub fn run() -> Result<()> {
             .context("a driving mission starts from the mission list; headless needs --shot <out.png>")?;
         let (mut scene, mut drv) = driving::load_driving_scene(&iso, viv)?;
         let ticks: u32 = args.iter().position(|a| a == "--frame").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0) as u32;
-        for _ in 0..ticks { drv.step(0.0, 0.0, 0.0, false); }
+        // Render aid: `--drive-throttle T` holds the throttle at T for the run (the hostiles a
+        // mission releases on the road ahead need the car to move).
+        let throttle: f32 = args.iter().position(|a| a == "--drive-throttle").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        for _ in 0..ticks { drv.step(throttle, 0.0, 0.0, false); }
         let (p, yaw, pitch) = drv.chase_camera();
         let mut cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV };
         if let Some(i) = args.iter().position(|a| a == "--cam") {
@@ -7565,6 +7568,7 @@ pub fn run() -> Result<()> {
         drv.apply_to_palette(layout.attach_base as usize, &mut pal);
         *SHOT_PALETTE.lock().unwrap() = Some(pal);
         eprintln!("[driving] {viv}: {} ticks, car at {:?} yaw {:.3}, state {:?}, {} vertices, {} draws", drv.ticks, drv.car.pos, drv.car.yaw, drv.mission_state, scene.vertices.len(), scene.materials.len());
+        for (d, slot) in drv.hostile_draws() { eprintln!("[driving] hostile element {} {} ({}) slot {slot} at {:?}", d.element, d.name, d.model, d.matrix[3]); }
         return shot(&scene, &cam, out, None, ticks as f32, opts, args.iter().any(|a| a == "--no-tex"), args.iter().any(|a| a == "--no-fog"), None, None);
     }
     let scene = if dev { load_dev(&iso, &level, all)? }
