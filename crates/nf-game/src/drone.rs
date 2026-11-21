@@ -21618,7 +21618,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // `explode_level` = GameState+0x12 ∈ {0x0700000b, 0x07000012} — the death goes to state 6
         // there [M Copter_Update 0x17dbb8:360-363].
         let explode_level = matches!(d.level, 0x0700_000b | 0x0700_0012);
-        let paths = self.copter_paths.clone();
         // copter-death-debris: case 6's `Explode_Create` positions — the game creates the blast
         // INSIDE `Copter_Update` [M 0x17e120-0x17e168], so a copter whose case 6 dispatched this
         // tick queues it below the loop (the loop's split borrows cannot call `spawn_blast`
@@ -21657,7 +21656,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 attackmode: &mut self.copter_attackmode,
                 exclude_hashes: copter_excludes[cidx].as_slice(),
             };
-            let (unhide, posed, death_blast, events) = c.update(&paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng, &mut ctx);
+            let (unhide, posed, death_blast, events) = c.update(&self.copter_paths, &mut self.channels, &mut self.gas, frame, explode_level, &mut self.rng, &mut ctx);
             for ev in events { copter_events.push(ev); }
             let _ = cidx;
             if unhide { self.scripts.unhide_sp(c.placement); }

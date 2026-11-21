@@ -30,6 +30,21 @@ struct Moving {
     /// Each shape-bearing part's glist flags (`celglist+0x44`, the object's obj+0xF0 through
     /// `Control_SetGList` 0x134960), aligned with `geo.objects` — what `pick_admits` reads.
     flags: Vec<u32>,
+    /// frame-hitches: the set before last, kept for its buffers. A rebuild (any part moved) fills
+    /// these cleared buffers instead of fresh ones. On a level whose movers never rest (0700001b's)
+    /// that was ~1.4 MB of new allocations every tick. Never read as geometry.
+    spare: Spare,
+}
+
+/// `Moving`'s recycled buffers (see `Moving::spare`).
+#[derive(Default)]
+struct Spare {
+    geo: Geo,
+    movers: Vec<(u64, Mat4, Mat4)>,
+    last: std::collections::HashMap<u64, Mat4>,
+    last_parts: Vec<(u64, u32)>,
+    last_objects: Vec<(u64, u32, Mat4)>,
+    flags: Vec<u32>,
 }
 
 type Mat4 = nf_formats::anim::Mat4;
@@ -449,6 +464,15 @@ impl Geo {
 
 impl Geo {
     fn push(&mut self, tris: impl IntoIterator<Item = ([V3; 3], u8)>) { self.push_flags(tris, false) }
+
+    /// frame-hitches: empty again for a dynamic-set rebuild, the buffers kept (`set_dynamic`'s
+    /// recycled set). Every field a fresh `Geo` starts empty is emptied; the static-only index
+    /// fields are never built on a dynamic set.
+    fn clear_dynamic(&mut self) {
+        let Geo { tris, mats, pass, oneway, objects, groups, owners, grid } = self;
+        tris.clear(); mats.clear(); pass.clear(); oneway.clear(); objects.clear(); groups.clear(); owners.clear();
+        *grid = None;
+    }
 
     fn push_flags(&mut self, tris: impl IntoIterator<Item = ([V3; 3], u8)>, node_pass: bool) {
         if self.push_kept(tris, node_pass) { return; }
@@ -1612,10 +1636,18 @@ impl CollisionWorld {
             d.movers = parts.iter().filter(|(_, h, _)| self.shapes.contains_key(h)).map(|&(id, _, m)| (id, m, m)).collect();
             return;
         }
-        let (mut geo, mut movers, mut last, mut flags) = (Geo::default(), Vec::new(), std::collections::HashMap::new(), Vec::new());
+        // frame-hitches: the rebuild fills the set-before-last's buffers (cleared: the same empty
+        // start a fresh set had; only their capacity carries over).
+        let Spare { geo: mut geo, mut movers, mut last, last_parts: mut new_last_parts, mut last_objects, mut flags } = std::mem::take(&mut d.spare);
+        geo.clear_dynamic();
+        movers.clear();
+        last.clear();
+        new_last_parts.clear();
+        last_objects.clear();
+        flags.clear();
         geo.tris.reserve(d.geo.tris.len());
         geo.mats.reserve(d.geo.mats.len());
-        let mut last_objects: Vec<(u64, u32, Mat4)> = Vec::with_capacity(parts.len());
+        last_objects.reserve(parts.len());
         for &(id, h, m) in parts {
             last.insert(id, m);
             let Some(t) = self.shapes.get(&h) else { continue };
@@ -1648,14 +1680,9 @@ impl CollisionWorld {
             }
             if geo.objects.len() > n { movers.push((id, d.last.get(&id).copied().unwrap_or(m), m)); last_objects.push((id, h, m)); flags.push(self.shape_flags.get(&h).copied().unwrap_or(0)); }
         }
-        *d = Moving {
-            geo,
-            movers,
-            last,
-            last_parts: parts.iter().map(|&(id, h, _)| (id, h)).collect(),
-            last_objects,
-            flags,
-        };
+        new_last_parts.extend(parts.iter().map(|&(id, h, _)| (id, h)));
+        let old = std::mem::replace(&mut *d, Moving { geo, movers, last, last_parts: new_last_parts, last_objects, flags, spare: Spare::default() });
+        d.spare = Spare { geo: old.geo, movers: old.movers, last: old.last, last_parts: old.last_parts, last_objects: old.last_objects, flags: old.flags };
     }
 
     /// Posts this tick's gated hurt planes whose gate channel reads high (level-05-basin-floor-3):

@@ -490,6 +490,9 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
         // ids it carries resolve exactly as the one-bank driver did [M `Sound_Ready` 0x1dceb8].
         for (slot, bank, sbf) in std::mem::take(&mut scene.sound_spares) { driver.load_spare_bank(slot, bank, sbf); }
         if let Some((lut, bin)) = scene.streams.take() { driver.load_streams(lut, std::sync::Arc::new(bin)); }
+        // frame-hitches: the level bank's samples and its effects' streams decode on a worker now,
+        // not in the frame that first plays them (the same PCM; a miss before it ends decodes as before).
+        driver.predecode_in_background();
         let output = nf_audio::Output::open();
         // Diagnostic sink note (unported-misc-10): the game's printf output sinks into
         // `deci2Putchar` 0x23cc90 — `_putchar` (OBJECT 0x2e7a58) swapped in by `scePrintf`
@@ -2282,6 +2285,13 @@ pub fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
     sim.snow_quads(right, up)
 }
 
+/// `snow_for` into a reused buffer (the window's per-frame call; frame-hitches).
+pub fn snow_for_into(scene: &scene::Scene, cam: &Camera, out: &mut Vec<scene::Vertex>) {
+    let Some(sim) = scene.sim.as_ref() else { out.clear(); return };
+    let (right, up) = billboard_axes(cam);
+    sim.snow_quads_into(right, up, out);
+}
+
 /// The emitter sprites facing the camera, grouped by def texture and blend (`Emitter_Draw` 0x17b708
 /// path A → `psiDrawParticleList` 0x122d50 with def+0x04 bound; `Scene::particle_draws`).
 fn particles_for(scene: &scene::Scene, cam: &Camera) -> Vec<(Option<usize>, bool, Vec<scene::Vertex>)> {
@@ -3296,6 +3306,8 @@ struct App {
     /// The gadget-beam palette entries (`Scene::beam_entries`), refreshed when the palette is
     /// rebuilt.
     beam_entries: Vec<usize>,
+    /// frame-hitches: the snow quads' per-frame buffer (`snow_for_into`), reused across frames.
+    snow_buf: Vec<scene::Vertex>,
     /// `--fps N`: a frame-rate cap (vsync off); None = vsync.
     fps_cap: Option<f32>,
     /// The always-on frame counter (top right): frames actually presented, counted over half-second
@@ -6626,7 +6638,8 @@ impl App {
                 let aspect = proj_aspect;
                 let (_, vp_rot) = draw_cam.view_proj_for(aspect, self.scene.mirror_x);
                 let vp = vp0;
-                let snow = snow_for(&self.scene, &draw_cam);
+                snow_for_into(&self.scene, &draw_cam, &mut self.snow_buf);
+                let snow = &self.snow_buf;
                 // fix-menus: a menu page up → the menu overlay replaces the HUD. fix-menu-movies2:
                 // the ONE movie plane (gpu.rs) serves every movie — the state-6 briefing/outro
                 // (fix-movie-playback), the P_INTRO pair and the page's looping backdrop
@@ -6739,7 +6752,7 @@ impl App {
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 g.renderer.set_particles(&g.queue, &particles_for(&self.scene, &draw_cam));
                 g.renderer.set_reflection(&g.queue, self.scene.drive_reflection.as_ref().map(|m| &m.frame));
-                let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
+                let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
                 if let Some(path) = self.capture_req.take() {
                     let (w, h) = (g.config.width.max(1), g.config.height.max(1));
                     let target = g.device.create_texture(&wgpu::TextureDescriptor {
@@ -6748,7 +6761,7 @@ impl App {
                         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
                     });
                     let tview = target.create_view(&Default::default());
-                    let mut senc = g.renderer.render(&g.device, &g.queue, &tview, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
+                    let mut senc = g.renderer.render(&g.device, &g.queue, &tview, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
                     let row = (4 * w).next_multiple_of(256);
                     let buf = g.device.create_buffer(&wgpu::BufferDescriptor { label: Some("spot shot"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
                     senc.copy_texture_to_buffer(
@@ -7175,6 +7188,7 @@ impl App {
             decal_cells: Vec::new(),
             pal_hidden: Vec::new(),
             beam_entries: Vec::new(),
+            snow_buf: Vec::new(),
             fps_cap: None,
             fps_meter: FpsMeter::default(),
             frame_start: std::time::Instant::now(),
@@ -8805,6 +8819,8 @@ static NET_STALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod flow_audit;
+#[cfg(test)]
+mod hitch_probe;
 #[cfg(test)]
 mod headless_app_harness {
     use super::*;

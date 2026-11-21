@@ -6831,17 +6831,25 @@ impl Sim {
     /// `nf_game::env::flake_half_extent` (the emitter-sprite equivalence, full-width reading; ~0.19-0.21 on the snow
     /// levels, checked against the 05 / 06 PS2 captures — the old fixed 0.1 drew the flakes half size).
     pub fn snow_quads(&self, right: [f32; 3], up: [f32; 3]) -> Vec<Vertex> {
-        let Some(env) = self.drones.env.as_ref() else { return Vec::new() };
+        let mut out = Vec::new();
+        self.snow_quads_into(right, up, &mut out);
+        out
+    }
+
+    /// `snow_quads` into a reused buffer (frame-hitches: the window draws this every frame; a fresh
+    /// ~670 KB Vec per frame on the snow levels was the largest steady allocation of the draw).
+    pub fn snow_quads_into(&self, right: [f32; 3], up: [f32; 3], out: &mut Vec<Vertex>) {
+        out.clear();
+        let Some(env) = self.drones.env.as_ref() else { return };
         let h = nf_game::env::flake_half_extent(self.level);
         let (r, u) = (right.map(|v| v * h), up.map(|v| v * h));
-        let mut out = Vec::with_capacity(env.drops.len() * 6);
+        out.reserve(env.drops.len() * 6);
         for (p, &alive) in env.drops.iter().zip(&env.alive) {
             if !alive { continue; }
             let c = |sr: f32, su: f32, uv: [f32; 2]| Vertex { pos: [p[0] + r[0] * sr + u[0] * su, p[1] + r[1] * sr + u[1] * su, p[2] + r[2] * sr + u[2] * su], uv, rgba: [63, 63, 63, 127], nrm: [0; 4] };
             let (a, b, cc, d) = (c(-1.0, -1.0, [0.0, 1.0]), c(1.0, -1.0, [1.0, 1.0]), c(1.0, 1.0, [1.0, 0.0]), c(-1.0, 1.0, [0.0, 0.0]));
             out.extend_from_slice(&[a, b, cc, a, cc, d]);
         }
-        out
     }
 
     /// The live animated script object from `src` (script hash, stream) on `skin`: its animation script and frame.
