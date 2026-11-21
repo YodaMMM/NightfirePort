@@ -577,6 +577,16 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
     if difficulty >= 2 {
         clear_the_spot(w, 13.0, false);
     }
+    if difficulty == 2 {
+        // pickup-pushout-walks (Agent): the pre-clear's resupply walks to a dropped gun that
+        // Pickup_Create now pushes out of the geometry [M 0x18dda0:166-183] ((35.8, 40.0, -15.5)
+        // vs (35.9, 40.0, -15.5) before); the stand it ends on differs by 0.08 u and the later
+        // fights fall out differently (#11's roof fire and the east post #24 took the run to 0
+        // at t16413 [L the branch run]). A player takes a breath at the guardroom door after
+        // the clear: a 30-tick idle (the wait sweep 15..450 step 15: 30, 45, 120, 195, 225, 240,
+        // 330, 375 and 420 complete).
+        w.wait(30);
+    }
     // 00-Agent tactics (real-health-00agent-06-3, measured on master c2c4a6e): the pre-clear's
     // budget windows outrun door #47's 360-tick auto-close [M Door_Update] — the nook nav then
     // met the leaf at pos01 0.50 state CLOSING and burned 4 × 3000 stuck ticks at the jamb
@@ -997,7 +1007,17 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool)
         let post = |w: &Walker, at: [f32; 2]| { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
             && d.health > 0.0 && d.team == 1 && dxz(d.pos, [at[0], 42.0, at[1]]) < 3.0) };
         if let Some(di) = post(&w, [32.0, -38.7]) {
+            // pickup-pushout-walks (00 Agent): with the dropped guns pushed out of the geometry
+            // [M Pickup_Create 0x18dda0:166-183] this 0.6 u step's return fire held Bond in place
+            // short of the spot while #24/#25 shot him to 0 (t6597-t6825 [L the branch run]; the
+            // master stream makes the same step in 150 ticks). The wait sweeps after the
+            // guardroom clear and before this leg found no pass. A player steps onto his spot
+            // first and fights from it: the step walks without the return fire; the aimed stand
+            // below is the fight.
+            let rf = w.dmg.return_fire;
+            w.dmg.return_fire = false;
             let _ = w.try_walk_to(Wp::new(10.8, 42.0, -34.2).r(0.4), "the #24 solo spot");
+            w.dmg.return_fire = rf;
             let k = aimed_stand(w, di, "the east post #24 from his solo spot", 1500);
             eprintln!("[06] east post #24 killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
         }

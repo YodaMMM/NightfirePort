@@ -3461,9 +3461,38 @@ fn following_mayhew_down_completes_the_level() {
     // Pre-hall ammo, then the hall's three named guards (death channels 0x11/0x12/0x13) → ch 0x99.
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        let dry = (sim.gun.clip as i32) + (sim.gun.spare as i32) < 48;
+        let ammo0 = (sim.gun.clip as i32) + (sim.gun.spare as i32);
+        let dry = ammo0 < 48;
+        // pickup-pushout-walks: guard #8's dropped gun (weapon 0x12, the gun in hand, 10 rounds)
+        // falls against a thin wall face west of the meet-room corridor; Pickup_Create pushes
+        // it out of that geometry [M 0x18dda0:166-183] to the face's WEST side (centre
+        // (-8.42, 5.34, -1.26), 0.35 u off the face). The shared resupply walks at it from the
+        // corridor's east side, slides south along the face and stalls 1.29 u off (the take
+        // distance is radius + 1.1 [M 0x18e148:203-214]). A player walks round to the open
+        // side and steps onto it. Route only; the resupply below still runs if the drop is not
+        // taken.
+        let drop_at = sim.drones.pickups.iter()
+            .filter(|p| !p.gone && p.from.is_some() && p.weapon == sim.gun.weapon as u16)
+            .map(|p| p.centre())
+            .find(|c| walker::dxz(*c, [-8.42, 5.34, -1.26]) < 0.2);
         drop(sim);
-        if dry { w.resupply("pre-hall ammo"); }
+        let mut got = false;
+        if dry {
+            if let Some(c) = drop_at {
+                w.walk_nav_to([-9.05, 6.47, -2.44], "pre-hall ammo: round the partition (south-west)", 1.0);
+                w.walk_to(Wp { at: [c[0] - 0.58, 6.47, c[2] - 0.24], act: Act::None, arrive: 0.3 }, "pre-hall ammo: the drop's open side");
+                w.walk_to(Wp { at: [c[0], 6.47, c[2]], act: Act::None, arrive: 0.3 }, "pre-hall ammo: onto the drop");
+                let sim = w.scene.sim.as_ref().unwrap();
+                got = (sim.gun.clip as i32) + (sim.gun.spare as i32) > ammo0;
+                eprintln!("[01f] pre-hall ammo: the pushed drop taken {got} (clip {} spare {})", sim.gun.clip, sim.gun.spare);
+                // The detour lands Bond in the hall on a different tick from the old route,
+                // and the hall/west-end fights fall out differently: a 20-tick breath on the
+                // drop before he turns back (the wait sweep 0..200 step 20: 20 and 80 bring
+                // the contact to the plate; 0, 40, 60, 100-200 lose him, the first at t6963).
+                if got { w.wait(20); }
+            }
+        }
+        if dry && !got { w.resupply("pre-hall ammo"); }
     }
     // Back through the meet-room corridor first: a resupply that ends in the south rooms
     // otherwise routes the stage through the closed west door at (-14.1, 5.3, 13.1) and stalls.

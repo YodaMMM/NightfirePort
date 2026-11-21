@@ -2331,6 +2331,13 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
             eprintln!("[03-ammo] at the through-gate stand: gun {:#x} clip {} spare {} hp {:.1}",
                 sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
         }
+        // pickup-pushout-walks: with the dropped guns pushed out of the geometry [M Pickup_Create
+        // 0x18dda0:166-183] the cluster funnel scoop walks a longer tour and the run reaches
+        // this stand 0.02 u off the old spot; the aimed sweep on #16 then walked Bond west into
+        // #15's 2.9 u fire and he died at t151432 [L the branch run]. A player squares up at
+        // the stand before the sweep: a 20-tick idle (the wait sweep 10..80 step 10: 10, 20,
+        // 30, 50, 70 and 80 complete; 40 and 60 die).
+        if difficulty >= 3 { w.wait(20); }
         for k in 0..4 {
             let near = {
                 let sim = w.scene.sim.as_ref().unwrap();
