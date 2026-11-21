@@ -1047,7 +1047,8 @@ pub fn heli_advance(x: f32) -> f32 {
 /// `FUN_001fd598` returns). Higher than 2 above the ground: roll (+0x94) approaches
 /// `roll_dot·max_speed/50` by 0.02 per tick while slower than `max_speed`, else 0. Lift (+0xa0)
 /// = `2·(min(goal.y − y, 10) − v.y) + 9.8`, × `clamp(rand·4/65536, 0.5, 1)` higher than 2 above
-/// the ground. One driving-generator draw per call, always. The yaw output +0x98 is not ported.
+/// the ground. One driving-generator draw per call, always. The full flight control, with the
+/// yaw +0x98, is `heli::Heli::flight`.
 pub struct HeliLift {
     pub goal_y: f32,
     pub roll: f32,

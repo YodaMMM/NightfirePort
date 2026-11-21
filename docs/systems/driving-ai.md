@@ -484,9 +484,10 @@ is blocked by pattern 3/4 cars holding their carrot.
 | 4 road follower | the carrot | `FUN_00135f70` unless nav +0x94, `FUN_00133f60` | 52 |
 | 5 scripted path | none | the sim copies the path object's transform and velocity (`FUN_001b18a8` / `FUN_001f7880`) | 55 |
 
-Each element's spawn command is AIEl +0xf8, an `sr` reference `0x7372_nnnn`; every one on the
-disc has that tag and `nnnn` no larger than the AICo count; `nnnn - 1` is read as the index
-[D; the base is S].
+Each element's spawn command is AIEl +0xf8, an `sr` reference `0x7372_nnnn`. **Corrected in
+§12.1:** `sr#nnnn` is a record in the Map window whose payload names the target,
+`CARP::<<Map>>::{AICo}::<byte offset>`, so the command is record `offset / 0xa0` (MIS01 element
+0: `sr#1` → offset 8960 → record 56). The `nnnn - 1` reading first written here was wrong.
 
 ### 11.2 The table
 
@@ -518,12 +519,13 @@ disc has that tag and `nnnn` no larger than the AICo count; `nnnn - 1` is read a
 ### 11.3 The disc test
 
 `each_pattern_on_its_mission` (NF_ISO): for each pattern, the first ground vehicle whose spawn
-command has it (all five are on MIS01: paris_bombvan 1, paradis_car 2 and 3, paris_henchbigbox
-4 and 5), built from its own `.atr`, runs 600 ticks at 1/60 against a scripted player (40 ahead,
-15 u/s, a slow weave) through `aim_point` → `hostile::chase_target_speed` → `dispatch` →
-`avoid_chase` / `chase_drive` → `Car::step`. Results: the hold car stays put with no pedal; the
-pursuer (cap 10) ends 150 from the player against 190 for a parked car; the road chaser drives 76,
-the road follower 26; pattern 5 drives nothing. The helicopter elements (MIS11 helimine, MIS13A
+command has it (with the §12.1 resolution all five are paris_henchbigbox elements on MIS01),
+built from its own `.atr`, runs 600 ticks at 1/60 against a scripted player (40 ahead, 15 u/s, a
+slow weave) through `aim_point` → `hostile::chase_target_speed` → `dispatch` → `avoid_chase` /
+`chase_drive` → `Car::step`. Results (re-run on `s/drive-gunners-heli` with the corrected
+commands): the hold car stays put with no pedal; the pursuer (profile 0xd, cap 20) ends 27 from
+the player against 190 for a parked car; the road chaser drives 163, the road follower 25;
+pattern 5 drives nothing. The helicopter elements (MIS11 helimine, MIS13A
 jungleheli, MIS3 openheli; MIS01's AIEl has none) run `heli_lift` for 600 ticks: 600 draws, the
 height settling at 34.6 for a 35 goal. Harness stand-ins [S]: the flat world at y = 0, the
 nearest road piece by brute force, the traffic junction chooser instead of the hinted kind-3/4
@@ -539,7 +541,143 @@ vertical acceleration.
   path object, and the wiring into the viewer.
 - What consumes the helicopter's +0x94/+0x98/+0xa0, and the sign of the pitch call vtbl+0xdc,
   were not read.
-- The AICo index base (`nnnn - 1`) is inferred from the reference range.
+- ~~The AICo index base (`nnnn - 1`) is inferred from the reference range.~~ Wrong; see §12.1.
 - `FUN_002cbd50`'s VU accumulation order is summed plainly.
 - Live checks worth doing: in Paris at the first chase break on FUN_00133f60 and read +0x140 /
   +0x25c and the pedal calls; on FUN_0013b4f8 for a helicopter count the generator draws per tick.
+
+## 12. Helicopters, rider gunners, the path object, the spawn-command reference (2026-11-21, branch `s/drive-gunners-heli`)
+
+Port: `crates/nf-formats/src/driveai.rs` (the `sr` names, `MapRef`, `AiPath`, the AICo
+placement/altitude), `crates/nf-game/src/driving/heli.rs` (the AIHelicopter controller),
+`crates/nf-game/src/driving/riders.rs` (the seated gunners). Tests:
+`crates/nf-game/tests/driving_ai_heli.rs` (16; the last two read the disc). Every row was read in
+`work/decomp/DRIVING.ELF/`; where the decompile hides call arguments (all calls inside
+0x139be8 / 0x139380) the disassembly was read (EE = file offset + 0x107080).
+
+### 12.1 How a reference word maps to a record [M + D]
+
+`{u16 index, "sr"}` words (`0x7372_nnnn`) name `sr  ` records of the same window (the Map
+article's, 2787 of them on MIS01). Each `sr` payload is a symbol name that the loader resolves
+by name (`FUN_002dc1b0` → `FUN_002cd5e0`, the pointer written back by `FUN_002d45d8`) [M].
+The names are `CARP::<<Map>>::{<chunk>}::<byte offset>` for Map chunks and
+`CARP::<group>::{<tag><hex index>}` for short-tag records [D]. So:
+
+- AIEl +0xf8 (the spawn command handed to `FUN_00145fc8` at spawn, 0x12cb08:226-229) names
+  `{AICo}::<offset>` on every element of the eight tracks: record `offset / 0xa0`
+  (`MapAi::command_index`). `FUN_00145ff8` reads that pointer as an AICo record [M].
+- AICo +0x80 on pattern-5 commands names `{AISp}::<offset>`: an AISp path record
+  `offset / 0x70` (`MapAi::path_index`) [D, every pattern-5 command].
+- AICo +0x50 / other references name `{AIEl}::<offset>` (`/ 0x100`) or `{AISp}` [D].
+- `FUN_0012c608` / `FUN_0012c640` turn an AIEl record pointer back into an element index:
+  `|ptr − db+0x10| >> 8` [M]. `FUN_00145ff8` also writes element +0xf8 = the command when the
+  command's +0x7a is not 9 or 10 [M].
+
+The exact site that rewrites the AIEl +0xf8 word into the resolved pointer was not located (the
+`sr` record's own +0xc gets the pointer; the field copy into the element is not seen in
+0x12b8b0, which copies the chunk verbatim) — the mapping above is the names' [D].
+
+### 12.2 Where the Paris helicopter comes from [M + D]
+
+MIS01's AIEl has no helicopter element and no AIHelicopter runs there. The MSet payload's name
+is `helicopter` [D]; `FUN_00204d18` keeps it (only `db5`/`z8` are replaced by the player-car
+choice), `FUN_002051f8` returns it, and `FUN_00176658` builds **the player's vehicle** from it
+(`FUN_001ff850(sim, 0, name, …)`, then `FUN_00195a08(*DAT_00339f5c, mgr+0x378)`) [M]. MIS01.VIV
+ships `data\sim\attrib\pvehicle\helicopter.atr` and `data\car\model\helicopter.crp` [D bigf].
+`FUN_00186878` picks the helicopter physics class (`FUN_002f1428`, 0x230 bytes) for a sim named
+`helicopter` or `helivanquish` [M]. That flight model is not ported. `FUN_00125860` and
+`FUN_00119e20` test the player actor's name against `helicopter` [M; what they change was not
+followed].
+
+### 12.3 The AIHelicopter controller [M]
+
+Pool of `HELI_SLOTS_AVAIL` (16) objects, 0x130 bytes, built by `FUN_00138220` in
+`FUN_0013e688`; vtable 0x36b888 (0x13bd30, 0x138280, reset 0x1382f0, update 0x138ef0, set-path
+0x13b468, release 0x13b498). A spawned helicopter gets one through `FUN_0013fa28` (+0x58 = 1; a
+radar object unless the actor's +0x13c is set); `FUN_00145ff8` hands it each command through
+`FUN_00138fa8` and sets +0x5c. The update needs both.
+
+| function | address | verdict | port / note |
+|---|---|---|---|
+| reset | 0x1382f0 | **added** | `Heli::reset`: state 1, mode 1, +0xd4 = −1, +0xd6 = 0xff. |
+| command apply | 0x138fa8 | **added** | `Heli::apply_command`: state = AICo +0x7a (10 when 0); +0x78 hold; mode = +0x79 when set (5 attaches the +0x80 path, `FUN_0013dfd8`); +0x80/+0x84 = +0x5c/+0x60; rockets `(char)(int)+0x68`, 0xff in state 10 when 0; +0x40 → +0x90 (states 9/10) else the goal; state 2 → mode 1, the body at the goal with the +0x00 rows; mode 1 → 2; radius `max(|+0x4c|, 5)`, +0xdd = sign ≥ 0; altitude `max(+0x58, 3)`; interval +0x64; timers 0; +0xd6 = 0. |
+| set path / release | 0x13b468 / 0x13b498 | **added** | `set_path`, `release`. |
+| update | 0x138ef0 | **added** | `Heli::update` (the gate was §11's): goal = the target outside states 2/9/10 with +0x78 clear; `FUN_0013b2a8`; the state machine. |
+| death check | 0x13b2a8 | **added** | `death_check`: +0xde clear: a proximity mine (actor +0x13c) within +0x140 of the target's box blasts and counts; +0xde set: health handed on (`FUN_00195a58`), despawn by actor (`FUN_0012da78`), +0xde = 0. |
+| state machine | 0x139be8 | **added** (6/7/8 reviewed) | `Heli::step`. Dead → 16. 1/4: movement(1, 0). 11: +0x78 = 1, movement(0, 0). 2: parked at the goal, velocity 0. 3: goal = target (+ its velocity × 2·radius with +0xdd), movement(1, 0), the gun at 65 while +0xdc ≠ 0 and (outside the radius or no lead). 5: movement(0, 1), pitch = dot(+0xc0, flat forward). 9/10: movement(1, 0), face the target (+0x78 clear) or the post (0x13a078 branch, a1 = s4+0x90), pitch = dot(+0xc0, flat side), aim = +0xb0 when that is under 0.2 else the forward row; 9 the gun, 10 the rockets, range 1000, at the post +0x90. 16: the crash below. 6/7/8 (the road fly-by, 150 / 35 offsets, ~2 KB): reviewed only — **no AICo record on the disc sets them**. 12-15 have no arm. |
+| crash | 0x139be8 case 16 | **added** | `crash`: mode 1; pitch −0.1 (floor −1), roll +0.01 (cap 1), lift ×0.99 (cap 0.25), actor +0x74 −2; impact = on the ground with contact, or the sweep ±n(fwd)·(sim+0x2c)/2 hits, or its front end is at or below the ground; then the blast, +0xde + 1, velocity ×0.35, roll 0. Because `FUN_0013b2a8` despawns as soon as +0xde ≠ 0, the case's own +0xde ≠ 0 arm (spin +5, a quarter-second wait) is not reached from the update (0x139be8's only caller is 0x138f8c). |
+| movement | 0x139380 | **added** | `Heli::movement(a1 = yaw boost, a2 = heading blend)` (0x1393a0/0x139394: a1 → s2, a2 → s3). Mode 2: speed `min(50·k, cap)`, 0 inside the radius (the `max(d/r·0.75, 1.01)·50` term is never below 50); flight(0, speed, goal, boost 0); pitch = dot(+0xc0, flat side). Mode 3: speed by state (5: `min(|v_t|·k, cap)`, 0 inside; others with +0x78 clear: inside `min(|v_t| if dot(v_t, +0xc0) > 0, cap)`, outside `min(max(|v_t|·k, 25), cap)`; +0x78 or 9/10: cap, 0 inside); the target's road `FUN_00135018` → +0xd4; outside the radius a re-join when the held road runs away from the goal or the route query differs (`FUN_00225c48`, `FUN_00225358`, `FUN_00224e00(adv)`); a carrot nearer than `adv = clamp(speed/2, 10, 20)` advances `2·adv − d`; flight(+0x11c, speed, carrot, a1); pitch = dot(+0xc0, flat side), or with a2 inside the radius dot(+0xc0, (fwd + flat side)/2). Mode 5: the path pose (below). |
+| face | 0x1385d8 | **added** | `face`: +0xb0 = n(p − pos), +0xc0 = n(flat). |
+| flight control | 0x13b4f8 | **added** (full) | `Heli::flight`; the yaw is new (§11 ported lift and roll). Rows decoded from the VU code: `FUN_001fd5b8` → `FUN_002cc230` = the quaternion's first matrix row (side), `FUN_001fd598` → `FUN_002cc350` = the third (forward); the transposed `FUN_001fd548` matrix times the velocity gives `dot(side, v)`. Yaw: input = mode 3 outside state 5 `dot(probe carrot − pos, flat side)` (navigator +0x8c, kind 5, re-joined along the forward row), else `dot(flat(goal − pos), flat side)`; with max > 0 (`__extendsfdf2` + `__gtdf2`) and the boost `8·(input − 0.5·dot(side, v))`; state 5 `input` while slower than max else 0; otherwise `−dot(side, v)`. |
+| gun | 0x1387a0 | **added** | `Heli::gun`: alive, +0x120 ≥ 0, the +0x102 timer; in range: +0xf0 = n(aim + 5·dir); inside 0.707 with a weapon: spread (three draws; level aim x/z ±(r − 0.5)·0.025, y −r·0.15; downward aim ±(r − 0.5)·0.05 each), the shot `FUN_001a27a0(w, 9, 10)`, the timer `(short)(int)(fps·interval)`; the firing flags (ai +0x4c → +0xb0/+0xb4) = inside the cone. |
+| rockets | 0x138b88 | **added** | `Heli::rockets_fire`: held in state 10 with no rockets; the +0x100 timer; in range with speed ≤ 5 or aim.y ≤ −0.05; inside 0.8434 of the flattened aim; launcher 8 / 7 by +0xfe when `FUN_001a2d10` says free; +0x110 = target; +0xdc − 1 (wrapping outside state 10), timer `max(fps·interval, fps/2)`, toggle. |
+
+Disc facts [D, `each_helicopter_for_1200_ticks`]: 34 helicopter elements on MIS11 (helimine), 3 on
+MIS13A (jungleheli), 3 on MIS3 (openheli); MIS4's subcopter elements do not set +0x77. Every
+helicopter spawn command is state 1 or 10 with mode 2 or 5; across the three tracks the only
+command with +0x7a in 2..9, 11 or 16 is MIS3 record 14 (state 3, mode 3, altitude 20,
+rockets 0.1 → +0xdc = 0, so that approach never guns). Records with +0x7a 13/14/15 are the
+ground profiles; a helicopter given one would idle (no arm). The proximity-mine test reads the
+actor's +0x13c; its writer was not traced (it is not the AIEl record).
+
+### 12.4 The rider gunners [M]
+
+`riders.rs`. Seats (0x12cb08:303-385): 3 window → class 0x369200 (ctor 0x1224b0, +0x78 0xd),
+4 sunroof → 0x368f08 (0x120b70), 0xe snowmobile → 0x368950 (0x11e490), 0xf vehicle gun and
+0x10 driver → 0x368c18 (0x11ff18 with 1 / 0), 0x11 Bond's seat → 0x3681f0 (0x11aca8); only 3,
+4 and 0xe get the rider's weapon. Base `FUN_00118720`: range² 5625 (75), clip 15, 60 ticks
+between shots, ready 1; skill 2/4 → range² ×4, 3/5 → ×9. Sunroof weapon clamp 1..2: 1 → clip 25
+(state 0xb), 2 (bazooka) → clip 0 (state 10).
+
+| function | address | verdict | port / note |
+|---|---|---|---|
+| target pick | 0x122e20 et al. | **added** | `pick_target`: the car controller's +0x1a4 target (vtbl+0x5c, +0x58 set, `FUN_0013e0b8`) else the player; the vehicle gun always the player. |
+| window sight | 0x122e20 | **added** | `window_sight`: d² ≤ range², heading in (−0.25, 0.3888889) turns. |
+| snowmobile sight | 0x11f528 | **added** | `snow_sight`: (−1/3, 1/3), the heading stored at +0x164. |
+| sunroof sight | 0x121818 | **added** | `sunroof_sight`: range, and neither other rider (+0x170/+0x174) up. |
+| vehicle-gun sight | 0x120478 | **added** | `vgun_sight`: range only. |
+| aim test | 0x123058 / 0x11f768 / 0x1219c0 / 0x119290 | **added** | `aim_test`: ±1/180 turn; +0x84 = heading > 0 (the sweep's direction, §11's `gunner_sweep`). |
+| reload test | 0x119270 | **added** | `needs_reload`. |
+| window acquire / tick / fire | 0x122780 / 0x122d28 / 0x122920 | **added** | aim hold fps·300 on acquiring; the countdown; fire on the cadence with or without the aim test, one draw `rand·5 >> 16`, no reload. |
+| snowmobile fire | 0x11e9a0 | **added** | one draw per shot; the animation index 0 unless on target. |
+| sunroof fire | 0x120fe0 | **added** (fire arm) | reload from the clip; fire only on target, index `(rand·6 >> 16) + 6·weapon`; the `FUN_00121c10` branch (state 0x10) is an input. |
+| the round | anim callbacks (0x122358, 0x120a18, 0x11e2f0, 0x11fdc0) | not traced | where the shot spawns and flies, its spread and damage. |
+
+### 12.5 The scripted path object [M + D]
+
+AISp records (0x70): +0x00 placement rows (position in row 3), +0x40 an `sr` reference to a `pt`
+record (`{pt  NNNN}`), +0x44 the track name (`path_mine45L`, …) [D]. `FUN_0013dfd8` builds the
+follower (`FUN_0013da80`, 0xb0 bytes): +0x4c = the `pt` pointer, +0x60 = an EAGL animation player
+(`FUN_001b1c20`) whose +0xd0 is the name, +0x70 = the placement (`FUN_002db690`) [M]. Mode 5 / pattern
+5 copy each tick: rows = player rows × +0x70 (`FUN_002cbb88`), position = player +0x30, velocity
+= +0x88 [M 0x139380 case 5, 0x130508]. The `pt` records start with an f32 300.0, a u32 2 and the
+name at +0x18 [D]; the track format and its playback are EAGL's and are not decoded.
+`heli::PathPose` is the seam.
+
+### 12.6 The disc tests
+
+`spawn_commands_and_the_paris_helicopter`: every element reference on the eight tracks resolves
+to an AICo record and every pattern-5 command to an AISp path; MIS01 element 0 → record 56; MIS01
+has no helicopter element and its MSet name is `helicopter`. `each_helicopter_for_1200_ticks`:
+each helicopter element of MIS11/MIS13A/MIS3 with its spawn command, and MIS3 record 14 applied at
+tick 300 to MIS3's mode-2 helicopter, against a scripted player for 1200 ticks. Path helicopters
+make no draws; hover/road helicopters exactly one per tick (plus three per gun shot); the MIS3
+approach goes 1 → 3 and never guns; rockets only from state 10, launchers alternating. Stand-ins
+[S]: flat ground 30 below the spawn; the integration of the four flight inputs (vertical
+acceleration lift − 9.8, yaw rate = yaw clamped to ±1 rad/s, the flat velocity easing toward
+forward × roll·50) since the physics class is not ported; the navigator a `RoadNav` joined on the
+nearest piece with the traffic chooser; the path pose held at the AISp placement; launchers busy
+30 ticks after a shot; the trigger that issues MIS3 record 14 (and to which element) is a guess.
+
+### 12.7 Unproven / not ported
+
+- The helicopter physics class (`FUN_002f1428`): how +0x94/+0x98/+0x9c/+0xa0 move the body.
+- States 6/7/8 (no disc command sets them), the EAGL path playback, the rider rounds.
+- What sets the actor's +0x13c (the proximity mine) and +0x30 (the crash contact); the
+  proximity position is read as the target's (`FUN_00195808(FUN_00201ae0())` not followed).
+- That `FUN_002c0618` is `atan2(a, b)` with the argument order used by `riders::heading_turns`.
+- Whether the full matrix of `FUN_001fd548` has the same first row as `FUN_001fd5b8`.
+- Which trigger issues which AICo record to which element (the `Trgr` layer).
+- Live checks worth doing: in MIS3 break on FUN_00138fa8 and read the record pointer (is
+  record 14 ever applied, to which element); on FUN_001387a0 in MIS13A count shots per second.
+

@@ -10,6 +10,10 @@ pub mod audio;
 pub mod hostile;
 // The per-pattern chase steering, avoidance, turret, world cap, helicopter leaf rules (§11).
 pub mod patterns;
+// The AI helicopter controller (FUN_00138fa8 / FUN_00139be8 / FUN_00139380 / FUN_0013b4f8, §12).
+pub mod heli;
+// The seated rider gunners: seat classes, sight, aim, fire cadence (§12).
+pub mod riders;
 // G-056 world-bounds: the driving maps' invisible boundary sheets (DRIVING.ELF 0x331a60).
 pub mod bounds;
 // The player chase camera (camera.ini HeliCam + FUN_001b2b48).
