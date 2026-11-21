@@ -543,8 +543,13 @@ impl SpeechFader {
 }
 
 /// `FUN_00147e30` [M]: the ambience level from the region's band (+0x14 top, +0x18 depth) and the
-/// listener height y: 0 below top - depth, 1 above top, else (y + top + depth) × 0.1 (the
-/// literal sum at 0x1480e0-0x1480f4).
+/// listener height y (listener +0x44): 0 below top - depth, 1 above top, else (y + top + depth) ×
+/// 0.1. Checked on the disassembly 0x148088-0x1480f8: the argument register starts 0 (`mtc1
+/// zero`), `c.olt.s y, top - depth` → 0; `c.olt.s top, y` → 1.0 (a `mov.s` of the saved 1.0 in
+/// the delay slot); else `add.s y, top`, `add.s + depth`, `mul.s × 0x3dcccccd`. All signed floats, all additions.
+/// On the disc [D, `drive_ambience_disc`] every `Envi` region has depth 10 and top -1000, except
+/// `nearvilla` (MIS4 / RACE, top 0). With top 0 the band is a clean 0..1 ramp over y in [-10, 0];
+/// with top -1000 the sum is negative only for y in [-1010, -1000] and 1.0 above it.
 pub fn ambience_level(y: f32, top: f32, depth: f32) -> f32 {
     if y < top - depth {
         0.0
