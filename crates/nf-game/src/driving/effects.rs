@@ -195,8 +195,9 @@ impl ParticleSystem {
 pub enum ParticleDraw {
     /// A sprite from the 256x256 `MAIN` sheet [M `FUN_001f34d8` binds 'MAIN' to both quad
     /// buckets]. `cell` = (u, v, size) in sheet units. `additive`: the 0x200 bucket, GS ALPHA
-    /// 0x48 (Cs*As + Cd) with FIX 0x80 [M `DAT_003e6030 = 0x8000000048`]; the default bucket's
-    /// blend register is not decoded here.
+    /// 0x48 (Cs*As + Cd) with FIX 0x80 [M `DAT_003e6030 = 0x8000000048`]; the default bucket is
+    /// GS ALPHA 0x44 ((Cs - Cd)*As + Cd, plain alpha blending) [M `FUN_001a0f80` on 0x3e3f70],
+    /// the streak bucket 0x68 with FIX 0x80 (Cs*FIX + Cd) [M `FUN_001a0fb8(0x3e8070, 0x80)`].
     Quad { centre: [f32; 3], size: f32, rotation: f32, cell: [f32; 3], rgba: [u8; 4], additive: bool },
     /// A triangle on the `sprk` texture: head + (0, width, 0), head, tail with UVs (0,0), (0,1),
     /// (1,0) [M the 0x40fdb0 table `FUN_001f34d8` fills].
@@ -616,8 +617,9 @@ impl VehicleFx {
 
 /// A glare instance's pulse (`FUN_001f1b60`) [M]: `x = frac((tick - phase) * rate)`; 0 past
 /// `duty`; with flag 0x800 a triangle (0x4000: a ramp-hold-ramp shape); `base + x*amp`. The
-/// fraction uses `FUN_002bfb50`, taken here as floor (not traced). The instance fields come from
-/// the track data, which is not decoded.
+/// fraction uses `FUN_002bfb50`, which is floorf (exponent test, mantissa mask, -1 for negative
+/// fractions) [M]. The instance fields come from the track `ef` entries
+/// (`nf_formats::trackfx`, used by `driving::trackfx`).
 pub fn glare_pulse(tick: u32, phase: u32, rate: f32, duty: f32, base: f32, amp: f32, flags: u32) -> f32 {
     let x = tick.wrapping_sub(phase) as f32 * rate;
     let mut x = x - x.floor();
@@ -642,7 +644,9 @@ pub fn glare_pulse(tick: u32, phase: u32, rate: f32, duty: f32, base: f32, amp: 
 
 /// `FUN_001f1d18`'s size cull [M]: a glare at `dist` is kept when dist / (size*pulse) <= 1.6
 /// (pulse = 1 without flag 0x400, else the pulse, dropped below 0.0001); at most 128 per frame.
-/// Returns the drawn size. The facing test of flag 0x20 is not ported.
+/// Returns the drawn size. `dist` is what the caller passes: the squared LOD distance for static
+/// items, 0 for scene objects [M `FUN_001ad1a0`, `FUN_001cab38`]. The facing test of flag 0x20
+/// is in `driving::trackfx::TrackFx::glares`.
 pub fn glare_size(dist: f32, size: f32, pulse: Option<f32>, drawn_so_far: usize) -> Option<f32> {
     if drawn_so_far >= 0x80 { return None; }
     let m = match pulse {

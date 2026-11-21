@@ -24,6 +24,8 @@ pub mod flight;
 pub mod intro;
 // G-057 suspension: the per-wheel spring–damper (sub_18FC00 + kind siblings).
 pub mod suspension;
+// Track placed effects: glare sprites and the particle effects started at load (trackfx).
+pub mod trackfx;
 // 647 drive-mission-scripts: the mission state machine (objectives, fails, timers, the PTP end).
 pub mod mission;
 // The game's mission rules: the trigger/action/event machine and the mission manager (FUN_00206b88).

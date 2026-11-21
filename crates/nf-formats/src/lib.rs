@@ -52,6 +52,7 @@ pub mod sha256;
 pub mod symfile;
 pub mod texture;
 pub mod vag;
+pub mod trackfx;
 pub mod trackobj;
 pub mod trackstart;
 pub mod tuning;
