@@ -710,9 +710,16 @@ impl DrivingState {
                     let lights = self.lights.clone();
                     for (k, (drv, _)) in self.ai_cars.iter_mut().enumerate() {
                         let world = nf_game::driving::ai::YieldWorld { now, lights: lights.clone(), vehicles: &vehicles, me: Some(k), light_objects: &[] };
-                        let _ = drv.step_shared(&rn, DT, Some(&world), &mut self.ai_rng);
-                        if let Some(hy) = self.collision.ground_y(drv.car.pos[0], drv.car.pos[1], drv.car.pos[2]) {
-                            drv.car.pos[1] = hy;
+                        match &self.land {
+                            // The AI land pass on the car's own hull and the track's walls, with
+                            // the junction lights and the yield world.
+                            Some(land) => { let _ = drv.step_land(&rn, land, DT, Some(&world), &mut self.ai_rng); }
+                            None => {
+                                let _ = drv.step_shared(&rn, DT, Some(&world), &mut self.ai_rng);
+                                if let Some(hy) = self.collision.ground_y(drv.car.pos[0], drv.car.pos[1], drv.car.pos[2]) {
+                                    drv.car.pos[1] = hy;
+                                }
+                            }
                         }
                     }
                 }
@@ -1492,9 +1499,36 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
                         .map(|b| CarParams::parse_atr(&String::from_utf8_lossy(&b)))
                         .unwrap_or_else(|| car_params.clone());
                     let step_seg = (rn.segs.len() / 5).max(1);
-                    for k in 1..=4 {
-                        let seg = (k * step_seg) % rn.segs.len();
-                        if let Ok(drv) = AiDriver::on_segment(t_params.clone(), rn, seg, 0, k as i8) {
+                    // The placement queries each wheel's ground (FUN_00187eb8 [M]): a car goes only
+                    // where all four wheels have road within 1.0 of the lane point, its body at rest
+                    // above the highest; other segments are skipped (spawning over a gap or under
+                    // a bridge rolled the car on the land pass).
+                    let spawn_ground = nf_game::driving::CollisionGround::new(col_tris.clone());
+                    let surface_under = |p: [f32; 3]| -> Option<f32> {
+                        use nf_game::driving::physics::Ground;
+                        let pl = spawn_ground.wheel_plane([p[0], p[1] + 50.0, p[2]])?;
+                        (pl.normal[1].abs() > 0.3).then(|| pl.v0[1] - (pl.normal[0] * (p[0] - pl.v0[0]) + pl.normal[2] * (p[2] - pl.v0[2])) / pl.normal[1])
+                    };
+                    let mut placed = 0;
+                    for k in 1..=(4 * 10) {
+                        if placed == 4 { break; }
+                        let seg = (k * step_seg + k / 4) % rn.segs.len();
+                        // The traffic car's own model box and hull points (pass C's contact list,
+                        // VU0 micro 0x1a0 [M]) and the traffic driver kind (FUN_0013fae0 passes 3 →
+                        // the AI land pass FUN_0018ecb8 [M], drive-physics.md §12).
+                        let mut t_params = t_params.clone();
+                        if let Some(m) = iso.read_bytes(viv_base + c.0 as u64, c.1 as u64).ok().and_then(|b| maybe_decompress(&b).ok()) {
+                            if let Ok(h) = nf_formats::carmesh::header_half_extents(&m) { t_params.half_extents = h; }
+                            if let Ok(h) = nf_formats::carmesh::hull_points(&m) { t_params.hull = h; }
+                        }
+                        if let Ok(mut drv) = AiDriver::on_segment(t_params.clone(), rn, seg, 0, (placed + 1) as i8) {
+                            drv.car.kind = nf_game::driving::physics::DriverKind::Traffic;
+                            // At rest above the road (the nav point is on the surface): body centre at
+                            // the ride height, as the placement FUN_00187eb8 sets it [M].
+                            let ys: Vec<Option<f32>> = (0..4).map(|i| surface_under(drv.car.wheel_world(i))).collect();
+                            if ys.iter().any(|y| y.is_none_or(|y| (y - drv.car.pos[1]).abs() > 1.0)) { continue; }
+                            let gy = ys.iter().map(|y| y.unwrap()).fold(f32::MIN, f32::max);
+                            drv.car.pos[1] = gy + drv.car.rest_height() + 0.02;
                             if let Some(slot) = load_car_into_scene(
                                 &iso,
                                 viv_base,
@@ -1511,6 +1545,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
                                 None,
                             ) {
                                 ai_cars.push((drv, slot));
+                                placed += 1;
                             }
                         }
                     }
@@ -1667,7 +1702,12 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
 
     // The land pass for land vehicles (the watercraft MIS11/MIS13C and the aerial MIS13A/MIS13B keep
     // the flat model and their own passes: their SUB_PHYSICS steps are not ported).
-    let land = (!matches!(viv_upper.as_str(), "MIS11" | "MIS13C" | "MIS13A" | "MIS13B")).then(|| nf_game::driving::CollisionGround::new(col_tris.clone()));
+    // Land cars also answer the track's 2-D wall list (pass B, FUN_001fb318's land branch [M];
+    // docs/systems/drive-physics.md §12): MIS01 24935 walls, MIS4 and RACE 6275 each [D].
+    let land = (!matches!(viv_upper.as_str(), "MIS11" | "MIS13C" | "MIS13A" | "MIS13B")).then(|| {
+        let walls = crp.extract_collision_walls().unwrap_or_default();
+        nf_game::driving::CollisionGround::with_walls(col_tris.clone(), walls)
+    });
     // The body box = the player model's article `Base` bbox (model+0xc [M FUN_001c9778], the
     // half extents the land step's hull, wheel points and inertia use); the model draws at
     // `pos − rot·centre`. Falls back to the .atr-side defaults when the box does not read.
