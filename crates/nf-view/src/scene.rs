@@ -6714,6 +6714,16 @@ impl Sim {
         (((a[0] * 0.76966).atan() * 0.5).tan() / 0.76966, ((a[1] * 0.57724).atan() * 0.5).tan() / 0.57724)
     }
 
+    /// The aim-mode cursor (`BL+0x118/+0x11c`) whose eased offset puts the shot through `at`: the point's
+    /// screen position (`View_3DPoint2Screen`, halved like the auto-aim store) times the zoom, since
+    /// `Player_GetAimingPoint` divides by it. `None` behind the eye. For the walkers' aimed stands.
+    pub fn cursor_for(&self, at: [f32; 3]) -> Option<[f32; 2]> {
+        let p = nf_formats::ps2float::mul(self.bond.pitch, std::f32::consts::FRAC_PI_2);
+        let b = nf_game::autoaim::view_basis(self.bond.yaw, p, self.bond.look());
+        let s = nf_game::autoaim::project_offset(self.bond.head(), &b, at)?;
+        Some([s[0] * 0.5 * self.zoom, s[1] * 0.5 * self.zoom])
+    }
+
     /// The current shot direction's offset from Bond's view as (yaw, pitch) radians — what the old
     /// angle-unit `aim_offset` held — for the walkers that steer the effective aim.
     pub fn aim_offset_angles(&self) -> [f32; 2] {

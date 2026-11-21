@@ -219,8 +219,8 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
                 let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
-                let cx_want_raw = -yaw_err / 0.76966;
-                let cy_want_raw = pitch_err / 0.57724;
+                // s-auto-aim: the cursor that puts the shot on `at` (screen units, through the zoom).
+                let [cx_want_raw, cy_want_raw] = sim.cursor_for(at).unwrap_or([-yaw_err / 0.76966, pitch_err / 0.57724]);
                 let cx_want = cx_want_raw.clamp(-0.296, 0.296);
                 let cy_want = cy_want_raw.clamp(-0.4, 0.4);
                 let cur = sim.cursor;
