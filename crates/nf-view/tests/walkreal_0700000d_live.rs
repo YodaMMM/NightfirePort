@@ -1635,7 +1635,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                 let look = sim.bond.look();
                 let right = [-yaw.cos(), 0.0, yaw.sin()];
                 let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
-                let (tx, ty) = (0.76966f32 * sim.cross[0], 0.57724f32 * sim.cross[1]);
+                let (tx, ty) = (0.76966f32 * sim.cross[0] / sim.zoom, 0.57724f32 * sim.cross[1] / sim.zoom);
                 let dv = [look[0] + tx * right[0] + ty * up[0], look[1] + tx * right[1] + ty * up[1], look[2] + tx * right[2] + ty * up[2]];
                 let dl = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt().max(1e-4);
                 let ray = [dv[0] / dl, dv[1] / dl, dv[2] / dl];
@@ -2660,7 +2660,7 @@ fn rim_sweep_act(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
             let look = sim.bond.look();
             let right = [-yaw.cos(), 0.0, yaw.sin()];
             let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
-            let (tx, ty) = (0.76966f32 * sim.cross[0], 0.57724f32 * sim.cross[1]);
+            let (tx, ty) = (0.76966f32 * sim.cross[0] / sim.zoom, 0.57724f32 * sim.cross[1] / sim.zoom);
             let dv = [look[0] + tx * right[0] + ty * up[0], look[1] + tx * right[1] + ty * up[1], look[2] + tx * right[2] + ty * up[2]];
             let dl = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt().max(1e-4);
             let ray = [dv[0] / dl, dv[1] / dl, dv[2] / dl];
@@ -2941,7 +2941,7 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, 
             let look = sim.bond.look();
             let right = [-yaw.cos(), 0.0, yaw.sin()];
             let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
-            let (tx, ty) = (0.76966 * sim.cross[0], 0.57724 * sim.cross[1]);
+            let (tx, ty) = (0.76966 * sim.cross[0] / sim.zoom, 0.57724 * sim.cross[1] / sim.zoom);
             let d = [look[0] + tx * right[0] + ty * up[0], look[1] + tx * right[1] + ty * up[1], look[2] + tx * right[2] + ty * up[2]];
             let dl = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
             let ray = [d[0] / dl, d[1] / dl, d[2] / dl];

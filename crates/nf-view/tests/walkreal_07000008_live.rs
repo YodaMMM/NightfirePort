@@ -1880,8 +1880,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             let p = sim.bond.pitch * std::f32::consts::FRAC_PI_2;
             let right = [cyy, 0.0, -syy];
             let up = [-p.sin() * syy, p.cos(), -p.sin() * cyy];
-            let tx = 0.76966 * sim.cross[0];
-            let ty = 0.57724 * sim.cross[1];
+            let tx = 0.76966 * sim.cross[0] / sim.zoom;
+            let ty = 0.57724 * sim.cross[1] / sim.zoom;
             let dd = [syy * p.cos() + tx * right[0] + ty * up[0],
                 p.sin() + tx * right[1] + ty * up[1],
                 cyy * p.cos() + tx * right[2] + ty * up[2]];
