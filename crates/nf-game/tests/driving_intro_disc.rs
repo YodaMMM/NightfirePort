@@ -153,8 +153,9 @@ struct Expect {
 
 const EXPECT: [Expect; 8] = [
     // The sniper section: on the helicopter's spline 0, POV mode; the letterbox the start list
-    // put up comes down when the path passes trigger 596 (frame 10).
-    Expect { viv: "MIS01", frames: 600, drives: false, owner: Owner::Player, pov: true, spline: Some(0), last_change: Some(10) },
+    // put up comes down when the path passes trigger 596 (frame 18 at the spline controller's
+    // rate 0.5 [M 0x13da80, 0x1b1110]; it was 10 at rate 1.0).
+    Expect { viv: "MIS01", frames: 600, drives: false, owner: Owner::Player, pov: true, spline: Some(0), last_change: Some(18) },
     Expect { viv: "MIS11", frames: 600, drives: true, owner: Owner::Player, pov: false, spline: None, last_change: None },
     Expect { viv: "MIS13A", frames: 600, drives: true, owner: Owner::Player, pov: false, spline: None, last_change: None },
     // On spline 0 the whole drive; trigger 78 starts camera 0 + letterbox, trigger 89 (173 u
@@ -174,7 +175,8 @@ const EXPECT: [Expect; 8] = [
 /// RACE: timer 5 set to 5 s on frame 1; the texts at 4, 3, 2 s left and the release below 1 s.
 const RACE_TEXTS: [(u32, u32); 4] = [(63, 0x8ff), (123, 0x8fe), (183, 0x8fd), (RACE_GO, 0x227c)];
 const RACE_GO: u32 = 243;
-const JEX2_CAM_END: u32 = 130;
+// Frame 258 at the spline controller's rate 0.5 [M 0x13da80, 0x1b1110]; 130 at rate 1.0.
+const JEX2_CAM_END: u32 = 258;
 
 #[test]
 fn every_track_opening_runs_to_its_hand_over() {

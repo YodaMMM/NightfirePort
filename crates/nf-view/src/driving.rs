@@ -390,6 +390,9 @@ pub struct DrivingState {
     pub difficulty: u32,
 }
 
+/// The front end's boot difficulty (`GameState+0x28` = 2, Agent [M 0x1c7e78:25]).
+pub const BOOT_DIFFICULTY: u32 = 2;
+
 const IDENT_MAT: Mat4 = [
     [1.0, 0.0, 0.0, 0.0],
     [0.0, 1.0, 0.0, 0.0],
@@ -442,7 +445,15 @@ impl DrivingState {
             }
         }
         if let Some(r) = self.car_rig.as_mut() { r.tick(&self.car, input.steer); }
-        if let Some((c, mesh, b)) = self.sub.as_mut() {
+        // On a scripted spline the vehicle's state-3 update `FUN_00131620` copies the path
+        // player's pose into the body and takes its velocity (+0x88 -> body +0x20) [M]; the
+        // spline block in `step_ai` writes both. The body's own drive step is not run then [S:
+        // whether the generic integrator still runs under state 3 is not traced; the pose is
+        // overwritten every frame either way].
+        let on_spline = self.intro.as_ref().is_some_and(|(i, p)| i.spline_position(p).is_some());
+        if on_spline {
+            // The spline block in `step_ai` owns the pose and the velocity this tick.
+        } else if let Some((c, mesh, b)) = self.sub.as_mut() {
             let si = nf_game::driving::sub_physics::SubInput { throttle: input.throttle, brake: input.brake, steer: input.steer, handbrake: input.handbrake, ..Default::default() };
             let _ = c.step_world(&si, &self.rigid, b, mesh, DT);
             let r = c.body.rows;
@@ -1014,6 +1025,8 @@ impl DrivingState {
                 i.out.clear();
                 i.step();
                 // A scripted spline carries the car (the path player's row 3 into the car matrix [S]).
+                // The velocity is the path player's: the position step x fps [M 0x1b14b8, 0x131620];
+                // `o` is last tick's spline point, as `step` leaves the body alone on a spline.
                 if let Some(q) = i.spline_position(paths) {
                     let o = self.car.pos;
                     self.car.vel = [(q[0] - o[0]) * 60.0, (q[1] - o[1]) * 60.0, (q[2] - o[2]) * 60.0];
@@ -1393,7 +1406,7 @@ pub fn mset_factor(mset: Option<&[u8]>, base: usize, difficulty: u32) -> f32 {
 /// at the boot default difficulty (GameState+0x28 = 2 [M 0x1c7e78:25] → mission+0x3b8 = 1), the
 /// value the view ran before the pick was plumbed. Tests and the headless `--shot` path use it.
 pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, DrivingState)> {
-    load_driving_scene_at(iso_path, viv_name, 2)
+    load_driving_scene_at(iso_path, viv_name, BOOT_DIFFICULTY)
 }
 
 /// `load_driving_scene` with the player's difficulty: `game_difficulty` is the game's

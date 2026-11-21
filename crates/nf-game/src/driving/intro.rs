@@ -314,16 +314,32 @@ impl IntroState {
                     self.spline = s;
                     // [S] the controller's vtable +0x24 (not decomposed) hands the spline's
                     // animation to the driver's path player; it starts at time 0 with the
-                    // FUN_001b1258 defaults and wraps to itself.
+                    // FUN_001b1258 defaults and wraps to itself. The time rate is the spline
+                    // controller's: `FUN_0013da80` writes its path element's +0x18 = 0.5 and
+                    // `FUN_001b1110` copies element +0x18 into the player's +0xa4 [M]; a reset
+                    // (`FUN_0013dcc0` -> `FUN_001b1258`) leaves +0xa4 alone [M].
                     self.path = PathPlayer {
                         anim: Some((anim.instance, anim.duration)),
                         next: Some((anim.instance, anim.duration)),
+                        rate: crate::driving::flight::CONTROLLER_RATE,
                         playing: true,
                         ..PathPlayer::default()
                     };
                     self.autodrive_flag = true;
                 } else {
                     self.out.push(IntroOut::ElementSpline { element: a.word(1), spline: s });
+                }
+            }
+            // ESetNextAISpline 0x158370 (word 1 = 0, the player; the spline needs its +0x40
+            // animation) -> FUN_0013e058: with the controller in place FUN_0013dd28 ->
+            // FUN_001b1838 sets the path player's next animation (+0x9c), played when this one
+            // ends [M]. Without a controller the game builds one (FUN_0013da80); the port only
+            // takes the case with the player already on a spline.
+            0xd1 => {
+                if a.word(1) == 0 && self.spline.is_some() {
+                    if let Some(anim) = paths.spline_ref(script, a.word(2)).and_then(|s| paths.spline_anim(script, s)) {
+                        self.path.next = Some((anim.instance, anim.duration));
+                    }
                 }
             }
             // EEndControlToSpline 0x14c110.
