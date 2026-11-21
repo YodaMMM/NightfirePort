@@ -513,6 +513,12 @@ pub struct Sim {
     /// arena on every machine → the same table.
     pub mp_bot_weapons: Option<nf_game::mp::botweap::BotWeaponTable>,
     pub mp_dead_ticks: [u32; nf_net::MAX_AGENTS],
+    /// mp-bot-drops: per slot, a dead bot's pending `DroneWeap_DropWeapon` 0x17a2a0. A shot / punch
+    /// death enters `BotDeathAnim` 0xF2, whose UPDATE (msg 3) drops the gun [M 0x175508 case 3]: 1 on
+    /// the death tick, 2 from the next tick's start, dropped at that tick's bot pass. A blast death
+    /// enters `BotDeathByExplosion` 0xF3, whose ENTER drops it after `MP_PlayerKilled` [M 0x1755a8]:
+    /// 3, dropped right after the kill. 0 = nothing pending. Shared state (every machine).
+    pub mp_bot_drop: [u8; nf_net::MAX_AGENTS],
     /// mp-world-sync (agent 9): the session's input row for the tick `step_bond` is about to run
     /// (the caller sets it — the live loop and `nf_view::net_tick`; `step_bond` consumes it). With
     /// it, `step_bond` moves the remote bodies BEFORE the local body (the same collision world for
@@ -2470,6 +2476,8 @@ impl Sim {
         }
         // mp-scenarios-online (agent6): the round restart's respawns and the match-decided deaths
         // reach the bodies before the bots tick.
+        // mp-bot-drops: last tick's death-anim deaths come due this tick (see `mp_bot_drop`).
+        for d in self.mp_bot_drop.iter_mut() { if *d == 1 { *d = 2; } }
         self.step_mp_scenario_sync();
         // local-match-bot-pickups: the row reconcile runs BEFORE the bots' rebuild — the game
         // unregisters in the same pass that deletes (the Handler's tail / Pickup_Update's
@@ -2482,6 +2490,9 @@ impl Sim {
         // mp-bots-in-match: the bots' per-frame driver — the game's `BOT_update` 0x126448 family
         // runs per frame inside the MP flow (the brains + the firing pipeline + respawn/score
         // bookkeeping), exactly like the port's `MP_Update` block above.
+        // mp-bot-drops: `BotDeathAnim`'s UPDATE drops the gun [M 0x175508 case 3] — the tick
+        // after the death, at the bots' pass, before the brains step.
+        self.mp_bot_drops_due(2);
         { let _p = nf_game::prof::scope("mp: step_mp_bots"); self.step_mp_bots(); }
         // local-match-bot-pickups: the shared take pass — `Pickup_Update` 0x18e148's
         // humans-then-bots taker loop — runs HERE, right after the bots and before any body
@@ -7036,6 +7047,66 @@ impl Sim {
         if std::env::var_os("NF_PICKUPLOG").is_some() {
             eprintln!("[mp-drop] tick {} held {:#x} -> {:?}", self.drones.frame, held, drops.iter().map(|p| (p.weapon, p.kind, p.rounds)).collect::<Vec<_>>());
         }
+        self.place_mp_drops(drops);
+    }
+
+    /// mp-bot-drops: run every pending bot drop whose `mp_bot_drop` state is `due` (2 = the death
+    /// anim's UPDATE, 3 = the explosion death's ENTER), in slot order.
+    pub fn mp_bot_drops_due(&mut self, due: u8) {
+        for slot in 0..nf_net::MAX_AGENTS {
+            if self.mp_bot_drop[slot] != due { continue; }
+            self.mp_bot_drop[slot] = 0;
+            self.mp_bot_death_drop(slot);
+        }
+    }
+
+    /// mp-bot-drops: `DroneWeap_DropWeapon` 0x17a2a0 for a dead MP bot (the guards' drop, run by
+    /// the bot death states [M 0x175508 case 3, 0x1755a8]): the held byte `anim+0x62` (the bot's
+    /// held weapon — `BOTWEAP_changeWeapon` 0x12a028 writes it with `Drone+0x768`); nothing below 1,
+    /// nothing (and no draw) without a third-person model (`weapon_data[w]+0x80`). At the gun's
+    /// matrix — moved to the bot's `obj+0x30` when the ray from there to it hits geometry — the base
+    /// (`weapon_data[w]+2`) with `clip_size · (0.5 or 0.25 + FRand(0.5))` rounds (0.5 below a clip of
+    /// 10), one `Rand_FRand(0.5)` on the shared stream; base 0x1A adds its launcher 0x1B as hidden
+    /// ammo with `clip_size(0x1B) · (0.25 + FRand(0.5))` (a second draw). `Pickup_CreateSimple`'s MP
+    /// arm: 1800 ticks, spinning, no respawn. The byte is cleared afterwards: once per death (the
+    /// port's dead body draws no gun already, and `BOT_respawn` builds a new bot object).
+    /// The gun's matrix: the game's is the posed weapon datum's bone (`AnimGetBoneWorldTrans`); the
+    /// port's bot pose is draw-only state, so the stand-in is the bot body's resting gun matrix
+    /// (`rest_gun_matrix`, the human drop's shared-state stand-in) [S].
+    pub fn mp_bot_death_drop(&mut self, slot: usize) {
+        use nf_formats::ps2float::{add, mul};
+        use nf_game::pickup::{kind, Pickup};
+        let Some(bot) = self.mp.as_ref().and_then(|m| m.bots.iter().find(|b| b.slot == slot)) else { return };
+        let w = bot.brain.vars.weapon_id;
+        if (w as i8) < 1 || w as usize >= self.weapons.records.len() { return; }
+        let wi = w as usize;
+        if self.weapons.model(wi) == 0 { return; }
+        let body = bot.brain.body.clone();
+        let mut m = self.rest_gun_matrix(&body, w);
+        if self.world.segment(body.pos, [m[3][0], m[3][1], m[3][2]]).is_some() {
+            m[3] = [body.pos[0], body.pos[1], body.pos[2], 1.0];
+        }
+        let n = self.weapons.clip_size(wi);
+        let f = add(self.drones.rng.frand(0.5), if n < 10 { 0.5 } else { 0.25 });
+        let base = self.weapons.base(wi);
+        let rounds = mul(n as f32, f) as i32 as i16;
+        let mut drops: Vec<Pickup> = Pickup::create_simple_mp(&m, base, rounds, kind::WEAPON, &self.weapons, &self.models).into_iter().collect();
+        if base == 0x1a {
+            let f = add(self.drones.rng.frand(0.5), 0.25);
+            let rounds = mul(self.weapons.clip_size(0x1b) as f32, f) as i32 as i16;
+            if let Some(mut p) = Pickup::create_simple_mp(&m, 0x1b, rounds, kind::AMMO, &self.weapons, &self.models) {
+                p.hidden = true;
+                drops.push(p);
+            }
+        }
+        if std::env::var_os("NF_PICKUPLOG").is_some() {
+            eprintln!("[mp-drop] tick {} bot slot {slot} held {w:#x} -> {:?}", self.drones.frame, drops.iter().map(|p| (p.weapon, p.kind, p.rounds)).collect::<Vec<_>>());
+        }
+        self.place_mp_drops(drops);
+    }
+
+    /// mp-drops-draw: a death drop's pickups into the reserved draw slots (hidden ones appended).
+    fn place_mp_drops(&mut self, drops: Vec<nf_game::pickup::Pickup>) {
         for d in drops {
             // The AR's launcher rounds drop hidden (`obj+0xF0 |= 0x10`): never drawn, no slot.
             if d.hidden { self.drones.pickups.push(d); continue; }
@@ -7803,8 +7874,8 @@ fn script_pickup_reservations(level: &Level, weapons: &nf_formats::weapon::Weapo
     (out, slots)
 }
 
-/// mp-drops-draw: the weapons a dead player can drop in this match, each as an inert reserved pickup
-/// (`gone`), `per_weapon` copies apiece. The renderer draws pickups per index from slots built at
+/// mp-drops-draw: the weapons a dead player or bot can drop in this match, each as an inert reserved
+/// pickup (`gone`), `per_weapon` copies apiece (2 per body: humans + bots). The renderer draws pickups per index from slots built at
 /// load (`placed_pickup_pose`), so a gun dropped at run time needs a slot that already exists.
 /// The candidates are every record a human can hold: the weapon-set row (its spawn column through
 /// `Upgrade_MPWeapon`, as `MP_EquipPlayer` 0x1855f8 equips it), the arena's other weapon pickups,
@@ -7841,7 +7912,10 @@ fn mp_drop_reservations(mp: &nf_game::mp::MpSettings, placed: &[nf_game::pickup:
         }
     }
     templates.sort_by_key(|t| t.weapon);
-    let per_weapon = (mp.human_count as usize).clamp(1, nf_net::MAX_AGENTS) * 2;
+    // mp-bot-drops: the bots drop too (`DroneWeap_DropWeapon` from their death states), so every
+    // body of the match (humans + bots, the slot cap `MP_MAX_SLOTS`) gets 2 slots per weapon.
+    let bodies = (mp.human_count as usize + mp.bot_count as usize).min(nf_game::mp::MP_MAX_SLOTS);
+    let per_weapon = bodies.clamp(1, nf_net::MAX_AGENTS) * 2;
     let mut out = Vec::new();
     for t in templates {
         for _ in 0..per_weapon {
@@ -11183,6 +11257,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             mp_bot_weapons: None,
             mp_armour: [0.0; nf_net::MAX_AGENTS],
             mp_dead_ticks: [0; nf_net::MAX_AGENTS],
+            mp_bot_drop: [0; nf_net::MAX_AGENTS],
             net_row: None,
             net_remotes_done: false,
             net_gun_busy: [false; nf_net::MAX_AGENTS],
@@ -14228,6 +14303,10 @@ impl Sim {
                 // 180 ticks, then BotRespawn runs BOT_respawn [M 0x171518:22-41; the human gate
                 // is FRAME_RATE_INT * 5 = 300, 0x190bb0:41] (standins-scene-929).
                 bot_died.push(bi);
+                // mp-bot-drops: a match-decided death drops through the death anim's UPDATE
+                // (`BotGlobal`'s killed msg 3 → 0xF2 [M 0x16e060:118]); which state the game's
+                // strike victim enters is not traced [S].
+                if b.slot < nf_net::MAX_AGENTS { self.mp_bot_drop[b.slot] = 1; }
             }
         }
         // NDrone2_DSTATE_BotDead's death-msg arm also zeroes the bot's pickup visit rows —
@@ -14679,6 +14758,9 @@ impl Sim {
                         // [M 0x1266c8].
                         Self::mp_bot_bark(&mut self.drones, &mut self.mp_fx, self.voices.as_deref(), &m.bots, victim_slot, 1);
                         m.player_killed(victim_slot, Some(killer_slot), false, false, &mut self.drones.rng);
+                        // mp-bot-drops: a round's death enters `BotDeathAnim` 0xF2 (`NDrone2_DealWithObjHit`
+                        // case 0x27's MP arm [M 0x13fff0: `uVar8 = 0xf2`]); its UPDATE drops the gun.
+                        if victim_slot < nf_net::MAX_AGENTS { self.mp_bot_drop[victim_slot] = 1; }
                         if std::env::var_os("NF_BOTLOG").is_some() { eprintln!("[botlog] f{frame} kill: slot {killer_slot} (weapon {:#x}) killed slot {victim_slot}", shot.weapon); }
                     }
                 }
@@ -15375,6 +15457,11 @@ impl Sim {
                     bt.deaths += 1;
                     bt.respawn_at = frame + 180;
                     m.player_killed(victim_slot, Some(shooter), false, false, &mut self.drones.rng);
+                    // mp-bot-drops: a blast death enters `BotDeathByExplosion` 0xF3
+                    // (`NDrone2_ExplosiveImpact` 0x146480's MP arm, `param_3 = 0xf3`), whose ENTER
+                    // drops the gun after `MP_PlayerKilled` [M 0x1755a8].
+                    if victim_slot < nf_net::MAX_AGENTS { self.mp_bot_drop[victim_slot] = 3; }
+                    self.mp_bot_drops_due(3);
                 }
             }
         }
@@ -15607,6 +15694,14 @@ impl Sim {
                 // at 0x17c518:128-134].
                 let killer = if blast_null_owner { None } else { Some(attacker) };
                 m.player_killed(victim, killer, false, false, &mut self.drones.rng);
+                // mp-bot-drops: a blast death enters `BotDeathByExplosion` 0xF3, whose ENTER drops
+                // the gun right after `MP_PlayerKilled` [M 0x146480 MP arm `param_3 = 0xf3`;
+                // 0x1755a8]; a round's death enters `BotDeathAnim` 0xF2, whose UPDATE drops it the
+                // next tick [M 0x13fff0 case 0x27 `0xf2`; 0x175508 case 3].
+                if victim < nf_net::MAX_AGENTS {
+                    self.mp_bot_drop[victim] = if located { 1 } else { 3 };
+                    if !located { self.mp_bot_drops_due(3); }
+                }
             }
             return;
         }
@@ -15771,7 +15866,16 @@ impl Sim {
             // body), so every machine creates the same pickup on the same tick.
             if self.mp_dead_ticks[slot] == 1 {
                 let gate = self.mp_combat.gates.get(slot).map(|g| (g.weapon, g.inv.clone()));
-                let mat = self.net_body(slot).zip(gate.as_ref()).map(|(b, (w, _))| self.rest_gun_matrix(b, *w));
+                // mp-bot-drops: the local slot's own body has its crouch drop zeroed by the dead
+                // camera rule by now (`Player_PositionCamera` 0x18f5d8:130-132) while the other
+                // machines' replica keeps it, and the drop's height followed it: the two machines
+                // created the gun 0.45 apart (a crouched death in the 8-human explosives run). The
+                // drop reads the body with that rule applied on every machine.
+                let mat = self.net_body(slot).zip(gate.as_ref()).map(|(b, (w, _))| {
+                    let mut b = b.clone();
+                    b.crouch_drop = 0.0;
+                    self.rest_gun_matrix(&b, *w)
+                });
                 if let (Some((held, inv)), Some(m)) = (gate, mat) { self.mp_death_drop(held, &inv, &m); }
             }
             self.mp_dead_ticks[slot] += 1;

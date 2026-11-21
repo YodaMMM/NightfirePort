@@ -31,7 +31,13 @@ Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] read in our decomp export (work/decom
   With the MP lifetime below the drop lasts 1800 ticks (30 s) and spins. Anyone alive takes it: the players' loop
   (the dropper too once respawned), then the bots.
 - MP bots die through `NDrone2_DSTATE_BotDeathAnim` 0x175508 (update case 3) / `BotDeathByExplosion` 0x1755a8, which
-  call `DroneWeap_DropWeapon` like the guards (with its `Rand_FRand` draws). Not ported (see Port).
+  call `DroneWeap_DropWeapon` like the guards (with its `Rand_FRand` draws). A round's or a punch's death enters 0xF2
+  (`NDrone2_DealWithObjHit` 0x13fff0 case 0x27's MP arm, `NDrone2_PunchImpact`/`BulletImpact`), and its UPDATE drops;
+  a blast death enters 0xF3 (`NDrone2_ExplosiveImpact` 0x146480's MP arm, `param_3 = 0xf3`), whose ENTER drops right
+  after `MP_PlayerKilled`. `Drone_SM_SetState` 0x1758c0 only queues the state; the route applies it (EXIT, ENTER).
+  The held byte is `anim+0x62`, written with `Drone+0x768` by `BOTWEAP_changeWeapon` 0x12a028. Ported (mp-bot-drops):
+  `Sim::mp_bot_death_drop`; the shot death drops on the next tick's bot pass, the blast death on the kill; the gun's
+  matrix is the bot body's resting gun matrix (the human drop's stand-in), not the posed datum.
 - Level placements (`parsemap_create_dynamic_objects`), scripts (`Script_CreateEntity`), `GT_Update`,
   `Pickup_CreateFromSet` (types 7–11): see the port's loaders.
 
@@ -166,6 +172,7 @@ mp-drops:
 - The online respawn wait is limit + 1 ticks like the offline one.
 - The kit's 10 → 0xC on a finished game: `init_level_loadout_ex(.., game_complete)`, fed by the app's level loads
   (`load_front_end_gc`). The other `Upgrade_Weapon` tables need the `Upgrades` row (not in this tree).
-- Not ported: the bots' own death drops (`DroneWeap_DropWeapon` from the bot death states; it draws `Rand_FRand`,
-  so it moves the shared stream); `MP_RegisterPickup`'s 64-slot cap and its eviction of the shortest-lived
+- The bots' own death drops (mp-bot-drops): `Sim::mp_bot_death_drop` from the bot death states (one `Rand_FRand`
+  per drop, two for the AR, on the shared stream), through the reserved draw slots (2 per body per weapon, humans
+  and bots). Not ported: `MP_RegisterPickup`'s 64-slot cap and its eviction of the shortest-lived
   registered pickup; the Professional Mode one-gun swap in the match take (`MPSettings+0x1BC`, 0x18e650:168-200).
