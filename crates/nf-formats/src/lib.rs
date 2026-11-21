@@ -9,6 +9,7 @@ pub mod character;
 pub mod collision;
 pub mod crp;
 pub mod crp_mesh;
+pub mod geoprim;
 pub mod disc;
 pub mod drone;
 pub mod ee;
