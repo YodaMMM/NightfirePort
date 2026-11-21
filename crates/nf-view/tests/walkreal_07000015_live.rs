@@ -1255,6 +1255,20 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
         w.walk_to(Wp::new(34.6, 41.4, 23.0).r(0.8), "the door[39] south stop (the fights answer the plank pair here)");
         w.walk_to(Wp::new(34.6, 41.4, 8.0).r(0.8), "the plank fuse retreat (out of the pop's reach)");
         for _ in 0..360 { w.tick(nf_game::player::Input::default(), false); }
+        // s/walks-1121-15-1b: the two plank grenadiers (#7, #8, skin 0x50000b2, the AR) stand
+        // ~10 u north of door[39] and shot Bond down in the leaf as it opened on the walk to the
+        // node (t5825, 6 hits of 7.0 [L the 2026-11-21 ledger]). A player opens door[39] from
+        // its south side and answers whoever the opened leaf shows before stepping through.
+        w.walk_to(Wp::new(34.6, 41.4, 23.0).r(0.8), "the door[39] south stop (the leaf opened from here)");
+        {
+            // The leaf on Bond's floor (door_near is xz-only and finds the deck below's twin).
+            let di = { let s = w.scene.sim.as_ref().unwrap();
+                (0..s.drones.doors.list.len()).min_by(|&a, &b| {
+                    let d3 = |i: usize| { let p = s.drones.doors.list[i].pos; (p[0] - 34.6).powi(2) + (p[1] - 41.6).powi(2) + (p[2] - 25.1).powi(2) };
+                    d3(a).total_cmp(&d3(b)) }).unwrap() };
+            w.use_door(di, "door[39] from its south stop");
+        }
+        hold_react(&mut w, 300, "the door[39] south stop", &|w: &Walker| live_near(w, 20.0));
         w.walk_to(Wp::new(34.6, 41.4, 28.0).r(1.2), "the door[39] north node (the fuse waited out)");
     } else {
         w.walk_route(route_a);
@@ -1338,7 +1352,18 @@ fn walk_spawn_to_the_omega_sector_exit_at(difficulty: u32) {
     // aimed stand taps only an EXPOSED part (an UNSEEN bail costs no ammo and no exposure),
     // resolved by skin so no other guard eats the stand.
     let (route_b1a, route_b1b) = route_b1.split_at(route_b1.iter().position(|(l, _)| *l == "the nav lane east").unwrap());
-    w.walk_route(route_b1a);
+    if difficulty >= 3 && !w.tops_up() {
+        // s/walks-1121-15-1b: the desk-corner pair (#2 AR, #3 rifle) shot Bond down on the walk
+        // up to door[47] north, before the stands below could run (t7622, 18.0 in 3 from #2 [L
+        // the 2026-11-21 ledger]). The last leg is walked the way a player crosses under guns:
+        // any guard the gun rays reach is answered at once, then the walk resumes.
+        let (head, last) = route_b1a.split_at(route_b1a.len() - 1);
+        w.walk_route(head);
+        let to = last[0].1.at;
+        walk_react(&mut w, to, 1.2, "the door[47] north leg", &|w: &Walker| live_near(w, 18.0));
+    } else {
+        w.walk_route(route_b1a);
+    }
     if difficulty >= 3 && !w.tops_up() {
         // real-health-00agent-15-6 (the run15j/l lever): the desk stands ENGAGED both guards
         // (they are exposed from door[47] north) but the fights left the AR with 1-2 rounds
@@ -2299,9 +2324,15 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage() {
 /// (#14, #12, #13, one round each). Measured on this tree: green, health 58.6 from the silo
 /// crossing to the exit (the opening crossing still costs 41.0).
 #[test]
-#[ignore = "s/g019-sky-2 (guards drop a finished voice line every control pass): Bond dies t6088 at (34.84,41.41,26.80) at the door[39] north node (#8's 0x1a grenade, -38.0) [L 2026-11-21 run]. Levers tried and dead: 16 single stops 500-8000 and 81 random 1-3-stop runs (46 die at the fence/plank, 26 at the door[29] west lane, 8 in the hall); re-tune and un-ignore"]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
-    walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(3));
+    // s/walks-1121-15-1b: un-ignored. Two route changes (the door[39] leaf opened from its south
+    // stop with the pair answered there; the door[47] north leg walked answering fire) carry
+    // Bond past the plank and the desk corner, and a 60-tick stop at tick 6950 re-rolls the
+    // tail [L the 2026-11-21 sweep: 6900/60, 6950/60, 7000/60 complete; 7000/45, 7000/75,
+    // 7050/60, 7100/60 and 25 other stops die]. The guards' hit chance and burst timing at
+    // the death were read against DroneWeap_DoBulletAccuracy 0x179740 and DroneWeap_BurstDelay
+    // 0x179ba8 and match.
+    walker::with_real_damage_head_hunting(|| walker::with_pause(6950, 60, || walk_spawn_to_the_omega_sector_exit_at(3)));
 }
 
 #[test]
