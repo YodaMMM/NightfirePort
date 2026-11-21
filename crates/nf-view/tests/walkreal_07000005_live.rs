@@ -1364,7 +1364,7 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
                 // real-damage variant's opt-in only — the plain walked test and the sisters keep
                 // the proven master legs (each variant stores its own gate value first, so a
                 // death panic above cannot leak the lever into the next test).
-                if name == "the stairs 28" && REAL_DAMAGE_BACKOFF.load(std::sync::atomic::Ordering::Relaxed) {
+                if name == "the stairs 28" && REAL_DAMAGE_BACKOFF.with(|c| c.get()) {
                     let armed = w.switch_to_armed("the stair-top pre-emptive");
                     // Open the stand on a full clip: under the held-sight rule (the chat-gate
                     // look_for_opponent [M 0x177ed0:26-28]) the pair engages at 5-7 u and a stand
@@ -1829,16 +1829,18 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
 /// pre-emptive stands at the cable route's end (the d >= 3 sniper arms' shape), inside the
 /// 3.0 auto-hit band [M DroneWeap_DoBulletAccuracy 0x179740:113-115]. The plain (top-up)
 /// walked test keeps the master tactic.
-static REAL_DAMAGE_BACKOFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Per thread: libtest runs the sisters side by side, and a process-wide flag set by one
+/// variant ran the pre-emptive stands in whichever sister was walking at the time.
+thread_local! { static REAL_DAMAGE_BACKOFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 #[test]
 fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
     // The explicit store at entry (not only the plain variant's set): a death PANIC above skips
     // this static's restore and would leak the lever into the sisters that run later in the same
     // binary — each variant pins its own gate value first.
-    REAL_DAMAGE_BACKOFF.store(true, std::sync::atomic::Ordering::Relaxed);
+    REAL_DAMAGE_BACKOFF.with(|c| c.set(true));
     walker::with_real_damage(the_door_band_exit_chains_to_07000006_walked);
-    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
+    REAL_DAMAGE_BACKOFF.with(|c| c.set(false));
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
@@ -1856,7 +1858,7 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
     // gated d >= 3 in the body so this sister's RNG stays the proven one. The explicit store:
     // the plain variant's death panic skips its restore — without this the leaked lever would
     // run the pre-emptive stands here too.
-    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
+    REAL_DAMAGE_BACKOFF.with(|c| c.set(false));
     walker::with_real_damage(|| the_door_band_exit_chains_to_07000006_walked_at(2))
 }
 
@@ -1876,7 +1878,7 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
     // Bond's pain is unscaled, so every tick a fight stands is a tick of bursts — the head pick
     // halves the stand time. The explicit store: the plain variant's death panic skips its
     // restore — without this the leaked lever would run the pre-emptive stands here too.
-    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
+    REAL_DAMAGE_BACKOFF.with(|c| c.set(false));
     walker::with_real_damage_head_hunting(|| the_door_band_exit_chains_to_07000006_walked_at(3))
 }
 

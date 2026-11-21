@@ -48,7 +48,8 @@ fn type_digit(w: &mut Walker, digit: u8) {
 
 /// walk-0a-de-teleport: the Operative real-damage walk is RECORDED (the 0b pattern): set by
 /// that test only (the plain walk tops health up — a write a replay cannot carry).
-static REC_0A: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Per thread (libtest runs the walks side by side; only the setting test records).
+thread_local! { static REC_0A: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 const REC_0A_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000a_operative.bin");
 thread_local! {
     static REC_0A_RECORDER: std::cell::RefCell<Option<nf_view::replay::Recorder>> = const { std::cell::RefCell::new(None) };
@@ -868,7 +869,7 @@ fn walk_qworm_and_back() -> Walker { walk_qworm_and_back_at(1) }
 /// `walk_qworm_and_back` at `difficulty` (2 = the front-end's launch path, see load_carry_at).
 fn walk_qworm_and_back_at(difficulty: u32) -> Walker {
     let mut w = load_carry_at(None, difficulty);
-    if difficulty == 1 && REC_0A.load(std::sync::atomic::Ordering::Relaxed) {
+    if difficulty == 1 && REC_0A.with(|c| c.get()) {
         // The header snapshots the warm load's RNG / pose / weapon / option rows before the
         // first recorded tick (replay_parity_0700000a.rs rebuilds the same warm load).
         let rec = nf_view::replay::Recorder::start(&w.scene, REC_0A_PATH, "0700000a.bin", None, false,
@@ -2086,9 +2087,9 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
 /// 0x12c5a0:166-184 + 0x180498:349]) — the dead-on port gap fixed this round.
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
-    REC_0A.store(true, std::sync::atomic::Ordering::Relaxed);
+    REC_0A.with(|c| c.set(true));
     walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
-    REC_0A.store(false, std::sync::atomic::Ordering::Relaxed);
+    REC_0A.with(|c| c.set(false));
 }
 
 /// The laser band rule, pinned phase by phase on fresh loads (each phase asserts right after its
