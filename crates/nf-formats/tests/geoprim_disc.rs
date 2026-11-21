@@ -14,16 +14,18 @@ use nf_formats::iso9660::IsoImage;
 /// (archive, placements naming a part, unresolved parts, strips, triangles, road nodes, road
 /// nodes with a decoded surface within 1 m) [D measured]. The node coverage is pinned exactly: a
 /// wrong vertex rule or placement direction moves it (read as the inverse matrix, paris's placed
-/// geometry had a surface within 6 m of only 82 of the 880 nodes — docs/formats/geoprim.md §4).
+/// geometry had a surface within 6 m of only 82 of the 880 nodes — docs/formats/geoprim.md §4;
+/// decoding each entry object's own batch instead of its draw chain gave 772/307/272/198 for
+/// MIS01/MIS3/MIS4/RACE — §4b).
 const COUNTS: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
-    ("MIS01", 2552, 86, 58207, 247883, 880, 772),
-    ("MIS11", 1958, 107, 45598, 295427, 136, 3),
-    ("MIS13A", 3021, 76, 55571, 329931, 88, 78),
-    ("MIS13B", 1412, 24, 20325, 120176, 56, 46),
-    ("MIS13C", 371, 21, 5260, 30583, 0, 0),
-    ("MIS3", 3689, 65, 58496, 261927, 348, 307),
-    ("MIS4", 3331, 45, 43017, 185514, 440, 272),
-    ("RACE", 3314, 45, 42742, 181958, 345, 198),
+    ("MIS01", 2552, 86, 60327, 257412, 880, 806),
+    ("MIS11", 1958, 107, 40275, 281548, 136, 0),
+    ("MIS13A", 3021, 76, 55963, 325807, 88, 88),
+    ("MIS13B", 1412, 24, 22347, 121974, 56, 50),
+    ("MIS13C", 371, 21, 5657, 32086, 0, 0),
+    ("MIS3", 3689, 65, 61842, 283733, 348, 336),
+    ("MIS4", 3331, 45, 43977, 184494, 440, 419),
+    ("RACE", 3314, 45, 43421, 180393, 345, 332),
 ];
 
 /// `RNgp` — the road-network article; `rn  #i` node records, payload +0x00 = x,y,z
@@ -123,7 +125,8 @@ fn every_driving_track_decodes_with_the_road_under_the_network() {
         eprintln!("skip: no /DRIVING/ extents in this image");
         return;
     }
-    for &(viv, placements, unresolved, strips, tris, n_nodes, n_near) in COUNTS {
+    let mut got = Vec::new();
+    for &(viv, ..) in COUNTS {
         let dec = track_crp(&iso, viv).unwrap_or_else(|| panic!("{viv}: no track .crp"));
         let g = track_geometry(&dec).unwrap_or_else(|e| panic!("{viv}: {e}"));
         let crp = Crp::parse(&dec).unwrap();
@@ -138,8 +141,8 @@ fn every_driving_track_decodes_with_the_road_under_the_network() {
             "{viv}: placements {} unresolved {} strips {} tris {} | road nodes {} with a surface within 1 m {near} | start {:?}",
             g.placements, g.unresolved_parts, g.strips.len(), tri_count(&g), nodes.len(), start
         );
-        assert_eq!((g.placements, g.unresolved_parts, g.missing_models, g.strips.len(), tri_count(&g)), (placements, unresolved, 0, strips, tris), "{viv} counts");
-        assert_eq!((nodes.len(), near), (n_nodes, n_near), "{viv}: road nodes / nodes over a surface");
+        got.push((viv, g.placements, g.unresolved_parts, g.strips.len(), tri_count(&g), nodes.len(), near));
+        assert_eq!(g.missing_models, 0, "{viv}: model references without a module symbol");
         assert!(g.strips.iter().all(|s| s.positions.iter().all(|p| p.iter().all(|c| c.is_finite()))), "{viv}: non-finite vertex");
         // The underwater track (MIS11: the network is the submarine's path through open water) and
         // MIS13C (no road nodes) have no road under the start.
@@ -148,6 +151,7 @@ fn every_driving_track_decodes_with_the_road_under_the_network() {
             assert!(s.is_some(), "{viv}: no surface within 4 m of the car start {p:?}");
         }
     }
+    assert_eq!(got, COUNTS.to_vec(), "(track, placements, unresolved, strips, triangles, road nodes, nodes over a surface)");
 }
 
 #[test]
@@ -172,7 +176,8 @@ fn the_road_surface_matches_the_collision_world_at_paris() {
         }
     }
     eprintln!("paris: render and collision both under {both} nodes, agree within 5 cm at {agree}");
-    assert!(both >= 600 && agree * 10 >= both * 9, "render/collision agreement {agree}/{both}");
+    // Drawn from the entry objects' own batches (the pre-chain reading) this was 730 of 739.
+    assert!(both >= 750 && agree + 5 >= both, "render/collision agreement {agree}/{both}");
 }
 
 /// The collision world as strips: `CDat ci#0` 0x40-byte items (rotation rows at +0/+0x20, the
@@ -242,7 +247,7 @@ fn collision_strips(crp: &Crp<'_>) -> Vec<WorldStrip> {
                 let v: Vec<[f32; 3]> = (0..n).map(|k| world([f(c, cur + k * 16), f(c, cur + k * 16 + 4), f(c, cur + k * 16 + 8)])).collect();
                 for k in 2..n {
                     if u32::from_le_bytes(c[cur + k * 16 + 12..cur + k * 16 + 16].try_into().unwrap()) & 1 != 0 {
-                        out.push(WorldStrip { article: name.clone(), part: 0, placement: 0, texture: None, positions: v[k - 2..=k].to_vec(), uvs: Vec::new() });
+                        out.push(WorldStrip { article: name.clone(), part: 0, placement: 0, texture: None, positions: v[k - 2..=k].to_vec(), uvs: Vec::new(), colors: Vec::new() });
                     }
                 }
                 cur += n * 16;
@@ -280,6 +285,87 @@ fn every_texture_a_track_names_is_in_its_sheets() {
         let missing: Vec<&String> = used.iter().filter(|t| !names.contains(*t)).collect();
         let untextured = g.strips.iter().filter(|s| s.texture.is_none()).count();
         eprintln!("{viv}: {} textures used, {} not in the track/common sheets {:?}; {untextured} untextured strips", used.len(), missing.len(), &missing[..missing.len().min(8)]);
-        assert!(missing.len() * 20 <= used.len(), "{viv}: {} of {} textures missing from the sheets", missing.len(), used.len());
+        // Only the exporter's `badshapereference` placeholder (descriptor name `bads`) is absent.
+        assert!(missing.iter().all(|t| t.as_str() == "bads"), "{viv}: textures missing from the sheets {missing:?}");
     }
+}
+
+/// The draw-chain reading against the entry objects' own batches, on every track, with two
+/// independent checks (docs/formats/geoprim.md §4b):
+/// 1. a model's `Colours` list (model `+0xb8` → `{0, name, n, 0}` + n × `{u16 vertex count, u16,
+///    stride, base, flag}`) names one vertex count per group entry [D]; compare it with the counts of
+///    the chain batches and of the objects' own batches;
+/// 2. the model's vertices against its article's `Base` box (+ 1/128 slack), for 16-bit-position
+///    batches.
+/// Pinned per track: (models with a Colours list, lists matching the chain, lists matching the own
+/// batches, models whose chain lies in the box, models whose own batches do, coloured strips).
+const CHAIN: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
+    ("MIS01", 1357, 1357, 81, 1871, 394, 59950),
+    ("MIS11", 314, 304, 0, 716, 266, 40738),
+    ("MIS13A", 743, 743, 24, 1232, 424, 27314),
+    ("MIS13B", 851, 851, 86, 1834, 472, 28578),
+    ("MIS13C", 237, 237, 36, 616, 244, 12124),
+    ("MIS3", 762, 744, 8, 1750, 754, 26622),
+    ("MIS4", 1142, 1136, 94, 1792, 452, 21418),
+    ("RACE", 1142, 1136, 106, 1789, 448, 21539),
+];
+
+#[test]
+fn the_draw_chain_not_the_entry_object_holds_each_models_geometry_and_colours() {
+    use nf_formats::crp_mesh::TrackModule;
+    use nf_formats::geoprim::{decode_packet, decode_vif, ModelIndex};
+    let Ok(path) = std::env::var("NF_ISO") else { eprintln!("skip: NF_ISO not set"); return };
+    let iso = IsoImage::open(&path).expect("open NF_ISO");
+    if track_crp(&iso, "MIS01").is_none() {
+        eprintln!("skip: no /DRIVING/ extents in this image");
+        return;
+    }
+    let mut got = Vec::new();
+    for &(viv, ..) in CHAIN {
+        let dec = track_crp(&iso, viv).unwrap();
+        let crp = Crp::parse(&dec).unwrap();
+        let module = TrackModule::load(&crp).unwrap();
+        let ix = ModelIndex::new(&module).unwrap();
+        let img = &module.image;
+        let rd = |p: u32| -> Option<u32> {
+            let a = ix.data_offset + p as usize;
+            img.get(a..a + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        };
+        let boxes: HashMap<String, ([f32; 3], [f32; 3])> =
+            crp.track_articles().unwrap().into_iter().map(|a| (a.name, (a.bbox_min, a.bbox_max))).collect();
+        let (mut lists, mut chain_ok, mut own_ok, mut box_chain, mut box_own, mut boxed) = (0, 0, 0, 0, 0, 0);
+        let mut coloured = 0;
+        for s in &module.symbols {
+            let Some(name) = s.name.strip_prefix("__Model:::") else { continue };
+            let part = ix.model_part(s.value).unwrap();
+            let entries = ix.model_packets(s.value).unwrap();
+            let chain: Vec<Vec<_>> = entries.iter().map(|&po| decode_vif(img, &ix.draw_chain(po, part).unwrap(), po).unwrap()).collect();
+            let own: Vec<Vec<_>> = entries.iter().map(|&po| decode_packet(img, po).unwrap()).collect();
+            coloured += chain.iter().flatten().filter(|s| !s.colors.is_empty()).count();
+            let n_of = |v: &Vec<Vec<nf_formats::geoprim::LocalStrip>>| -> Vec<usize> { v.iter().map(|b| b.iter().map(|s| s.positions.len()).sum()).collect() };
+            // 1. the Colours list
+            let cl = rd(s.value + 0xb8).unwrap();
+            let (cname, n) = (rd(cl + 4).unwrap(), rd(cl + 8).unwrap() as usize);
+            if cname == rd(s.value).unwrap() && n <= 64 {
+                lists += 1;
+                let counts: Vec<usize> = (0..n).map(|i| (rd(cl + 0x10 + 16 * i as u32).unwrap() & 0xffff) as usize).collect();
+                let (c, o) = (n_of(&chain), n_of(&own));
+                chain_ok += (c.len() >= counts.len() && c[..counts.len()] == counts[..]) as usize;
+                own_ok += (o.len() >= counts.len() && o[..counts.len()] == counts[..]) as usize;
+            }
+            // 2. the Base box
+            let article = name.split("::").next().unwrap();
+            if let Some((lo, hi)) = boxes.get(article) {
+                let inside = |v: &Vec<Vec<nf_formats::geoprim::LocalStrip>>| {
+                    v.iter().flatten().flat_map(|s| s.positions.iter()).all(|p| (0..3).all(|k| p[k] >= lo[k] - 1.0 / 128.0 && p[k] <= hi[k] + 1.0 / 128.0))
+                };
+                boxed += 1;
+                box_chain += inside(&chain) as usize;
+                box_own += inside(&own) as usize;
+            }
+        }
+        eprintln!("{viv}: Colours lists {lists}: match chain {chain_ok}, own {own_ok} | {boxed} models with a box: chain inside {box_chain}, own inside {box_own} | coloured strips {coloured}");
+        got.push((viv, lists, chain_ok, own_ok, box_chain, box_own, coloured));
+    }
+    assert_eq!(got, CHAIN.to_vec());
 }

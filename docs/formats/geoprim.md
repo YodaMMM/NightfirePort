@@ -50,21 +50,26 @@ a part with a model. `Wmap` + `wn#1..94` index these items spatially (`wn` u16 l
 - `__Model:::<…>::Model[0].XX` symbol (a `.data` offset; the image holds `.data` at file offset
   0x40, and every relocated pointer is `.data`-relative): `+0x00` parent (`Colours` block with the
   texture name), `+0xc0` u32 = XX, `+0xc8` u32 group count, `+0xcc` pointer to the group table.
-  The parts of one article share the table and differ in their colour data: paris `S04_s4s_00`'s
-  36 parts all draw the same 2 packets.
+  The parts of one article share the table and differ only in `+0xc0` (the part index, which
+  selects per-part colours and textures, §4b) and the small `+0xbc` block; paris `S04_s4s_00`'s 36
+  parts all draw the same 2 batches with 36 different colour sets.
+- `+0xb8` → the model's `Colours` list when it has one: `{0, → "Colours", n, 0}` then n × 16-byte
+  `{u16 vertex count, u16 7, stride, base, flag}` — one per group entry, `base` = part 0's colour
+  bytes, `stride` = the distance between two parts' colour uploads [D]. The draw does not read it
+  (the interpreter indexes the op-4 table instead, §4b); it serves here as an independent check.
 - Group table: `{0xA0000000, 0, 2n}` then n × `{0xA000FFFF, packet}`. The table is one array for
   the whole module; each article's pointer is its own first group: the first group's packet header
   names that same article for every article with models (paris 467, MIS4 479, MIS3 416 — no
   exception).
 - Packet: `+0x00` → GeoPrim header (`+0x00` render-method list, `+0x14` name string), `+0x08` DMA
-  tag (`0x6000xxxx`, low 16 bits = quadwords), `+0x10` VIF codes. The render-method list's first
-  `0x0300000N` word is followed by a `__EAGL::TAR:::{…}TEX0::<name>` pointer = the texture. A list
-  without one keeps the previous packet's texture (inferred; the EAGL state machine is not traced).
+  tag (`0x6000xxxx`, low 16 bits = quadwords), `+0x10` VIF codes. **The game does not draw this
+  batch for this entry** — see §4b for what it draws. Texture: §4b. A list that names no texture
+  keeps the previous entry's (inferred; the EAGL state machine is not traced).
 
 ## 4. The VIF batch [D]
 
-One batch per packet (paris: 1,778 of 1,779 packets carry one header + one `MSCNT`; the other is
-empty):
+One batch per packet object (paris: 1,778 of 1,779 carry one header + one `MSCNT`; the other is
+empty). Which batch an entry draws, and its colours, is in §4b.
 
 | unpack | meaning |
 |---|---|
@@ -73,29 +78,89 @@ empty):
 | `V3-16` usn | position = (u16 − 0x8000) / 256 |
 | `V3-32` (masked; mask leaves x/y/z as data) | position as floats (sky, water, some windows and lights) |
 | `V2-16` usn / `V2-32` | UV, same rule / floats |
-| `V4-8` ×count, `V3-8` | colours / normals (not decoded) |
+| `V3-8` masked, usn | per-vertex colour R, G, B (§4b) |
+| `V4-32` (other addresses), second `V3`/`V2` sets | not decoded (layout depends on the microcode) |
 
 Proof of the rules: the /256 rule reproduces each article's `Base` box to 1/256 (e.g.
 `S12_RiverBnk_n_Road_00` −14.0078..14.207 × −3.5..4.5 × −30.0078..30.0078); every strip-list byte
 of all 8 tracks is a multiple of 3 below 3 × count and the ends fall on the geometric breaks; road
-strips span v = 0..1. With the placements of §2 (tests, `NF_ISO`):
+strips span v = 0..1. With the placements of §2 and the draw chains of §4b (tests, `NF_ISO`):
 
-| track | placements (unresolved) | strips | triangles | road nodes | surface within 1 m |
+| track | placements (unresolved) | strips | triangles | road nodes | surface within 1 m (own-batch reading) |
 |---|---|---|---|---|---|
-| MIS01 paris | 2552 (86) | 58,207 | 247,883 | 880 | 772 |
-| MIS11 underwater | 1958 (107) | 45,598 | 295,427 | 136 | 3 (open water) |
-| MIS13A | 3021 (76) | 55,571 | 329,931 | 88 | 78 |
-| MIS13B | 1412 (24) | 20,325 | 120,176 | 56 | 46 |
-| MIS13C | 371 (21) | 5,260 | 30,583 | 0 | — |
-| MIS3 snow1a | 3689 (65) | 58,496 | 261,927 | 348 | 307 |
-| MIS4 snow2a | 3331 (45) | 43,017 | 185,514 | 440 | 272 |
-| RACE snow2a | 3314 (45) | 42,742 | 181,958 | 345 | 198 |
+| MIS01 paris | 2552 (86) | 60,327 | 257,412 | 880 | 806 (772) |
+| MIS11 underwater | 1958 (107) | 40,275 | 281,548 | 136 | 0 (3) (open water) |
+| MIS13A | 3021 (76) | 55,963 | 325,807 | 88 | 88 (78) |
+| MIS13B | 1412 (24) | 22,347 | 121,974 | 56 | 50 (46) |
+| MIS13C | 371 (21) | 5,657 | 32,086 | 0 | — |
+| MIS3 snow1a | 3689 (65) | 61,842 | 283,733 | 348 | 336 (307) |
+| MIS4 snow2a | 3331 (45) | 43,977 | 184,494 | 440 | 419 (272) |
+| RACE snow2a | 3314 (45) | 43,421 | 180,393 | 345 | 332 (198) |
 
-Paris cross-check: under 739 road nodes both the render surface and the `CDat` collision surface
-exist; they agree within 5 cm at 730. The `CDat ci#0` items are the inverse kind of matrix
-(world → local): `world_j = row_j · (local − t)` with rows at +0x00/(0,1,0)/+0x20 and t at +0x30.
-Every texture named by MIS01/MIS11/MIS13B/MIS13C/MIS4/RACE is in the track `.ssh` or
-`data\render\common.ssh`; MIS13A and MIS3 each name one missing `badshapereference`.
+Paris cross-check: under 762 road nodes both the render surface and the `CDat` collision surface
+exist; they agree within 5 cm at 760 (the own-batch reading: 730 of 739). The `CDat ci#0` items are
+the inverse kind of matrix (world → local): `world_j = row_j · (local − t)` with rows at
++0x00/(0,1,0)/+0x20 and t at +0x30. Every texture named by the 8 tracks is in the track `.ssh` or
+`data\render\common.ssh`, except the exporter's `badshapereference` placeholder (`bads`) on
+MIS4/RACE.
+
+## 4b. What a group entry draws: the render list's DMA chain [M + D]
+
+**Draw path** [M `FUN_002843a0` 0x2843a0]: the model draw sets the global
+`DAT_003483fc = model +0xc0` (the part index), then for each group entry `{0xA000FFFF, E}` calls
+the render-method interpreter `FUN_002a3290(*E)` — on the GeoPrim header, whose `+0` is the
+instruction list. The interpreter [M 0x2a3290] switches on the top byte; the lengths used to walk
+a list are: ops 1 and 4 = 2 words, 2 = n + 2, 3 = 1 + n, 5/6/7 = 3 + n (n = low 16 bits),
+0xe/0xf = 1, 0 = end. Every list of the 8 tracks walks cleanly with these and holds exactly one
+op 4 [D].
+
+**Op 4** (`0x04000002`, pointer T) copies 2 doublewords from `T + 16 × DAT_003483fc` into the DMA
+chain [M case 4]. Each table entry is a DMA `call` tag with no payload (`0x50000000`, address X)
+[D, every entry reached in the 8 tracks]. X is either
+- a `call` tag (DMA id 5): payload = the part's colour upload (`STMASK 0x40404040`, optionally
+  `STROW (0,0,0,0x80)`, `UNPACK V3-8` masked usn, num = vertex count), address = a `ret` tag
+  (id 6) whose payload is the geometry batch shared by all parts; or
+- a `ret` tag (id 6): one batch with the geometry and, when present, its colours.
+
+Paris counts: 6,091 call-shaped and 1,450 ret-shaped table entries reached over all models. The
+colour calls of one batch sit one stride apart; in all 1,057 paris runs the first call is
+referenced by nothing and every later one by a table [D]; the first one's purpose is unknown.
+
+**The geometry is not the entry object's own batch.** Paris `S04_s4s_00` entry 0x36858's list
+calls the batch stored in object 0x355f8 (8 vertices, header named `P_Fern … _218`); the batch
+stored in 0x36858 itself (60 vertices) is called by the next entry's list. Proof, all 8 tracks
+(`the_draw_chain_not_the_entry_object_holds_each_models_geometry_and_colours`):
+
+| track | `Colours` lists | match chain counts | match own counts | models with a box | chain inside box | own inside box |
+|---|---|---|---|---|---|---|
+| MIS01 | 1357 | 1357 | 81 | 1890 | 1871 | 394 |
+| MIS11 | 314 | 304 | 0 | 727 | 716 | 266 |
+| MIS13A | 743 | 743 | 24 | 1283 | 1232 | 424 |
+| MIS13B | 851 | 851 | 86 | 2105 | 1834 | 472 |
+| MIS13C | 237 | 237 | 36 | 709 | 616 | 244 |
+| MIS3 | 762 | 744 | 8 | 1823 | 1750 | 754 |
+| MIS4 | 1142 | 1136 | 94 | 1889 | 1792 | 452 |
+| RACE | 1142 | 1136 | 106 | 1886 | 1789 | 448 |
+
+("box" = the article's `Base` box + 1/128.) The road-node coverage and the collision agreement
+(§4) rise with the chain reading on every track with roads.
+
+**Colours** [D]: every `UNPACK V3-8` reached by a chain has STMASK 0x40404040 (x/y/z from the
+data, w from the row), VIF mode 0 and num = the batch's vertex count; the decoder takes the three
+bytes as R, G, B (`LocalStrip::colors`). The values are night lighting: e.g. `S04_s4s_00` part 1
+reads 0x3d4251 / 0x191d26 (dim blue-grey) with lamp-lit vertices up to 0x7e839e, where the GS
+convention makes 0x80 = 1.0 for a modulated texture. Paris: 59,950 of 60,327 strips carry colours.
+Unproven: that the VU1 microcode passes these to the GS unchanged (eaglrm.o is not disassembled),
+the alpha (the row's w, 0x80 where the chain sets STROW, otherwise inherited VIF state), and the
+purpose of the unreferenced first colour call.
+
+**Textures** [M case 3 / case 6, D]: op 3 (`0x0300000N`) carries N words whose top two bits pick
+the descriptor: 0 = the word, 1 = word + part × 0x60, 2 = a run-time table, 3 = none; op 6
+(`0x06KK00NN`) carries one at +8, plus KK × part × 0x60. So a part can carry its own texture
+(paris: 1,938 mode-1 words, all resolving to a descriptor; `P_building3_12seg` part 10 → the
+descriptor labelled `pb01_10`). The sheet name is the descriptor's +4 word (≤ 4 ASCII bytes): it
+equals the `TEX0::` tail on every `{T0@…}` descriptor, while the per-part `{T0|…}` descriptors'
+tails are export labels (`pb01_1` → sheet `pb02`) [D].
 
 ## 5. Sky and ground [D]
 
@@ -109,12 +174,35 @@ Every texture named by MIS01/MIS11/MIS13B/MIS13C/MIS4/RACE is in the track `.ssh
 
 ## 6. Open
 
-1. The VU1 microcode (eaglrm.o) was not disassembled; the /256 scale and the strip-list unit are
-   data-proven only.
-2. MIS4/RACE: fewer road nodes have a decoded surface (272/440, 198/345), and render and collision
-   coverage of the nodes differ there (both present at 225 of 440 within 4 m). Some articles' render
-   model is far smaller than their collision tile (`PTSR2_dd_45`: a 10-vertex piece vs a 40 × 24
-   collision tile). Whether another article draws those surfaces, or a mission-phase switch hides
-   them, is not settled.
-3. The sky draw rule; colours/normals; the texture carry-over between packets.
+1. The VU1 microcode (eaglrm.o) was not disassembled; the /256 scale, the strip-list unit and the
+   colour pass-through are data-proven only.
+2. MIS4/RACE coverage: with the chain reading 419/440 and 332/345 road nodes have a surface within
+   1 m (was 272 and 198). The remaining gap is not examined.
+3. The sky draw rule; the texture carry-over between entries; the second UV/position sets and
+   `V4-32` blocks some layouts carry; the role of the `+0xbc` block and of `FUN_00285ca8` (run when
+   model `+0xd0` ≠ 0, before the part index is set).
 4. The car start used by the tests is the first `rn` node (the PR #5 rule), not a traced game rule.
+5. How the `Lighting` tuning (§7) combines with the per-vertex colours.
+
+## 7. Render tuning: fog and lighting (`crates/nf-formats/src/rendertun.rs`)
+
+Each track VIV carries `data\tuning\Render\Fog\<track>.tun` and `…\Lighting\<track>.tun`
+(RefPack; `Key=value` text). Keys are the tuner names without spaces (`fog START` → `fogSTART`).
+
+- **Fog** [M `FUN_001ac668` 0x1ac668 registers `fog START` → +0x10 (1..5000), `fog END` → +0x24,
+  `fog mode` → +0x1c (0..3), `fog Density` → +0x18 (0..1), `Fog Colour` → +0x20]. The colour
+  string `a,b,c,d` is scanned as four ints and stored `a<<24 | d<<16 | c<<8 | b` (b unmasked)
+  [M `FUN_00144740`]; `FUN_001ac978` swaps bytes 0/2 and `FUN_0028cf98` swaps them back into GS
+  register 0x3d (FOGCOL), so FOGCOL R/G/B = the stored bytes 0/1/2: paris (22, 15, 20), snow1a
+  (40, 45, 50) from `255,-13488856,45,50`. The apply step also computes
+  `density × 255 / (end − start)` [M 0x1ac978]: paris 1..1450.21 with density 0.000475 gives
+  8.4e-5 — next to no fog — where the other tracks use density 1. `fog mode` is not read by the
+  apply step; how the VU code uses the slope is not traced.
+- **Lighting** [M `FUN_001ae630` 0x1ae630, the `RLightManager`]: four instances (`World`,
+  `Character`, `Unused1`, `Unused2`, 0x70 bytes apart) of `Ambient Sky` (+0xe0), `Ambient Ground`
+  (+0xd0), `Light 1` (+0xb0), `Light 2` (+0xc0) RGBA floats plus their angles, and globals
+  (`Enable light maps`, `Light map lighting bias`, `Sun height`, `Moon size`). `FUN_001b0158`
+  turns the angles into per-instance light matrices [M]. Paris `World`: sky ambient 0.72 grey,
+  ground 0, Light1 (0.90, 0.94, 1.00), Light2 0.478 grey; light maps off. Directional lights need
+  normals, which the colour-carrying world batches lack [D]; whether the `World` ambient scales
+  the per-vertex colours in the microcode is not traced.
