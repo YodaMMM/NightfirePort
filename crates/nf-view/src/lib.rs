@@ -4188,6 +4188,7 @@ impl App {
                 // (the drive replaced the scene); only that hand-off rebuilds the front end below.
                 let from_drive = self.driving.is_some();
                 self.driving = drv;
+                if let Some(d) = self.driving.as_mut() { d.start_audio(); }
                 self.driving_end_ticks = None;
                 self.swap_in_scene(scene, load.ptp_return);
                 if let Some(drv) = &self.driving {
