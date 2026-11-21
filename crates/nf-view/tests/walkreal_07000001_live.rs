@@ -1058,7 +1058,15 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // boxes (Walker::shield_boxes). In the ch-0xF pocket the settled contact stands ~0.7-1.3 u
     // off the line to the pocket guards; the cylinder cone held the trigger through the whole
     // pocket fight while the guards' SMG rounds reached Bond past him (t26967, t42850).
-    if difficulty == 2 { w.shield_boxes = true; }
+    // retune-nb-01-3 (d3, the 00 Agent sister of the same fight): the endgame return-fire
+    // stands + the determined pass on the mouth captain #3 held the trigger the same way —
+    // the settled contact sits between Bond and #3's mouth park, the cylinder+bloom cone
+    // (0.9 + 0.05·ds, capped 0.2464·ds) crossed him at every stand, and #3's shotgun landed
+    // 7.20-pellet volleys from 0.8-5.0 u while Bond fired ZERO rounds at exposed true (clip
+    // 5 spare 0 unchanged across two 1200-tick fight passes; death t80171, 58 hits [L the
+    // d3_r12_v1 run]). The hit-box cone is the same lever d2 shipped (t26967); d1 keeps the
+    // cylinder (its stream is pinned green).
+    if difficulty >= 2 { w.shield_boxes = true; }
     let guards: Vec<usize> = {
         let sim = w.scene.sim.as_ref().unwrap();
         (0..sim.drones.list.len()).filter(|&i| {
@@ -2970,6 +2978,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // now bounds the flank too: no approach into the mouth, the exit stays for the plate legs.
         let prev_flank_hold = w.flank_hold_x;
         w.flank_hold_x = Some(-27.0);
+        // retune-nb-01-3 (d3): the flank POINT gets the same pocket bound (walker.rs
+        // flank_point_x_min) — a mouth guard east of the park line could still flank Bond
+        // west INTO the pocket pack (the t83962 shape). d3 real damage only: the green
+        // d1/d2 walks keep their streams byte-identical.
+        let prev_flank_point = w.flank_point_x_min;
+        if difficulty >= 3 && !w.tops_up() { w.flank_point_x_min = Some(-27.0); }
         for sweep in 0..3 {
             let near: Vec<usize> = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -3016,6 +3030,44 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 if walker::dxz(gpos, bpos) > 9.0 && gpos[0] > -27.0 {
                     w.walk_nav_to(gpos, &format!("pre-stairwell approach guard {g2}"), 8.0);
                 }
+                // retune-nb-01-3 (d3, the contact-protection race): the contact's route ENDS in
+                // the pocket between the guards' parks, his pool is 10.0, and every pocket
+                // guard's head shot kills him — on the v4 stream #3's SMG head hit landed at
+                // t37277 while Bond's own #3 fight was still converging (the kill 400 ticks
+                // late, t37359 [L the NF_HEALTH_TRACE run]). The east-stand shoot can only
+                // HOLD at the walled parks (~1200-2400 ticks a guard, zero damage), so the
+                // pocket set is fought the recovery posture's way: the tap loop in place, and
+                // from a WALLED stand one band-checked north-edge stand retry (the plate-lane
+                // clear's own pick — #17's head exposes from the corridor's north edge [L the
+                // 01-2 clear-0 probe]). Walled everywhere = left at once (no lure — the 01-2
+                // v2 law). d3 real damage only; the green d1/d2 keep their streams.
+                if difficulty >= 3 && !w.tops_up() && gpos[0] < -27.0 {
+                    if !plate_pocket_fight(&mut w, g2, &format!("pre-stairwell pocket guard {g2} (in place)")) {
+                        let stand: [f32; 3] = {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let live: Vec<V3> = (0..sim.drones.list.len()).filter(|&i| {
+                                let d = &sim.drones.list[i];
+                                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                                    && d.pos[0] < -26.0
+                            }).map(|i| sim.drones.list[i].pos).collect();
+                            drop(sim);
+                            let candidates = [[-28.5f32, 16.5], [-29.0, 16.5], [-28.0, 15.5], [-27.0, 16.0], [-26.5, 15.5], [-24.9, 14.5]];
+                            candidates.into_iter()
+                                .find(|c| live.iter().all(|p| walker::dxz(*p, [c[0], p[1], c[1]]) >= 3.05))
+                                .map(|c| [c[0], 6.4, c[1]])
+                                .unwrap_or([-24.9, 6.4, 14.5])
+                        };
+                        if walker::dxz(bpos, stand) > 1.2 {
+                            let rf_stand = w.dmg.return_fire;
+                            w.dmg.return_fire = false;
+                            w.walk_nav_to(stand, &format!("pre-stairwell pocket stand {g2} (the north edge)"), 1.0);
+                            w.dmg.return_fire = rf_stand;
+                        }
+                        plate_pocket_fight(&mut w, g2, &format!("pre-stairwell pocket guard {g2} (the north edge)"));
+                    }
+                    if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                    continue;
+                }
                 if !w.shoot(g2, &format!("pre-stairwell guard {g2}")) {
                     if w.resupply("pre-stairwell ammo") { w.shoot(g2, &format!("pre-stairwell guard {g2} retry")); }
                 }
@@ -3026,6 +3078,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         }
         w.dmg.back_off = prev_back_off;
         w.flank_hold_x = prev_flank_hold;
+        w.flank_point_x_min = prev_flank_point;
     }
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
@@ -3035,6 +3088,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // and #17 at 0.7-1.9 u landed the last 50 hp (death t28813).
     let prev_flank_hold = w.flank_hold_x;
     if !w.tops_up() { w.flank_hold_x = Some(-27.0); }
+    // retune-nb-01-3 (d3, the ignore's lever 1, the endgame walk posture): the flank POINT
+    // stays east of the pocket line through the whole descent region — the stairwell-head
+    // nav, the plate-lane rounds and the plate nav run with the nav flank machinery live,
+    // and a mouth guard's perpendicular flank target walked Bond into the pocket pack (the
+    // t83962 death: flank (-31.6,16.6), #3/#17 at 0.8-0.9 u [L the 01-2 v3 run]). d3 real
+    // damage only; d1/d2 keep their streams byte-identical.
+    let prev_flank_point = w.flank_point_x_min;
+    if difficulty >= 3 && !w.tops_up() { w.flank_point_x_min = Some(-27.0); }
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
     // retune-nb-01 (d1, the 2026-11-21 run): the plate lane's pocket pair — REAL-DAMAGE
     // ONLY (the top-up walks keep their route byte-identical; this block walks and fights
@@ -3130,13 +3191,17 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                     // the arrived stand, no approach and no flank. `shoot_bounded`'s flank
                     // ladder walked Bond past #17's face at 1.1-1.3 u inside the 3.0 forced
                     // band [M 0x179740:100-110] (the v5-v9 deaths) even when he exposed from
-                    // the stand. d3 keeps the old machinery byte-identical (its ledger's
-                    // levers are the endgame economy, not this fight).
-                    if difficulty < 3 {
-                        plate_pocket_fight(&mut w, g, &format!("plate-lane guard {g} (round {round})"));
-                    } else {
-                        w.shoot_bounded(g, &format!("plate-lane guard {g} (round {round})"), 1800);
-                    }
+                    // the stand.
+                    // retune-nb-01-3 (d3 joins the loop; 01-2's "d3 keeps the old machinery"
+                    // pin is stale — its endgame economy levers landed and the death moved):
+                    // the old shoot_bounded held 1800-tick windows on the walled lane guards
+                    // (zero kills, "exposed false" every round, clip 21 spare 27 untouched)
+                    // while the contact walked the plate lane INTO their crossfire — his corpse
+                    // at the plate and the escort-fail restart at t78420 [L the d3_r12_v2 run].
+                    // The loop's walled-guard law (left at once, no windows, no lure) is the
+                    // contact-protection the phase needs; the exposed ones die to the head tap
+                    // (the d1 v3 run: #17 one tap, zero cost).
+                    plate_pocket_fight(&mut w, g, &format!("plate-lane guard {g} (round {round})"));
                     if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
                 }
                 if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
@@ -3150,6 +3215,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         }
     w.walk_nav_to(plate, "the plate", 1.2);
     w.flank_hold_x = prev_flank_hold;
+    w.flank_point_x_min = prev_flank_point;
     let sim = w.scene.sim.as_ref().unwrap();
     let on_plate = sim.bond.pos[0] < -32.0 && sim.bond.pos[2] > 12.0;
     if !on_plate {

@@ -284,6 +284,15 @@ pub struct Walker {
     /// the flank for across guards; this holds the same line inside `shoot`/`shoot_bounded` for
     /// every caller (the return-fire stands included). Bond holds instead.
     pub flank_hold_z: Option<f32>,
+    /// OPT-IN (retune-nb-01-3, the 07000001 d3 00 Agent walk): the flank POINT's own west
+    /// bound — a perpendicular flank point west of this x is refused (Bond holds, the same
+    /// hold counting) even when the TARGET guard stands east of `flank_hold_x`'s line.
+    /// `flank_hold_x` checks the guard's park; this checks where the flank NAV would walk:
+    /// the d3 t83962-shaped death picked a mouth guard's flank at (-31.6,16.6) — west INTO
+    /// the stairwell pocket — and the walk through the mouth put #3/#17 at 0.8-0.9 u (the
+    /// ×2 TooClose band [M Drone_ModBulletDamage 0x139f50]). Default None: every other walk
+    /// keeps master's flank machinery byte-identical.
+    pub flank_point_x_min: Option<f32>,
     /// OPT-IN (the 0700001b 00 Agent walk): steer the zero-g float away from a charging space
     /// laser's locked target when no hostile is within 10 u (see tick_inner). False by default.
     pub laser_dodge: bool,
@@ -451,6 +460,7 @@ impl Walker {
             grenade_downgrade_logged: false,
             flank_hold_x: None,
             flank_hold_z: None,
+            flank_point_x_min: None,
             laser_dodge: false,
             record_inputs: None,
             record_states: None,
@@ -1278,6 +1288,20 @@ impl Walker {
                     [dp[0] + px * side * dist, dp[1], dp[2] + pz * side * dist]
                 };
                 drop(sim);
+                // flank_point_x_min (OPT-IN, retune-nb-01-3): the flank POINT west of the hold
+                // line is a hold, not a walk — the check is on the flank nav's own destination
+                // (`flank_hold_x` checks the guard's park; a mouth guard east of the line could
+                // still flank Bond INTO the pocket pack behind him). `flanks` is already
+                // incremented (the block's entry), so the next pick's side flips — an east point
+                // is taken; two west points and a hold give the leg back at three, the same
+                // budget the other holds return.
+                if !close_buried && self.flank_point_x_min.is_some_and(|mx| fp[0] < mx) {
+                    blocked_streak = 0;
+                    last_progress = t;
+                    eprintln!("[walk] {label}: flank point ({:.1},{:.1},{:.1}) west of the pocket line — holding (no flank into the pocket, hold {flanks})", fp[0], fp[1], fp[2]);
+                    if flanks >= 3 { return false; }
+                    continue;
+                }
                 if close_buried {
                     eprintln!("[walk] {label}: no exposed part for {blocked_streak} ticks at {len:.1} u — stepping back to ({:.1},{:.1},{:.1})", fp[0], fp[1], fp[2]);
                 } else {
