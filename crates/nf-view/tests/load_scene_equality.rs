@@ -100,7 +100,7 @@ const BASELINE: &[(&str, &str)] = &[
     // [M 0x1db050] — 0700000c's multi-SP sub chains add 6 slots (+248 vertices, +576 indices,
     // +1 attachment); 07000014's vent-lid SPs are placed SPs (unchanged), the rest have no
     // multi-SP sub chains.
-    ("0700000c.bin", "e608a0241a79dcce 4926782 10356138 8432 4726862 97 12444 170 22 40 11"), // re-pinned 10-26: 0x3b on posed slots
+    ("0700000c.bin", "af239d92df384299 4926782 10356138 8431 4726942 97 12444 170 22 40 11"), // re-pinned 11-20: the 0x8 static cel glow (obj_turbine_volumecorona) rides a corona billboard slot [M View_DrawCelGlist 0x1e6538:61-69]
     // script-entity-copies: one draw slot per ScriptPlayer running a script — 14's nine
     // SPs on the vent-lid script 0x06000A3B (+ its other shared scripts) add 20 attachments, +1600 vertices.
     // The keypads' LOD pair in the posed slots (Lock_Unlock 0x1b0650 / case 1 `Control_NextLOD`: three
@@ -118,7 +118,7 @@ const BASELINE: &[(&str, &str)] = &[
     // Pulse_GLOW on 5-0x18 (28 glow meshes) on each of the two first-person models
     // [M Player_WeaponFiring 0x1a5460:203-217] — +56 attachments, +5600 vertices, +2 materials.
     ("07000014.bin", "f4b46bc4f0a78d89 7207069 14976597 6843 7045282 99 15016 173 41 37 30"), // re-pinned 10-26: p0-gated 0x3b instanced from load (created hidden [M 0x18dbf8:27-29])
-    ("07000001.bin", "ebe4f5f0413f0809 4439467 9308115 3536 4366285 77 11265 101 11 20 4"), // re-pinned 10-30: the rigid bodies (0xD8) on posed slots [M RB_EulerEvolve 0x1d7810]
+    ("07000001.bin", "5325b646f4eb7504 4439467 9308115 3533 4366301 77 11265 101 11 20 4"), // re-pinned 11-20: the four 0x8 Corona_test1 hall glows ride corona billboard slots [M View_DrawCelGlist 0x1e6538:61-69]
 ];
 
 #[test]
