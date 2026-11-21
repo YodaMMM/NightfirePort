@@ -97,6 +97,39 @@ pub struct WalkTickState {
 }
 
 /// The walker over one loaded scene.
+/// NF_WALK_PAUSE="tick,n[;tick,n...]": the sweep knob for `pause_at` (unset in normal runs);
+/// otherwise the test's own `with_pause` / `with_pauses` lever.
+#[allow(dead_code)]
+fn pause_env() -> Vec<(u32, u32)> {
+    if let Ok(v) = std::env::var("NF_WALK_PAUSE") {
+        return v.split(';').filter_map(|p| {
+            let mut it = p.split(',').map(|x| x.trim().parse::<u32>().ok());
+            Some((it.next()??, it.next()??))
+        }).collect();
+    }
+    PAUSE.with(|c| c.borrow().clone())
+}
+
+thread_local! {
+    /// The test's own pause lever (`with_pause`), read by `Walker::new`.
+    static PAUSE: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Runs `f` with every Walker it creates idling `n` default ticks once at tick `t` (the walk
+/// lever re-roll: a stream-shifting merge moves a lucky walk; this re-rolls it the way a player
+/// who stopped for a moment would). Restored after `f`, also on a panic.
+#[allow(dead_code)]
+pub fn with_pause<R>(t: u32, n: u32, f: impl FnOnce() -> R) -> R { with_pauses(&[(t, n)], f) }
+
+/// `with_pause` with several stops, in tick order.
+#[allow(dead_code)]
+pub fn with_pauses<R>(stops: &[(u32, u32)], f: impl FnOnce() -> R) -> R {
+    struct Restore(Vec<(u32, u32)>);
+    impl Drop for Restore { fn drop(&mut self) { let v = std::mem::take(&mut self.0); PAUSE.with(|c| *c.borrow_mut() = v); } }
+    let _r = Restore(PAUSE.with(|c| c.replace(stops.to_vec())));
+    f()
+}
+
 pub struct Walker {
     pub scene: Scene,
     /// Top Bond's health up every tick (the "enemies disabled for the walk" allowance; the pain
@@ -108,6 +141,8 @@ pub struct Walker {
     /// reaches the first value, Bond idles (default input) for the second, whatever leg is
     /// running. A shared-stream re-roll the walk measured, not a tactic. None = no pause.
     pub pause_at: Option<(u32, u32)>,
+    /// The stops after `pause_at`, in order (`with_pauses` / NF_WALK_PAUSE).
+    pub pause_rest: Vec<(u32, u32)>,
     /// Real-damage bookkeeping (damage_log.rs): live whenever the top-up is off.
     pub dmg: DamageLog,
     /// Called after every stepped tick with the scene and the tick count (an observer, as in
@@ -238,7 +273,7 @@ impl Walker {
         nf_view::attach_headless_sound(&mut scene);
         let pos = scene.sim.as_ref().unwrap().bond.pos;
         Walker {
-            scene, top_up_health: true, round_dodge: false, pause_at: None, dmg: DamageLog::new(), on_step: None, stop_on_exit: true,
+            scene, top_up_health: true, round_dodge: false, pause_at: None, pause_rest: pause_env(), dmg: DamageLog::new(), on_step: None, stop_on_exit: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0, float_ticks: 0,
             sidestep: 0, max_y: pos[1], lenient: false, stuck_answers: false,
@@ -363,6 +398,7 @@ impl Walker {
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
+        if self.pause_at.is_none() && !self.pause_rest.is_empty() { self.pause_at = Some(self.pause_rest.remove(0)); }
         if let Some((t, n)) = self.pause_at { if self.total_ticks >= t { self.pause_at = None; for _ in 0..n { self.tick_inner(Input::default(), false, false, false); } } }
         // OPT-IN round_dodge (the 07000014 00 Agent walk): a live 0x14 round (the explosive
         // grenade-launcher class that killed the walk) whose line passes within 3 u of Bond's chest,

@@ -3213,7 +3213,10 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 /// delta within the game's chain), ch 0xbf/0xc0/0x82, the button, MissionState 6.
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
-    walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2));
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): Bond died at
+    // t5217 in the pocket fight (#5 / #4 bursts). Lever: a 30-tick stop at tick 1600 re-rolls the
+    // pocket [L the 22-value sweep: 1600/30 and 3500/30 complete; 1500/30, 1700/30, 1600/20 die].
+    walker::with_real_damage_head_hunting(|| walker::with_pause(1600, 30, || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2)));
 }
 
 /// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked chaser mission on
@@ -3243,5 +3246,11 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// at +8428, the lift-out hand-back at +9490, the button, end health 17.0 (the pool spent,
 /// 37 hits for 83.0 across the whole walk).
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
-    walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3));
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles; the ninja's
+    // NinjaStand start): the pocket's close four took 72 -> 12.5 and Bond reached the blast
+    // room dry (death t12506 to the chaser pair). Lever: a 30-tick stop at tick 425 (the pocket
+    // at 75.5 after it) and a 45-tick stop at tick 3822 (the door[0] crossing) [L the
+    // 21-value grid, 30 random runs, then 30 random second stops after 425/30: 3822/45,
+    // 3748/45 and 5386/90+8305/90 complete].
+    walker::with_real_damage_head_hunting(|| walker::with_pauses(&[(425, 30), (3822, 45)], || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3)));
 }

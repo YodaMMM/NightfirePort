@@ -3226,7 +3226,13 @@ fn door_lip_lure(w: &mut Walker) {
     }
 
 #[test]
-fn walk_from_the_spawn_to_the_exit_with_the_contact() { walk_from_the_spawn_to_the_exit_with_the_contact_at(1) }
+fn walk_from_the_spawn_to_the_exit_with_the_contact() {
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the contact
+    // walk ended in a mission restart before the LoadPointActivator plate (t45808). Lever: a
+    // 60-tick stop at tick 3000 re-rolls it [L the 11-value sweep: 3000/60, 8000/60, 25000/60,
+    // 35000/60 and 500/200 complete].
+    walker::with_pause(3000, 60, || walk_from_the_spawn_to_the_exit_with_the_contact_at(1))
+}
 
 fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
     let iso = iso();
@@ -3817,7 +3823,8 @@ fn following_mayhew_down_completes_the_level() {
 #[test]
 fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_level_loads() {
     let iso = iso();
-    let mut w = walk_to_the_exit(&iso, true);
+    // Stream batch 1121: the contact walk's lever (see walk_from_the_spawn_to_the_exit_with_the_contact).
+    let mut w = walker::with_pause(3000, 60, || walk_to_the_exit(&iso, true));
     // The exit tick: the hold stands with the full count, the fade level is 0, the request rides.
     {
         let sim = w.scene.sim.as_ref().unwrap();
