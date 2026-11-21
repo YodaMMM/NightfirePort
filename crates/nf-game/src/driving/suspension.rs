@@ -2,8 +2,9 @@
 //! docs/systems/drive-suspension.md. Its only caller is `FUN_00190510` [M call at :258],
 //! which the controller `FUN_00188200` runs when `SUB_PHYSICS` is 0 and the vtbl+0x1d4
 //! object's +0xc8 is non-zero [M 0x188bf8-0x188c30]; +0xc8 is `IS_SNOWMOBILE` in the pvehicle
-//! schema [M FUN_001968f8 :265], set by supersnow / small_snowmobile [D] (that the vtbl+0x1d4
-//! getter returns the attr block is unproven). `FUN_0018e548` repeats the same loop shape.
+//! schema [M FUN_001968f8 :265], set by supersnow / small_snowmobile [D]; the vtbl+0x1d4 getter
+//! of the car class (vtable 0x379ef0, slot word 0x193170) is `FUN_00193170`, which returns
+//! car+0x23c, the attr block [M]. `FUN_0018e548` repeats the same loop shape.
 //!
 //! Per wheel [M 0x18fc00 :51-74]: `x = wheel.w + SPRING_REST_LENGTH` (+0x60) is stored, the
 //! ground query (vtbl+0x214, wheel index) runs, then `x = max(min(x, LIMIT (+0x64)), 0)`.
