@@ -63,6 +63,19 @@ then `LinkCreep_Dest(0, +0x60)` picks the first step point.
 - Port: `Creep::new` (nav.rs) — the same 0.4 / `trunc × 2.5` math (as written), shared with
   `LinkCreep_ForNodes` 0x159810.
 
+### `AINetwork_SetupNextNode` 0x159668: past the last node
+`route+0x80 += dir`; inside the node list → `LinkCreep_Calc` re-creeps the next link. Past the end
+(index ≥ count) the loop arm (flag & 7 = 2) wraps to node 0 and the bounce arm (3, dead on the
+disc) reverses; every other arm clamps the index to the count and copies the route's dest
+(`route+0x40`) straight into the move target (`route+0x60`), with no creep recalc [M 0x159668:
+`puVar12[0x40] = puVar12[0x41]`, `puVar12+0x30 = puVar12+0x20`]. The finished creep keeps
+`LinkCreep_Increment` [M 0x159f28: step >= steps] calling back here, so the target stays the dest.
+- Port: `Route::next_node` (nav.rs): target = dest, creep left finished. The old port re-crept
+  target → dest in 0.4 steps; a last leg of 0.4..1.0 has zero steps (`trunc(trunc(|d|) × 2.5)`),
+  so the target never left the last node and a goal 0.5-1.0 past it was never reached (cover
+  runs, arrival 0.5, parked 0.55-0.8 short for thousands of ticks). Test:
+  `nav::tests::past_the_last_node_the_move_target_is_the_destination`.
+
 ### `LinkCreep_Dest` 0x15b420 — the step point
 `vec × (step + k)` from the route start, stored through `build_FindCel` [M 0x15b420:8-16].
 Callers: `ReFindMissionPath` 0x153a30, `AssignAIPath` 0x154190, `MoveTarget_IsRouteNode`

@@ -6,6 +6,9 @@
 //! Every pinned value is read off the disc (the pack/level archives, [D]) or the decompile ([M]).
 //! Opt-in via `NF_ISO`.
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_game::player::Input;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
@@ -48,6 +51,11 @@ fn the_kimiko_scene_actors_and_the_handback() {
     let mut scene = load("07000007.bin");
     {
         let sim = scene.sim.as_mut().unwrap();
+        // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+        // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+        // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+        // beats the pair's fail on a teleport.
+        reveal07::drakes_reveal(sim);
         sim.bond.pos = [94.3, 44.6, -45.9]; // TouchOnce #412's volume (out 0x48)
         for _ in 0..90 { sim.step_bond(Input::default(), false, false, false); }
     }
@@ -70,10 +78,16 @@ fn the_kimiko_scene_actors_and_the_handback() {
 
     // The game's skip action ends the scene; `Script_Free` kills the doubles, hands Bond back at
     // stream 6's entity (key 498) and lifts the freeze; the ch-0x48 drones delete, the rest stand.
+    // On the real path the library door pair (#404/#417, the two guards at the -48 wall) left on
+    // Drake's reveal (ch 21) before the plate [D p6 = 21; reveal07]; the frozen set is the party
+    // around the hall that the scene does not delete (no ch-0x48 second switch).
+    assert!(!sim.drones.list.iter().any(|d| matches!(d.placement, 404 | 417) && d.present),
+        "the library door pair left on Drake's reveal before the plate");
     let hall_guards: Vec<([f32; 3], f32, f32)> = sim.drones.list.iter()
-        .filter(|d| d.present && d.skin != 0x0500_0015 && [93.7, 94.8].iter().any(|x| (d.pos[0] - x).abs() < 0.6) && (d.pos[2] + 48.0).abs() < 0.6)
+        .filter(|d| d.present && d.skin != 0x0500_0015 && d.second_channel != 0x48
+            && (d.pos[0] - 94.3).abs() < 25.0 && (d.pos[2] + 45.9).abs() < 25.0)
         .map(|d| (d.pos, d.pos[0], d.pos[2])).collect();
-    assert!(hall_guards.len() >= 2, "the two hall guards near the -48 wall must be present pre-skip");
+    assert!(!hall_guards.is_empty(), "the party around the hall is present pre-skip");
     drop(sim);
     {
         let sim = scene.sim.as_mut().unwrap();

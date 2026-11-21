@@ -359,8 +359,10 @@ fn the_exit_is_not_used_through_the_security_room_wall() {
     // crouched head puts the use point 0.53 above the exit's horizontal plane. Crouch held here.
     let mut w = load();
     place(&mut w, 2.26, 9.6);
-    let crouch = nf_game::player::Input { crouch: true, ..Default::default() };
-    for _ in 0..60 { w.tick(crouch, false); }
+    // One Toggle press, then still (a press every tick re-toggles once the 13-tick stance
+    // lockout reopens [M Player_SSCrouch 0x1924c0:45-55]).
+    w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+    for _ in 0..59 { w.tick(nf_game::player::Input::default(), false); }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.bond.crouch_drop > 0.3 && (sim.bond.pos[2] - 9.905).abs() < 0.1,
@@ -368,7 +370,7 @@ fn the_exit_is_not_used_through_the_security_room_wall() {
     }
     let mut fired = false;
     for _ in 0..10 {
-        w.tick(crouch, true);
+        w.tick(nf_game::player::Input::default(), true);
         if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { fired = true; break; }
     }
     assert!(fired, "E beside the exit in the lobby loads the next level [M Trigger_Activate 0x1b2318; L PCSX2]");

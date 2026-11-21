@@ -9,17 +9,11 @@
 /// The level's cel graph, built alongside `parse_room_cels` (which is this function's room half —
 /// the two MUST agree; `Scene::cels` is `.0`).
 ///
-/// `cells` spans the WHOLE parse in archive order — the game's pCelList record array is parse-wide
-/// (parsemap_block_map_data_static appends one 0x50-byte record per cel placement as each map is
-/// parsed, sub-maps first, main map last), and the main map's portal block indexes THAT array.
-/// *Measured* [D]: 07000002's main-map portal records point past the main map's own cel placements
-/// (22 of 37 endpoints) — they address sub-map cels too.
-///
-/// The pCelList record index: `parsemap_block_map_data_static` (0x1d1998) addresses the record as
-/// `pCelList + placement.index * 0x50` for by-index placements (the by-hash path goes through the
-/// entity hashtable, untraced — those records are unreachable here and the portals naming them are
-/// counted in `dropped_portals`). Records the port cannot resolve are the *sparse* remainder of the
-/// game's array; only the named ones exist as nodes.
+/// `cells` holds one node per cel placement of the whole parse, in archive order (sub-maps first,
+/// main map last). Each map file gets its own `pCelList` (`parsemap_block_map_header` 0x1d1430), and
+/// a portal endpoint names a record of the map that carries the portal block; the endpoint rules
+/// (per-map record keys, by-hash records, the stale-register carry-over and first-parsed-wins) are
+/// on `nf_view::scene::parse_cel_graph` [M 0x1d15f8, 0x1d1998] (G-016).
 #[derive(Clone, Default)]
 pub struct CelGraph {
     pub cells: Vec<CelNode>,
@@ -151,6 +145,20 @@ pub fn portal_visible_cels_game_from_cell_doors(graph: &CelGraph, start: usize, 
         }
     }
     Some(vis)
+}
+
+/// The runtime cel flags bit 0x10000000: `parseentity_fixup_entity` 0x1d00c0 writes 0x1804c023 /
+/// 0x1804c047 (instead of 0x804c023 / 0x804c047) for a room cel whose parameter 3 (`level_tag+0x38`,
+/// the full word) is non-zero [M 0x1d00c0 the 0xc023 and 0xc047 arms]. `Vision_Portal_Recurse`
+/// 0x1e86e8:33-41 ORs `(cel+0x3c >> 28 ^ 1) & 1` over the VisCelList into `viewer+0x20`, the byte
+/// that gates `View_DrawSky` 0x1e5ad0:91, the `Game_Draw` sky calls and the lens flare's sun test
+/// (`HUD_UpdateLensFlarePane` 0x19d770:68): a room with the bit is a room the sky is not seen from.
+pub const CEL_NO_SKY: u32 = 0x1000_0000;
+
+/// `viewer+0x20` after a capture: some cel of the VisCelList chain lacks `CEL_NO_SKY`
+/// [M 0x1e86e8:33-41 — the byte is cleared, then ORed per listed cel].
+pub fn chain_sees_sky(graph: &CelGraph, chain: &[usize]) -> bool {
+    chain.iter().any(|&c| graph.cells.get(c).is_some_and(|n| n.flags & CEL_NO_SKY == 0))
 }
 
 pub fn portal_visible_cels(graph: &CelGraph, eye_room: usize, eye: [f32; 3], depth0: &[[f32; 4]; 5]) -> Option<Vec<bool>> {

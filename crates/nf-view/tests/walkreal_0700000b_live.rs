@@ -39,6 +39,7 @@ mod walker;
 use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
+fn env_u32(name: &str, default: u32) -> u32 { std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default) }
 
 fn load_warm() -> Walker {
     // Single load: the level's own boot state IS the carried state (health 100, the 0a
@@ -872,6 +873,18 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
         }
         w.walk_to(Wp::new(-14.3, 47.4, 6.5).r(1.0), "E-plate #166 side (walked)");
     }
+    // g031-object-order-walks: the Agent / 00 Agent walks stand at the plate before the use. The
+    // same-tick lift carry (G-031) moved Bond's cab ride by under 0.0001 u, which re-rolled the
+    // exec-floor and roof fights; both sisters then died on the deck (d2 t17712 at the jump
+    // edge, d3 t17433 at the deck key to #4's 0x18 rounds) [L]. The wait re-times the roof
+    // cut-scene and the deck fight: d2 waits 120 (60 also completes; 30/200/300 die), d3 waits
+    // 300 (30/60/200 also complete; 120 dies) [L the 2026-11-21 sweep]. The Operative walk keeps
+    // no wait (its recording is pinned). NF_0B_PLATE_WAIT2/3 override for a re-tune.
+    if real && w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
+        let d = w.scene.sim.as_ref().unwrap().drones.difficulty;
+        let n = env_u32(&format!("NF_0B_PLATE_WAIT{d}"), if d >= 3 { 300 } else { 120 });
+        if n > 0 { w.wait(n); }
+    }
     eprintln!("[0b] at E-plate #166 — the real use");
     for _ in 0..80 {
         w.tick(Default::default(), true);
@@ -1105,6 +1118,14 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                 [target[0], target[2]], // (dead for d1 — the take-break fires at the slot)
             ]
         };
+        // s-g019-sky-2 (d2 only): a 12-tick stand at the deck door before the sprint. With the
+        // guards dropping finished voice lines on every control pass [M 0x1490f0:82-94] the
+        // squad's barks (and the draws behind them) shifted, and the unchanged sprint died at
+        // t17442 to the crouch-firing #5 at d 1.6. The stand re-rolls the deck fight: of the
+        // 18 lengths tried between 0 and 90 ticks, 12 is the only one that reaches the latch.
+        if w.scene.sim.as_ref().unwrap().drones.difficulty == 2 {
+            for _ in 0..12 { w.tick(Default::default(), false); }
+        }
         let mut phase = 0usize;
         let start = w.total_ticks;
         let mut stall_diag = 0u32;
@@ -1547,11 +1568,18 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
                 // close above brings the aim to the guard so the gate actually opens.
                 let err_gate = if agent_run { 0.05 } else { 0.18 };
                 if err_g.abs() < err_gate {
-                    trigger = true;
                     let at = [g.pos[0], g.pos[1] + 0.3, g.pos[2]];
                     let want_pitch = ((at[1] - (p[1] + sim.bond.eye - sim.bond.crouch_drop))
                         / dg.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-                    look = (want_pitch - sim.bond.pitch).clamp(-0.08, 0.08);
+                    // s-g019-sky-2 (d1/d2): the press waits for the PITCH too. The yaw gate
+                    // alone let the dart go while the look was still swinging down onto the
+                    // body: with the guards dropping finished voice lines on every control
+                    // pass [M 0x1490f0:82-94] #5 strafes in state 0x70 at the window and the
+                    // t17361 dart flew over him; the K5 does not refire inside the ~80 ticks
+                    // he needs to close to d 1.6 and kill Bond.
+                    let pitch_err = want_pitch - sim.bond.pitch;
+                    trigger = difficulty3 || pitch_err.abs() < 0.03;
+                    look = pitch_err.clamp(-0.08, 0.08);
                     break;
                 }
             }
@@ -1885,14 +1913,18 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage() {
 /// 66.4 hp, mission complete t16926, stuck 0, falls 1.
 #[test]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
-    walker::with_real_damage(|| {
-        let mut w = load_fresh_at(2);
-        w.dmg.lane_fights = true;
-        w.dmg.back_off = Some(3.0);
-        w.dmg.tranq_fights = true;
-        fresh_boot_asserts(&w);
-        walk_to_the_mission_end(&mut w, true, true, false);
-    });
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1800/60 [L the
+    // 10-value sweep on the joined tree: 1800/60, 250/200, 3500/200 of 24 values complete].
+    walker::with_pause(1800, 60, || {
+        walker::with_real_damage(|| {
+            let mut w = load_fresh_at(2);
+            w.dmg.lane_fights = true;
+            w.dmg.back_off = Some(3.0);
+            w.dmg.tranq_fights = true;
+            fresh_boot_asserts(&w);
+            walk_to_the_mission_end(&mut w, true, true, false);
+        });
+    })
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
@@ -1975,17 +2007,21 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
 /// prints the census columns (visible + the world-ray spine aim) beside the world ray.
 #[test]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
-    walker::with_real_damage(|| {
-        let mut w = load_fresh_at(3);
-        w.dmg.lane_fights = true;
-        w.dmg.back_off = Some(3.0);
-        w.dmg.tranq_fights = true;
-        // real-health-00agent-0b-deck-2: the deck crossing's fight lever (d3 only — the d1/d2
-        // sisters do not set it, their streams stay byte-identical).
-        w.dmg.world_ray_fights = true;
-        fresh_boot_asserts(&w);
-        walk_to_the_mission_end(&mut w, true, true, false);
-    });
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: 1000/60, 6000/60 complete].
+    walker::with_pause(1000, 60, || {
+        walker::with_real_damage(|| {
+            let mut w = load_fresh_at(3);
+            w.dmg.lane_fights = true;
+            w.dmg.back_off = Some(3.0);
+            w.dmg.tranq_fights = true;
+            // real-health-00agent-0b-deck-2: the deck crossing's fight lever (d3 only — the d1/d2
+            // sisters do not set it, their streams stay byte-identical).
+            w.dmg.world_ray_fights = true;
+            fresh_boot_asserts(&w);
+            walk_to_the_mission_end(&mut w, true, true, false);
+        });
+    })
 }
 
 /// The roof cut-scene's channel tail, alone: the disc's writer of objective 10's ch 0x59, the

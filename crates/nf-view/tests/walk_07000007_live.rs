@@ -27,6 +27,9 @@ fn the_party_starts_locked_reveals_unlocks_at_the_hall_and_exits_to_the_gondola(
         // and the fists switch request lands within ~100 ticks [M Player_InitWeapon case 0x7000007].
         for _ in 0..150 { sim.step_bond(Input::default(), false, false, false); if sim.drones.channels.on(0x47) && sim.gun.weapon == 1 { break; } }
         assert!(sim.drones.channels.on(0x47), "the spawn plate reveals the party's first objective [D #411]");
+        // The mission monitor runs earlier in the tick than the object walk that writes the plate's
+        // channel [M 0x1336f8], so it reads ch 0x47 on the next tick: settle it.
+        sim.step_bond(Input::default(), false, false, false);
         assert_eq!(sim.drones.mission.states[nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0007).expect("level in the mission table")][0], 3, "objective 1 is visible (revealed by ch 0x47 [L])");
         // The weapon lock holds before the hall: Bond holds the fists (weapon 1 [M level_carry_live's
         // party test; Player_InitWeapon 0x1a7ef8 case 0x7000007's switch request]).

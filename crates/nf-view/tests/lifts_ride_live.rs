@@ -105,7 +105,13 @@ fn the_paternoster_carries_bond_from_load() {
     // -18.9..-9.1, y 56.8..63.8, z -1.9..2.2 [D pack 0790000b + trigger dump]).
     scene.sim.as_mut().unwrap().bond.pos = [-14.0, 58.0, 0.0];
     scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
-    scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+    // The plate writes its channel the tick after the contact, and a relinking teleport adds one
+    // more tick (Bond's own pick for the move tick is still the old cel) [L g031_object_order_live,
+    // s-g031-trigger-lag-truth]: up to three ticks.
+    for _ in 0..3 {
+        scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x75) { break; }
+    }
     assert!(scene.sim.as_ref().unwrap().drones.channels.on(0x75), "#245's own touch write raised ch 0x75 [D #245 mask 8]");
     // The case-6 arm: hit&mask frees the cycle script, flips cur, loads script B (0x06000A09,
     // mode 1 — the 10-tick re-pose + event 0xC [D nis dump]) and goes to state 2 [M 0x1dbda8

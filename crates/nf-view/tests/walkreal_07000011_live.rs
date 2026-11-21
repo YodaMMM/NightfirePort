@@ -520,6 +520,16 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     band(&w, 30.4, 32.7, "flight C's bottom");
     w.walk_to(Wp::new(22.4, 31.3, -3.0).r(1.0), "the north strip 31.1 east");
     loot_the_drops(&mut w, "the 31.1 strip");
+    if difficulty == 3 {
+        // pickup-pushout-walks (00 Agent): with the dropped guns pushed out of the geometry
+        // (Pickup_Create 0x18dda0:166-183) Bond's first hit on the connector-1 descent comes
+        // 26 ticks earlier (his legs tick-identical to master up to there,
+        // first hit t6429 vs t6455) and the run reached the 18.9 strip with 4 health instead
+        // of 14.5 (#18's 4.0 at t7307 [L the branch run]). A player catches his breath at the
+        // 31.1 strip's east end before the descent: a 285-tick idle (the wait sweep 15..600
+        // step 15: 225, 285, 330 and 585 complete, the rest die between t6613 and t7654).
+        w.wait(285);
+    }
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
     band(&w, 26.4, 29.5, "connector 1's bottom");
     w.walk_to(Wp::new(15.0, 27.4, 4.8).r(1.0), "the south strip 27.1 west");
@@ -902,6 +912,10 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
 ///    second measured run died at d 1.1 of #19 that way); a player reloads between guards.
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 90-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 90/200 passed.
+    walker::set_post_intro_wait(90);
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||

@@ -96,7 +96,12 @@ fn the_wall_hug_scene_holds_the_gate_pair_and_swaps_the_pairs_at_its_end() {
         let sim = scene.sim.as_mut().unwrap();
         sim.bond.pos = touch_centre(sim, 0x43);
     }
-    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+    // The plate writes its channel the tick after the contact, one more after a relinking
+    // teleport [L g031_object_order_live]: step to the write (at most three ticks).
+    for _ in 0..3 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x43) { break; }
+    }
     // THE TOUCH TICK, in the game's walk order [M control_movement_object_handler 0x1336f8:54-68:
     // one newest-first walk runs every control func — the plate #301 writes ch 0x43, then SP #298
     // (placement 298) triggers and `SP_LoadScript`'s trailing `Script_Update` [M 0x1dbc08:56] runs
@@ -228,7 +233,12 @@ fn the_wall_hug_plate_swaps_without_the_cut_scene_while_the_combat_music_is_on()
         let sim = scene.sim.as_mut().unwrap();
         sim.bond.pos = touch_centre(sim, 0x43);
     }
-    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+    // The plate writes its channel the tick after the contact, one more after a relinking
+    // teleport [L g031_object_order_live]: step to the write (at most three ticks).
+    for _ in 0..3 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x43) { break; }
+    }
     // THE PLATE TICK (the trace's 174328): the channel is on, the script does NOT start (no
     // freeze), and the spawner's kill lands IN THE SAME WALK (see the tick-order note above):
     // by the tick boundary the spawned pair is removed and the spawner is gone.
@@ -308,7 +318,12 @@ fn the_wait_first_stream_starts_its_clock_on_the_start_tick() {
         let sim = scene.sim.as_mut().unwrap();
         sim.bond.pos = touch_centre(sim, 0x43);
     }
-    scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+    // The plate writes its channel the tick after the contact, one more after a relinking
+    // teleport [L g031_object_order_live]: step to the write (at most three ticks).
+    for _ in 0..3 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
+        if scene.sim.as_ref().unwrap().drones.channels.on(0x43) { break; }
+    }
     {
         let sim = scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x43), "the wall-hug plate fires ch 0x43 [D]");
@@ -472,7 +487,11 @@ fn tower2_stairwell_the_kill_channel_keeps_the_drawn_guard() {
     // hi [15.69, 35.75, -0.78]). The latch fires and the kill scan reads LAST tick's drawn
     // (the spawner's Control runs before this tick's drone pass) → the drawn guard is KEPT
     // [M 0x138060 `bnez $v0` → 0x138098: the kept count].
+    // The plate writes ch 0x1D the tick after Bond's contact [L g031_object_order_live], and the
+    // teleport relinks (one more tick), so the kill scan runs two ticks after the move: the guard
+    // stands beside Bond on the touch (the same l < 2 drawn arm as above) to stay drawn there.
     scene.sim.as_mut().unwrap().bond.pos = [14.65, 33.52, -1.82];
+    scene.sim.as_mut().unwrap().drones.list[guard].pos = [13.65, 33.52, -1.82];
     let mut latched = false;
     for _ in 0..6 {
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);

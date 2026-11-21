@@ -352,7 +352,7 @@ fn the_beam_end_equals_the_crosshair_rays_hit() {
     let (yaw, p) = (sim.bond.yaw, sim.bond.pitch * std::f32::consts::FRAC_PI_2);
     let right = [-yaw.cos(), 0.0, yaw.sin()];
     let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
-    let (tx, ty) = (0.76966 * sim.cross[0], 0.57724 * sim.cross[1]);
+    let (tx, ty) = (0.76966 * sim.cross[0] / sim.zoom, 0.57724 * sim.cross[1] / sim.zoom);
     let d0 = [0, 1, 2].map(|k| look[k] + tx * right[k] + ty * up[k]);
     let l = (d0[0] * d0[0] + d0[1] * d0[1] + d0[2] * d0[2]).sqrt();
     let dir = d0.map(|v| v / l);

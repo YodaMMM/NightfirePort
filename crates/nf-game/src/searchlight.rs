@@ -8,8 +8,8 @@
 //! The bullet contact path (U-041, docs/systems/searchlight-bullet.md): a flying bullet's HITTEST picks the
 //! head's world sphere each tick and the head's update breaks on a class-5 contact with damage > 0.0 [M].
 //!
-//! Not ported yet (G-033): the spot's dynamic light (illumination is renderer work) and `Gas_Init` smoke
-//! for broken lights (no particle system; its 6 RNG draws per puff are therefore not consumed either).
+//! The broken head's `Gas_Init` smoke is requested here (`Searchlights::smoke`, the state-2 arm's
+//! own gate) and emitted by the caller through `crate::gas` (its 6 shared-stream draws per puff).
 //! `Control_NextLOD`'s model swap on kill/break (obj+0xD8 ← *(glist+0x40) [M 0x1cb900:138,454 →
 //! 0x1349b0:8-12]; the block-0x27 chain, 07000006's heads → OBJECT_SearchLightBroken [D]) is pinned as
 //! `Part::lod_next` — drawing the swapped variant is the renderer's side (nf-view resolves
@@ -117,6 +117,9 @@ pub struct Part {
 #[derive(Clone, Debug, Default)]
 pub struct Searchlights {
     pub parts: Vec<Part>,
+    /// The state-2 smoke requests of this tick's head updates (the head position — `Gas_Init`'s
+    /// origin `obj+0x30` [M 0x1cb900:382-384]), drained by the caller in update order.
+    pub smoke: Vec<V3>,
 }
 
 /// One flying bullet's per-tick pick, as `Collide_Update` sees it: the flight segment [from, to] (the
@@ -323,10 +326,15 @@ impl Searchlights {
         // own on-byte is 0 and the state-3 arm reads exactly that byte [M :399].
         if off != 0 && channels.on(off as u32) {
             self.off_kill(head);
+            // The kill FALLS THROUGH to the state dispatch [M disasm 0x1cba20-0x1cba5c: after
+            // `jal Control_NextLOD` the `lh 0xf4` reads state 3; the state-3 arm's on-byte (just
+            // zeroed) fails its `beqz` at 0x1cbd40 and branches to the contact walk 0x1cc1d0]: a
+            // bullet contact on the kill tick still breaks the head.
+            self.bullet_check(head, shots, &mut sounds);
             return sounds;
         }
         let state = self.parts[head].state;
-        let mut parts_now = false; // run the spot/beam/corona updates this tick (states 0/1 and the 3→0 turn-on)
+        let mut parts_now = false; // run the spot/beam/corona updates this tick (states 0/1 only)
         match state {
             // State 0: the sweep [M].
             0 => {
@@ -370,20 +378,24 @@ impl Searchlights {
             // every path before the contact walk [M 0x1cb900:373-393]; the walk's own state-2 gate below makes
             // that fall-through a no-op here.
             2 => {
+                // The smoke [M 0x1cb900:374-385]: while the head draws (obj+0xFC), every frame with
+                // `(GameState+52 + obj+0xEC) % 7 == 0` one `Gas_Init` puff at the head — requested here so
+                // it runs once per broken head per qualifying frame, and never on the break tick itself
+                // (the break is written by the tail walk, after this arm).
                 let h = &mut self.parts[head];
+                if h.drawn && frame.wrapping_add(h.created) % 7 == 0 { self.smoke.push(h.pos); }
                 if h.pitch < 0.8 { h.pitch += 0.05; }
-                // Gas_Init smoke every 7th drawn frame is not ported (no particle system); its RNG draws are
-                // not consumed either (G-033).
                 let _ = rng;
             }
-            // State 3: off — the on-channel re-lights it with the relay clunk [M].
+            // State 3: off — the on-channel re-lights it with the relay clunk, then jumps STRAIGHT to the
+            // contact walk [M disasm 0x1cbd40-0x1cbd8c: `sh $zero, 0xf4`, `jal Sound_Play3D(0xe5)`,
+            // `b 0x1cc1d4`] — no sweep, no spot ray, no beam/corona draw this tick. The parts come back on
+            // the next tick's state-0 pass (the spot on its first ray hit, the beam unconditionally, the
+            // corona by its angle gate) [M 0x1cb900:186-353].
             _ => {
                 if on != 0 && channels.on(on as u32) {
-                    let links = self.parts[head].links;
                     self.parts[head].state = 0;
-                    for p in links.into_iter().flatten() { self.parts[p].drawn = true; }
                     sounds.push((0xe5, pos));
-                    parts_now = true; // the turn-on falls straight into the part updates [M]
                 }
             }
         }

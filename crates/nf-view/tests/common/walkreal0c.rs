@@ -219,8 +219,8 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
                 let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
-                let cx_want_raw = -yaw_err / 0.76966;
-                let cy_want_raw = pitch_err / 0.57724;
+                // s-auto-aim: the cursor that puts the shot on `at` (screen units, through the zoom).
+                let [cx_want_raw, cy_want_raw] = sim.cursor_for(at).unwrap_or([-yaw_err / 0.76966, pitch_err / 0.57724]);
                 let cx_want = cx_want_raw.clamp(-0.296, 0.296);
                 let cy_want = cy_want_raw.clamp(-0.4, 0.4);
                 let cur = sim.cursor;
@@ -232,7 +232,7 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                 let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
                 let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
                 // The effective aim (what the fired round obeys): the view + the eased offsets.
-                let aoff = sim.drones.aim_offset;
+                let aoff = sim.aim_offset_angles();
                 let err = { let mut a = yaw_err - aoff[0];
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
@@ -282,7 +282,7 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     eprintln!("[0c] yard stand ({label}) t{t}: tgt #{di} hp {:.1} at ({:.2},{:.2}) still {still} aim {:?} err {err:.3} perr {perr:.3} clip {} spare {} hp {:.1} atgt {:?} aoff {:?} aimbit {} fire_state {} cursor ({:.3},{:.3})",
                         sim.drones.list[di].health, sim.drones.list[di].pos[0], sim.drones.list[di].pos[2],
                         aim.map(|a| [a[0], a[2]]), sim.gun.clip, sim.gun.spare, sim.drones.health.health,
-                        sim.drones.aim_target, sim.drones.aim_offset, sim.aiming, sim.gun.fire_state, cur[0], cur[1]);
+                        sim.drones.aim_target, sim.aim_offset_angles(), sim.aiming, sim.gun.fire_state, cur[0], cur[1]);
                 }
                 (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
             };

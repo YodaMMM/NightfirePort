@@ -60,9 +60,25 @@ is `+0x29`. `set_2nd_behaviour` / `set_1st_behaviour` / `change_to_attack_mode` 
 either block survive a swap back. Wired: the GoToGoal arrival tail and EnemyMission's arrival
 `ChangeToAttackMode`. The 07000011 office guards (p5 = 100, mode 7, `+0x5A4` = 0x56) take their second
 block on arrival — its step property 0x42 is what makes them step-aim in the fight
-(`start_corridor_guard_07000011_live`). Not wired yet (GAPS G-055): `FirstAttack`'s alt-state branch
-[M 0x148010:100-131], `PreDroneControl`'s second-switch flush [M 0x148db0:58-82] and `HandleImpact`'s
-09/0A `Set1st` [M 0x1469b8:114].
+(`start_corridor_guard_07000011_live`). Also wired (GAPS G-055): `FirstAttack`'s alt-state branch
+[M 0x148010:100-131], `PreDroneControl`'s second-switch flush [M 0x148db0:58-82], `HandleImpact`'s
+09/0A `Set1st` at all four sites [M 0x1469b8:114-116, 231-233, 296-298, 342-344], CivilianMission's
+arrival `ChangeToAttackMode` [M 0x15d860:60], and `GetDroneTypeAttackTypeFriend`'s voice-set-0xB
+creation arm [M 0x14cbd8:119-127]: with `+0x50C >= 1.0` and `+0xD8 == 0xB` (skin 0x0500001E, the
+ninja) it calls `ChangeToAttackMode` and returns before the `+0x5A2` alert fold and the `+0x5A4` /
+`+0x13A` fold, so the ninja's start state stays NinjaStand 0xA6, whose ENTER sets the engage range
+`+0xF0 = 3.0` and combat range `+0xFC = 5.0` before SetState(0xA7) [M 0x16b990 case 1]
+(`g055_kind_b_creation`). On the disc the arm's swap is a no-op: the three skin-0x0500001E
+placements (07000004 #1, 07000016 #105/#126) have no alternate state. `DoTypeSettingsOLD`'s
+`ChangeToAttackMode` [M 0x14d2e8:72] needs an OLD-chain placement; there is none.
+
+Census (`g055_behaviour_census`, every level archive through `Level::parse`): 555 drone placements
+carry p5 = 100; the other 33 kind-0x0f records are the skinless p5 = 0 template records, for which the
+port keeps `alert_props = None` (the game's `+0xC48 != 100` path: no swap). No other code reads `+0x29`
+than `DroneFunc_Using2ndBehaviour` (its one caller is GoToGoal [M 0x165640:67]), and nothing reads
+`+0x4DC` / `+0x4E8` directly after creation except `DoModeSettingsNEW`'s second-block alertness read
+[M 0x14c600:75] (the port's `alert_block`); every other property access goes through `+0x4D8`, the
+port's `props`.
 
 ## The first-attack stamps and the comms-alert state
 

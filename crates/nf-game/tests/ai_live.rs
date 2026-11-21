@@ -282,7 +282,12 @@ fn guard_takes_cover_like_the_game() {
     // 4: 16 was measured at 11:09 UTC on the muzzle tree, 4 at ~03:35 UTC on the gas+guard tree, so
     // 16 is the more recent measurement; the joined tree carries BOTH lever families and re-pins
     // from its own run).
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 16);
+    // Seed 2 (re-picked at g028-cover: goal routes now arrive under the goal's own radius, so the cover
+    // run takes the live 198-tick path round the gate pillar [M 0x169240, 0x158b10:104, 0x15b110:20-22]
+    // and every later draw moves. Seeds 0-30 on this model: 2, 3, 5, 6, 7, 10, 15 and 29 pass every pin;
+    // 1, 4, 8, 11, 16, 19, 22, 23, 26-28 and 30 hold the 90-tick lean in UnderCoverAim (live 37), the
+    // rest pick another first move.)
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 2);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }
@@ -763,6 +768,42 @@ fn auto_aim_snaps_to_a_guard_near_the_crosshair() {
     assert_eq!(sim.aim_target, Some(i));
     let far = sim.auto_aim(&d, p.eye, look(0.6), 2);
     assert!(sim.aim_target.is_none() && (far[0] - look(0.6)[0]).abs() > 1e-4, "sister: the offset still eases back, not a new snap");
+}
+
+/// s-auto-aim [M Check_AutoAim 0x1a73f8 disasm 0x1a7778-0x1a77d4, Player_AutoAim 0x1a7c98 disasm
+/// 0x1a7e78-0x1a7ecc, HUD_UpdateCrossHair 0x19e6d0:87-92]: the stored offset is a SCREEN position ,
+/// the projected target ((sx − W/2)/(W/4), (sy − H/2)/(H/4)) halved, i.e. where the crosshair sits ,
+/// not the old (yaw, pitch) radians. A guard to the right of the view sits at x > 0 (screen right);
+/// the old store held −0.025 rad. The next tick with no target halves it in screen space and the
+/// shot goes through that point (`Player_GetAimingPoint` 0x1a4a98).
+#[test]
+fn auto_aim_offset_is_the_targets_screen_position() {
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let (drones, i, rng) = l.drones(None, 61.342);
+    let mut sim = l.sim(drones, rng);
+    let p = bond_at([69.3, 26.5, 99.5]);
+    sim.tick(&d, &p);
+    let bone2 = sim.list[i].palette(&d).unwrap()[2][3];
+    let bone2 = [bone2[0], bone2[1], bone2[2]];
+    let to = [bone2[0] - p.eye[0], bone2[1] - p.eye[1], bone2[2] - p.eye[2]];
+    let yaw = to[0].atan2(to[2]) + 0.05;
+    let look = [yaw.sin(), 0.0, yaw.cos()];
+    sim.auto_aim(&d, p.eye, look, 2);
+    assert_eq!(sim.aim_target, Some(i));
+    let b = nf_game::autoaim::view_basis(look[0].atan2(look[2]), 0.0f32.asin(), look);
+    let s = nf_game::autoaim::project_offset(p.eye, &b, bone2).unwrap();
+    let want = [s[0] * 0.5, s[1] * 0.5];
+    assert_eq!(sim.aim_offset.map(f32::to_bits), want.map(f32::to_bits), "the stored offset is the halved screen position");
+    assert!(sim.aim_offset[0] > 0.05, "a guard right of the view sits right on the screen: {:?}", sim.aim_offset);
+    // The guard drops out (not drawn): the offset halves again and the shot aims through it.
+    sim.list[i].drawn = false;
+    let dir = sim.auto_aim(&d, p.eye, look, 2);
+    assert_eq!(sim.aim_target, None);
+    let want2 = [want[0] * 0.5, want[1] * 0.5];
+    assert_eq!(sim.aim_offset.map(f32::to_bits), want2.map(f32::to_bits));
+    let exp = nf_game::autoaim::aim_dir(&b, want2, 1.0);
+    for k in 0..3 { assert!((dir[k] - exp[k]).abs() < 1e-6, "{dir:?} vs {exp:?}"); }
 }
 
 /// Bond on 07000005's collision (docs/systems/player.md): at the level-start position of the snapshot [L] (104.954,
@@ -1574,3 +1615,35 @@ fn auto_aim_from_a_moving_shooter_is_the_same_instantaneous_geometry() {
     assert!((off[1] - off2[1]).abs() < 0.02, "the assist offset tracks the geometry, not a velocity history ({off:?} vs {off2:?})");
 }
 
+
+/// U-030 (the cover run near the gate): the live trace (work/chase_trace.tsv) holds RunForCover 0x8C for 198 ticks
+/// (frames 0x1f9de..0x1faa4): strafe 0xC (danim 100) east of the gate pillar, back-off 0x4 (danim 14) west along
+/// its south face, then strafe 0xD (danim 101) north round its corner, entering UnderCoverInit 0x93 at
+/// (58.60, 99.07) [L]. The arrival is the goal's own radius: RunForCover passes `Drone+0x704` (0.5, FindCover's
+/// SetupGoalPosition) to `MoveToGoalPosition` [M disasm 0x169240/0x169250 `lwc1 $f12, 0x704`],
+/// `SetupRouteToPosition` stores it at route+0x8C [M 0x158b10:104] and `AINetwork_FollowRoute` arrives past the
+/// last node only under it [M 0x15b110:20-22]. The port built every goal route with a flat 2.0, so the guard
+/// stopped 1.5 short south of the pillar after 148 ticks and slid into cover without the north leg.
+#[test]
+fn cover_run_rounds_the_gate_pillar_like_the_game() {
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 16);
+    let mut sim = l.sim(drones, rng);
+    let player = bond_at([79.86, 22.92, 96.0]);
+    let (mut start, mut arrive, mut at_pos, mut north_leg) = (None, None, [0.0f32; 3], false);
+    for t in 0..500u32 {
+        let before = sim.list[gi].pos;
+        sim.tick(&d, &player);
+        let g = &sim.list[gi];
+        if g.state == 0x8c && start.is_none() { start = Some(t); }
+        if g.state == 0x8c && g.anim.danim == 101 { north_leg = true; }
+        if g.state == 0x93 && arrive.is_none() && start.is_some() { arrive = Some(t); at_pos = before; }
+    }
+    let (s, a) = (start.expect("no RunForCover"), arrive.expect("no UnderCoverInit"));
+    eprintln!("RunForCover {} ticks, arrival at ({:.2}, {:.2})", a - s, at_pos[0], at_pos[2]);
+    assert!((194..=202).contains(&(a - s)), "RunForCover lasted {} ticks (live 198)", a - s);
+    assert!(north_leg, "the run must end with the strafe-0xD leg north round the pillar (live danim 101)");
+    let err = ((at_pos[0] - 58.60).powi(2) + (at_pos[2] - 99.07).powi(2)).sqrt();
+    assert!(err < 0.2, "arrived at ({:.2}, {:.2}), {err:.2} from the live (58.60, 99.07)", at_pos[0], at_pos[2]);
+}

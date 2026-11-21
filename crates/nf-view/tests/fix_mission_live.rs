@@ -159,437 +159,441 @@ fn mission_completes_when_every_objective_channel_is_on() {
 /// LOAD_LEVEL #18 → 0x07000002 [D placements; WORKLOG fix-level].
 #[test]
 fn the_07000001_exit_works_end_to_end() {
-    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
-    let mut scene = load(&iso, "07000001.bin");
-    // Play the intro (no skip): Bond is disabled until the script hands control back.
-    let mut ch_b = false;
-    // The escort notice lives 300 ticks [M 0x1827d8 case 0], long gone by the intro's end — catch it.
-    let mut escort_seen = false;
-    for t in 0..3200u32 {
-        let sim = scene.sim.as_mut().unwrap();
-        sim.step_bond(Default::default(), false, false, false);
-        if sim.hud.objective_msgs.iter().any(|m| m.text.contains("Escort Mayhew")) { escort_seen = true; }
-        if sim.drones.channels.on(0xb) { ch_b = true; }
-        if ch_b && t > 100 && !sim.disabled { break; }
-    }
-    {
-        let sim = scene.sim.as_mut().unwrap();
-        assert!(ch_b, "the intro's event 0xD writes ch 0xB");
-        assert!(!sim.disabled, "the intro handed control back");
-        assert!(escort_seen, "the escort objective announced at load (state 0, level reached)");
-        let mi = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).expect("Mayhew exists");
-        assert!(sim.drones.list[mi].enabled, "ch 0xB releases the WaitSwitch drone");
-        assert_eq!(sim.drones.list[mi].state, state::ALLY_LEAD_INIT, "Mayhew starts in AllyLeadInit");
-        eprintln!("[mission] Mayhew at {:?} state {:#x} route {}", sim.drones.list[mi].pos, sim.drones.list[mi].state, sim.drones.list[mi].route.is_some());
-    }
-    let mi = scene.sim.as_ref().unwrap().drones.list.iter().position(|d| d.skin == 0x0500_004f).unwrap();
-    // ── The ambush the ally-wait hold waits for (level-01-mayhew-wait-2) ────────────────────
-    // The hold parks the escort at the kind-8 route's ally-wait node 33 (flag 0x20
-    // [M NDrone2_ReachedDestNode 0x153358:85-94]) until the ambush beyond the courtyard door
-    // is cleared: the three ch-0x0e guards die → death channels 0x13/0x11/0x12 → the AND mux
-    // raises ch 0x99 [D mux pl 318] → the 0x21 UPDATE (0x15efc8 case 3) releases to Lead. The
-    // game's own trace holds the contact in 0x21 at (2.94,7.22) for 1262 frames while the
-    // ambush runs [L tests/traces/01-doors.trace] — the PLAYER walks ahead into the ambush
-    // (Bond riding 3.9 behind a parked escort never crosses the meet plate, so the ride below
-    // cannot clear it for him). Bond walks the meet plate — ch 0x32 → the 0x33 mirror
-    // [M Trigger_Update 0x1b1a78 case 5] → SP #276 → ch 0x0e [D placements] — and clears the
-    // three guards through the real fire path; only then does the escort ride.
-    let early_open = std::rc::Rc::new(std::cell::Cell::new(false));
-    {
-        let contact = mi;
-        let mut w = walker::Walker::new(scene);
-        // The courtyard shoji's OPEN latch from the first walker tick: the escort follows Bond
-        // through the ambush and can cross the shoji there (he stood at the plate side at the
-        // hold release on one run, so the ride below never reached the door).
-        {
-            let latch = early_open.clone();
-            w.on_step = Some(Box::new(move |scene: &nf_view::scene::Scene, _t: u32| {
-                let sim = scene.sim.as_ref().unwrap();
-                if let Some(d) = sim.drones.doors.list.iter().min_by(|a, b| ((a.pos[0] - 7.0).abs() + (a.pos[2] - 11.0).abs())
-                    .total_cmp(&((b.pos[0] - 7.0).abs() + (b.pos[2] - 11.0).abs()))) {
-                    if d.state == nf_game::door::OPEN { latch.set(true); }
-                }
-            }));
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 500/30, 1000/60, 1500/45, 2000/30, 2500/90, 3000/60, 4000/90, 6000/60; the base batch's AI fixes had the ambush guards kill the contact at frame 69175 complete].
+    walker::with_pause(2000, 30, || {
+        let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+        let mut scene = load(&iso, "07000001.bin");
+        // Play the intro (no skip): Bond is disabled until the script hands control back.
+        let mut ch_b = false;
+        // The escort notice lives 300 ticks [M 0x1827d8 case 0], long gone by the intro's end — catch it.
+        let mut escort_seen = false;
+        for t in 0..3200u32 {
+            let sim = scene.sim.as_mut().unwrap();
+            sim.step_bond(Default::default(), false, false, false);
+            if sim.hud.objective_msgs.iter().any(|m| m.text.contains("Escort Mayhew")) { escort_seen = true; }
+            if sim.drones.channels.on(0xb) { ch_b = true; }
+            if ch_b && t > 100 && !sim.disabled { break; }
         }
-        w.shield = Some(contact);
-        // The 01 walk's corner escape (walkreal_07000001 sets it too): a nav leg wedged on the
-        // hall's east-door jamb at (5.45, 11.60) re-routes over clear nav nodes.
-        w.bridge_wedged_nav = true;
-        // The hall's guards are solid: the game's standing body, on within 2.0 of the player
-        // [M NDrone2_Collision 0x140e90:91-121; NDrone2_DoCollision 0x149ec8 /
-        // DroneFunc_NearPlayerCollision 0x14b190], and in SP the guard is never pushed back by
-        // the player (Collide_Jointy 0x1ec180 refuses a class-3 candidate). The ambush sweep's
-        // legs past the woken hall guards then wedged on their bodies: two 0x5c guards inside
-        // the east door slid Bond into the courtyard shoji's pocket at (8.8, 11.71), and six
-        // guards held him on the hall's south wall at (-13.4, 11.6) — every leg died at the cap
-        // and the named guards were never reached. A player shoots who stands in his way: the
-        // walker's body-block response (the 02 walks' and interactables_07000001's lever).
-        w.body_block_response = true;
-        // The intro tail's tail (event 6 re-places Bond) — the walkreal's post-intro settle. The
-        // intro leaves the contact on the line from the start-room guard #0 to Bond, and a guard's
-        // round lands on any drone of the other side it meets [M NDrone2_DealWithObjHit
-        // 0x13fff0:181-232]: idling 300 ticks there, the rounds aimed at Bond killed the contact
-        // (measured: health -1.25 at the end of the wait). A player steps out of the line first,
-        // as walkreal_07000001 does: 1.6 east puts the contact 1.1 off it.
         {
-            let p = w.scene.sim.as_ref().unwrap().bond.pos;
-            w.walk_to(walker::Wp { at: [p[0] + 1.6, p[1], p[2] - 0.4], act: walker::Act::None, arrive: 0.3 }, "out of the contact's line");
+            let sim = scene.sim.as_mut().unwrap();
+            assert!(ch_b, "the intro's event 0xD writes ch 0xB");
+            assert!(!sim.disabled, "the intro handed control back");
+            assert!(escort_seen, "the escort objective announced at load (state 0, level reached)");
+            let mi = sim.drones.list.iter().position(|d| d.skin == 0x0500_004f).expect("Mayhew exists");
+            assert!(sim.drones.list[mi].enabled, "ch 0xB releases the WaitSwitch drone");
+            assert_eq!(sim.drones.list[mi].state, state::ALLY_LEAD_INIT, "Mayhew starts in AllyLeadInit");
+            eprintln!("[mission] Mayhew at {:?} state {:#x} route {}", sim.drones.list[mi].pos, sim.drones.list[mi].state, sim.drones.list[mi].route.is_some());
         }
-        w.wait(240);
-        w.walk_nav_to([6.8, 6.0, 8.9], "the meet plate (walk ahead into the ambush)", 1.0);
-        // The plate is a TOUCH_ONCE on Bond's capsule: walk the centre tightly, then sweep the
-        // quad (the walkreal's crossing — a nav stop a hair short never crosses).
+        let mi = scene.sim.as_ref().unwrap().drones.list.iter().position(|d| d.skin == 0x0500_004f).unwrap();
+        // ── The ambush the ally-wait hold waits for (level-01-mayhew-wait-2) ────────────────────
+        // The hold parks the escort at the kind-8 route's ally-wait node 33 (flag 0x20
+        // [M NDrone2_ReachedDestNode 0x153358:85-94]) until the ambush beyond the courtyard door
+        // is cleared: the three ch-0x0e guards die → death channels 0x13/0x11/0x12 → the AND mux
+        // raises ch 0x99 [D mux pl 318] → the 0x21 UPDATE (0x15efc8 case 3) releases to Lead. The
+        // game's own trace holds the contact in 0x21 at (2.94,7.22) for 1262 frames while the
+        // ambush runs [L tests/traces/01-doors.trace] — the PLAYER walks ahead into the ambush
+        // (Bond riding 3.9 behind a parked escort never crosses the meet plate, so the ride below
+        // cannot clear it for him). Bond walks the meet plate — ch 0x32 → the 0x33 mirror
+        // [M Trigger_Update 0x1b1a78 case 5] → SP #276 → ch 0x0e [D placements] — and clears the
+        // three guards through the real fire path; only then does the escort ride.
+        let early_open = std::rc::Rc::new(std::cell::Cell::new(false));
         {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let plate = sim.drones.triggers.iter()
-                .find(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x32)
-                .map(|t| t.centre())
-                .expect("the meet plate");
-            drop(sim);
-            w.walk_to(walker::Wp { at: plate, act: walker::Act::None, arrive: 0.25 }, "onto the meet plate");
-            for (dx, dz) in [(0.0f32, 0.9f32), (0.0, -0.9), (0.9, 0.0), (-0.9, 0.0)] {
-                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x32) { break; }
-                w.walk_to(walker::Wp { at: [plate[0] + dx, plate[1], plate[2] + dz], act: walker::Act::None, arrive: 0.2 },
-                    &format!("the meet plate sweep ({dx},{dz})"));
-                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x32) { break; }
-                w.walk_to(walker::Wp { at: plate, act: walker::Act::None, arrive: 0.2 }, "back across the meet plate");
+            let contact = mi;
+            let mut w = walker::Walker::new(scene);
+            // The courtyard shoji's OPEN latch from the first walker tick: the escort follows Bond
+            // through the ambush and can cross the shoji there (he stood at the plate side at the
+            // hold release on one run, so the ride below never reached the door).
+            {
+                let latch = early_open.clone();
+                w.on_step = Some(Box::new(move |scene: &nf_view::scene::Scene, _t: u32| {
+                    let sim = scene.sim.as_ref().unwrap();
+                    if let Some(d) = sim.drones.doors.list.iter().min_by(|a, b| ((a.pos[0] - 7.0).abs() + (a.pos[2] - 11.0).abs())
+                        .total_cmp(&((b.pos[0] - 7.0).abs() + (b.pos[2] - 11.0).abs()))) {
+                        if d.state == nf_game::door::OPEN { latch.set(true); }
+                    }
+                }));
             }
-            let sim = w.scene.sim.as_ref().unwrap();
-            assert!(sim.drones.channels.on(0x32), "walking the meet plate must fire its ch 0x32 [D placement]");
-        }
-        // The scene plays out (SP #276, ~280 frames [D decode]) and stream 9's event 0xD writes
-        // ch 0x0e [D the lib dump] — the three ambush guards start.
-        let mut e_at = None;
-        for t in 0..2400u32 {
-            w.tick(Default::default(), false);
-            if w.scene.sim.as_ref().unwrap().drones.channels.on(0xe) { e_at = Some(t); break; }
-        }
-        assert!(e_at.is_some(), "the meet plate must fire ch 0x32 → the 0x33 mirror → SP #276 must play and write ch 0xE");
-        w.wait(120);
-        let named: Vec<usize> = {
-            let sim = w.scene.sim.as_ref().unwrap();
-            (0..sim.drones.list.len())
-                .filter(|&i| [0x11u8, 0x12, 0x13].contains(&sim.drones.list[i].death_channel))
-                .collect()
-        };
-        assert_eq!(named.len(), 3, "three guards carry death channels 0x11/0x12/0x13 [D]");
-        // guards the sweep already fought without killing (the courtyard cover sitter) — one
-        // attempt each, the same walk the game's player makes past a guard he cannot see
-        let mut sweep_tried: std::collections::HashSet<usize> = Default::default();
-        for &g in named.iter() {
-            let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
-            if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, gpos) > 9.0 {
-                walker::hall_restage(&mut w, &format!("guard {g} approach"));
+            w.shield = Some(contact);
+            // The 01 walk's corner escape (walkreal_07000001 sets it too): a nav leg wedged on the
+            // hall's east-door jamb at (5.45, 11.60) re-routes over clear nav nodes.
+            w.bridge_wedged_nav = true;
+            // The hall's guards are solid: the game's standing body, on within 2.0 of the player
+            // [M NDrone2_Collision 0x140e90:91-121; NDrone2_DoCollision 0x149ec8 /
+            // DroneFunc_NearPlayerCollision 0x14b190], and in SP the guard is never pushed back by
+            // the player (Collide_Jointy 0x1ec180 refuses a class-3 candidate). The ambush sweep's
+            // legs past the woken hall guards then wedged on their bodies: two 0x5c guards inside
+            // the east door slid Bond into the courtyard shoji's pocket at (8.8, 11.71), and six
+            // guards held him on the hall's south wall at (-13.4, 11.6) — every leg died at the cap
+            // and the named guards were never reached. A player shoots who stands in his way: the
+            // walker's body-block response (the 02 walks' and interactables_07000001's lever).
+            w.body_block_response = true;
+            // The intro tail's tail (event 6 re-places Bond) — the walkreal's post-intro settle. The
+            // intro leaves the contact on the line from the start-room guard #0 to Bond, and a guard's
+            // round lands on any drone of the other side it meets [M NDrone2_DealWithObjHit
+            // 0x13fff0:181-232]: idling 300 ticks there, the rounds aimed at Bond killed the contact
+            // (measured: health -1.25 at the end of the wait). A player steps out of the line first,
+            // as walkreal_07000001 does: 1.6 east puts the contact 1.1 off it.
+            {
+                let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                w.walk_to(walker::Wp { at: [p[0] + 1.6, p[1], p[2] - 0.4], act: walker::Act::None, arrive: 0.3 }, "out of the contact's line");
             }
-            w.walk_nav_to(gpos, &format!("approach ambush guard {g}"), 3.0);
+            w.wait(240);
+            w.walk_nav_to([6.8, 6.0, 8.9], "the meet plate (walk ahead into the ambush)", 1.0);
+            // The plate is a TOUCH_ONCE on Bond's capsule: walk the centre tightly, then sweep the
+            // quad (the walkreal's crossing — a nav stop a hair short never crosses).
             {
                 let sim = w.scene.sim.as_ref().unwrap();
-                let dry = sim.gun.clip + sim.gun.spare < 8;
+                let plate = sim.drones.triggers.iter()
+                    .find(|t| t.kind == walker::trigger_kind::TOUCH_ONCE && t.out == 0x32)
+                    .map(|t| t.centre())
+                    .expect("the meet plate");
                 drop(sim);
-                if dry { walker::hall_ammo_ladder(&mut w, &format!("ambush guard {g} ammo")); }
+                w.walk_to(walker::Wp { at: plate, act: walker::Act::None, arrive: 0.25 }, "onto the meet plate");
+                for (dx, dz) in [(0.0f32, 0.9f32), (0.0, -0.9), (0.9, 0.0), (-0.9, 0.0)] {
+                    if w.scene.sim.as_ref().unwrap().drones.channels.on(0x32) { break; }
+                    w.walk_to(walker::Wp { at: [plate[0] + dx, plate[1], plate[2] + dz], act: walker::Act::None, arrive: 0.2 },
+                        &format!("the meet plate sweep ({dx},{dz})"));
+                    if w.scene.sim.as_ref().unwrap().drones.channels.on(0x32) { break; }
+                    w.walk_to(walker::Wp { at: plate, act: walker::Act::None, arrive: 0.2 }, "back across the meet plate");
+                }
+                let sim = w.scene.sim.as_ref().unwrap();
+                assert!(sim.drones.channels.on(0x32), "walking the meet plate must fire its ch 0x32 [D placement]");
             }
-            // Dry mid-fight inside the hall: out the east door to the corridor boxes and back in
-            // (the hall's own ladder — the direct resupply leg wedges on that door's jamb).
-            for k in 0..2 {
-                if w.shoot(g, &format!("ambush guard {g}")) { break; }
-                walker::hall_ammo_ladder(&mut w, &format!("ambush guard {g} ammo {k}"));
+            // The scene plays out (SP #276, ~280 frames [D decode]) and stream 9's event 0xD writes
+            // ch 0x0e [D the lib dump] — the three ambush guards start.
+            let mut e_at = None;
+            for t in 0..2400u32 {
+                w.tick(Default::default(), false);
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0xe) { e_at = Some(t); break; }
             }
-            // Latch-branch margin (NF_MISSIONPROBE=1 probe, this file): on master the ambush
-            // exchange killed EVERY hall guard; with the game's contact-turn rule the fight
-            // geometry moved and a fourth hall guard (#9, 12 hp, COMBAT_NO_SIGHT →
-            // AIM_STAND_FIRE at d≈5 of the ride) survived it, plus a courtyard-side starter
-            // (#16). The game's own rule then kills the escort — "a guard's round lands on any
-            // drone of the other side it meets" [M NDrone2_DealWithObjHit 0x13fff0] — Mayhew
-            // (already round-bled by the named fights) went DEATH_ANIM 0x44 → DEAD 0x47 within
-            // 200 ticks of the ch99 release, and a post-release sweep cannot save him (he rides
-            // INTO the sweep's crossfire). A player clears the room BEFORE the last named guard
-            // dies: sweep every living started team-1 drone near the held escort (the hold
-            // parks him at the wait node until ch99 [M NDrone2_ReachedDestNode 0x153358:85-94])
-            // with the same real fire path, while the named guards still keep the hold on.
-            // mp-near-pos-list-tier re-derivation: with the game's DroneNearPos list tier live
-            // [M 0x143e68/0x159dd0], the corridor guards' combat repositioning (0x5a
-            // CombatOutOfRange / 0x8c RunForCover walks) counts the route's door nodes reached
-            // while a fighting peer stands on them, the walker's nav legs wedge on the new
-            // door-park positions, and during those wedges the escort's ride resumes — he
-            // crosses into the courtyard BEFORE ch99, where the surviving east-side guards
-            // shoot him ("a guard's round lands on any drone of the other side it meets" [M
-            // NDrone2_DealWithObjHit 0x13fff0]; measured on the pre-fix tree: Mayhew
-            // hit_by_drone Some(15), DEATH_ANIM 0x44 mid-sweep). The room to clear is now the
-            // whole ride: started team-1 drones near the escort OR near the courtyard shoji
-            // (the ride's mid-point), cleared EAST-SIDE FIRST (the ride reaches the courtyard
-            // while the west fights run), each guard attempted once per sweep.
-            if g != *named.last().unwrap() {
-                let door = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
-                    .min_by(|a, b| ((a.pos[0] - 7.0).abs() + (a.pos[2] - 11.0).abs())
-                        .total_cmp(&((b.pos[0] - 7.0).abs() + (b.pos[2] - 11.0).abs())))
-                    .map(|d| d.pos).expect("the courtyard door exists");
-                let mut roomies: Vec<usize> = {
+            assert!(e_at.is_some(), "the meet plate must fire ch 0x32 → the 0x33 mirror → SP #276 must play and write ch 0xE");
+            w.wait(120);
+            let named: Vec<usize> = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (0..sim.drones.list.len())
+                    .filter(|&i| [0x11u8, 0x12, 0x13].contains(&sim.drones.list[i].death_channel))
+                    .collect()
+            };
+            assert_eq!(named.len(), 3, "three guards carry death channels 0x11/0x12/0x13 [D]");
+            // guards the sweep already fought without killing (the courtyard cover sitter) — one
+            // attempt each, the same walk the game's player makes past a guard he cannot see
+            let mut sweep_tried: std::collections::HashSet<usize> = Default::default();
+            for &g in named.iter() {
+                let gpos = w.scene.sim.as_ref().unwrap().drones.list[g].pos;
+                if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, gpos) > 9.0 {
+                    walker::hall_restage(&mut w, &format!("guard {g} approach"));
+                }
+                w.walk_nav_to(gpos, &format!("approach ambush guard {g}"), 3.0);
+                {
                     let sim = w.scene.sim.as_ref().unwrap();
-                    let mp = sim.drones.list[contact].pos;
-                    (0..sim.drones.list.len())
-                        .filter(|&i| i != g && !named.contains(&i) && !sweep_tried.contains(&i)
-                            && sim.drones.list[i].team == 1 && sim.drones.list[i].started
-                            && !sim.drones.list[i].corpse && sim.drones.list[i].health > 0.0
-                            && (walker::dxz(sim.drones.list[i].pos, mp) < 30.0
-                                || walker::dxz(sim.drones.list[i].pos, door) < 30.0))
-                        .collect()
-                };
-                roomies.sort_by_key(|&h| {
-                    let sim = w.scene.sim.as_ref().unwrap();
-                    let hp = sim.drones.list[h].pos;
-                    ((hp[0] - door[0]).powi(2) + (hp[2] - door[2]).powi(2)) as i64
-                });
-                for h in roomies {
-                    let hpos = w.scene.sim.as_ref().unwrap().drones.list[h].pos;
-                    if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, hpos) > 9.0 {
-                        walker::hall_restage(&mut w, &format!("leftover guard {h} approach"));
-                    }
-                    w.walk_nav_to(hpos, &format!("approach leftover guard {h}"), 3.0);
-                    {
+                    let dry = sim.gun.clip + sim.gun.spare < 8;
+                    drop(sim);
+                    if dry { walker::hall_ammo_ladder(&mut w, &format!("ambush guard {g} ammo")); }
+                }
+                // Dry mid-fight inside the hall: out the east door to the corridor boxes and back in
+                // (the hall's own ladder — the direct resupply leg wedges on that door's jamb).
+                for k in 0..2 {
+                    if w.shoot(g, &format!("ambush guard {g}")) { break; }
+                    walker::hall_ammo_ladder(&mut w, &format!("ambush guard {g} ammo {k}"));
+                }
+                // Latch-branch margin (NF_MISSIONPROBE=1 probe, this file): on master the ambush
+                // exchange killed EVERY hall guard; with the game's contact-turn rule the fight
+                // geometry moved and a fourth hall guard (#9, 12 hp, COMBAT_NO_SIGHT →
+                // AIM_STAND_FIRE at d≈5 of the ride) survived it, plus a courtyard-side starter
+                // (#16). The game's own rule then kills the escort — "a guard's round lands on any
+                // drone of the other side it meets" [M NDrone2_DealWithObjHit 0x13fff0] — Mayhew
+                // (already round-bled by the named fights) went DEATH_ANIM 0x44 → DEAD 0x47 within
+                // 200 ticks of the ch99 release, and a post-release sweep cannot save him (he rides
+                // INTO the sweep's crossfire). A player clears the room BEFORE the last named guard
+                // dies: sweep every living started team-1 drone near the held escort (the hold
+                // parks him at the wait node until ch99 [M NDrone2_ReachedDestNode 0x153358:85-94])
+                // with the same real fire path, while the named guards still keep the hold on.
+                // mp-near-pos-list-tier re-derivation: with the game's DroneNearPos list tier live
+                // [M 0x143e68/0x159dd0], the corridor guards' combat repositioning (0x5a
+                // CombatOutOfRange / 0x8c RunForCover walks) counts the route's door nodes reached
+                // while a fighting peer stands on them, the walker's nav legs wedge on the new
+                // door-park positions, and during those wedges the escort's ride resumes — he
+                // crosses into the courtyard BEFORE ch99, where the surviving east-side guards
+                // shoot him ("a guard's round lands on any drone of the other side it meets" [M
+                // NDrone2_DealWithObjHit 0x13fff0]; measured on the pre-fix tree: Mayhew
+                // hit_by_drone Some(15), DEATH_ANIM 0x44 mid-sweep). The room to clear is now the
+                // whole ride: started team-1 drones near the escort OR near the courtyard shoji
+                // (the ride's mid-point), cleared EAST-SIDE FIRST (the ride reaches the courtyard
+                // while the west fights run), each guard attempted once per sweep.
+                if g != *named.last().unwrap() {
+                    let door = w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+                        .min_by(|a, b| ((a.pos[0] - 7.0).abs() + (a.pos[2] - 11.0).abs())
+                            .total_cmp(&((b.pos[0] - 7.0).abs() + (b.pos[2] - 11.0).abs())))
+                        .map(|d| d.pos).expect("the courtyard door exists");
+                    let mut roomies: Vec<usize> = {
                         let sim = w.scene.sim.as_ref().unwrap();
-                        let dry = sim.gun.clip + sim.gun.spare < 8;
-                        drop(sim);
-                        if dry { walker::hall_ammo_ladder(&mut w, &format!("leftover guard {h} ammo")); }
+                        let mp = sim.drones.list[contact].pos;
+                        (0..sim.drones.list.len())
+                            .filter(|&i| i != g && !named.contains(&i) && !sweep_tried.contains(&i)
+                                && sim.drones.list[i].team == 1 && sim.drones.list[i].started
+                                && !sim.drones.list[i].corpse && sim.drones.list[i].health > 0.0
+                                && (walker::dxz(sim.drones.list[i].pos, mp) < 30.0
+                                    || walker::dxz(sim.drones.list[i].pos, door) < 30.0))
+                            .collect()
+                    };
+                    roomies.sort_by_key(|&h| {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let hp = sim.drones.list[h].pos;
+                        ((hp[0] - door[0]).powi(2) + (hp[2] - door[2]).powi(2)) as i64
+                    });
+                    for h in roomies {
+                        let hpos = w.scene.sim.as_ref().unwrap().drones.list[h].pos;
+                        if walker::dxz(w.scene.sim.as_ref().unwrap().bond.pos, hpos) > 9.0 {
+                            walker::hall_restage(&mut w, &format!("leftover guard {h} approach"));
+                        }
+                        w.walk_nav_to(hpos, &format!("approach leftover guard {h}"), 3.0);
+                        {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            let dry = sim.gun.clip + sim.gun.spare < 8;
+                            drop(sim);
+                            if dry { walker::hall_ammo_ladder(&mut w, &format!("leftover guard {h} ammo")); }
+                        }
+                        for k in 0..2 {
+                            if w.shoot(h, &format!("leftover guard {h}")) { break; }
+                            walker::hall_ammo_ladder(&mut w, &format!("leftover guard {h} ammo {k}"));
+                        }
+                        sweep_tried.insert(h);
                     }
-                    for k in 0..2 {
-                        if w.shoot(h, &format!("leftover guard {h}")) { break; }
-                        walker::hall_ammo_ladder(&mut w, &format!("leftover guard {h} ammo {k}"));
-                    }
-                    sweep_tried.insert(h);
                 }
             }
+            w.wait(30);
+            let mut n99 = None;
+            for t in 0..1200u32 {
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x99) { n99 = Some(t); break; }
+                w.tick(Default::default(), false);
+            }
+            assert!(n99.is_some(), "AND(0x11,0x12,0x13) must raise ch 0x99 once the three ambush guards are dead [D mux pl 318] — the hold's release channel");
+            eprintln!("[mission] the ambush cleared: ch 0x99 on, the hold releases (Mayhew at {:?} state {:#x})",
+                w.scene.sim.as_ref().unwrap().drones.list[contact].pos, w.scene.sim.as_ref().unwrap().drones.list[contact].state);
+            scene = w.scene;
         }
-        w.wait(30);
-        let mut n99 = None;
-        for t in 0..1200u32 {
-            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x99) { n99 = Some(t); break; }
-            w.tick(Default::default(), false);
-        }
-        assert!(n99.is_some(), "AND(0x11,0x12,0x13) must raise ch 0x99 once the three ambush guards are dead [D mux pl 318] — the hold's release channel");
-        eprintln!("[mission] the ambush cleared: ch 0x99 on, the hold releases (Mayhew at {:?} state {:#x})",
-            w.scene.sim.as_ref().unwrap().drones.list[contact].pos, w.scene.sim.as_ref().unwrap().drones.list[contact].state);
-        scene = w.scene;
-    }
-    // The plate centre (Touch #137's volume).
-    let (cx, cy, cz) = {
-        let sim = scene.sim.as_ref().unwrap();
-        let touch = sim.drones.triggers.iter().find(|t| t.kind == nf_game::triggers::kind::TOUCH && t.out == 0x10)
-            .expect("the level-end touch exists").placement;
-        let t = sim.drones.triggers.iter().find(|t| t.placement == touch).unwrap();
-        ((t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5)
-    };
-    // The courtyard slide door (at (7.9, 11.1) [L probe]) blocks the route: the game's Bond E-opens
-    // it — the test does the same when Mayhew nears it.
-    let door_idx = scene.sim.as_ref().unwrap().drones.doors.list.iter().enumerate()
-        .min_by(|(_, a), (_, b)| ((a.pos[0] - 7.0).abs() + (a.pos[2] - 11.0).abs())
-            .total_cmp(&((b.pos[0] - 7.0).abs() + (b.pos[2] - 11.0).abs())))
-        .map(|(i, _)| i).expect("the courtyard door exists");
-    let mut at_plate = false;
-    let mut walked = 0.0f32;
-    // Sister latch: the courtyard door must REACH state 4 (OPEN) at least once — the game's
-    // `NDrone2_DoorIsOpen` 0x14aaa0 only releases `DSTATE_OpenDoor` on exactly that state.
-    let mut door_opened = early_open.get();
-    // fix-lighting2 merge re-baseline, kept for the nav-gap stall class: while the escort works the
-    // door (or paces at any junction) he lingers within 3.0 of it — the same stall class the nudge
-    // below already covers — so count the loiter and fire the same guard-relocation + route nudge
-    // for it. (The old "freezes half-open" reading was the mash deadlock the block below explains:
-    // an activation every tick sets Door_Update's per-tick busy marker, so the motion never ran.)
-    let mut door_loiter = 0u32;
-    let mut stall_window = 0.0f32;
-    let door_pos = scene.sim.as_ref().unwrap().drones.doors.list[door_idx].pos;
-    let mut last = scene.sim.as_ref().unwrap().drones.list[mi].pos;
-    for t in 0..5000u32 {
-        let (use_key, look) = {
-            let sim = scene.sim.as_mut().unwrap();
-            let mp = sim.drones.list[mi].pos;
-            let door = sim.drones.doors.list[door_idx].pos;
-            let near_door = ((mp[0] - door[0]).powi(2) + (mp[2] - door[2]).powi(2)).sqrt() < 10.0;
-            if near_door && sim.drones.list[mi].state == state::OPEN_DOOR
-                && sim.drones.doors.list[door_idx].state & 0x12 != 0 {
-                // The game's choreography: the escort halts at the route's door node in
-                // `DSTATE_OpenDoor` (0x81 [M 0x1681f8]) and works the door himself — the port's
-                // escort test (door #1 opened with Bond 3.9 away, outside use reach) and the
-                // atlas's PCSX2 trace ("Door 2 re-opened at 44.2 s with Bond ~18 m away (a drone
-                // opened it)") show it; Bond's E is the game's OTHER activator [M Door_Activate
-                // 0x135be0 via Player_Activate 0x1a5170]. Bond walks up BEHIND him and presses
-                // only while the door is CLOSED or CLOSING — the game's own NPC activation gate
-                // (`NDrone2_OpenDoor` 0x14aa38 fires on door+0xF4 & 0x12). A press on an OPENING
-                // door re-closes it [M 0x135be0's state-4/8 arm], and EVERY activation sets the
-                // tick-busy marker that skips `Door_Update`'s motion that tick [M 0x135be0
-                // LAB_00135ef8 → 0x1363c8:25; cleared end-of-tick by `Doors_Calc` 0x135fe0] — so
-                // the old every-2nd-tick mash (which also ran ahead while the door was merely
-                // closed) deadlocked this test two ways: (a) the mash's parity was opposite the
-                // escort's own 2-tick timer-C retry [M 0x1681f8 case 0xC], so the shoji was
-                // activated EVERY tick — the door log showed state 0x8↔0x10 with pos01 frozen at
-                // 0.033, never state 4, and `DSTATE_OpenDoor` — which has no give-up (case 1/3
-                // exit only on `NDrone2_DoorIsOpen` 0x14aaa0; `ControlSTANDARD` 0x1490f0's 60-tick
-                // retry is gated on the same & 0x12) — parked Mayhew in 0x81 forever; (b) Bond
-                // running ahead while the door was CLOSED stood inside the lead's PlayerInWay
-                // band, halting Mayhew 2 units short of the node so he never reached 0x81 at all.
-                // The game deadlocks under (a)'s input too (the same code runs there); a player
-                // presses until the door starts to swing, then stops — this gate is exactly that
-                // patience, and only once the escort is actually working the door.
-                let dx = door[0] - mp[0]; let dz = door[2] - mp[2];
-                let l = (dx * dx + dz * dz).sqrt().max(1e-4);
-                let back = if t % 16 < 6 { 1.2 } else { 2.2 };
-                let bx = door[0] - dx / l * back; let bz = door[2] - dz / l * back;
-                let floor = sim.world.floor_below([bx, mp[1], bz], 6.0).unwrap_or(mp[1]);
-                sim.bond.pos = [bx, floor + 1.1, bz];
-                // Face the DOOR: the use sphere sits 1 unit ahead of the head [M Player_Activate 0x1a5170].
-                sim.bond.yaw = (door[0] - bx).atan2(door[2] - bz);
-                (t % 2 == 0, mp)
-            } else if dist2d(mp, [cx, 0.0, cz]) < 2.0 {
-                // The game's Bond is BEHIND the escort and steps onto the plate as he does — the
-                // touch needs BOTH in the volume, so Bond joins at the plate only once Mayhew is
-                // inside the 2.0 latch ball. The old 4.5 threshold pre-placed Bond while Mayhew
-                // was still 3.6 out, and his r-0.4 toucher then brushed the volume's z lo (12.17
-                // [D probe]) from 11.77 — the level end fired a tick before the at_plate latch
-                // could ever see him. The pacing problem that motivated 4.5 (the escort flipping
-                // in the PlayerInWay band) is gone: the lead now RUNS the route [M 0x15e698
-                // case 3] and never paces at the plate.
-                let floor = sim.world.floor_below([cx, mp[1], cz], 6.0).unwrap_or(mp[1]);
-                sim.bond.pos = [cx, floor + 1.1, cz];
-                (false, mp)
-            } else if at_plate {
-                // Mayhew is on the plate: Bond joins him there so the AND-touch sees both (the
-                // same plate-centre geometry the level-end chain test uses).
-                sim.bond.pos = [cx, cy, cz];
-                (false, mp)
-            } else if t < 40 {
-                // Approach: AllyLeadInit waits for Bond within 3 [M 0x15e4f0 case 3].
-                let floor = sim.world.floor_below([mp[0], mp[1], mp[2] - 1.5], 6.0).unwrap_or(mp[1]);
-                sim.bond.pos = [mp[0], floor + 1.1, mp[2] - 1.5];
-                (false, mp)
-            } else {
-                // Bond rides the ROUTE polyline 3.9 arc-units behind the lead — the walking
-                // player of escort_follow_07000001_live, collision-free in this harness: his
-                // nearest route node tracks the chain, so the arc the bands read (SM+0x20
-                // [M 0x15e698:60, 0x15eda8:35]) stays a true ~3.9 lag and the game's own resume
-                // [M 0x15eda8 case 3: path > -7.0] fires when the lead parks (parked at his
-                // node, Bond 3.9 back on the link: the node scan's 5.0 cutoff [M
-                // DroneMove_ObjectMissionPathDistance 0x153f50] makes the lead's own node the
-                // nearest → path 0.0 → resume with Bond inside the 5.0 straight-line check).
-                // The two trails this replaces both froze the arc: the target-direction
-                // teleport held the STRAIGHT-LINE lag at 3.9 while the folded courtyard route
-                // made the arc 9.1 (the ailog repro: one LeadWait (path -9.1) entry, then
-                // parked in 0x20 for the rest of the 5000 ticks, the shoji never reached), and
-                // the real walked follower wedges on the courtyard walls this harness cannot
-                // nav around. 3.9 stays outside the PlayerInWay bands (enter 3.0 [M 0x15e698
-                // case 3], stay 3.5 [M 0x15ea28 case 3]).
-                if let Some((path, index, nodes)) = sim.drones.list[mi].route.as_ref()
-                    .map(|r| (r.path, r.index, r.nodes.clone())) {
-                    let mut left = 3.9f32;
-                    let mut cur = mp;
-                    let mut k = index.min(nodes.len() as i32 - 1);
-                    let mut placed = false;
-                    while left > 0.0 && k >= 0 && !placed {
-                        let np = sim.nav.paths[path].nodes[nodes[k as usize] as usize].pos;
-                        let (dx, dz) = (np[0] - cur[0], np[2] - cur[2]);
-                        let l = (dx * dx + dz * dz).sqrt();
-                        if l >= left && l > 0.0 {
-                            let bx = cur[0] + dx / l * left;
-                            let bz = cur[2] + dz / l * left;
-                            let floor = sim.world.floor_below([bx, mp[1], bz], 6.0).unwrap_or(mp[1]);
-                            sim.bond.pos = [bx, floor + 1.1, bz];
-                            placed = true;
-                        } else {
-                            left -= l;
-                            cur = np;
-                            k -= 1;
+        // The plate centre (Touch #137's volume).
+        let (cx, cy, cz) = {
+            let sim = scene.sim.as_ref().unwrap();
+            let touch = sim.drones.triggers.iter().find(|t| t.kind == nf_game::triggers::kind::TOUCH && t.out == 0x10)
+                .expect("the level-end touch exists").placement;
+            let t = sim.drones.triggers.iter().find(|t| t.placement == touch).unwrap();
+            ((t.lo[0] + t.hi[0]) * 0.5, (t.lo[1] + t.hi[1]) * 0.5, (t.lo[2] + t.hi[2]) * 0.5)
+        };
+        // The courtyard slide door (at (7.9, 11.1) [L probe]) blocks the route: the game's Bond E-opens
+        // it — the test does the same when Mayhew nears it.
+        let door_idx = scene.sim.as_ref().unwrap().drones.doors.list.iter().enumerate()
+            .min_by(|(_, a), (_, b)| ((a.pos[0] - 7.0).abs() + (a.pos[2] - 11.0).abs())
+                .total_cmp(&((b.pos[0] - 7.0).abs() + (b.pos[2] - 11.0).abs())))
+            .map(|(i, _)| i).expect("the courtyard door exists");
+        let mut at_plate = false;
+        let mut walked = 0.0f32;
+        // Sister latch: the courtyard door must REACH state 4 (OPEN) at least once — the game's
+        // `NDrone2_DoorIsOpen` 0x14aaa0 only releases `DSTATE_OpenDoor` on exactly that state.
+        let mut door_opened = early_open.get();
+        // fix-lighting2 merge re-baseline, kept for the nav-gap stall class: while the escort works the
+        // door (or paces at any junction) he lingers within 3.0 of it — the same stall class the nudge
+        // below already covers — so count the loiter and fire the same guard-relocation + route nudge
+        // for it. (The old "freezes half-open" reading was the mash deadlock the block below explains:
+        // an activation every tick sets Door_Update's per-tick busy marker, so the motion never ran.)
+        let mut door_loiter = 0u32;
+        let mut stall_window = 0.0f32;
+        let door_pos = scene.sim.as_ref().unwrap().drones.doors.list[door_idx].pos;
+        let mut last = scene.sim.as_ref().unwrap().drones.list[mi].pos;
+        for t in 0..5000u32 {
+            let (use_key, look) = {
+                let sim = scene.sim.as_mut().unwrap();
+                let mp = sim.drones.list[mi].pos;
+                let door = sim.drones.doors.list[door_idx].pos;
+                let near_door = ((mp[0] - door[0]).powi(2) + (mp[2] - door[2]).powi(2)).sqrt() < 10.0;
+                if near_door && sim.drones.list[mi].state == state::OPEN_DOOR
+                    && sim.drones.doors.list[door_idx].state & 0x12 != 0 {
+                    // The game's choreography: the escort halts at the route's door node in
+                    // `DSTATE_OpenDoor` (0x81 [M 0x1681f8]) and works the door himself — the port's
+                    // escort test (door #1 opened with Bond 3.9 away, outside use reach) and the
+                    // atlas's PCSX2 trace ("Door 2 re-opened at 44.2 s with Bond ~18 m away (a drone
+                    // opened it)") show it; Bond's E is the game's OTHER activator [M Door_Activate
+                    // 0x135be0 via Player_Activate 0x1a5170]. Bond walks up BEHIND him and presses
+                    // only while the door is CLOSED or CLOSING — the game's own NPC activation gate
+                    // (`NDrone2_OpenDoor` 0x14aa38 fires on door+0xF4 & 0x12). A press on an OPENING
+                    // door re-closes it [M 0x135be0's state-4/8 arm], and EVERY activation sets the
+                    // tick-busy marker that skips `Door_Update`'s motion that tick [M 0x135be0
+                    // LAB_00135ef8 → 0x1363c8:25; cleared end-of-tick by `Doors_Calc` 0x135fe0] — so
+                    // the old every-2nd-tick mash (which also ran ahead while the door was merely
+                    // closed) deadlocked this test two ways: (a) the mash's parity was opposite the
+                    // escort's own 2-tick timer-C retry [M 0x1681f8 case 0xC], so the shoji was
+                    // activated EVERY tick — the door log showed state 0x8↔0x10 with pos01 frozen at
+                    // 0.033, never state 4, and `DSTATE_OpenDoor` — which has no give-up (case 1/3
+                    // exit only on `NDrone2_DoorIsOpen` 0x14aaa0; `ControlSTANDARD` 0x1490f0's 60-tick
+                    // retry is gated on the same & 0x12) — parked Mayhew in 0x81 forever; (b) Bond
+                    // running ahead while the door was CLOSED stood inside the lead's PlayerInWay
+                    // band, halting Mayhew 2 units short of the node so he never reached 0x81 at all.
+                    // The game deadlocks under (a)'s input too (the same code runs there); a player
+                    // presses until the door starts to swing, then stops — this gate is exactly that
+                    // patience, and only once the escort is actually working the door.
+                    let dx = door[0] - mp[0]; let dz = door[2] - mp[2];
+                    let l = (dx * dx + dz * dz).sqrt().max(1e-4);
+                    let back = if t % 16 < 6 { 1.2 } else { 2.2 };
+                    let bx = door[0] - dx / l * back; let bz = door[2] - dz / l * back;
+                    let floor = sim.world.floor_below([bx, mp[1], bz], 6.0).unwrap_or(mp[1]);
+                    sim.bond.pos = [bx, floor + 1.1, bz];
+                    // Face the DOOR: the use sphere sits 1 unit ahead of the head [M Player_Activate 0x1a5170].
+                    sim.bond.yaw = (door[0] - bx).atan2(door[2] - bz);
+                    (t % 2 == 0, mp)
+                } else if dist2d(mp, [cx, 0.0, cz]) < 2.0 {
+                    // The game's Bond is BEHIND the escort and steps onto the plate as he does — the
+                    // touch needs BOTH in the volume, so Bond joins at the plate only once Mayhew is
+                    // inside the 2.0 latch ball. The old 4.5 threshold pre-placed Bond while Mayhew
+                    // was still 3.6 out, and his r-0.4 toucher then brushed the volume's z lo (12.17
+                    // [D probe]) from 11.77 — the level end fired a tick before the at_plate latch
+                    // could ever see him. The pacing problem that motivated 4.5 (the escort flipping
+                    // in the PlayerInWay band) is gone: the lead now RUNS the route [M 0x15e698
+                    // case 3] and never paces at the plate.
+                    let floor = sim.world.floor_below([cx, mp[1], cz], 6.0).unwrap_or(mp[1]);
+                    sim.bond.pos = [cx, floor + 1.1, cz];
+                    (false, mp)
+                } else if at_plate {
+                    // Mayhew is on the plate: Bond joins him there so the AND-touch sees both (the
+                    // same plate-centre geometry the level-end chain test uses).
+                    sim.bond.pos = [cx, cy, cz];
+                    (false, mp)
+                } else if t < 40 {
+                    // Approach: AllyLeadInit waits for Bond within 3 [M 0x15e4f0 case 3].
+                    let floor = sim.world.floor_below([mp[0], mp[1], mp[2] - 1.5], 6.0).unwrap_or(mp[1]);
+                    sim.bond.pos = [mp[0], floor + 1.1, mp[2] - 1.5];
+                    (false, mp)
+                } else {
+                    // Bond rides the ROUTE polyline 3.9 arc-units behind the lead — the walking
+                    // player of escort_follow_07000001_live, collision-free in this harness: his
+                    // nearest route node tracks the chain, so the arc the bands read (SM+0x20
+                    // [M 0x15e698:60, 0x15eda8:35]) stays a true ~3.9 lag and the game's own resume
+                    // [M 0x15eda8 case 3: path > -7.0] fires when the lead parks (parked at his
+                    // node, Bond 3.9 back on the link: the node scan's 5.0 cutoff [M
+                    // DroneMove_ObjectMissionPathDistance 0x153f50] makes the lead's own node the
+                    // nearest → path 0.0 → resume with Bond inside the 5.0 straight-line check).
+                    // The two trails this replaces both froze the arc: the target-direction
+                    // teleport held the STRAIGHT-LINE lag at 3.9 while the folded courtyard route
+                    // made the arc 9.1 (the ailog repro: one LeadWait (path -9.1) entry, then
+                    // parked in 0x20 for the rest of the 5000 ticks, the shoji never reached), and
+                    // the real walked follower wedges on the courtyard walls this harness cannot
+                    // nav around. 3.9 stays outside the PlayerInWay bands (enter 3.0 [M 0x15e698
+                    // case 3], stay 3.5 [M 0x15ea28 case 3]).
+                    if let Some((path, index, nodes)) = sim.drones.list[mi].route.as_ref()
+                        .map(|r| (r.path, r.index, r.nodes.clone())) {
+                        let mut left = 3.9f32;
+                        let mut cur = mp;
+                        let mut k = index.min(nodes.len() as i32 - 1);
+                        let mut placed = false;
+                        while left > 0.0 && k >= 0 && !placed {
+                            let np = sim.nav.paths[path].nodes[nodes[k as usize] as usize].pos;
+                            let (dx, dz) = (np[0] - cur[0], np[2] - cur[2]);
+                            let l = (dx * dx + dz * dz).sqrt();
+                            if l >= left && l > 0.0 {
+                                let bx = cur[0] + dx / l * left;
+                                let bz = cur[2] + dz / l * left;
+                                let floor = sim.world.floor_below([bx, mp[1], bz], 6.0).unwrap_or(mp[1]);
+                                sim.bond.pos = [bx, floor + 1.1, bz];
+                                placed = true;
+                            } else {
+                                left -= l;
+                                cur = np;
+                                k -= 1;
+                            }
+                        }
+                        if !placed {
+                            let floor = sim.world.floor_below([cur[0], mp[1], cur[2]], 6.0).unwrap_or(mp[1]);
+                            sim.bond.pos = [cur[0], floor + 1.1, cur[2]];
                         }
                     }
-                    if !placed {
-                        let floor = sim.world.floor_below([cur[0], mp[1], cur[2]], 6.0).unwrap_or(mp[1]);
-                        sim.bond.pos = [cur[0], floor + 1.1, cur[2]];
-                    }
+                    (false, mp)
                 }
-                (false, mp)
-            }
-        };
-        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, use_key);
-        door_opened |= scene.sim.as_ref().unwrap().drones.doors.list[door_idx].state == nf_game::door::OPEN;
-        let (mp, rtarget) = {
-            let sim = scene.sim.as_ref().unwrap();
-            (sim.drones.list[mi].pos, sim.drones.list[mi].route.as_ref().map(|r| r.target))
-        };
-        walked += ((mp[0] - last[0]).powi(2) + (mp[2] - last[2]).powi(2)).sqrt();
-        stall_window += ((mp[0] - last[0]).powi(2) + (mp[2] - last[2]).powi(2)).sqrt();
-        // NAV-GAP STAND-IN (not this task's files): the shared nav bounds/creep stalls at the
-        // courtyard junction (the game's drone slides along the wall; the port's creep gives up) —
-        // the test nudges Mayhew toward his route target, the slide the game performs. Everything
-        // this task owns (the mission layer, the lead states, the ch 0xB release, the exit chain)
-        // is exercised for real around this.
-        if dist2d(mp, door_pos) < 3.0 { door_loiter += 1; } else { door_loiter = 0; }
-        if t > 100 && t % 30 == 0 && !at_plate {
-            // The stall test reads the movement accumulated over the whole 30-tick window, not the
-            // last tick's step: the stairwell-head creep still advances (≈0.03/tick — the port's
-            // slow wall slide), and the old per-tick `moved < 0.05` read that REAL progress as a
-            // stall, yanking Mayhew 2 units every 30 ticks — he ping-ponged around route node 27
-            // (−26.24, 14.48) for 3,200 ticks without ever ARRIVING, so the route never advanced
-            // to the doorway nodes and down the stairs. A true stall moves ≈0 over the window and
-            // still fires; the game's walking drone is never teleported at all.
-            if stall_window < 0.05 || door_loiter > 40 {
-                // fix-actors: the escort now cowers (AllyLeadHide 0x15ec08 [M]) while an armed hostile
-                // fights within 10 — the game's own rule. The hide clears when no armed drone remains
-                // within 14 (`NotNearArmedDrone` [M 0x15ec08 case 3]); the stall here is a guard the
-                // courtyard fight woke, so the test moves the fight away (the game's guard would lose
-                // Bond or die) and the escort resumes.
-                {
+            };
+            scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, use_key);
+            door_opened |= scene.sim.as_ref().unwrap().drones.doors.list[door_idx].state == nf_game::door::OPEN;
+            let (mp, rtarget) = {
+                let sim = scene.sim.as_ref().unwrap();
+                (sim.drones.list[mi].pos, sim.drones.list[mi].route.as_ref().map(|r| r.target))
+            };
+            walked += ((mp[0] - last[0]).powi(2) + (mp[2] - last[2]).powi(2)).sqrt();
+            stall_window += ((mp[0] - last[0]).powi(2) + (mp[2] - last[2]).powi(2)).sqrt();
+            // NAV-GAP STAND-IN (not this task's files): the shared nav bounds/creep stalls at the
+            // courtyard junction (the game's drone slides along the wall; the port's creep gives up) —
+            // the test nudges Mayhew toward his route target, the slide the game performs. Everything
+            // this task owns (the mission layer, the lead states, the ch 0xB release, the exit chain)
+            // is exercised for real around this.
+            if dist2d(mp, door_pos) < 3.0 { door_loiter += 1; } else { door_loiter = 0; }
+            if t > 100 && t % 30 == 0 && !at_plate {
+                // The stall test reads the movement accumulated over the whole 30-tick window, not the
+                // last tick's step: the stairwell-head creep still advances (≈0.03/tick — the port's
+                // slow wall slide), and the old per-tick `moved < 0.05` read that REAL progress as a
+                // stall, yanking Mayhew 2 units every 30 ticks — he ping-ponged around route node 27
+                // (−26.24, 14.48) for 3,200 ticks without ever ARRIVING, so the route never advanced
+                // to the doorway nodes and down the stairs. A true stall moves ≈0 over the window and
+                // still fires; the game's walking drone is never teleported at all.
+                if stall_window < 0.05 || door_loiter > 40 {
+                    // fix-actors: the escort now cowers (AllyLeadHide 0x15ec08 [M]) while an armed hostile
+                    // fights within 10 — the game's own rule. The hide clears when no armed drone remains
+                    // within 14 (`NotNearArmedDrone` [M 0x15ec08 case 3]); the stall here is a guard the
+                    // courtyard fight woke, so the test moves the fight away (the game's guard would lose
+                    // Bond or die) and the escort resumes.
+                    {
+                        let sim = scene.sim.as_mut().unwrap();
+                        for g in sim.drones.list.iter_mut().filter(|g| g.team == 1 && g.started && !g.corpse) {
+                            g.pos = [g.pos[0] + 60.0, g.pos[1], g.pos[2] + 60.0];
+                        }
+                    }
                     let sim = scene.sim.as_mut().unwrap();
-                    for g in sim.drones.list.iter_mut().filter(|g| g.team == 1 && g.started && !g.corpse) {
-                        g.pos = [g.pos[0] + 60.0, g.pos[1], g.pos[2] + 60.0];
+                    if let Some(tgt) = rtarget {
+                        let dx = tgt[0] - mp[0]; let dz = tgt[2] - mp[2];
+                        let l = (dx * dx + dz * dz).sqrt().max(1e-4);
+                        // ai-sight-drawn-gate-3: the destination-floor guard. The nudge shifts 2.0
+                        // toward the route target; a stall at the courtyard rail puts the landing spot
+                        // over a drop, and the every-30-tick re-fire then walked the escort through
+                        // the air (the 826b trace: y -172 -> -19274, the horizontal drift the teleport
+                        // re-firing while floor_below found nothing). The game's walking drone is
+                        // never teleported at all; when the DESTINATION has no floor the window is
+                        // skipped and the escort keeps his own slide. One floor_below, at the
+                        // destination — the old spot's floor said nothing about the landing.
+                        // ai-sight-drawn-gate-4: the step clamps to the remaining distance — the
+                        // game's walker advances by speed·dt toward the goal and ARRIVES there, never
+                        // overshooting past it [M NDrone2_Move 0x14eff8's per-tick step]. The old fixed
+                        // 2.0 jump past a 0.127-away door node threw the escort 15× beyond the goal,
+                        // onto the opening shoji's collision rail (the only floor_below hit there — the
+                        // port's doorway-threshold seam has no floor: x 4.6-5.5, z 8.8-11.2 all miss
+                        // within 8.0); when the panel slid the rest of the way open the "floor" left
+                        // and the faithful gravity (Drone_CollisionHandler 0x140968) took him to −17k.
+                        let step = 2.0_f32.min(l);
+                        let dest = [mp[0] + dx / l * step, mp[1], mp[2] + dz / l * step];
+                        if let Some(floor) = sim.world.floor_below(dest, 6.0) {
+                            let dr = &mut sim.drones.list[mi];
+                            dr.pos = [dest[0], floor + 1.0, dest[2]];
+                        }
                     }
                 }
-                let sim = scene.sim.as_mut().unwrap();
-                if let Some(tgt) = rtarget {
-                    let dx = tgt[0] - mp[0]; let dz = tgt[2] - mp[2];
-                    let l = (dx * dx + dz * dz).sqrt().max(1e-4);
-                    // ai-sight-drawn-gate-3: the destination-floor guard. The nudge shifts 2.0
-                    // toward the route target; a stall at the courtyard rail puts the landing spot
-                    // over a drop, and the every-30-tick re-fire then walked the escort through
-                    // the air (the 826b trace: y -172 -> -19274, the horizontal drift the teleport
-                    // re-firing while floor_below found nothing). The game's walking drone is
-                    // never teleported at all; when the DESTINATION has no floor the window is
-                    // skipped and the escort keeps his own slide. One floor_below, at the
-                    // destination — the old spot's floor said nothing about the landing.
-                    // ai-sight-drawn-gate-4: the step clamps to the remaining distance — the
-                    // game's walker advances by speed·dt toward the goal and ARRIVES there, never
-                    // overshooting past it [M NDrone2_Move 0x14eff8's per-tick step]. The old fixed
-                    // 2.0 jump past a 0.127-away door node threw the escort 15× beyond the goal,
-                    // onto the opening shoji's collision rail (the only floor_below hit there — the
-                    // port's doorway-threshold seam has no floor: x 4.6-5.5, z 8.8-11.2 all miss
-                    // within 8.0); when the panel slid the rest of the way open the "floor" left
-                    // and the faithful gravity (Drone_CollisionHandler 0x140968) took him to −17k.
-                    let step = 2.0_f32.min(l);
-                    let dest = [mp[0] + dx / l * step, mp[1], mp[2] + dz / l * step];
-                    if let Some(floor) = sim.world.floor_below(dest, 6.0) {
-                        let dr = &mut sim.drones.list[mi];
-                        dr.pos = [dest[0], floor + 1.0, dest[2]];
-                    }
-                }
+                stall_window = 0.0;
             }
-            stall_window = 0.0;
+            last = look;
+            if ((mp[0] - cx).powi(2) + (mp[2] - cz).powi(2)).sqrt() < 2.0 && (mp[1] - cy).abs() < 2.5 { at_plate = true; }
+            if scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
+                    if t % 400 == 0 {
+                let st = scene.sim.as_ref().unwrap().drones.list[mi].state;
+                eprintln!("[mission] t {t}: Mayhew {mp:?} state {st:#x} walked {walked:.1}");
+            }
         }
-        last = look;
-        if ((mp[0] - cx).powi(2) + (mp[2] - cz).powi(2)).sqrt() < 2.0 && (mp[1] - cy).abs() < 2.5 { at_plate = true; }
-        if scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
-                if t % 400 == 0 {
-            let st = scene.sim.as_ref().unwrap().drones.list[mi].state;
-            eprintln!("[mission] t {t}: Mayhew {mp:?} state {st:#x} walked {walked:.1}");
-        }
-    }
-    let sim = scene.sim.as_ref().unwrap();
-    eprintln!("[mission] end: ch10 {} ch99 {} ch0b {} bond {:?} mayhew {:?} at_plate {at_plate}",
-        sim.drones.channels.on(0x10), sim.drones.channels.on(99), sim.drones.channels.on(0xb),
-        sim.bond.pos, sim.drones.list[mi].pos);
-    assert!(door_opened, "the courtyard shoji reached OPEN (state 4) at least once [M NDrone2_DoorIsOpen 0x14aaa0] — an activation every tick kept it ping-ponging 0x8↔0x10");
-    // (The old `at_plate` 2.0-ball proxy is gone: the walking lead stops 3.6 from the touch
-    // volume's centre while the game's REAL condition — the AND plate's touch, out 0x10, both
-    // bodies — already fired and the level end reports 0x07000002, asserted below exactly as
-    // escort_follow and walkreal do [D placements; WORKLOG fix-level].)
-    assert_eq!(sim.drones.level_exit, Some(0x0700_0002),
-        "Bond + Mayhew on the plate fire the LOAD_LEVEL to 0x07000002");
-    eprintln!("[mission] 07000001 exit end to end ok (walked {walked:.1})");
+        let sim = scene.sim.as_ref().unwrap();
+        eprintln!("[mission] end: ch10 {} ch99 {} ch0b {} bond {:?} mayhew {:?} at_plate {at_plate}",
+            sim.drones.channels.on(0x10), sim.drones.channels.on(99), sim.drones.channels.on(0xb),
+            sim.bond.pos, sim.drones.list[mi].pos);
+        assert!(door_opened, "the courtyard shoji reached OPEN (state 4) at least once [M NDrone2_DoorIsOpen 0x14aaa0] — an activation every tick kept it ping-ponging 0x8↔0x10");
+        // (The old `at_plate` 2.0-ball proxy is gone: the walking lead stops 3.6 from the touch
+        // volume's centre while the game's REAL condition — the AND plate's touch, out 0x10, both
+        // bodies — already fired and the level end reports 0x07000002, asserted below exactly as
+        // escort_follow and walkreal do [D placements; WORKLOG fix-level].)
+        assert_eq!(sim.drones.level_exit, Some(0x0700_0002),
+            "Bond + Mayhew on the plate fire the LOAD_LEVEL to 0x07000002");
+        eprintln!("[mission] 07000001 exit end to end ok (walked {walked:.1})");
+    })
 }
 
 fn dist2d(a: [f32; 3], b: [f32; 3]) -> f32 { ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }

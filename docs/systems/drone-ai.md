@@ -187,8 +187,37 @@ routes (0021), combat movement, start-up properties and WaitSwitch (0022): docs/
 Cover — selection, states and the tick order — is ported and documented above and in docs/systems/drone-cover.md
 (WORKLOG 0023/0079, fix-cover-remainder, fix-search-cover-g028); grenades (0080), AI volumes (0032), head
 tracking and the aim bone (fix-ai-remainder), deaths and hit reactions are ported too. Still open from
-G-026/27/28: hearing beyond the sound-alert chain, per-target cover slots (only Bond is modelled), the
-`RecoverFromScaryObject` (0x86) flee route update and U-030's RunForCover route shape.
+G-026/27/28: hearing beyond the sound-alert chain and the `RecoverFromScaryObject` (0x86) flee route update.
+(Per-target cover slots: Bond is the only slot holder in single player; the RunForCover shape near the gate was the
+goal arrival radius, now matched — docs/systems/drone-cover.md.)
+
+## State coverage (s/g026-guard-ai, 2026-11-20)
+
+`NDrone2_StateFuncs` 0x29b300 read from the ELF (250 entries, names from the symbol table) and matched
+against the port's state constants (`drone.rs` `state`, `kiko.rs`, `mp/bots.rs`) and docs/port-map/:
+
+- With a port arm: every story-level id, plus the bot family 0xC3–0xF9 (`mp/bots.rs`).
+- No port arm, no producer on the shipped path (docs/port-map/unreached.md and the `state` module's
+  unreached block): 0x3B, 0x57, 0x5D, 0x61 (msg 0x1B has no sender), 0x6A, 0x6B, 0x6C, 0x80, 0x9D,
+  0xA1, 0xB5, 0xB7–0xBC.
+- 0x02 `DSTATE_Disabled` 0x172440: no port arm, and no literal `Drone_SM_SetState(…, 2, …)` site in
+  the decompile (grep, 2026-11-20). Variable-id and table entries into it were not checked, so its
+  reach is unproven.
+- Placement census (`g026_reload_census`, every level in `nf_view::dev::LEVELS`, kind-0x0F placements):
+  the stand reload's alternate anim 0x4A (danim 0x3F) exists only for anim set 9, 01 (3 drones), 02
+  (7), 03 (4), 11 (4), 12 (4), 13 (3), 4A (15). Type 0xC (`+0xD8`) is one drone on any level: 07000008's
+  escort VIP (skin 0x0500003B).
+
+Ported here: the stand reload ENTER [M 0x1666d8:17-27], `Drone_AlertStatusSet(1)`, then
+`Rand_Rand(0x1E)` on every entry (before the `CanDoAnimState(0x4A, 0)` test, so the stream moves for
+every anim set), a 0 with the anim available → reload anim 0x4A, else 0x52; follow-on 0x68 either way.
+The crouch reload 0x167370 has neither the draw nor the status write. Tests: `g026_guard_ai_live`.
+
+Still a stand-in inside a story-level handler: CombatNoMove 0x1643e8's type-0xC `Rand(3)` → CrouchCover
+0x6E roll [M :103-111] (taken when the drone is not in the fire-anim arm: `+0x3C` set, or `+0x3B`
+clear). Its only candidate is the 07000008 escort VIP placement, and the port's level-start drone list for
+07000008 (difficulty 1) holds no type-0xC drone (`type_c_drone_probe`): whether she is created later and
+ever enters 0x59 is unproven, so the roll stays unported.
 
 ## Firing [M, L]
 

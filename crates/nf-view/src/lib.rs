@@ -5768,15 +5768,13 @@ impl App {
                                     // delta (mouse + pad merge) flips sign here.
                                     look: std::mem::take(&mut self.look) * if self.look_inverted { -1.0 } else { 1.0 },
                                     jump: self.just.remove(&KeyCode::Space),
-                                    // options-census: the Crouch row picks the feed [M
-                                    // Player_SSCrouch 0x1924c0:84-105] — Toggle reads press edges
-                                    // (the game's Input_Action(8/7, 4)), Hold reads the level
-                                    // (Input_Action(8, 1)).
-                                    crouch: if self.crouch_toggle_opt {
-                                        self.just.remove(&KeyCode::KeyC) | self.just.remove(&KeyCode::ControlLeft)
-                                    } else {
-                                        self.keys.contains(&KeyCode::KeyC) || self.keys.contains(&KeyCode::ControlLeft)
-                                    },
+                                    // The crouch press EDGE in both Crouch modes: the walk crouches
+                                    // on `Input_Action(8, 4)` whatever the option [M Player_HandleJump
+                                    // 0x1916b0:89-95] and Toggle stands on it; Hold's stand test reads
+                                    // the HELD level (`Input_Action(8, 1)`) [M Player_SSCrouch
+                                    // 0x1924c0:84-87] from `crouch_held`.
+                                    crouch: self.just.remove(&KeyCode::KeyC) | self.just.remove(&KeyCode::ControlLeft),
+                                    crouch_held: self.keys.contains(&KeyCode::KeyC) || self.keys.contains(&KeyCode::ControlLeft),
                                     crouch_hold: !self.crouch_toggle_opt,
                                     aiming: self.aiming,
                                     weapon_cycle: std::mem::take(&mut self.weapon_cycle),
@@ -9605,28 +9603,29 @@ mod headless_app_harness {
 
     // options-census: the Crouch option picks the stand condition [M Player_SSCrouch
     // 0x1924c0:84-105]. Toggle stands on the crouch/jump press edge; Hold stands when the
-    // crouch action is not held. The transitions carry a 60-tick lockout [M 0x1924c0], so each
-    // waits it out before the next press.
+    // crouch action is not held. Both crouch on the press edge [M Player_HandleJump
+    // 0x1916b0:89-95]. The transitions carry the stance lockout (13 ticks with the 50-frame
+    // transition script [M 0x1924c0:45-55, D 0x060001dc/dd]), so each waits it out first.
     #[test]
     fn the_crouch_option_picks_the_stand_condition() {
         let Ok(iso) = std::env::var("NF_ISO") else { return };
         let mut h = HeadlessApp::mission(&iso, "07000005.bin");
-        let inp = |crouch: bool, toggle: bool| nf_game::player::Input { crouch, crouch_hold: !toggle, ..Default::default() };
+        let inp = |edge: bool, held: bool, toggle: bool| nf_game::player::Input { crouch: edge, crouch_held: held, crouch_hold: !toggle, ..Default::default() };
         let sim = h.app.scene.sim.as_mut().unwrap();
         sim.drones.crouch_toggle = true;
-        sim.step_bond(inp(true, true), false, false, false);
+        sim.step_bond(inp(true, true, true), false, false, false);
         assert!(sim.bond.crouched, "toggle: a crouch edge crouches");
-        for _ in 0..61 { sim.step_bond(inp(false, true), false, false, false); }
+        for _ in 0..61 { sim.step_bond(inp(false, false, true), false, false, false); }
         assert!(sim.bond.crouched, "toggle: no edge holds the crouch");
-        sim.step_bond(inp(true, true), false, false, false);
-        assert!(!sim.bond.crouched, "toggle: the second edge stands [M 0x1924c0:99-105]");
-        for _ in 0..61 { sim.step_bond(inp(false, false), false, false, false); }
-        sim.step_bond(inp(true, false), false, false, false);
-        assert!(sim.bond.crouched, "hold: the held action crouches [M 0x1924c0:84-88]");
-        for _ in 0..61 { sim.step_bond(inp(true, false), false, false, false); }
+        sim.step_bond(inp(true, true, true), false, false, false);
+        assert!(!sim.bond.crouched, "toggle: the second edge stands [M 0x1924c0:89-105]");
+        for _ in 0..61 { sim.step_bond(inp(false, false, false), false, false, false); }
+        sim.step_bond(inp(true, true, false), false, false, false);
+        assert!(sim.bond.crouched, "hold: the press edge crouches [M 0x1916b0:89-95]");
+        for _ in 0..61 { sim.step_bond(inp(false, true, false), false, false, false); }
         assert!(sim.bond.crouched, "hold: still held, still crouched");
-        sim.step_bond(inp(false, false), false, false, false);
-        assert!(!sim.bond.crouched, "hold: released stands [M 0x1924c0:84-88]");
+        sim.step_bond(inp(false, false, false), false, false, false);
+        assert!(!sim.bond.crouched, "hold: released stands [M 0x1924c0:84-87]");
     }
 
     // The goggles key: V is the keyboard's action-13 press [M HUD_MonitorNightSight 0x19e9d8:74

@@ -2233,7 +2233,11 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// at the 07000015 load.
 #[test]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
-    walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: 500/30, 1000/60, 1500/45, 6000/60 (stream batch 1121b on master) complete].
+    walker::with_pause(1000, 60, || {
+        walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
+    })
 }
 
 /// The game's FirstAttack flush [M 0x148010:100-131] puts every p5=100 [D census] guard on his
@@ -2442,435 +2446,443 @@ fn burn_keypad(w: &mut Walker, at: V3, ch: u32) {
 /// The walked tripbomb route: pickup → place → retreat → shoot, everything on real input.
 #[test]
 fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 4000/90 [L the
+    // 10-value sweep on the joined tree: 500/30, 1500/45, 4000/90, 6000/60, 8000/60 complete].
+    walker::with_pause(4000, 90, || {
+        // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+        // dest past the last node [M 0x159668]) re-deal this walk's fights. A 200-tick stand after the
+        // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 200/400 passed.
+        walker::set_post_intro_wait(200);
+        let iso = iso();
+        let mut w = Walker::new(nf_view::load(&iso, "07000014.bin", false).unwrap());
 
-    // 1. The east route to the SP #276 hand-back (the mezzanine) — this file's pinned chain.
-    walk_infiltration_to_handback(&mut w);
+        // 1. The east route to the SP #276 hand-back (the mezzanine) — this file's pinned chain.
+        walk_infiltration_to_handback(&mut w);
 
-    // 2. The descent to the facility corridor (the shared west route's first block, verbatim —
-    // duplicated so the shared fn keeps its exact shape for its own callers).
-    {
-        w.walk_to(Wp::new(34.63, 2.80, 37.94).r(1.0), "the pad west");
-        w.walk_to(Wp::new(34.57, 2.80, 37.18).r(0.9), "the pad's south-west step head");
-        open_the_pad_lid(&mut w);
-        w.walk_to(Wp::new(33.09, 2.37, 35.38).r(0.8), "the 1.72 landing");
-        shoot_the_drop_band_guard(&mut w);
+        // 2. The descent to the facility corridor (the shared west route's first block, verbatim —
+        // duplicated so the shared fn keeps its exact shape for its own callers).
         {
-            let start = w.total_ticks;
-            loop {
-                assert!(w.total_ticks - start < 2400,
-                    "the landing's west drop never cleared the overhang\n{}",
-                    walker::fail_dump_pub(&w.scene, [31.8, 1.0, 34.0], "the landing west drop"));
-                {
+            w.walk_to(Wp::new(34.63, 2.80, 37.94).r(1.0), "the pad west");
+            w.walk_to(Wp::new(34.57, 2.80, 37.18).r(0.9), "the pad's south-west step head");
+            open_the_pad_lid(&mut w);
+            w.walk_to(Wp::new(33.09, 2.37, 35.38).r(0.8), "the 1.72 landing");
+            shoot_the_drop_band_guard(&mut w);
+            {
+                let start = w.total_ticks;
+                loop {
+                    assert!(w.total_ticks - start < 2400,
+                        "the landing's west drop never cleared the overhang\n{}",
+                        walker::fail_dump_pub(&w.scene, [31.8, 1.0, 34.0], "the landing west drop"));
+                    {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let p = sim.bond.pos;
+                        if p[0] < 32.6 && p[1] < 1.4 && sim.bond.grounded { break; }
+                    }
+                    let tz = drop_aim_z(&w);
                     let sim = w.scene.sim.as_ref().unwrap();
-                    let p = sim.bond.pos;
-                    if p[0] < 32.6 && p[1] < 1.4 && sim.bond.grounded { break; }
+                    let b = &sim.bond;
+                    let inp = nf_game::player::Input {
+                        forward: 1.0,
+                        jump: b.grounded && (w.total_ticks - start) % 30 == 0,
+                        turn: wrap_pi((31.8f32 - b.pos[0]).atan2(tz - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
+                        ..Default::default()
+                    };
+                    w.tick(inp, false);
                 }
-                let tz = drop_aim_z(&w);
-                let sim = w.scene.sim.as_ref().unwrap();
-                let b = &sim.bond;
-                let inp = nf_game::player::Input {
-                    forward: 1.0,
-                    jump: b.grounded && (w.total_ticks - start) % 30 == 0,
-                    turn: wrap_pi((31.8f32 - b.pos[0]).atan2(tz - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
-                    ..Default::default()
-                };
-                w.tick(inp, false);
             }
+            the_machine_room_to_the_corridor(&mut w);
+            w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor north to the leg-2 spot");
         }
-        the_machine_room_to_the_corridor(&mut w);
-        w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor north to the leg-2 spot");
-    }
 
-    // 3. The south loop to the armoury branch. The route to the armoury ledge is 77 nodes — the
-    // same long haul the passing west-route walk covers to node 71; the branch splits at
-    // (-30.34, 0.40, 23.13). Nodes are walked leniently (one wedged node re-aims at the next);
-    // the walk STOPS at node 73 (-38.27, 0.40, 33.21) — the catwalk head — and takes the floor
-    // legs east instead of the 1.20 ledge nodes (walking at the ledge's node height climbs Bond
-    // onto the 1.45 crate and wedges him against the elevated shelf — the lane is passed UNDER,
-    // on the floor [L the lane-entry probe]).
-    let route = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let from: V3 = sim.bond.pos;
-        nav_route(sim, from, [-36.12f32, 1.20, 33.62])
-            .expect("the nav web routes the south loop to the armoury ledge")
-    };
-    let stop_at = route.iter().position(|p| p[0] < -38.0 && p[2] > 32.5).unwrap_or(route.len());
-    for (k, p) in route.iter().take(stop_at).enumerate() {
-        let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("the armoury loop node {k}"));
-    }
-    // The clear runs on every difficulty: a squad that follows Bond into the lane walks the
-    // armed beam and sets the bomb off before the retreat (the plain walk's measured run: six
-    // guards in AIM_STAND_FIRE at (-40.5, 1.0, 33.4) behind him at the row, and the placed bomb
-    // gone during the under-slab crawl). A player clears his tail before he sets a trap, then
-    // steps back to where the loop ended (the clear's own walk home stops 1.0 short, and the
-    // direct legs below start from the loop's end).
-    let loop_end = w.scene.sim.as_ref().unwrap().bond.pos;
-    clear_hostiles(&mut w, 26.0, 900);
-    w.walk_to(Wp::new(loop_end[0], loop_end[1], loop_end[2]).r(0.3), "back to the loop's end");
-    // North through the open doorway (-42.7, 1.2, 29.9) first: the direct steer from the loop's
-    // end to the sill row grazes its east jamb and wedged at (-40.47, 0.65, 29.09) once the
-    // clear had moved Bond 0.15 south.
-    w.walk_to(Wp::new(-42.4, 0.65, 30.8).r(0.4), "north through the doorway");
-    eprintln!("[014-trip] the loop done at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    // The game's own node path into the lane (the nav web's route branch→rack [L the nav probe]):
-    // from the catwalk head the AI climbs the crate row and walks it EAST at y 1.20 — nodes
-    // (-37.33, 1.20, 33.61) → (-36.74, 1.20, 33.61) → (-36.12, 1.20, 33.62) → (-35.02, 1.20,
-    // 33.61) — then the lane's north node (-33.73, 1.20, 35.81) at the rack front. Floor-level
-    // legs stall on the 1.45 platform at x ≈ -36.2 (the row is the intended deck; the under-shelf
-    // floor passage at 0.80 is blocked to the steer-walker by the sill/column hops).
-    for (label, wp) in [
-        ("the sill row up", Wp::new(-37.33, 1.20, 33.61).r(0.5)),
-        ("the row east 1", Wp::new(-36.74, 1.20, 33.61).r(0.4)),
-        ("the row east 2", Wp::new(-36.3, 1.30, 33.62).r(0.35)),
-    ] {
-        let ok = w.try_walk_to(wp, label);
-        eprintln!("[014-trip] {label}: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    }
-    // The armoury door (-35.6, 0.8, 33.6) locks the under-shelf passage on ch 46 (0x2E) [L the
-    // crawl fail dump: door kind 2, state 0x2, pos01 0.00, ch_lock 46]. Its writers are the
-    // shelf-side keypad pair — 0x2e Lock, out 0x2C at (-35.84, 2.30, 32.17) and out 0x2D at
-    // (-35.84, 2.30, 35.09) [D the 2026-11-02 census] — burned with the Q-Claw laser the player
-    // already carries from the SkyBridge crossing.
-    {
-        let mut drawn = false;
-        for _ in 0..240 {
-            w.tick(nf_game::player::Input { switch_to: Some(LASER), ..Default::default() }, false);
-            let g = &w.scene.sim.as_ref().unwrap().gun;
-            if g.weapon == LASER && g.switch_state == 0 && g.reload_state == 0 { drawn = true; break; }
-        }
-        assert!(drawn, "the switch request 0x4e draws the Q-Claw laser");
-        burn_keypad(&mut w, [-35.84, 2.30, 32.17], 0x2c);
-        burn_keypad(&mut w, [-35.84, 2.30, 35.09], 0x2d);
-        for _ in 0..120 {
-            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x2e) { break; }
-            w.tick(nf_game::player::Input::default(), false);
-        }
-        assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x2e),
-            "the burned pair lift the door's lock ch 0x2E [L the door dump ch_lock 46]");
-        // E the door open from the crate row (the walker's real use path).
-        let (_, di) = walker::door_near(w.scene.sim.as_ref().unwrap(), [-35.6, 0.8, 33.6])
-            .expect("the armoury door is the nearest door to the row");
-        w.use_door(di, "the armoury door");
-        // The slide needs to finish before the shot: a half-open panel leaves the crawl gap at
-        // floor level but still intersects the crouched shot line at ~1.75.
-        for _ in 0..400 {
-            if w.scene.sim.as_ref().unwrap().drones.doors.list[di].pos01 > 0.9 { break; }
-            w.tick(nf_game::player::Input::default(), false);
-        }
-        eprintln!("[014-trip] the armoury door pos01 {:.2}; bond {:?}",
-            w.scene.sim.as_ref().unwrap().drones.doors.list[di].pos01, w.scene.sim.as_ref().unwrap().bond.pos);
-    }
-    // The under-slab crouch crawl: the shelf slab (tops 3.5, underside ~2.2 — the lane-entry
-    // probe's open band y 0.9..2.2) rides over the crate row; standing head (~3.2) hits it. The
-    // game's crouch is a toggle: one press crouches, the crawl runs, one press stands when the
-    // headroom clears [M Player_SSCrouch 0x1924c0:84-105]. try_walk_to has no crouch acts —
-    // the crawl is the raw input path.
-    {
-        let start = w.total_ticks;
-        w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
-        loop {
-            assert!(w.total_ticks - start < 1200,
-                "the under-slab crawl never cleared east\n{}",
-                walker::fail_dump_pub(&w.scene, [-35.3, 1.3, 33.61], "under-slab east"));
-            if w.scene.sim.as_ref().unwrap().bond.pos[0] > -35.35 { break; }
+        // 3. The south loop to the armoury branch. The route to the armoury ledge is 77 nodes — the
+        // same long haul the passing west-route walk covers to node 71; the branch splits at
+        // (-30.34, 0.40, 23.13). Nodes are walked leniently (one wedged node re-aims at the next);
+        // the walk STOPS at node 73 (-38.27, 0.40, 33.21) — the catwalk head — and takes the floor
+        // legs east instead of the 1.20 ledge nodes (walking at the ledge's node height climbs Bond
+        // onto the 1.45 crate and wedges him against the elevated shelf — the lane is passed UNDER,
+        // on the floor [L the lane-entry probe]).
+        let route = {
             let sim = w.scene.sim.as_ref().unwrap();
-            let b = &sim.bond;
-            let inp = nf_game::player::Input {
-                forward: 1.0,
-                turn: wrap_pi((-35.35f32 - b.pos[0]).atan2(33.61 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
-                ..Default::default()
-            };
-            w.tick(inp, false);
+            let from: V3 = sim.bond.pos;
+            nav_route(sim, from, [-36.12f32, 1.20, 33.62])
+                .expect("the nav web routes the south loop to the armoury ledge")
+        };
+        let stop_at = route.iter().position(|p| p[0] < -38.0 && p[2] > 32.5).unwrap_or(route.len());
+        for (k, p) in route.iter().take(stop_at).enumerate() {
+            let _ = w.try_walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("the armoury loop node {k}"));
         }
-        for _ in 0..80 {
-            w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
-            if !w.scene.sim.as_ref().unwrap().bond.crouched { break; }
-            w.tick(nf_game::player::Input::default(), false);
-        }
-        eprintln!("[014-trip] under the slab east: bond {:?} crouched {}",
-            w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.crouched);
-    }
-    // The rack-front node (the nav web's own lane node at the take spot).
-    {
-        let ok = w.try_walk_to(Wp::new(-33.73, 1.20, 35.81).r(0.4), "the rack-front node");
-        eprintln!("[014-trip] the rack-front node: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    }
-
-    // 4. The take: walk INTO the rack until the game's pickup touch adds the 0x3a.
-    let before = w.scene.sim.as_ref().unwrap().drones.taken.len();
-    let mut took_at = None;
-    for i in 0..180 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.drones.taken.iter().skip(before).any(|(_, k)| matches!(k, nf_game::pickup::Taken::Weapon { weapon: 0x3a })) {
-            took_at = Some(i);
-            break;
-        }
-        w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
-    }
-    let taken_at = took_at.expect("the rack-front walk takes the tripbomb through Pickup_Update's touch [M 0x18e148]");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[014-trip] the 0x3a taken at +{taken_at} ticks, bond {:?}", sim.bond.pos);
-        assert!(sim.drones.pickups.iter().any(|p| p.weapon == 0x3a && p.gone), "the taken pickup's tombstone [M take_pickup]");
-    }
-
-    // 5. The real switch request draws the tripbomb.
-    let mut drawn = false;
-    for _ in 0..240 {
-        w.tick(nf_game::player::Input { switch_to: Some(TRIP), ..Default::default() }, false);
-        let g = &w.scene.sim.as_ref().unwrap().gun;
-        if g.weapon == TRIP && g.switch_state == 0 && g.reload_state == 0 { drawn = true; break; }
-    }
-    assert!(drawn, "the switch request 0x3a draws the picked-up tripbomb");
-
-    // 6. Place it on the rack wall with the real fire: aim the eye-ray at the wall face in front
-    // of Bond, hold fire until the gadget leaves the gun, then wait out the stick.
-    //
-    // The guards that follow Bond into the armoury throw frags at him. A frag blast that reaches
-    // the placed round sets it off (`Explode_Propagate` 0x17c518 case 5 → 0x12cd98: the 0x3a
-    // passes the id gate and the record gate, reach = the falloff > 0.0002, no line-of-sight
-    // test [M]); on this route a frag landing in the pit 6.4 u away does exactly that. A player
-    // whose bomb went off places the next one — the gun still holds more [spare 4 after
-    // the first throw, this run] — so the placement and the first retreat leg repeat until a
-    // bomb survives it.
-    let mut attempt = 0u32;
-    let mut first_aim_y: Option<f32> = None;
-    let (gi, bomb_pos, bomb_n) = loop {
-    attempt += 1;
-    if attempt > 1 {
-        let ok = w.try_walk_to(Wp::new(-33.73, 1.20, 35.81).r(0.4), "back to the rack-front node");
-        eprintln!("[014-trip] re-place {attempt}: back to the rack-front node ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-        for _ in 0..60 {
-            w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
-        }
-    }
-    let (wall_hit, wall_n) = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let b = &sim.bond;
-        let e = [b.pos[0], b.pos[1] + b.eye - b.crouch_drop, b.pos[2]];
-        let (t, n) = sim.world.segment_hit(e, [e[0] + 6.0, e[1], e[2]]).expect("the rack wall in front of the take spot");
-        ([e[0] + 6.0 * t, e[1], e[2]], n)
-    };
-    eprintln!("[014-trip] the rack wall face at {wall_hit:?} normal {wall_n:?}");
-    // The throw aims 0.8 u lower than the eye-ray's wall hit: a bomb at the eye height (≈2.5)
-    // sits above the under-shelf band (open y 0.9..2.2 [L the lane-entry probe]) and every 12+
-    // u shot line from the catwalk is shadowed by the slab — a bomb at ≈1.7 keeps the P2K's
-    // line under the slab (the catwalk eye 2.15 → 1.7 descends through the open band).
-    // A re-place reuses the first throw's aim height (the walk back can leave the eye a little
-    // higher, and the bomb must still sit under the slab).
-    let aim_y = *first_aim_y.get_or_insert((wall_hit[1] - 0.8).max(1.2));
-    let aim = [wall_hit[0], aim_y, wall_hit[2]];
-    // Hold fire only until the gadget leaves the gun — Bond is 0.9 u from the wall, well inside
-    // the future beam line, so the retreat must start the moment it sticks (the arm is 120
-    // stuck ticks [M 0x12ce80:330]).
-    let mut thrown = false;
-    for _ in 0..240 {
-        steer_aim(&mut w, aim, true, false);
-        if w.scene.sim.as_ref().unwrap().drones.grenades.iter().any(|g| g.weapon_type == TRIP as u16) { thrown = true; break; }
-    }
-    assert!(thrown, "the held fire throws the tripbomb [M the throw arm]");
-    let mut stuck = false;
-    for _ in 0..150 {
-        steer_aim(&mut w, aim, false, false);
-        if trip_stuck_index(w.scene.sim.as_ref().unwrap()).is_some() { stuck = true; break; }
-    }
-    let gi = trip_stuck_index(w.scene.sim.as_ref().unwrap()).expect("the thrown tripbomb sticks on the rack wall [M 0x12ce80]");
-    let (bomb_pos, bomb_n) = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let g = &sim.drones.grenades[trip_stuck_now(sim)];
-        (g.pos, g.phase.as_ref().unwrap().normal)
-    };
-    assert!(stuck && bomb_n[0] < -0.7, "the stick faces back down the lane (normal {bomb_n:?})");
-    assert!(bomb_pos[1] < 2.2, "the bomb sits in the under-slab band ({}) — the shot line stays under the shelf [L the open band y 0.9..2.2]", bomb_pos[1]);
-    eprintln!("[014-trip] placed at {bomb_pos:?} normal {bomb_n:?}");
-
-    // 7. Walk OUT: south off the future beam line first (the beam runs 200 u west along +normal
-    // from the bomb at z ≈ 35.8 — the lane's z 33.6 crate row is 2.2 clear of it), then west
-    // along the row (the node path reversed) and down to the catwalk, south to the 0.40 lane.
-    // The arm is 120 stuck ticks [M 0x12ce80:330] — the retreat clears the line before it.
-    for (label, wp) in [
-        ("off the beam line south", Wp::new(-34.6, 1.20, 33.61).r(0.5)),
-    ] {
-        let ok = w.try_walk_to(wp, label);
-        eprintln!("[014-trip] retreat {label}: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    }
-    if trip_stuck_index(w.scene.sim.as_ref().unwrap()).is_some() { break (gi, bomb_pos, bomb_n); }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[014-trip] attempt {attempt}: the placed bomb went off during the first leg; blasts {:?}; tripbombs left {}",
-            sim.drones.explosions, sim.gun.spare + sim.gun.clip);
-        assert!(attempt < 4, "three placed tripbombs went off before the retreat");
-        assert!(sim.gun.weapon == TRIP && sim.gun.spare + sim.gun.clip > 0, "a tripbomb is left to place again");
-    }
-    };
-    let _ = gi;
-    // The under-slab crouch crawl west (the approach's crawl reversed; one press crouches,
-    // one press stands [M Player_SSCrouch 0x1924c0:84-105]).
-    {
-        let start = w.total_ticks;
-        w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
-        loop {
-            assert!(w.total_ticks - start < 1200,
-                "the under-slab crawl never cleared west\n{}",
-                walker::fail_dump_pub(&w.scene, [-36.95, 1.3, 33.61], "under-slab west"));
-            if w.scene.sim.as_ref().unwrap().bond.pos[0] < -36.95 { break; }
-            let sim = w.scene.sim.as_ref().unwrap();
-            let b = &sim.bond;
-            let inp = nf_game::player::Input {
-                forward: 1.0,
-                turn: wrap_pi((-36.95f32 - b.pos[0]).atan2(33.61 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
-                ..Default::default()
-            };
-            w.tick(inp, false);
-        }
-        for _ in 0..80 {
-            w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
-            if !w.scene.sim.as_ref().unwrap().bond.crouched { break; }
-            w.tick(nf_game::player::Input::default(), false);
-        }
-        eprintln!("[014-trip] retreat under the slab west: bond {:?} crouched {}",
-            w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.crouched);
-    }
-    for (label, wp) in [
-        ("the row west 3 (the sill head)", Wp::new(-37.33, 1.20, 33.61).r(0.4)),
-        ("down to the catwalk head", Wp::new(-38.6, 0.55, 33.2).r(0.5)),
-        ("the catwalk west", Wp::new(-41.5, 0.6, 33.2).r(0.8)),
-        ("the 0.40 lane south", Wp::new(-42.25, 0.5, 28.92).r(1.0)),
-    ] {
-        let ok = w.try_walk_to(wp, label);
-        eprintln!("[014-trip] retreat {label}: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        // The flush changes the guards' fight around the placement, so a thrown guard grenade
-        // can enter and leave `grenades` between the stick and the retreat — re-find the stuck
-        // tripbomb instead of trusting the placement-time index (the 2026-11-03 len-1/index-1).
-        let gi = trip_stuck_index(sim).expect("the placed tripbomb is still stuck at the retreat");
-        let gi = trip_stuck_now(sim);
-        let armed = sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed);
-        eprintln!("[014-trip] retreated to {:?} armed {armed} beams {}", sim.bond.pos, sim.drones.tripbomb_beams.len());
-        if armed && !sim.drones.tripbomb_beams.is_empty() {
-            let bd = trip_beam_dist(sim, sim.bond.pos);
-            eprintln!("[014-trip] beam distance {bd:.2}");
-        }
-        let d = tv_len(tv_sub(trip_body_centre(sim, gi), sim.bond.pos));
-        eprintln!("[014-trip] retreat body-dist {d:.2}");
-        assert!(armed, "the tripbomb armed behind him");
-        assert!(!sim.drones.tripbomb_beams.is_empty(), "the armed tripbomb draws its beam");
-        assert!(d >= 12.0, "the retreat walks 12+ u from the placed tripbomb ({d})");
-        assert!(trip_beam_dist(sim, sim.bond.pos) > 1.6, "the retreat stands clear of the beam line");
-    }
-
-    // 8. The shot position. The armoury's geometry offers NO floor ≥ 12 u with a clear eye→body
-    // line to the rack-wall bomb (26 candidate spots probed on this run: every ≥12 line is
-    // blocked — the shelf slab shadows the lane from the west, the pit walls block the
-    // south-west, and the only window into the lane is the doorway at z 33.0-34.2 whose axis
-    // dies in the pit wall at (-41.2, 29.5) [L the spot diagnostics, this run]). The level's
-    // own clear shot is THROUGH THE DOORWAY from the sill head: crouched on the crate row at
-    // (-37.33, 1.20, 33.61) the eye (~1.85) passes under the slab (open y 0.9..2.2) and through
-    // the open doorway straight at the bomb. The walk back in is real input; the shot happens
-    // outside the beam trigger but inside the 8-u blast (the walker's top-up is this file's own
-    // walk allowance) — a ≥12 clear line is a live check.
-    {
+        // The clear runs on every difficulty: a squad that follows Bond into the lane walks the
+        // armed beam and sets the bomb off before the retreat (the plain walk's measured run: six
+        // guards in AIM_STAND_FIRE at (-40.5, 1.0, 33.4) behind him at the row, and the placed bomb
+        // gone during the under-slab crawl). A player clears his tail before he sets a trap, then
+        // steps back to where the loop ended (the clear's own walk home stops 1.0 short, and the
+        // direct legs below start from the loop's end).
+        let loop_end = w.scene.sim.as_ref().unwrap().bond.pos;
+        clear_hostiles(&mut w, 26.0, 900);
+        w.walk_to(Wp::new(loop_end[0], loop_end[1], loop_end[2]).r(0.3), "back to the loop's end");
+        // North through the open doorway (-42.7, 1.2, 29.9) first: the direct steer from the loop's
+        // end to the sill row grazes its east jamb and wedged at (-40.47, 0.65, 29.09) once the
+        // clear had moved Bond 0.15 south.
+        w.walk_to(Wp::new(-42.4, 0.65, 30.8).r(0.4), "north through the doorway");
+        eprintln!("[014-trip] the loop done at {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+        // The game's own node path into the lane (the nav web's route branch→rack [L the nav probe]):
+        // from the catwalk head the AI climbs the crate row and walks it EAST at y 1.20 — nodes
+        // (-37.33, 1.20, 33.61) → (-36.74, 1.20, 33.61) → (-36.12, 1.20, 33.62) → (-35.02, 1.20,
+        // 33.61) — then the lane's north node (-33.73, 1.20, 35.81) at the rack front. Floor-level
+        // legs stall on the 1.45 platform at x ≈ -36.2 (the row is the intended deck; the under-shelf
+        // floor passage at 0.80 is blocked to the steer-walker by the sill/column hops).
         for (label, wp) in [
-            ("back up the 0.40 lane", Wp::new(-42.25, 0.5, 30.73).r(0.8)),
-            ("back to the catwalk west", Wp::new(-41.5, 0.6, 33.2).r(0.6)),
-            ("back to the catwalk head", Wp::new(-38.6, 0.55, 33.2).r(0.5)),
-            ("back to the sill head", Wp::new(-37.33, 1.20, 33.61).r(0.4)),
+            ("the sill row up", Wp::new(-37.33, 1.20, 33.61).r(0.5)),
+            ("the row east 1", Wp::new(-36.74, 1.20, 33.61).r(0.4)),
+            ("the row east 2", Wp::new(-36.3, 1.30, 33.62).r(0.35)),
         ] {
             let ok = w.try_walk_to(wp, label);
             eprintln!("[014-trip] {label}: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
         }
-        // The crouch-crawl back through the doorway into the lane (the approach crawl again):
-        // the doorway's north jamb blocks every sill-head line (the parked panel/jamb at
-        // (-35.82, 1.44, 34.42) [L this run's shot-line seg]) — the level's only clear line to
-        // the rack-wall bomb is from inside the lane, crouched under the shelf slab.
-        let start = w.total_ticks;
-        w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
-        loop {
-            assert!(w.total_ticks - start < 1200,
-                "the crawl back into the lane never cleared\n{}",
-                walker::fail_dump_pub(&w.scene, [-34.9, 1.3, 33.61], "crawl back east"));
-            if w.scene.sim.as_ref().unwrap().bond.pos[0] > -34.9 { break; }
+        // The armoury door (-35.6, 0.8, 33.6) locks the under-shelf passage on ch 46 (0x2E) [L the
+        // crawl fail dump: door kind 2, state 0x2, pos01 0.00, ch_lock 46]. Its writers are the
+        // shelf-side keypad pair — 0x2e Lock, out 0x2C at (-35.84, 2.30, 32.17) and out 0x2D at
+        // (-35.84, 2.30, 35.09) [D the 2026-11-02 census] — burned with the Q-Claw laser the player
+        // already carries from the SkyBridge crossing.
+        {
+            let mut drawn = false;
+            for _ in 0..240 {
+                w.tick(nf_game::player::Input { switch_to: Some(LASER), ..Default::default() }, false);
+                let g = &w.scene.sim.as_ref().unwrap().gun;
+                if g.weapon == LASER && g.switch_state == 0 && g.reload_state == 0 { drawn = true; break; }
+            }
+            assert!(drawn, "the switch request 0x4e draws the Q-Claw laser");
+            burn_keypad(&mut w, [-35.84, 2.30, 32.17], 0x2c);
+            burn_keypad(&mut w, [-35.84, 2.30, 35.09], 0x2d);
+            for _ in 0..120 {
+                if w.scene.sim.as_ref().unwrap().drones.channels.on(0x2e) { break; }
+                w.tick(nf_game::player::Input::default(), false);
+            }
+            assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x2e),
+                "the burned pair lift the door's lock ch 0x2E [L the door dump ch_lock 46]");
+            // E the door open from the crate row (the walker's real use path).
+            let (_, di) = walker::door_near(w.scene.sim.as_ref().unwrap(), [-35.6, 0.8, 33.6])
+                .expect("the armoury door is the nearest door to the row");
+            w.use_door(di, "the armoury door");
+            // The slide needs to finish before the shot: a half-open panel leaves the crawl gap at
+            // floor level but still intersects the crouched shot line at ~1.75.
+            for _ in 0..400 {
+                if w.scene.sim.as_ref().unwrap().drones.doors.list[di].pos01 > 0.9 { break; }
+                w.tick(nf_game::player::Input::default(), false);
+            }
+            eprintln!("[014-trip] the armoury door pos01 {:.2}; bond {:?}",
+                w.scene.sim.as_ref().unwrap().drones.doors.list[di].pos01, w.scene.sim.as_ref().unwrap().bond.pos);
+        }
+        // The under-slab crouch crawl: the shelf slab (tops 3.5, underside ~2.2 — the lane-entry
+        // probe's open band y 0.9..2.2) rides over the crate row; standing head (~3.2) hits it. The
+        // game's crouch is a toggle: one press crouches, the crawl runs, one press stands when the
+        // headroom clears [M Player_SSCrouch 0x1924c0:84-105]. try_walk_to has no crouch acts —
+        // the crawl is the raw input path.
+        {
+            let start = w.total_ticks;
+            w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+            loop {
+                assert!(w.total_ticks - start < 1200,
+                    "the under-slab crawl never cleared east\n{}",
+                    walker::fail_dump_pub(&w.scene, [-35.3, 1.3, 33.61], "under-slab east"));
+                if w.scene.sim.as_ref().unwrap().bond.pos[0] > -35.35 { break; }
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = &sim.bond;
+                let inp = nf_game::player::Input {
+                    forward: 1.0,
+                    turn: wrap_pi((-35.35f32 - b.pos[0]).atan2(33.61 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
+                    ..Default::default()
+                };
+                w.tick(inp, false);
+            }
+            for _ in 0..80 {
+                w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+                if !w.scene.sim.as_ref().unwrap().bond.crouched { break; }
+                w.tick(nf_game::player::Input::default(), false);
+            }
+            eprintln!("[014-trip] under the slab east: bond {:?} crouched {}",
+                w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.crouched);
+        }
+        // The rack-front node (the nav web's own lane node at the take spot).
+        {
+            let ok = w.try_walk_to(Wp::new(-33.73, 1.20, 35.81).r(0.4), "the rack-front node");
+            eprintln!("[014-trip] the rack-front node: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+        }
+
+        // 4. The take: walk INTO the rack until the game's pickup touch adds the 0x3a.
+        let before = w.scene.sim.as_ref().unwrap().drones.taken.len();
+        let mut took_at = None;
+        for i in 0..180 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.drones.taken.iter().skip(before).any(|(_, k)| matches!(k, nf_game::pickup::Taken::Weapon { weapon: 0x3a })) {
+                took_at = Some(i);
+                break;
+            }
+            w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+        }
+        let taken_at = took_at.expect("the rack-front walk takes the tripbomb through Pickup_Update's touch [M 0x18e148]");
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[014-trip] the 0x3a taken at +{taken_at} ticks, bond {:?}", sim.bond.pos);
+            assert!(sim.drones.pickups.iter().any(|p| p.weapon == 0x3a && p.gone), "the taken pickup's tombstone [M take_pickup]");
+        }
+
+        // 5. The real switch request draws the tripbomb.
+        let mut drawn = false;
+        for _ in 0..240 {
+            w.tick(nf_game::player::Input { switch_to: Some(TRIP), ..Default::default() }, false);
+            let g = &w.scene.sim.as_ref().unwrap().gun;
+            if g.weapon == TRIP && g.switch_state == 0 && g.reload_state == 0 { drawn = true; break; }
+        }
+        assert!(drawn, "the switch request 0x3a draws the picked-up tripbomb");
+
+        // 6. Place it on the rack wall with the real fire: aim the eye-ray at the wall face in front
+        // of Bond, hold fire until the gadget leaves the gun, then wait out the stick.
+        //
+        // The guards that follow Bond into the armoury throw frags at him. A frag blast that reaches
+        // the placed round sets it off (`Explode_Propagate` 0x17c518 case 5 → 0x12cd98: the 0x3a
+        // passes the id gate and the record gate, reach = the falloff > 0.0002, no line-of-sight
+        // test [M]); on this route a frag landing in the pit 6.4 u away does exactly that. A player
+        // whose bomb went off places the next one — the gun still holds more [spare 4 after
+        // the first throw, this run] — so the placement and the first retreat leg repeat until a
+        // bomb survives it.
+        let mut attempt = 0u32;
+        let mut first_aim_y: Option<f32> = None;
+        let (gi, bomb_pos, bomb_n) = loop {
+        attempt += 1;
+        if attempt > 1 {
+            let ok = w.try_walk_to(Wp::new(-33.73, 1.20, 35.81).r(0.4), "back to the rack-front node");
+            eprintln!("[014-trip] re-place {attempt}: back to the rack-front node ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+            for _ in 0..60 {
+                w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+            }
+        }
+        let (wall_hit, wall_n) = {
             let sim = w.scene.sim.as_ref().unwrap();
             let b = &sim.bond;
-            let inp = nf_game::player::Input {
-                forward: 1.0,
-                turn: wrap_pi((-34.9f32 - b.pos[0]).atan2(33.61 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
-                ..Default::default()
-            };
-            w.tick(inp, false);
+            let e = [b.pos[0], b.pos[1] + b.eye - b.crouch_drop, b.pos[2]];
+            let (t, n) = sim.world.segment_hit(e, [e[0] + 6.0, e[1], e[2]]).expect("the rack wall in front of the take spot");
+            ([e[0] + 6.0 * t, e[1], e[2]], n)
+        };
+        eprintln!("[014-trip] the rack wall face at {wall_hit:?} normal {wall_n:?}");
+        // The throw aims 0.8 u lower than the eye-ray's wall hit: a bomb at the eye height (≈2.5)
+        // sits above the under-shelf band (open y 0.9..2.2 [L the lane-entry probe]) and every 12+
+        // u shot line from the catwalk is shadowed by the slab — a bomb at ≈1.7 keeps the P2K's
+        // line under the slab (the catwalk eye 2.15 → 1.7 descends through the open band).
+        // A re-place reuses the first throw's aim height (the walk back can leave the eye a little
+        // higher, and the bomb must still sit under the slab).
+        let aim_y = *first_aim_y.get_or_insert((wall_hit[1] - 0.8).max(1.2));
+        let aim = [wall_hit[0], aim_y, wall_hit[2]];
+        // Hold fire only until the gadget leaves the gun — Bond is 0.9 u from the wall, well inside
+        // the future beam line, so the retreat must start the moment it sticks (the arm is 120
+        // stuck ticks [M 0x12ce80:330]).
+        let mut thrown = false;
+        for _ in 0..240 {
+            steer_aim(&mut w, aim, true, false);
+            if w.scene.sim.as_ref().unwrap().drones.grenades.iter().any(|g| g.weapon_type == TRIP as u16) { thrown = true; break; }
         }
-        eprintln!("[014-trip] back inside the lane: bond {:?} crouched {}",
-            w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.crouched);
-    }
-
-    // He waits out the arm crouched in the lane (the beam is up by now or arms within these ticks).
-    for _ in 0..200 {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let gi = trip_stuck_now(sim);
-        if sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed) && !sim.drones.tripbomb_beams.is_empty() { break; }
-        w.tick(nf_game::player::Input::default(), false);
-    }
-    let body = trip_body_centre(w.scene.sim.as_ref().unwrap(), trip_stuck_now(w.scene.sim.as_ref().unwrap()));
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let (bd, d) = (trip_beam_dist(sim, sim.bond.pos), tv_len(tv_sub(body, sim.bond.pos)));
-        eprintln!("[014-trip] at the spot: bond {:?} body-dist {d:.2} beam-dist {bd:.2} armed {}",
-            sim.bond.pos, { let gi = trip_stuck_now(sim); sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed) });
-        assert!(d >= 3.0, "the shot spot holds the bomb in view ({d})");
-        assert!(bd > 1.6, "Bond stands clear of the beam line ({bd})");
-        let gi = trip_stuck_now(sim);
-        assert!(sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed), "the tripbomb armed");
-        assert!(!sim.drones.tripbomb_beams.is_empty(), "the armed tripbomb draws its beam");
-    }
-
-    // 9. Switch back to the P2K (the level-start gun) and shoot the body through the real fire:
-    // the bullet-vs-tripbomb rule detonates it [M Bullet_handle_object_destruction 0x12cd98].
-    let mut drawn2 = false;
-    for _ in 0..240 {
-        w.tick(nf_game::player::Input { switch_to: Some(P2K), ..Default::default() }, false);
-        let g = &w.scene.sim.as_ref().unwrap().gun;
-        if g.weapon == P2K && g.switch_state == 0 && g.reload_state == 0 { drawn2 = true; break; }
-    }
-    assert!(drawn2, "the switch request 0x02 draws the P2K");
-    let mut detonated = None;
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let e = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
-        let seg = sim.world.segment(e, trip_body_centre(sim, gi));
-        eprintln!("[014-trip] shot eye {e:?} -> body seg {seg:?} crouched {}", sim.bond.crouched);
-    }
-    for round in 0..12u32 {
-        // Aim at the body, pull on alternate ticks (the refire edge), until this round's flight ends.
-        let mut flew = false;
-        for t in 0..240u32 {
-            let pull = !flew && t % 2 == 0;
-            let aim = trip_body_centre(w.scene.sim.as_ref().unwrap(), gi);
-            steer_aim(&mut w, aim, pull, false);
-            let live = !w.scene.sim.as_ref().unwrap().drones.player_bullets.is_empty();
-            if trip_stuck_index(w.scene.sim.as_ref().unwrap()).is_none() { break; }
-            if flew && !live { break; }
-            flew |= live;
+        assert!(thrown, "the held fire throws the tripbomb [M the throw arm]");
+        let mut stuck = false;
+        for _ in 0..150 {
+            steer_aim(&mut w, aim, false, false);
+            if trip_stuck_index(w.scene.sim.as_ref().unwrap()).is_some() { stuck = true; break; }
         }
-        if trip_stuck_index(w.scene.sim.as_ref().unwrap()).is_none() { detonated = Some(round + 1); break; }
-        let _ = &mut flew;
-    }
-    let rounds = detonated.expect("a P2K round at the body from 12+ u detonates the placed tripbomb [M 0x12cd98]");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let e = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
-        eprintln!("[014-trip] DETONATED by round {rounds}");
-        eprintln!("[014-trip] final bond position {:?}", sim.bond.pos);
-        eprintln!("[014-trip] shot line eye {e:?} -> body {body:?} (dist {:.2})", tv_len(tv_sub(body, e)));
-        assert!(sim.drones.grenades.iter().all(|g| g.weapon_type != TRIP as u16), "the gadget deleted (obj+0xFE |= 1) [M 0x12cd98]");
-        // (the 0x0600_0052 script-player check tripwire_shot_live pins is unusable here: this
-        // level's destructible props pre-register 0x0600_0052 SP players at load, so the list
-        // always contains one — the deletion observables above are the 0x12cd98 rule here.)
-        assert!(sim.drones.tripbomb_beams.is_empty(), "the beam deleted with it (BU+0x38, +0x70 & 0x80000) [M]");
-    }
+        let gi = trip_stuck_index(w.scene.sim.as_ref().unwrap()).expect("the thrown tripbomb sticks on the rack wall [M 0x12ce80]");
+        let (bomb_pos, bomb_n) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let g = &sim.drones.grenades[trip_stuck_now(sim)];
+            (g.pos, g.phase.as_ref().unwrap().normal)
+        };
+        assert!(stuck && bomb_n[0] < -0.7, "the stick faces back down the lane (normal {bomb_n:?})");
+        assert!(bomb_pos[1] < 2.2, "the bomb sits in the under-slab band ({}) — the shot line stays under the shelf [L the open band y 0.9..2.2]", bomb_pos[1]);
+        eprintln!("[014-trip] placed at {bomb_pos:?} normal {bomb_n:?}");
+
+        // 7. Walk OUT: south off the future beam line first (the beam runs 200 u west along +normal
+        // from the bomb at z ≈ 35.8 — the lane's z 33.6 crate row is 2.2 clear of it), then west
+        // along the row (the node path reversed) and down to the catwalk, south to the 0.40 lane.
+        // The arm is 120 stuck ticks [M 0x12ce80:330] — the retreat clears the line before it.
+        for (label, wp) in [
+            ("off the beam line south", Wp::new(-34.6, 1.20, 33.61).r(0.5)),
+        ] {
+            let ok = w.try_walk_to(wp, label);
+            eprintln!("[014-trip] retreat {label}: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+        }
+        if trip_stuck_index(w.scene.sim.as_ref().unwrap()).is_some() { break (gi, bomb_pos, bomb_n); }
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[014-trip] attempt {attempt}: the placed bomb went off during the first leg; blasts {:?}; tripbombs left {}",
+                sim.drones.explosions, sim.gun.spare + sim.gun.clip);
+            assert!(attempt < 4, "three placed tripbombs went off before the retreat");
+            assert!(sim.gun.weapon == TRIP && sim.gun.spare + sim.gun.clip > 0, "a tripbomb is left to place again");
+        }
+        };
+        let _ = gi;
+        // The under-slab crouch crawl west (the approach's crawl reversed; one press crouches,
+        // one press stands [M Player_SSCrouch 0x1924c0:84-105]).
+        {
+            let start = w.total_ticks;
+            w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+            loop {
+                assert!(w.total_ticks - start < 1200,
+                    "the under-slab crawl never cleared west\n{}",
+                    walker::fail_dump_pub(&w.scene, [-36.95, 1.3, 33.61], "under-slab west"));
+                if w.scene.sim.as_ref().unwrap().bond.pos[0] < -36.95 { break; }
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = &sim.bond;
+                let inp = nf_game::player::Input {
+                    forward: 1.0,
+                    turn: wrap_pi((-36.95f32 - b.pos[0]).atan2(33.61 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
+                    ..Default::default()
+                };
+                w.tick(inp, false);
+            }
+            for _ in 0..80 {
+                w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+                if !w.scene.sim.as_ref().unwrap().bond.crouched { break; }
+                w.tick(nf_game::player::Input::default(), false);
+            }
+            eprintln!("[014-trip] retreat under the slab west: bond {:?} crouched {}",
+                w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.crouched);
+        }
+        for (label, wp) in [
+            ("the row west 3 (the sill head)", Wp::new(-37.33, 1.20, 33.61).r(0.4)),
+            ("down to the catwalk head", Wp::new(-38.6, 0.55, 33.2).r(0.5)),
+            ("the catwalk west", Wp::new(-41.5, 0.6, 33.2).r(0.8)),
+            ("the 0.40 lane south", Wp::new(-42.25, 0.5, 28.92).r(1.0)),
+        ] {
+            let ok = w.try_walk_to(wp, label);
+            eprintln!("[014-trip] retreat {label}: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+        }
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            // The flush changes the guards' fight around the placement, so a thrown guard grenade
+            // can enter and leave `grenades` between the stick and the retreat — re-find the stuck
+            // tripbomb instead of trusting the placement-time index (the 2026-11-03 len-1/index-1).
+            let gi = trip_stuck_index(sim).expect("the placed tripbomb is still stuck at the retreat");
+            let gi = trip_stuck_now(sim);
+            let armed = sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed);
+            eprintln!("[014-trip] retreated to {:?} armed {armed} beams {}", sim.bond.pos, sim.drones.tripbomb_beams.len());
+            if armed && !sim.drones.tripbomb_beams.is_empty() {
+                let bd = trip_beam_dist(sim, sim.bond.pos);
+                eprintln!("[014-trip] beam distance {bd:.2}");
+            }
+            let d = tv_len(tv_sub(trip_body_centre(sim, gi), sim.bond.pos));
+            eprintln!("[014-trip] retreat body-dist {d:.2}");
+            assert!(armed, "the tripbomb armed behind him");
+            assert!(!sim.drones.tripbomb_beams.is_empty(), "the armed tripbomb draws its beam");
+            assert!(d >= 12.0, "the retreat walks 12+ u from the placed tripbomb ({d})");
+            assert!(trip_beam_dist(sim, sim.bond.pos) > 1.6, "the retreat stands clear of the beam line");
+        }
+
+        // 8. The shot position. The armoury's geometry offers NO floor ≥ 12 u with a clear eye→body
+        // line to the rack-wall bomb (26 candidate spots probed on this run: every ≥12 line is
+        // blocked — the shelf slab shadows the lane from the west, the pit walls block the
+        // south-west, and the only window into the lane is the doorway at z 33.0-34.2 whose axis
+        // dies in the pit wall at (-41.2, 29.5) [L the spot diagnostics, this run]). The level's
+        // own clear shot is THROUGH THE DOORWAY from the sill head: crouched on the crate row at
+        // (-37.33, 1.20, 33.61) the eye (~1.85) passes under the slab (open y 0.9..2.2) and through
+        // the open doorway straight at the bomb. The walk back in is real input; the shot happens
+        // outside the beam trigger but inside the 8-u blast (the walker's top-up is this file's own
+        // walk allowance) — a ≥12 clear line is a live check.
+        {
+            for (label, wp) in [
+                ("back up the 0.40 lane", Wp::new(-42.25, 0.5, 30.73).r(0.8)),
+                ("back to the catwalk west", Wp::new(-41.5, 0.6, 33.2).r(0.6)),
+                ("back to the catwalk head", Wp::new(-38.6, 0.55, 33.2).r(0.5)),
+                ("back to the sill head", Wp::new(-37.33, 1.20, 33.61).r(0.4)),
+            ] {
+                let ok = w.try_walk_to(wp, label);
+                eprintln!("[014-trip] {label}: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
+            }
+            // The crouch-crawl back through the doorway into the lane (the approach crawl again):
+            // the doorway's north jamb blocks every sill-head line (the parked panel/jamb at
+            // (-35.82, 1.44, 34.42) [L this run's shot-line seg]) — the level's only clear line to
+            // the rack-wall bomb is from inside the lane, crouched under the shelf slab.
+            let start = w.total_ticks;
+            w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+            loop {
+                assert!(w.total_ticks - start < 1200,
+                    "the crawl back into the lane never cleared\n{}",
+                    walker::fail_dump_pub(&w.scene, [-34.9, 1.3, 33.61], "crawl back east"));
+                if w.scene.sim.as_ref().unwrap().bond.pos[0] > -34.9 { break; }
+                let sim = w.scene.sim.as_ref().unwrap();
+                let b = &sim.bond;
+                let inp = nf_game::player::Input {
+                    forward: 1.0,
+                    turn: wrap_pi((-34.9f32 - b.pos[0]).atan2(33.61 - b.pos[2]) - b.yaw).clamp(-0.08, 0.08),
+                    ..Default::default()
+                };
+                w.tick(inp, false);
+            }
+            eprintln!("[014-trip] back inside the lane: bond {:?} crouched {}",
+                w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().bond.crouched);
+        }
+
+        // He waits out the arm crouched in the lane (the beam is up by now or arms within these ticks).
+        for _ in 0..200 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let gi = trip_stuck_now(sim);
+            if sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed) && !sim.drones.tripbomb_beams.is_empty() { break; }
+            w.tick(nf_game::player::Input::default(), false);
+        }
+        let body = trip_body_centre(w.scene.sim.as_ref().unwrap(), trip_stuck_now(w.scene.sim.as_ref().unwrap()));
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let (bd, d) = (trip_beam_dist(sim, sim.bond.pos), tv_len(tv_sub(body, sim.bond.pos)));
+            eprintln!("[014-trip] at the spot: bond {:?} body-dist {d:.2} beam-dist {bd:.2} armed {}",
+                sim.bond.pos, { let gi = trip_stuck_now(sim); sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed) });
+            assert!(d >= 3.0, "the shot spot holds the bomb in view ({d})");
+            assert!(bd > 1.6, "Bond stands clear of the beam line ({bd})");
+            let gi = trip_stuck_now(sim);
+            assert!(sim.drones.grenades[gi].phase.as_ref().map_or(false, |p| p.armed), "the tripbomb armed");
+            assert!(!sim.drones.tripbomb_beams.is_empty(), "the armed tripbomb draws its beam");
+        }
+
+        // 9. Switch back to the P2K (the level-start gun) and shoot the body through the real fire:
+        // the bullet-vs-tripbomb rule detonates it [M Bullet_handle_object_destruction 0x12cd98].
+        let mut drawn2 = false;
+        for _ in 0..240 {
+            w.tick(nf_game::player::Input { switch_to: Some(P2K), ..Default::default() }, false);
+            let g = &w.scene.sim.as_ref().unwrap().gun;
+            if g.weapon == P2K && g.switch_state == 0 && g.reload_state == 0 { drawn2 = true; break; }
+        }
+        assert!(drawn2, "the switch request 0x02 draws the P2K");
+        let mut detonated = None;
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let e = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+            let seg = sim.world.segment(e, trip_body_centre(sim, gi));
+            eprintln!("[014-trip] shot eye {e:?} -> body seg {seg:?} crouched {}", sim.bond.crouched);
+        }
+        for round in 0..12u32 {
+            // Aim at the body, pull on alternate ticks (the refire edge), until this round's flight ends.
+            let mut flew = false;
+            for t in 0..240u32 {
+                let pull = !flew && t % 2 == 0;
+                let aim = trip_body_centre(w.scene.sim.as_ref().unwrap(), gi);
+                steer_aim(&mut w, aim, pull, false);
+                let live = !w.scene.sim.as_ref().unwrap().drones.player_bullets.is_empty();
+                if trip_stuck_index(w.scene.sim.as_ref().unwrap()).is_none() { break; }
+                if flew && !live { break; }
+                flew |= live;
+            }
+            if trip_stuck_index(w.scene.sim.as_ref().unwrap()).is_none() { detonated = Some(round + 1); break; }
+            let _ = &mut flew;
+        }
+        let rounds = detonated.expect("a P2K round at the body from 12+ u detonates the placed tripbomb [M 0x12cd98]");
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let e = [sim.bond.pos[0], sim.bond.pos[1] + sim.bond.eye - sim.bond.crouch_drop, sim.bond.pos[2]];
+            eprintln!("[014-trip] DETONATED by round {rounds}");
+            eprintln!("[014-trip] final bond position {:?}", sim.bond.pos);
+            eprintln!("[014-trip] shot line eye {e:?} -> body {body:?} (dist {:.2})", tv_len(tv_sub(body, e)));
+            assert!(sim.drones.grenades.iter().all(|g| g.weapon_type != TRIP as u16), "the gadget deleted (obj+0xFE |= 1) [M 0x12cd98]");
+            // (the 0x0600_0052 script-player check tripwire_shot_live pins is unusable here: this
+            // level's destructible props pre-register 0x0600_0052 SP players at load, so the list
+            // always contains one — the deletion observables above are the 0x12cd98 rule here.)
+            assert!(sim.drones.tripbomb_beams.is_empty(), "the beam deleted with it (BU+0x38, +0x70 & 0x80000) [M]");
+        }
+    })
 }
 
 /// The delta approach's visibility-keyed scan (real-health-00agent-14-landing-5): answer the

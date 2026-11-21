@@ -28,10 +28,16 @@ fn crouch_into_the_hatch(kill: bool) -> f32 {
         sim.step_bond(Input::default(), false, false, false);
     }
     sim.bond = nf_game::player::Bond::stand_at(&sim.world, [30.1, 41.0, -18.0], 0.0);
-    for _ in 0..10 { sim.step_bond(Input { crouch: true, ..Default::default() }, false, false, false); }
+    // s-crouch-latch: the crouch key was fed as a press EVERY tick, which under the old flat
+    // 60-tick stance lockout toggled the stance every 60 ticks (crouch at 0, stand at 60, ...):
+    // the stands step Bond onto the 40.65 sill, the crouches take him under the hatch top. The
+    // game's lockout reopens after 13 ticks [M Player_SSCrouch 0x1924c0:45-55], so the same
+    // route is fed as one press every 60 ticks.
+    let press = |t: u32| t % 60 == 0;
+    for t in 0..10u32 { sim.step_bond(Input { crouch: press(t), ..Default::default() }, false, false, false); }
     let mut max_z = f32::NEG_INFINITY;
-    for _ in 0..360 {
-        sim.step_bond(Input { forward: 1.0, crouch: true, ..Default::default() }, false, false, false);
+    for t in 10..370u32 {
+        sim.step_bond(Input { forward: 1.0, crouch: press(t), ..Default::default() }, false, false, false);
         max_z = max_z.max(sim.bond.pos[2]);
     }
     max_z

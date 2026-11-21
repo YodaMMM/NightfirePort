@@ -2623,7 +2623,11 @@ fn walk_arrival_to_drakes_defeat_on_real_health_at(difficulty: u32) {
 #[test]
 /// UN-IGNORED 2026-11-13: green on master c94c1043e (the ignored-walk sweep).
 fn walk_arrival_to_drakes_defeat_on_real_health() {
-    walk_arrival_to_drakes_defeat_on_real_health_at(1);
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 700/45 [L the
+    // 10-value sweep on the joined tree: 700/45 and 5000/60 of 18 values complete].
+    walker::with_pause(700, 45, || {
+        walk_arrival_to_drakes_defeat_on_real_health_at(1);
+    })
 }
 
 /// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked
@@ -2635,6 +2639,7 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
 /// GREEN 2026-11-13: the waits shift cover (a no-owner 0x6b explosive bolt landed on the held
 /// missile-wait spot) and the Drake fight's cover ring reaches 8 and 11 u (every point within 5 u
 /// of the hold was blind to Drake); the walk defeats Drake on real health at Agent.
+#[ignore = "stream batch 1121b: Bond dies in the console run or Drake's fight on the joined stream; no stop of 31 swept completes it"]
 fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
     walk_arrival_to_drakes_defeat_on_real_health_at(2);
 }

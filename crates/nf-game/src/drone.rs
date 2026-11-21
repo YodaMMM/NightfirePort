@@ -559,6 +559,8 @@ pub mod anim_state {
     pub const DRAW_WEAPON: u16 = 0x46;
     pub const STAND_IDLE: u16 = 0x24;
     pub const RELOAD: u16 = 0x52;
+    /// The stand reload's 1-in-30 alternate (`NDrone2_DSTATE_AimStandReload` 0x1666d8:21-24).
+    pub const RELOAD_ALT: u16 = 0x4a;
     pub const BACKOFF: u16 = 0x04;
     pub const CROUCH_AIM: u16 = 0x05;
     pub const STRAFE_LEFT: u16 = 0x0c;
@@ -2167,9 +2169,10 @@ impl Drone {
         // 0x148010:124-127 and `DroneFunc_Set2ndBehaviour` 0x14a618 (latching `+0x29 = 1`, read by
         // `DroneFunc_Using2ndBehaviour` 0x14a5e8) and restores the first block with
         // `DroneFunc_Set1stBehaviour` 0x14a5f0 (clears `+0x29`, `+0x4D8 → +0x4DC`). The port swaps
-        // `props` with this inactive copy (`set_2nd_behaviour` / `set_1st_behaviour`); the
-        // ChangeToAttackMode and GoToGoal-arrival sites are wired, the FirstAttack / PreDroneControl /
-        // HandleImpact ones not yet (docs/systems/dronefunc-rest.md, GAPS G-055).
+        // `props` with this inactive copy (`set_2nd_behaviour` / `set_1st_behaviour`); every site is
+        // wired: ChangeToAttackMode (its EnemyMission / CivilianMission / GoToGoal callers and the
+        // voice-set-0xB creation arm in `type_setup`), GoToGoal's arrival tail, FirstAttack's alt
+        // tail, PreDroneControl's flush and HandleImpact's 09/0A `Set1st` (GAPS G-055).
         let alert_props = (param(5) == 100).then_some(alert_words);
         let alert = nf_formats::drone::ALERTNESS_LEVELS[d.props.get(0x20, &normal) as usize & 3];
         let weapon = nf_formats::drone::weapon_id(skin, param(9), setup.kind);
@@ -2587,6 +2590,18 @@ impl Drone {
             let a = row(self.alt_mode).map_or(0, |t| t.alt);
             (if a != 0 { a } else { row(self.mode).map_or(0, |t| t.alt) }) as u8
         };
+        // The voice-set-0xB arm [M 0x14cbd8:119-127]: `+0x50C >= 1.0` with `+0xD8 == 0xB` (skin
+        // 0x0500001E, the ninja [M 0x14b300:158-162]) runs `NDrone2_ChangeToAttackMode` 0x14a648
+        // (with an alternate state: the alternate mode, the second behaviour block) and RETURNS —
+        // past the alert fold of `+0x5A2` (:128-155, see `start_state`) and the `+0x5A4` /
+        // `+0x13A` fold below (:157-209). Its `+0xAC = 100.0` is overwritten by the caller's stats
+        // read [M 0x14c600:81-108]. [D census, g055_behaviour_census: 07000004 #1 and 07000016
+        // #105/#126, all first-block alertness 1.0 and no alternate state — the swap is a no-op on
+        // the disc; the skipped folds keep the ninja's start state NinjaStand 0xA6.]
+        if self.kind == 0xb && self.alert >= 1.0 {
+            self.change_to_attack_mode();
+            return;
+        }
         if self.alt_mode == 0 && self.alt_state == 0 && (self.second_channel != 0 || self.alert_block >= 1.0) {
             self.alt_state = match self.start_state(d) { 4 | 5 | 6 | 8 | 0x30 | 0x31 | 0x36 | 0x37 | 0x85 | 0x89 => 0x56, 0x10 | 0x2e | 0x32 => 0x12, 0x29 => 0x2a, 0xa6 => 0xa7, _ => 0 };
         }
@@ -2626,7 +2641,9 @@ impl Drone {
         // she keeps her base start state (otherwise Zoe shoots at Bond at the gondola
         // — the 07000008 ally's alert reached 1.0 on the guards' gunfire and the fold put her
         // into the player-hunting ATTACK).
-        if self.alert >= 1.0 && self.team != 2 {
+        // Voice set 0xB never folds: `GetDroneTypeAttackTypeFriend`'s 0xB arm returns before the
+        // fold at creation, and below alertness 1.0 the fold does not run [M 0x14cbd8:119-128].
+        if self.alert >= 1.0 && self.team != 2 && self.kind != 0xb {
             return match s { 4 | 5 | 6 | 0x30 | 0x31 | 0x36 | 0x56 => 0x56, 0x10 | 0x12 | 0x2e | 0x32 | 0xb5 => 0x12, 0x29 | 0x2a => 0x2a, 0xa6 | 0xa7 => 0xa7, x => x as u8 };
         }
         s as u8
@@ -2772,14 +2789,33 @@ impl Drone {
         self.call_anim(d, anim, 0, 0);
     }
 
-    /// `SetStandIdleAnim(force)`: in Idle one of 0x24..0x26 (Rand 3) held 5 + Rand 5 seconds; elsewhere 0x24.
+    /// `DroneAnim_SetStandIdleAnim` 0x13ca68 (`force` = the game's respect argument 0). With the
+    /// argument set and the hold clock `+0x59c` (`stand_until`) running it returns at once
+    /// [M :19-21]; Idle (4) picks `0x24 + Rand(3)` and PartyGirl (0x2f) with property 0x47
+    /// `0x24 + Rand(4)`, each held `(5 + Rand(5)) * FRAME_RATE_INT` [M :31-42]; every other state
+    /// takes 0x24 with no hold [M :27-28]. Model `+0xD8 == 0x10` always asks 0x26 [M :46-48]; a
+    /// state outside 0x24..0x27 or one the set cannot play is 0x24 [M :49-68]; the clock is stamped
+    /// `now + hold` [M :71]. Deviation kept: the game always calls `CallAnim` [M :70] (which zeroes or
+    /// replaces a pending call); the port keeps its older call guard — `request_anim` for the no-hold
+    /// states, no call while one is pending in the random arms — because the always-call form moved
+    /// the real-damage walks on 0700001b and 07000006 (not yet re-tuned).
     fn set_stand_idle(&mut self, d: &Data, rng: &mut Rng, frame: u32, force: bool) {
-        if self.state != state::IDLE { self.request_anim(d, anim_state::STAND_IDLE); return; }
         if !force && frame < self.stand_until { return; }
-        let mut anim = anim_state::STAND_IDLE + rng.rand(3) as u16;
-        if !self.can_do(d, anim) { anim = anim_state::STAND_IDLE }
-        self.stand_until = frame + (5 + rng.rand(5)) * 60;
-        if self.anim.call.is_none() && self.anim.state != anim { self.call_anim(d, anim, 0, 0) }
+        let n = match self.state {
+            state::IDLE => 3,
+            state::PARTY_GIRL if self.prop(d, 0x47) => 4,
+            _ => 0,
+        };
+        let (mut anim, mut hold) = (anim_state::STAND_IDLE, 0);
+        if n != 0 {
+            anim = anim_state::STAND_IDLE + rng.rand(n) as u16;
+            hold = (5 + rng.rand(5)) * 60;
+        }
+        if self.kind == 0x10 { anim = 0x26 }
+        if anim != anim_state::STAND_IDLE && !self.can_do(d, anim) { anim = anim_state::STAND_IDLE }
+        if n == 0 { self.request_anim(d, anim) }
+        else if self.anim.call.is_none() && self.anim.state != anim { self.call_anim(d, anim, 0, 0) }
+        self.stand_until = frame + hold;
     }
 
     /// `DroneAnim_SetWalkIdleAnim` (0x13cc70): in Patrol (SM id + 1) % 3 + 0x37, or 0x37 when the set lacks it.
@@ -2829,7 +2865,7 @@ impl Drone {
         let alerted = self.prop(d, 0x25) && self.alert >= 0.66;
         match code {
             crate::nav::follow::MOVING => { let a = if alerted { anim_state::ALERT_WALK } else { self.walk_anim(d) }; self.request_anim(d, a) }
-            crate::nav::follow::NO_PATH => self.request_anim(d, anim_state::STAND_IDLE),
+            crate::nav::follow::NO_PATH => self.set_stand_idle(d, _rng, frame, false), // route done → SetStandIdleAnim(1) [M 0x1514d8:12-13]
             _ => { let a = if self.alert >= 0.66 { anim_state::ALERT_IDLE } else { self.walk_anim(d) }; self.request_anim(d, a) }
         }
         self.desired_yaw = atan2_approx(target[0] - self.pos[0], target[2] - self.pos[2]);
@@ -6560,6 +6596,11 @@ impl Drone {
     /// `NDrone2_MoveTarget_IsRouteNode` (0x1550c8), `NDrone2_CanReachGoalPosition` (0x155ad0) and
     /// `NDrone2_GetAnglesToMoveTarget` (0x155db8); `NDrone2_SetRunToPosition` (0x155b30) and
     /// `NDrone2_SetupAlertTarget` (0x155d48) are the goal-set forms.
+    /// *Deviation*: the game hands `MoveToGoalPosition` the goal's own radius (`Drone+0x704`) from
+    /// every caller and `SetupRouteToPosition` stores it at route+0x8C [M 0x158b10:104], which
+    /// `AINetwork_FollowRoute` arrives under past the last node [M 0x15b110:20-22]; this default
+    /// keeps the flat 2.0. Only RunForCover passes its goal radius (`move_to_goal_r`); the other
+    /// callers are untriaged (docs/systems/drone-cover.md, Live check).
     fn move_to_goal(&mut self, d: &Data) -> u8 { self.move_to_goal_r(d, 2.0) }
 
     /// `move_to_goal` with the caller's radius: a fresh route keeps it as its arrival threshold
@@ -7064,7 +7105,11 @@ impl Drone {
             }
             (RUN_FOR_COVER, msg::UPDATE) => {
                 if !in_cover_ok(self, false) || (self.seen && self.dist < 4.0) { self.set_state(ATTACK); return Some(true); }
-                match self.move_to_goal(d) {
+                // The goal's own radius (0.5 from FindCover's SetupGoalPosition), not the flat 2.0:
+                // `lwc1 $f12, 0x704` before `jal 0x1517d8` [M disasm 0x169240/0x169250]. With 2.0 the
+                // guard stopped 1.5 short of the gate pillar's corner on 07000005 (148 ticks, live 198).
+                let r = self.goal_arrival;
+                match self.move_to_goal_r(d, r) {
                     0 | 2 => {
                         let remaining = self.croute.as_ref().map_or(0.0, |r| r.remaining);
                         // `SlideToPosition(0x3CCCCCCC = 0.025, +0x830, y = 1)` [M 0x169150:64-67] — 2.5 %/tick
@@ -8351,8 +8396,24 @@ impl Drone {
                 }
             }
             (WAIT_SWITCH, msg::ENTER) => { self.enabled = false; self.vision_on = false; self.watching = false; true }
-            (WAIT_SWITCH, msg::UPDATE) => { if self.channel_on { self.enabled = true; let s = self.start_state(d); self.set_state(s) } true }
-            (WAIT_SWITCH, msg::ENABLE) => { self.enabled = true; let s = self.start_state(d); self.set_state(s); true }
+            // `NDrone2_DSTATE_WaitSwitch` 0x15b960: on the channel (msg 3) the truck driver (dtypenew
+            // 0x17) goes to TruckDriverInit 0x32, and a drone with a start script (`+0x554`) plays it
+            // (PlayScript 3) before its start state, as the Global ENTER does [M 0x15b960:25-38]; the
+            // enable message (0xe) takes the same start-script branch without the 0x17 arm [M :40-49].
+            (WAIT_SWITCH, msg::UPDATE) => {
+                if self.channel_on {
+                    self.enabled = true;
+                    if self.mode == 0x17 { self.set_state(TRUCK_DRIVER_INIT); }
+                    else if self.start_script != 0 { self.set_state(PLAY_SCRIPT); }
+                    else { let s = self.start_state(d); self.set_state(s) }
+                }
+                true
+            }
+            (WAIT_SWITCH, msg::ENABLE) => {
+                self.enabled = true;
+                if self.start_script != 0 { self.set_state(PLAY_SCRIPT); } else { let s = self.start_state(d); self.set_state(s); }
+                true
+            }
             // `NDrone2_DSTATE_SpaceDrake` 0x16dee0 — Drake's zero-g state (0700001b, task
             // drake-fight-1b). Messages: 1 ENTER, 3 UPDATE, 4 the idle timeout, 5 anim done, 8 bullet.
             (SPACE_DRAKE, msg::ENTER) => {
@@ -8362,7 +8423,7 @@ impl Drone {
                 self.health = 10.0;
                 self.vision_on = true;
                 self.watching = true;
-                self.request_anim(d, anim_state::STAND_IDLE);
+                self.set_stand_idle(d, rng, frame, true); // SetStandIdleAnim(0) [M 0x16dee0:20]
                 if self.prop(d, 0x46) { self.set_idle_timeout(rng, frame, 45, 5) }
                 true
             }
@@ -8371,6 +8432,7 @@ impl Drone {
                 // channel IS 10 [D placement #186 p3 = 10], so the per-tick cached
                 // wait_channel_on (Drones::tick) is that channel's live value.
                 if self.wait_channel_on { self.set_state(crate::kiko::DELETE_ME); }
+                else { self.set_stand_idle(d, rng, frame, false); } // channel off → SetStandIdleAnim(1) [M 0x16dee0:28-33, :47-48]
                 true
             }
             (SPACE_DRAKE, msg::IDLE_TIMEOUT) => {
@@ -8385,7 +8447,7 @@ impl Drone {
             }
             (SPACE_DRAKE, msg::ANIM_DONE) => {
                 // [M 0x16dee0 case 5 → LAB_0016dfc0]: SetStandIdleAnim(0).
-                self.request_anim(d, anim_state::STAND_IDLE);
+                self.set_stand_idle(d, rng, frame, true);
                 true
             }
             (SPACE_DRAKE, msg::BULLET) => {
@@ -9037,8 +9099,9 @@ impl Drone {
                 // else the `+0x3b = seen ? (+0x1e == 0) : 0` fire re-arm and stay. There is NO
                 // 0x5b/0x5c exit — the old unseen-ticks arm was the 0x59 ↔ 0x5c thrash (with
                 // DroneFunc_CombatState 0x148338:136-142 sending a stationary 0x5c back to 0x59
-                // every tick). The voice-0xC Rand(3) → 0x6e roll [M 0x1643e8:103-111] is not ported: it
-                // sits behind the +0x3C fire-mode byte, and only 07000008's ally carries that voice.
+                // every tick). The type-0xC (`+0xD8`) Rand(3) → 0x6e roll [M 0x1643e8:103-111] is not ported:
+                // it runs when the fire-anim arm is skipped (`+0x3C` set or `+0x3B` clear), and the only
+                // type-0xC placement on any level is 07000008's escort VIP (g026_reload_census).
                 if !self.stays(d) { self.set_state(AIM_STAND); return true; }
                 self.turn_to_opponent(0.5235988);
                 if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
@@ -9182,14 +9245,21 @@ impl Drone {
             // `NDrone2_DSTATE_AimStandReload` 0x1666d8 (state 0x69) / `NDrone2_DSTATE_AimCrouchReload`
             // 0x167370 (state 0x71) ENTER [M 0x1666d8 case 1]: `firing` drops, the clip refills from
             // the reserve (`+0xBBC = +0xBBE`), and the reload anim's follow-on returns to the matching
-            // fire state (0x68 stand / 0x70 crouch). (The game's 1-in-30 alternate reload anim 0x4a
-            // with the same follow-on is a presentation variant [M 0x1666d8:21-27] — the port plays
-            // RELOAD only.)
+            // fire state (0x68 stand / 0x70 crouch). The STAND reload alone also sets alert status 1
+            // and draws `Rand_Rand(0x1e)` on every entry: a 0 with `CanDoAnimState(0x4a, 0)` plays the
+            // alternate reload anim 0x4a (same follow-on 0x68), else 0x52 [M 0x1666d8:17-27]. The
+            // crouch reload has neither the draw nor the status write [M 0x167370 case 1]. The draw is
+            // taken before the CanDoAnimState test (short-circuit order), so it moves the shared
+            // stream even for anim sets without 0x4a.
             (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1666d8:16 / 0x167370:15]
-                self.firing = false;
+                let anim = if s == AIM_STAND_RELOAD {
+                    self.alert_status_set(1, frame); // `Drone_AlertStatusSet(1)` [M 0x1666d8:17]
+                    if rng.rand(0x1e) == 0 && self.can_do(d, anim_state::RELOAD_ALT) { anim_state::RELOAD_ALT } else { anim_state::RELOAD }
+                } else { anim_state::RELOAD };
+                self.firing = false; // `+0x3B = 0` [M 0x1666d8:18 / 0x167370:17]
                 self.clip = self.clip_max;
-                self.call_anim(d, anim_state::RELOAD, if s == AIM_STAND_RELOAD { AIM_STAND_FIRE } else { AIM_CROUCH_FIRE }, 0);
+                self.call_anim(d, anim, if s == AIM_STAND_RELOAD { AIM_STAND_FIRE } else { AIM_CROUCH_FIRE }, 0);
                 true
             }
             (AIM_STAND_RELOAD | AIM_CROUCH_RELOAD, msg::UPDATE) => { self.turn_to_opponent(0.9); true }
@@ -9498,7 +9568,7 @@ impl Drone {
             (CASTLE_CHAT_GUARD1, msg::ENTER) => {
                 self.vision_on = true;
                 if self.alert >= 0.66 { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); }
-                else { self.set_stand_idle(d, rng, frame, false); }
+                else { self.set_stand_idle(d, rng, frame, true); } // SetStandIdleAnim(0) [M 0x1612e0:28]
                 true
             }
             // EXIT [M case 2]: a chat guard whose start script never played (+0x554 still set — the
@@ -9529,7 +9599,7 @@ impl Drone {
             // 0x1612e0:57-65 + 0x13ab58:99]) [M].
             (CASTLE_CHAT_GUARD1, msg::ANIM_DONE) => {
                 if self.alert >= 0.66 { self.call_anim(d, anim_state::ALERT_IDLE, 4, 0); }
-                else { self.set_stand_idle(d, rng, frame, false); }
+                else { self.set_stand_idle(d, rng, frame, true); } // SetStandIdleAnim(0) [M 0x1612e0:63]
                 true
             }
             // The alert group [M cases 0x11/0x12/0x14/0x15/0x16/0x1e → DroneVision_EnemyAlerts]: a
@@ -9766,8 +9836,9 @@ impl Drone {
                     if self.prop(d, 0x52) { self.fail_reason = Some(crate::ally::mission_fail_reason(0xb)); }
                     self.set_state(CIVILIAN_SCARED);
                 } else {
-                    // [M 0x160140:41-46] the game returns here: SetStandIdleAnim(1) then BondTalk.
-                    self.set_stand_idle(d, rng, frame, true);
+                    // [M 0x160140:41-46] the game returns here: SetStandIdleAnim(1) then BondTalk —
+                    // the respect argument 1 keeps the 5..9 s hold (port force = false).
+                    self.set_stand_idle(d, rng, frame, false);
                     self.bond_talk(d, rng, frame);
                 }
                 true
@@ -10690,7 +10761,17 @@ impl Drone {
             // 0x14b0f8:6, and `NDrone2_PreDroneControl` 0x148db0:126 behind the +0x18 flag) [M] — a
             // visual-only spawn the port's draw layer does not build (nothing in
             // the AI reads the eyes datum on the ported paths [M 0x16b990 reads it for the cheat arm only]).
-            (0xa6, msg::ENTER) => { self.set_state(crate::kiko::NINJA_ATTACK); true }
+            // ENTER also sets `+0x4F8 |= 0x80000000` (bounded) and `|= 0x10000` (vision), the engage
+            // range `+0xF0 = 3.0` and the combat range `+0xFC = 5.0` [M 0x16b990 case 1:
+            // 0x40400000 / 0x40a00000] before the SetState.
+            (0xa6, msg::ENTER) => {
+                self.bounded = true;
+                self.vision_on = true;
+                self.engage_range = 3.0;
+                self.combat_range = 5.0;
+                self.set_state(crate::kiko::NINJA_ATTACK);
+                true
+            }
             // NinjaAttack 0xa7 (0x16bb50): ENTER — vision on, +0x4F8 |= 0x80000000, alert 1.0, then
             // the distance routing (bands or the close-band evasion / sword / stand-fire choice);
             // UPDATE re-routes each tick while no transition is pending.
@@ -13211,6 +13292,24 @@ pub fn in_view_of(player: &Player, pos: V3) -> bool {
 fn drawn_room_mask(cel_graph: &crate::celgraph::CelGraph, player: &Player, door_closed: &[bool]) -> Option<Vec<bool>> {
     if cel_graph.portals.is_empty() { return None; }
     let start = player.obj_cel?;
+    let depth0 = viewer_depth0(player)?;
+    crate::celgraph::portal_visible_cels_from_cell_doors(cel_graph, start, player.eye, &depth0, Some(door_closed))
+}
+
+/// The VisCelList chain from the viewer's linked cel (`Vision_Portal_Recurse` 0x1e86e8 inserts the
+/// viewer's cel first, then `Vision_Recurse` the portal-reached cels), with `drawn_room_mask`'s
+/// depth-0 planes. A level without portals lists the viewer's cel alone. `None` = the viewer has no
+/// cel or no aim (the game skips the whole function without a cel [M 0x1e86e8:11]).
+fn viewer_chain(cel_graph: &crate::celgraph::CelGraph, player: &Player, door_closed: &[bool]) -> Option<Vec<usize>> {
+    let start = player.obj_cel?;
+    if start >= cel_graph.cells.len() { return None; }
+    let depth0 = viewer_depth0(player)?;
+    if cel_graph.portals.is_empty() { return Some(vec![start]); }
+    crate::celgraph::portal_cel_chain_from_cell_doors(cel_graph, start, player.eye, &depth0, Some(door_closed))
+}
+
+/// `drawn_room_mask`'s depth-0 planes (see its doc); `None` with a zero aim.
+fn viewer_depth0(player: &Player) -> Option<[[f32; 4]; 5]> {
     let a2 = player.aim[0] * player.aim[0] + player.aim[1] * player.aim[1] + player.aim[2] * player.aim[2];
     if !(a2 > 1e-12) { return None; }
     let l = a2.sqrt();
@@ -13222,7 +13321,7 @@ fn drawn_room_mask(cel_graph: &crate::celgraph::CelGraph, player: &Player, door_
     let fw = [player.aim[0] / l, player.aim[1] / l, player.aim[2] / l];
     let fe = fw[0] * player.eye[0] + fw[1] * player.eye[1] + fw[2] * player.eye[2];
     depth0[4] = [-fw[0], -fw[1], -fw[2], fe + 200.0];
-    crate::celgraph::portal_visible_cels_from_cell_doors(cel_graph, start, player.eye, &depth0, Some(door_closed))
+    Some(depth0)
 }
 
 pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) -> bool {
@@ -13726,8 +13825,9 @@ pub struct Drones {
     /// Gates `DroneFunc_DoForcedAttack` 0x148c60's forced attacks on 07000007 (without it one punch
     /// turned every guest hostile). The interrogate state itself is not ported yet, so only the gate is.
     pub party_loud: bool,
-    /// Auto-aim: the last target (`BL+0x114`) and the crosshair offset as (yaw, pitch) radians (`BL+0x120` / `+0x124`,
-    /// screen units in the game; *approximation*: small angles).
+    /// Auto-aim: the lock pointer (`BL+0x114`) and, in `aim_offset`, the smoothed crosshair offset `BL+0x120` /
+    /// `+0x124` in the game's screen units (x right, y up, ±1 at the screen edges [M HUD_UpdateCrossHair
+    /// 0x19e6d0:87-92]); the shot aims through it (`autoaim::aim_dir`, `Player_GetAimingPoint` 0x1a4a98).
     pub aim_target: Option<usize>,
     /// weapon-handling: the next `fire_player` shot's player-owner spread scale
     /// (`bullet::player_spread` — `Bullet_init` 0x12c5a0:139-170's class-3 arm: the pull bloom and
@@ -14044,6 +14144,11 @@ pub struct Drones {
     /// HITTEST's damage float and pick mode `Collide_Update` redistributes onto the hit objects'
     /// `obj+0xD0` lists [M 0x1ea398:160-215; Bullet_update 0x12e7b0's per-tick HITTEST writes].
     sl_shots: Vec<crate::searchlight::Shot>,
+    /// The guard rounds' searchlight contacts of the last tick's bullet pass (it runs after the
+    /// control walk), fed to this tick's walk with the player rounds — every class-5 round's
+    /// contact reaches the head's `obj+0xD0` walk, whoever fired it [M Collide_Update 0x1ea398;
+    /// Searchlight_Update 0x1cb900:411-412 reads only the attacker's class byte 5].
+    sl_round_shots: Vec<crate::searchlight::Shot>,
     /// The mission layer (`Mission_Update` 0x182c60, docs/systems/mission.md). `inited` latches the
     /// per-level `Mission_Init` (0x182270, from `ResetMap_GameInit`) on this level's first tick.
     pub mission: crate::mission::Mission,
@@ -14085,6 +14190,14 @@ pub struct Drones {
     bullet_contacts_now: Vec<crate::triggers::BulletContact>,
     /// Last tick's `bullet_contacts_now` — the set `Trigger_Hit` reads this tick (see above).
     bullet_contacts_prev: Vec<crate::triggers::BulletContact>,
+    /// G-031: the player touchers built LAST tick (from that tick's post-move body) — the set
+    /// `Trigger_Hit` reads this tick. The game's player contact enters the trigger's `obj+0xD0`
+    /// list in `Collide_Update`, which runs after the update walk [M 0x1336f8:238; the lists are
+    /// cleared + rebuilt there, 0x1ea398:25-53], and every trigger read (`Trigger_Calc`'s touch
+    /// pass at the walk's head [M 0x1336f8:24], the walk's own `Trigger_Update`) comes before the
+    /// next Collide — so a plate Bond steps on at tick N writes its channel at tick N+1. `None`
+    /// before the first tick: no Collide has run yet, the lists are empty.
+    prev_player_touchers: Option<Vec<crate::triggers::Toucher>>,
     /// The route-node → door binding (`NDrone_InitDoorNodes` 0x139a70: each door-flagged node binds
     /// its nearest door object), keyed (nav path, node id) → `Doors::list` index. Computed lazily on
     /// the first tick that needs it (the doors' positions are static).
@@ -14482,9 +14595,10 @@ impl Drones {
             pickups: Vec::new(), inventory: crate::pickup::Inventory::level_start(0x73, 34), taken: Vec::new(), scripts: Default::default(), player_events: Vec::new(), npc_enabled: true, hold_npcs: false, hold_active: false,
             npc_system_disabled: false,
             bond_door_skip: false, // the boot value latches at the Mission_Init site (Player_Init 0x1910f8's write)
-            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), trigger_walls: Vec::new(), bullet_paths: Vec::new(), script_round_damage: Vec::new(), script_round_hits: Vec::new(), sl_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), guard_break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), use_picks: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
+            spawn_counter: 0, audio: Default::default(), script_sounds: Vec::new(), map_sounds: Default::default(), music: Default::default(), attack_gate: Default::default(), alarm_music: [0; 3], voice_last: Vec::new(), patrol_cooldown: 0, saw_opp_this_frame: false, saw_opp_last_frame: false, searchlights: Default::default(), doors: Default::default(), fuseboxes: Vec::new(), wire_geo: Default::default(), sss: Default::default(), trigger_walls: Vec::new(), bullet_paths: Vec::new(), script_round_damage: Vec::new(), script_round_hits: Vec::new(), sl_shots: Vec::new(), sl_round_shots: Vec::new(), props: Default::default(), break_kills: Vec::new(), guard_break_kills: Vec::new(), breaks: Default::default(), monitors: Default::default(), mission: crate::mission::Mission::new(), mission_carry: None, mission_inited: false, mission_events: Vec::new(), useobjs: Default::default(), use_picks: Default::default(), ai_points: Vec::new(), bullet_path_weapons: Vec::new(), copters: Vec::new(), copter_paths: Vec::new(), locks: Vec::new(), grapple_points: Vec::new(), prev_event2: 0,
             bullet_contacts_now: Vec::new(),
             bullet_contacts_prev: Vec::new(),
+            prev_player_touchers: None,
             space_laser_beams: Vec::new(),
             // fix-06-alarm.
             sound_triggers: Default::default(),
@@ -16590,6 +16704,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.bullet_paths.clear();
         self.bullet_path_weapons.clear();
         self.sl_shots.clear();
+        self.sl_shots.append(&mut self.sl_round_shots);
         // `Collide_Update` 0x1ea398's first loop clears every hit list at the head of the frame —
         // the fusebox wires' hit flags are per-tick only.
         for fb in &mut self.fuseboxes { fb.clear_hits(); }
@@ -17788,7 +17903,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             .map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
         if flags70 & 2 != 0 {
             if let Some(id) = d.surfaces.and_then(|s| nf_formats::sfx::SurfaceSounds::get(&s.impact, m)) {
-                self.audio.play3d(id, hit, None);
+                self.play_impact(d, id, hit);
             }
         }
         let host = crate::world::HitHost::Object(crate::world::PANE_PART | pane as u64, matrix);
@@ -18030,95 +18145,91 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.player_bullets.retain(|b| !b.dead);
     }
 
-    /// `Sound_Play3D` (0x1dd548) with the table's radii: the sound enters the hearing list for the next tick. Looped
-    /// sounds are never heard (`Sound_Alertness` skips them).
-    /// `Player_AutoAim` (0x1a7c98) / `Check_AutoAim` (0x1a73f8), once per tick when auto-aim is on and Bond is not in aim
-    /// mode: the nearest qualifying drone's bone 2 within `Autoaim_Range` (25): drawn, alive, not type 0xB; |yaw to it −
-    /// Bond's yaw| < `Autoaim_Angle_H` · k and |pitch to it − Bond's pitch| < `Autoaim_Angle_V` · k with k = weapon
-    /// `+0x14` / 100 · (1 − d / 25) · the difficulty multiplier (Easy 1.9, Normal 1, Hard 0), ×1.4 (`LockOnMul`) for the
-    /// last target; line of sight from the head. A target snaps the crosshair offset onto it; the offset then halves
-    /// every tick. Returns the direction the next bullet takes (`Player_GetAimingPoint`), given Bond's view `look`.
+    /// `Player_AutoAim` (0x1a7c98) / `Check_AutoAim` (0x1a73f8) from a bare view direction: the yaw and
+    /// pitch taken back out of `look`, zoom 1. The Sim calls [`Self::auto_aim_view`] with Bond's own
+    /// angles and zoom; this wrapper serves the probes that only hold a direction.
     pub fn auto_aim(&mut self, d: &Data, head: V3, look: V3, weapon: u8) -> V3 {
-        let t = d.tuning;
         let yaw = look[0].atan2(look[2]);
-        // The game's pitch angle is `asinf` 0x232d48 (jal at 0x1a7710 in `Check_AutoAim` 0x1a73f8 [M ELF jal
-        // scan]); asinf's own callees — `dptofp` 0x225378 (jal 0x232e18, the f64→f32 result narrowing) and
-        // `matherr` 0x2352e8 → `dpcmp` 0x225108 (the |x|>1 domain-error path, jal 0x2352f4 [M]) — are the
-        // SDK soft-float/libm internals this Rust `.asin()` + `.clamp(-1.0, 1.0)` replace [M unported-misc-7].
         let pitch = look[1].clamp(-1.0, 1.0).asin();
-        let wf = d.weapons.records.get(weapon as usize).map_or(100.0, |w| f32::from_le_bytes(w[0x14..0x18].try_into().unwrap()));
+        self.auto_aim_view(d, head, yaw, pitch, look, 1.0, weapon)
+    }
+
+    /// `Player_AutoAim` (0x1a7c98)'s scan arm and `Player_GetAimingPoint` (0x1a4a98): the per-tick
+    /// auto-aim with the option on (or the Q-Claw held) and the aim bit clear. Returns the next shot's
+    /// direction. Spec: docs/systems/auto-aim.md.
+    /// - The cap starts at `Autoaim_Range` (25), the Q-Claw's (0x50/0x51) at its record's +0x1c
+    ///   [M 0x1a7d30-0x1a7d6c]. Each candidate must sit no farther than the cap (`*cap < dist` skips,
+    ///   so an equal distance later in the scan wins [M 0x1a75a8]); a pass lowers the cap to its distance.
+    /// - The window: k = ((w+0x14 · 0.01) · (1 − dist/25)) · difficulty mul (Easy 1.9, Normal 1, Hard 0),
+    ///   forced to 1 for the Q-Claw; H = `Autoaim_Angle_H`·k, V = `Autoaim_Angle_V`·k, both ×1.4
+    ///   (`LockOnMul`) for the current lock `BL+0x114` [M disasm 0x1a75f8-0x1a76c8]. Skipped when both are 0.
+    /// - |`Vec_AngleDifference`(`atan2f`(dx, dz), yaw)| < H, then |… (`asinf`(dy/dist), pitch)| < V, then
+    ///   `Collide_LineOfSight` mask 0xa from the head [M 0x1a75c8-0x1a7764].
+    /// - The lock: the cap takes the distance; only when `View_3DPoint2Screen` returns > 0 do the
+    ///   offset (`BL+0x120/+0x124`, the target's screen position ×2) and the lock pointer change
+    ///   [M 0x1a7778-0x1a77d8].
+    /// - The release: the pointer clears only when the cap still equals `Autoaim_Range` after the scan
+    ///   [M 0x1a7e0c-0x1a7e20], so a Q-Claw scan (cap 50/100) never clears it.
+    /// - Then all four offsets halve (`BL+0x118..0x124`, the port's cursor halves in the Sim) and the shot
+    ///   aims through the halved offset [M 0x1a7e78-0x1a7ecc; Player_Update 0x193600 runs
+    ///   `Player_Weapon` (→ `Player_AutoAim`) before `Player_WeaponFiring`, jal 0x194064 / 0x194070].
+    pub fn auto_aim_view(&mut self, d: &Data, head: V3, yaw: f32, pitch: f32, look: V3, zoom: f32, weapon: u8) -> V3 {
+        use nf_formats::ps2float::{div, mul};
+        let t = d.tuning;
+        let basis = crate::autoaim::view_basis(yaw, pitch, look);
+        let qclaw = matches!(weapon, 0x50 | 0x51);
+        let rec_f32 = |o: usize| d.weapons.records.get(weapon as usize).map(|w| f32::from_le_bytes(w[o..o + 4].try_into().unwrap()));
+        let wf = rec_f32(0x14).unwrap_or(100.0);
         let diff = match self.difficulty { 1 => t.Autoaim_EasyMul, 3 | 4 => t.Autoaim_HardMul, _ => t.Autoaim_NormalMul };
-        // The initial cap: `Autoaim_Range` (25.0 [L], `ReadTuningVars` 0x1d3a80:20, stored at
-        // 0x1d3bcc) — except the Q-Claw (0x50/0x51), whose cap is its own record's +0x1c
-        // [M `Player_AutoAim` 0x1a7c98 disasm 0x1a7d54-0x1a7d68 `lwc1 $f0, 0x1c($v0)` from
+        // The initial cap [M `Player_AutoAim` 0x1a7c98 disasm 0x1a7d54-0x1a7d68 `lwc1 $f0, 0x1c($v0)` from
         // `weapon_data + type·0x10c`; L ee_start_05: 50.0 / 100.0]. (The per-difficulty
-        // MAX_AUTO_AIM_DIST_NEAR/MIDL that `Player_InitWeapon` 0x1a7ef8 writes are never read
-        // in ACTION.ELF — see the fix-progress-remainder report.)
-        let mut best = if matches!(weapon, 0x50 | 0x51) {
-            d.weapons.records.get(weapon as usize).map_or(t.Autoaim_Range, |w| f32::from_le_bytes(w[0x1c..0x20].try_into().unwrap()))
-        } else { t.Autoaim_Range };
-        let mut found = None;
-        // weapon-handling [M Player_AutoAim 0x1a7c98:63-78]: the Q-Claw (0x50/0x51) scans ONLY the
-        // class-'Q' objects (the grapple points, `Grapple_Create` 0x198298) — never the drones —
-        // with k forced to 1 [M Check_AutoAim 0x1a73f8:150-152] and the object position (`obj+0x30`
-        // for a class other than 2/3 [M :113-120]); the port's point is the placement plus its
-        // object's sphere centre [S — the centre offset, not obj+0x30]. Grapple points carry an
-        // index past `GRAPPLE_AIM` in `aim_target` (the lock-on ×1.4 memory).
+        // MAX_AUTO_AIM_DIST_NEAR/MIDL that `Player_InitWeapon` 0x1a7ef8 writes are never read in ACTION.ELF.)
+        let mut best = if qclaw { rec_f32(0x1c).unwrap_or(t.Autoaim_Range) } else { t.Autoaim_Range };
+        // weapon-handling [M Player_AutoAim 0x1a7c98:63-78]: the Q-Claw scans ONLY the class-'Q' objects
+        // (the grapple points, `Grapple_Create` 0x198298), never the drones; the object position
+        // (`obj+0x30` for a class other than 2/3 [M :113-120]); the port's point is the placement plus its
+        // object's sphere centre [S, the centre offset, not obj+0x30]. Grapple points carry an index past
+        // `GRAPPLE_AIM` in `aim_target`.
         const GRAPPLE_AIM: usize = 1 << 20;
-        if matches!(weapon, 0x50 | 0x51) {
-            for (gi, g) in self.grapple_points.iter().enumerate() {
-                let p = g.pos;
-                let dv = [p[0] - head[0], p[1] - head[1], p[2] - head[2]];
-                let dist = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
-                if dist > best || dist <= 0.0 { continue; }
-                let (mut h, mut v) = (t.Autoaim_Angle_H, t.Autoaim_Angle_V);
-                if self.aim_target == Some(GRAPPLE_AIM + gi) { h *= t.Autoaim_LockOnMul; v *= t.Autoaim_LockOnMul; }
-                let dyaw = angle_difference(yaw, dv[0].atan2(dv[2]));
-                if dyaw.abs() >= h { continue; }
-                let dpitch = angle_difference(pitch, (dv[1] / dist).clamp(-1.0, 1.0).asin());
-                if dpitch.abs() >= v || !d.world.line_of_sight_masked(head, p, crate::world::LOS_SENSOR) { continue; }
-                best = dist;
-                found = Some((GRAPPLE_AIM + gi, dyaw, dpitch));
+        let mut cands: Vec<(usize, V3)> = Vec::new();
+        if qclaw {
+            for (gi, g) in self.grapple_points.iter().enumerate() { cands.push((GRAPPLE_AIM + gi, g.pos)); }
+        } else {
+            for (i, dr) in self.list.iter().enumerate() {
+                // `Check_AutoAim` (0x1a73f8): skip drawn==0 (`obj+0xFC`), dead (`+0xAC <= 0`), voice set 0xB
+                // (`+0xD8`), the Disabled state (`obj+0xF4 == 1`, covered by `enabled`), and, single player ,
+                // every non-enemy team (`+0x44 != 1`; the MP build's `MP_areObjectsOnSameTeam` is not
+                // modelled). Bone 2 (`AnimGetBoneWorldTrans(obj, 0x80000002)`).
+                if !dr.present || !dr.enabled || !dr.drawn || dr.corpse || dr.health <= 0.0 || dr.kind == 0xb || dr.team != 1 { continue; }
+                let Some(p) = dr.palette(d).and_then(|m| m.get(2).map(|r| [r[3][0], r[3][1], r[3][2]])) else { continue };
+                cands.push((i, p));
             }
         }
-        for (i, dr) in self.list.iter().enumerate() {
-            if matches!(weapon, 0x50 | 0x51) { break; }
-            // `Check_AutoAim` (0x1a73f8): skip drawn==0 (`obj+0xFC`), dead (`+0xAC <= 0`), voice set 0xB (`+0xD8`),
-            // the Disabled state (`obj+0xF4 == 1`, covered by `enabled`), and — single player — **every non-enemy
-            // team** (`+0x44 != 1` → skip; the MP build checks `MP_areObjectsOnSameTeam` instead, not modelled).
-            // This keeps Bond's crosshair off allies, hostages and civilians (drone.md `+0x44`: 1 = enemies,
-            // 10/11/13/14 → 3 friends, 12 → 2 bots) — the 07000002 "shootable civilians" report.
-            if !dr.present || !dr.enabled || !dr.drawn || dr.corpse || dr.health <= 0.0 || dr.kind == 0xb || dr.team != 1 { continue; }
-            let Some(p) = dr.palette(d).and_then(|m| m.get(2).map(|r| [r[3][0], r[3][1], r[3][2]])) else { continue };
-            let dv = [p[0] - head[0], p[1] - head[1], p[2] - head[2]];
-            let dist = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
-            if dist > best || dist <= 0.0 { continue; }
-            let mut k = wf * 0.01 * (1.0 - dist / t.Autoaim_Range) * diff;
-            if matches!(weapon, 0x50 | 0x51) { k = 1.0; }
-            let (mut h, mut v) = (t.Autoaim_Angle_H * k, t.Autoaim_Angle_V * k);
-            if self.aim_target == Some(i) { h *= t.Autoaim_LockOnMul; v *= t.Autoaim_LockOnMul; }
+        for (id, p) in cands {
+            let dist = crate::autoaim::dist3d(head, p);
+            if best < dist { continue; }
+            let mut k = mul(mul(mul(wf, f32::from_bits(0x3c23_d70a)), crate::trig::ee_sub(1.0, div(dist, t.Autoaim_Range))), diff);
+            if qclaw { k = 1.0; }
+            let (mut v, mut h) = (mul(t.Autoaim_Angle_V, k), mul(t.Autoaim_Angle_H, k));
+            if self.aim_target == Some(id) { v = mul(v, t.Autoaim_LockOnMul); h = mul(h, t.Autoaim_LockOnMul); }
             if h == 0.0 && v == 0.0 { continue; }
-            let dyaw = angle_difference(yaw, dv[0].atan2(dv[2]));
-            if dyaw.abs() >= h { continue; }
-            let dpitch = angle_difference(pitch, (dv[1] / dist).clamp(-1.0, 1.0).asin());
-            // The game's sensor LOS passes the stairwell's 0x40-material well panes [M
-            // Check_AutoAim 0x1a73f8:164-165 calls Collide_LineOfSight with mask 0xa;
-            // Collide_Intersect 0x1ebaa8:305-309/317-319 drop surface-0x40/0x80 hits under its
-            // 0x8 bit] — the plain segment test blocked the lock from every landing behind the
-            // pane, so the auto-aim never took the roping guard it visibly faces.
-            if dpitch.abs() >= v || !d.world.line_of_sight_masked(head, p, crate::world::LOS_SENSOR) { continue; }
+            let to_yaw = crate::trig::atan2f_libm(crate::trig::ee_sub(p[0], head[0]), crate::trig::ee_sub(p[2], head[2]));
+            if crate::trig::angle_difference(to_yaw, yaw).abs() >= h { continue; }
+            let to_pitch = crate::trig::asinf_libm(div(crate::trig::ee_sub(p[1], head[1]), dist));
+            if crate::trig::angle_difference(to_pitch, pitch).abs() >= v { continue; }
+            // The game's sensor LOS passes the stairwell's 0x40-material well panes [M Check_AutoAim
+            // 0x1a73f8:164-165 calls Collide_LineOfSight with mask 0xa; Collide_Intersect 0x1ebaa8:305-309/
+            // 317-319 drop surface-0x40/0x80 hits under its 0x8 bit].
+            if !d.world.line_of_sight_masked(head, p, crate::world::LOS_SENSOR) { continue; }
+            if let Some(s) = crate::autoaim::project_offset(head, &basis, p) {
+                self.aim_offset = s;
+                self.aim_target = Some(id);
+            }
             best = dist;
-            found = Some((i, dyaw, dpitch));
         }
-        match found {
-            Some((i, dyaw, dpitch)) => { self.aim_target = Some(i); self.aim_offset = [dyaw, dpitch]; }
-            None => { self.aim_target = None; }
-        }
-        let (y, p) = (yaw + self.aim_offset[0], pitch + self.aim_offset[1]);
-        // The offset is halved after use (the game halves it at the end of `Player_AutoAim`; `Player_GetAimingPoint`
-        // doubles it back, so a fresh target is aimed at exactly).
-        self.aim_offset = [self.aim_offset[0] * 0.5, self.aim_offset[1] * 0.5];
-        [p.cos() * y.sin(), p.sin(), p.cos() * y.cos()]
+        if best == t.Autoaim_Range { self.aim_target = None; }
+        self.aim_offset = [mul(self.aim_offset[0], 0.5), mul(self.aim_offset[1], 0.5)];
+        crate::autoaim::aim_dir(&basis, self.aim_offset, zoom)
     }
 
     /// `NDrone2_SpeechSFX(idx, force, 0, 0)` → `NDrone2_PlaySFX(2.0, …)` for each request of a drone's update: closed
@@ -18238,7 +18349,27 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     fn impact_sound(&mut self, d: &Data, from: V3, to: V3) {
         let (Some(s), Some((t, _, m))) = (d.surfaces, d.world.segment_surface(from, to, false)) else { return };
         let p = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t];
-        if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m) { self.audio.play3d(id, p, None); }
+        if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m) { self.play_impact(d, id, p); }
+    }
+
+    /// `Effect_Bullet` 0x1ce8a8:86-90's impact sound: `Sound_Play3D(100.0, -1.0, -1.0,
+    /// EffectInfo[mat]+0x14, hit, 0, 0, 0)`: the default-radius arm (`param_8 == 0` takes the
+    /// inner/outer/weight of `SFXOutputData[id]` [M Sound_Play3D 0x1dd548:27-52, :96-98]) with no
+    /// `Sound_ModAlertness` after it (unlike `Effect_Body`'s half weight [M 0x1cf400:9-16]), so
+    /// the drones hear a round's impact at the bank's full weight (`Sound_Alertness` 0x1ddc48
+    /// walks the same node list). The impact rows are 20..50 weight, outer 15..30 u, none looped
+    /// [D SFXOutputData]. The port played these on the audio pool only, so a round striking a
+    /// wall beside an unaware guard went unheard (g041-effects).
+    fn play_impact(&mut self, d: &Data, id: u32, p: V3) {
+        Self::play_impact_on(&mut self.audio, &mut self.sounds, d, id, p);
+    }
+
+    /// `play_impact` over the two fields alone (the drone-bullet walk holds `self.bullets`).
+    fn play_impact_on(audio: &mut crate::sound::Sounds, sounds: &mut Vec<Sound>, d: &Data, id: u32, p: V3) {
+        audio.play3d(id, p, None);
+        let Some(t) = d.sfx else { return };
+        let h = t.get(id);
+        if !h.looped { sounds.push(Sound { id: h.id, pos: p, inner: h.inner, outer: h.outer, weight: h.weight }); }
     }
 
     /// `Sound_Play3D(id, pos, …)`: heard (the sound pool) and, unless looped, entered in the drones' hearing list.
@@ -18601,7 +18732,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         let (muzzle, dir) = {
             let g = &self.props.gunimps[gi];
-            (g.muzzle(), g.barrel_dir())
+            // G-046: the raw `Mat_GetDir` row — `Bullet_init` normalises it (`bullet::cone`).
+            (g.muzzle(), g.barrel_row())
         };
         let weapon = tg.weapon;
         let Some(w) = weapons.records.get(weapon as usize) else { return };
@@ -19666,11 +19798,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.hold_active = false;
             // Dev-only: a script's event 5 during a held tick is not kept (the hold already freezes them).
             self.npc_enabled = true;
-            self.sky_frame(d.level);
+            self.sky_frame(d.level, player, cel_graph);
             return;
         }
         self.tick_impl(d, player, cel_graph);
-        self.sky_frame(d.level);
+        self.sky_frame(d.level, player, cel_graph);
     }
 
     /// The unit-test entry (hand-built `Player`s carry no viewer cel): the drawn gate keeps the
@@ -19683,16 +19815,33 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// a 2-D `Sound_Play(100, 0x5d)` (0x5e after a reflicker roll) when one leaves 1
     /// [M 0x1e5ad0:100-109]. Only slots with a flash variant run the timers (0700000a/0700000b's
     /// slot 3 on the disc [D]).
-    fn sky_frame(&mut self, level: u32) {
+    /// The viewer's sky gate (`viewer+0x20`, `celgraph::chain_sees_sky`) is re-read from the same
+    /// VisCelList walk the drawn gate runs (`viewer_chain`: the sim's eye, aim and linked cel stand in
+    /// for the render camera's). Without a cel graph (the hand-built harnesses) the gate stays open.
+    /// On 0x0700001B the pair rewrites `SunVector` every frame (`sky::rotating_sky_sun`), which the
+    /// lens flare and the sees-the-sun byte read.
+    fn sky_frame(&mut self, level: u32, player: &Player, cel_graph: Option<&crate::celgraph::CelGraph>) {
+        if let Some(g) = cel_graph {
+            // Only levels whose sky has state to advance need the walk (the timers or the 1b spin).
+            let stateful = level == 0x0700_001b || self.sky.slots.iter().any(|s| s.flash_glist != 0 || s.flash_obj != 0);
+            if stateful {
+                if let Some(chain) = viewer_chain(g, player, &self.doors.closed_flags()) {
+                    self.sky.no_sky_view = !crate::celgraph::chain_sees_sky(g, &chain);
+                }
+            }
+        }
         // One set of lightning globals (`LightningType`/`Reflicker`/`SuperHappyLightningFlag`
         // [L 0x30d0b8/0x30d0b9]): `Lightning_Update` 0x18cf68 (the 0x2c bolts, ticked in `fx`) consumes
         // `Reflicker` [M :23-24] before the frame's `View_DrawSky` calls read and rewrite all three.
         self.sky.globals = self.fx.lightning;
         // The level id gates `rotatosky.168` [M 0x1e5ad0:186-198]: only 0x0700001B spins its sky (the
         // lightning timers ignore it). It was passed 0, so the 1b counter never advanced.
-        for th in self.sky.frame_thunder(level, false, &mut self.sky_rng) {
+        let sees_sky = !self.sky.no_sky_view;
+        let frame = self.sky.frame(level, false, sees_sky, &mut self.sky_rng);
+        for th in frame.thunder {
             self.audio.play(th.id());
         }
+        if let Some(sun) = frame.sun { self.sun_vector = sun; }
         self.fx.lightning = self.sky.globals;
     }
 
@@ -21583,6 +21732,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let (a, b, r) = player.body;
             player_touchers.push(crate::triggers::Toucher::raw(a, b, r));
         }
+        // G-031: this tick's trigger reads see LAST tick's player contacts (see the field); the
+        // drones' touchers stand where last tick's walk left them already (the drones move later
+        // in this tick), which is the same phase.
+        let player_touchers = self.prev_player_touchers.replace(player_touchers).unwrap_or_default();
         let touchers: Vec<crate::triggers::Toucher> = player_touchers.into_iter()
             .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true, seg_only: false }))
             .collect();
@@ -22297,11 +22450,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // `Gas_Init(0.05, 0.25, …, 0x2000039, 7, 0x48403080, 1, [stack] 128)` — the
                 // decompile drops the 11th arg; the disassembly passes life = 0x80 = 128
                 // [M 0x1cbce0/0x1cbcb0]. The puff's 6 shared-RNG draws are consumed by
-                // `init_searchlight_smoke` (gas.rs — the game's formulas, bit-exact).
-                let smoke: Vec<[f32; 3]> = self.searchlights.parts.iter()
-                    .filter(|p| p.kind == 1 && p.state == 2 && p.drawn && (frame + p.created) % 7 == 0)
-                    .map(|p| p.pos).collect();
-                for pos in smoke {
+                // `init_searchlight_smoke` (gas.rs — the game's formulas, bit-exact). The request comes
+                // from THIS head's state-2 arm (`Searchlights::smoke`): one puff per broken head per
+                // qualifying frame, none on the break tick (the old scan over every head ran once per
+                // head dispatch — N puffs per broken head on an N-head level — and caught the break
+                // tick, whose state 2 is written by the tail walk after the arm).
+                for pos in std::mem::take(&mut self.searchlights.smoke) {
                     let host = self.rbodies.host_at(pos);
                     self.gas.init_searchlight_smoke(&mut self.rng, pos, host);
                 }
@@ -22807,6 +22961,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             for (t, m, delay) in dr.msg_out.drain(..) { self.delayed_msgs.push((t, m, frame + delay)); }
             dr.voice_finished = dr.voice.is_none_or(|v| self.audio.finished(v.0));
+            // `NDrone2_ControlSTANDARD` 0x1490f0:82-94 polls `+0x4D0` on every control pass and
+            // zeroes it once `Sound_IsFinnished` reads the node finished [M] (`Drone_Control`
+            // 0x139268:48-61 runs it whenever `PreDroneControl` returns, which it does with 1 on
+            // every path but the SetState arm [M 0x148db0:56/86/128]). Kept, the finished handle
+            // went stale: the next sound to take that pool node made the guard read as talking
+            // again, and his next bark (and the draws behind it) moved with unrelated sounds.
+            if dr.voice_finished { dr.voice = None; }
             dr.patrol_cooldown = self.patrol_cooldown;
             dr.saw_opp_last_frame = self.saw_opp_last_frame;
             // guard-blast-smoke: the smoke cloud's touch this tick → msg 0x17 (DealWithObjHit case
@@ -23494,7 +23655,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             for id in std::mem::take(&mut dr.anim_stops) { self.audio.stop_all_with_id(id); }
             if let Some(t) = d.sfx { for id in &snd { let h = t.get(*id); self.audio.play3d(h.id, at, None); if !h.looped { self.sounds.push(Sound { id: h.id, pos: at, inner: h.inner, outer: h.outer, weight: h.weight }); } } }
-            for mut p in dr.drops.drain(..) { p.from = Some(index); self.pickups.push(p); }
+            for mut p in dr.drops.drain(..) {
+                p.from = Some(index);
+                // `Pickup_Create` 0x18dda0:166-183: the new pickup's world sphere is pushed out of the
+                // geometry (`Collide_SphereIntersect`, radius obj+0x8C, mask 0x50d) and the
+                // translation takes the same delta. [S] the sphere centre is rotated by the aligned
+                // matrix (the game's obj+0x80 was built from the pre-align one, :162).
+                p.push_out(d.world);
+                self.pickups.push(p);
+            }
             // `Drone_CollisionHandler` (0x140968, WORKLOG 0078): the feet-sphere down-ray + gravity, before the
             // AI-boundary push-out (the game's `AINetwork_GetBoundsPushVectorForSphere` runs last in the handler).
             drop(_pt);
@@ -23946,6 +24115,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     })
                 };
                 let dmg = d.weapons.bullet_contact_damage(b.weapon);
+                // The searchlight heads take the guard round too (the same HITTEST segment pick
+                // as Bond's rounds, the damage float the head's walk gates on) [M Bullet_update
+                // 0x12e7b0:388-443 arms the pick for every round; Searchlight_Update
+                // 0x1cb900:411-417]. The walk reads it next tick (this pass runs after it).
+                if !self.searchlights.parts.is_empty() {
+                    self.sl_round_shots.push(crate::searchlight::Shot { from, to, damage: dmg, segment: true });
+                }
                 for (pi, c, r, mesh) in &script_held {
                     if meets(c, *r, mesh) { self.script_round_damage.push((*pi, dmg)); }
                 }
@@ -24029,7 +24205,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 .map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
                             if flags70_p & 2 != 0 {
                                 if let Some(s) = d.surfaces.as_ref() {
-                                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, pm) { self.audio.play3d(id, pp, None); }
+                                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, pm) { Self::play_impact_on(&mut self.audio, &mut self.sounds, d, id, pp); }
                                 }
                             }
                             self.effects.bullet_impact_on(&mut self.rng, d.surfaces, &mut self.gas, &mut self.fx, pp, pn, pm, b.dir, flags70_p, b.bounces, false, 0, phost, self.rbodies.host_at(pp));
@@ -24078,7 +24254,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                             let flags6c_d = d.weapons.records.get(b.weapon as usize)
                                 .map_or(0u32, |r| u32::from_le_bytes(r[0x6c..0x70].try_into().unwrap()));
                             if flags70 & 2 != 0 {
-                                if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m) { self.audio.play3d(id, p, None); }
+                                if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m) { Self::play_impact_on(&mut self.audio, &mut self.sounds, d, id, p); }
                             }
                             // `Bullet_CollisionHandler` 0x12ce80: the effects + ricochet. The shooter is a
                             // drone (not class 3), so `Effect_Bullet` draws its `Rand_Rand(2)` [M 0x1ce94c].
@@ -24114,7 +24290,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                                 hit_host = d.world.segment_surface_host(nxt, far, false).map_or(crate::world::HitHost::Cel(None), |h| h.4);
                                 pierce = crate::effect::penetration_roll(&mut self.rng, m2, b.weapon, flags6c_d);
                                 if flags70 & 2 != 0 {
-                                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m2) { self.audio.play3d(id, cur, None); }
+                                    if let Some(id) = nf_formats::sfx::SurfaceSounds::get(&s.impact, m2) { Self::play_impact_on(&mut self.audio, &mut self.sounds, d, id, cur); }
                                 }
                             }
                             if let Some(nd) = ricochet_nd {
@@ -26152,6 +26328,35 @@ mod abseil_tests {
         };
     }
 
+    /// `NDrone2_ControlSTANDARD` 0x1490f0:82-94: every control pass reads `+0x4D0` through
+    /// `Sound_IsFinnished` and zeroes it once the line is finished [M]. The pool node the line
+    /// held is then free for the next sound (`Sound_UpdateSounds` 0x1dda70 frees a state-2 node),
+    /// and a guard must not read as talking because an unrelated sound took that node.
+    /// Sister: while the line plays the guard stays busy and keeps his handle.
+    #[test]
+    fn a_finished_line_drops_the_handle_so_a_reused_node_is_not_talk() {
+        empty_data!(0x0700_000b, d_keep, d);
+        let mut drones = Drones::new(vec![drone_at([10.0, 0.0, 10.0])], Rng::new(0x5eed));
+        let l = ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+        let h = drones.audio.play3d(0x25e, [10.0, 0.0, 10.0], None);
+        drones.list[0].voice = Some((h, 0x25e));
+        // The rest of the 256-node pool busy, so the next sound must reuse a freed node.
+        for _ in 1..crate::sound::POOL { drones.audio.play3d(0x7, [0.0; 3], None); }
+        drones.tick_inner(&d, &Player::default());
+        assert_eq!(drones.list[0].voice, Some((h, 0x25e)), "sister: the playing line keeps its handle");
+        assert!(drones.list[0].voice_busy(), "sister: the playing line is busy [M 0x149798]");
+        // The line ends: the node goes state 2, the pass reads it finished and drops the handle.
+        drones.audio.stop(h);
+        drones.tick_inner(&d, &Player::default());
+        assert_eq!(drones.list[0].voice, None, "finished: +0x4D0 = 0 on the control pass [M 0x1490f0:91]");
+        // The sound update frees the node, and the next sound takes it.
+        drones.audio.update(None, l, &|x| x != h);
+        let h2 = drones.audio.play3d(0x7, [0.0; 3], None);
+        assert_eq!(h2, h, "the pool handed the freed node to the next sound");
+        drones.tick_inner(&d, &Player::default());
+        assert!(!drones.list[0].voice_busy(), "an unrelated sound on the reused node is not the guard's line");
+    }
+
     /// G-055 (drone-block-swaps): `NDrone2_PreDroneControl`'s second-switch flush
     /// [M 0x148db0:51-90] — a guard with `+0x135` (second channel) set whose channel goes ON
     /// runs the `ChangeToAttackMode` flush inline when `+0x5A4` (alt_state) is non-zero:
@@ -26337,6 +26542,32 @@ mod abseil_tests {
         dr2.send(&d, &mut Rng::new(0x5eed), 100, msg::ENTER);
         assert!((0xac..=0xb2).contains(&dr2.talks.last().copied().map_or(0, |t| t.0)),
             "UnderCoverFire's ENTER barks 0xAC + Rand(7) [M 0x16a3e0:33]");
+    }
+
+    /// `NDrone2_DSTATE_WaitSwitch` 0x15b960: a drone woken by its channel plays its start script
+    /// (PlayScript 3) before its start state, as the Global ENTER does; a drone without one goes
+    /// straight to its start state [M 0x15b960:25-38]. 07000006's escort #450 waits on the spawn
+    /// plates' ch 0xb9 with start script 0x0600011b (its reply line).
+    #[test]
+    fn wait_switch_wakes_into_the_start_script() {
+        empty_data!(0x0700_0006, keep, d);
+        let mut dr = drone_at([10.0, 0.0, 10.0]);
+        dr.health = 10.0;
+        dr.switch_channel = 0xb9;
+        dr.start_script = 0x0600_011b;
+        dr.state = state::WAIT_SWITCH;
+        dr.channel_on = true;
+        dr.send(&d, &mut Rng::new(1), 10, msg::UPDATE);
+        assert_eq!(dr.state, state::PLAY_SCRIPT, "the woken drone plays its start script [M 0x15b960:36-38]");
+        assert!(dr.enabled, "NDrone2_Enable(1) on the wake [M 0x15b960:27]");
+        let mut plain = drone_at([10.0, 0.0, 10.0]);
+        plain.health = 10.0;
+        plain.switch_channel = 0xb9;
+        plain.state = state::WAIT_SWITCH;
+        plain.channel_on = true;
+        plain.send(&d, &mut Rng::new(1), 10, msg::UPDATE);
+        assert_ne!(plain.state, state::PLAY_SCRIPT, "no start script: the start state [M 0x15b960:33-35]");
+        assert_ne!(plain.state, state::WAIT_SWITCH);
     }
 
     /// `NDrone2_DSTATE_PlayScript` 0x15ba68: the 0x6000168/0x6000169 arms fall into the shared

@@ -63,7 +63,9 @@ fn a_talking_guests_face_weights_follow_the_line() {
     // harness) so the only talk lines are the ones Bond's approach provokes.
     for _ in 0..3000 { step(&mut scene); if !scene.sim.as_ref().unwrap().disabled { break; } }
     scene.sim.as_mut().unwrap().drones.scripts.skip_request = true;
-    for _ in 0..300 { step(&mut scene); }
+    // Stream batch 1121b (the cover run's route end moves the party's draws): 300 settle ticks
+    // left no guest line inside the window; of 200/250/300/350/400/450/500/600/700 only 300 failed.
+    for _ in 0..350 { step(&mut scene); }
     assert!(!scene.sim.as_ref().unwrap().disabled, "Bond is free after the intro");
 
     // Approach the nearest awake type-13 guest and aim at him until his BondTalk takes the FACIAL

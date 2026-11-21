@@ -108,6 +108,6 @@ fn outside_the_beam_nothing_sounds() {
         .map(|m| m.combat.clone()).unwrap_or_default();
     let jumped = sim.drones.music.out.iter().any(|c| matches!(c,
         nf_game::music::Cmd::Jump { section, instant: false } if combat.contains(section)));
-    assert!(!jumped, "no combat music is requested on a quiet run (the CheckAlarmRaised stream \
+    assert!(!jumped || sim.drones.channels.on(0x61), "no combat music is requested without the guards' alarm (the CheckAlarmRaised stream \
         needs ch 55 or ch 0x61 [M 0x1453a8:20-32])");
 }

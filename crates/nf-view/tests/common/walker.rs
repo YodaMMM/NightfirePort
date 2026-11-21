@@ -154,6 +154,39 @@ pub struct WalkTickState {
     pub mission_end: Option<u32>,
 }
 
+/// NF_WALK_PAUSE="tick,n[;tick,n...]": the sweep knob for `pause_at` (unset in normal runs);
+/// otherwise the test's own `with_pause` / `with_pauses` lever.
+#[allow(dead_code)]
+fn pause_env() -> Vec<(u32, u32)> {
+    if let Ok(v) = std::env::var("NF_WALK_PAUSE") {
+        return v.split(';').filter_map(|p| {
+            let mut it = p.split(',').map(|x| x.trim().parse::<u32>().ok());
+            Some((it.next()??, it.next()??))
+        }).collect();
+    }
+    PAUSE.with(|c| c.borrow().clone())
+}
+
+thread_local! {
+    /// The test's own pause lever (`with_pause`), read by `Walker::new`.
+    static PAUSE: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Runs `f` with every Walker it creates idling `n` default ticks once at tick `t` (the walk
+/// lever re-roll: a stream-shifting merge moves a lucky walk; this re-rolls it the way a player
+/// who stopped for a moment would). Restored after `f`, also on a panic.
+#[allow(dead_code)]
+pub fn with_pause<R>(t: u32, n: u32, f: impl FnOnce() -> R) -> R { with_pauses(&[(t, n)], f) }
+
+/// `with_pause` with several stops, in tick order.
+#[allow(dead_code)]
+pub fn with_pauses<R>(stops: &[(u32, u32)], f: impl FnOnce() -> R) -> R {
+    struct Restore(Vec<(u32, u32)>);
+    impl Drop for Restore { fn drop(&mut self) { let v = std::mem::take(&mut self.0); PAUSE.with(|c| *c.borrow_mut() = v); } }
+    let _r = Restore(PAUSE.with(|c| c.replace(stops.to_vec())));
+    f()
+}
+
 /// The walker over one loaded scene.
 pub struct Walker {
     pub scene: Scene,
@@ -165,6 +198,11 @@ pub struct Walker {
     /// Drones kept standing every tick (an escort-leg allowance, opt-in; empty by default): health
     /// floored at 1000 while alive (god mode, like Bond's top-up). For walks that pin an escort's route rules, not the firefight.
     pub keep_alive: Vec<usize>,
+    /// A one-shot idle at a tick (the walk_lever re-roll: `Some((tick, n))` idles n default ticks
+    /// once `total_ticks` reaches tick). NF_WALK_PAUSE="tick,n" sets it for a sweep run.
+    pub pause_at: Option<(u32, u32)>,
+    /// The stops after `pause_at`, in order.
+    pub pause_rest: Vec<(u32, u32)>,
     /// ai-sight-drawn-gate-4 (NF_ALARM_TRACE, additive): each drone's last logged state, so the
     /// trace prints only transitions + a 50-tick digest — the fail reads as the presser's walk.
     pub alarm_last: Vec<u8>,
@@ -414,7 +452,7 @@ impl Walker {
             .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
         let watch_last = vec![(0u8, [0.0f32; 3]); drone_watch.len()];
         Walker {
-            scene, top_up_health: true, dmg: DamageLog::new(), keep_alive: Vec::new(), stop_on_exit: true, skip_cutscenes: true,
+            scene, top_up_health: true, dmg: DamageLog::new(), keep_alive: Vec::new(), pause_at: None, pause_rest: pause_env(), stop_on_exit: true, skip_cutscenes: true,
             report: Report { legs: Vec::new(), stuck_events: Vec::new(), falls: Vec::new() },
             total_ticks: 0, on_step: None, pos, last_sample: pos, sample_tick: 0, stuck: 0, stuck_cycles: 0,
             sidestep: 0, sidestep_decays: false, max_y: pos[1], lenient: false,
@@ -655,6 +693,8 @@ impl Walker {
     }
 
     fn tick_inner(&mut self, input: Input, use_key: bool, fire: bool, reload: bool) {
+        if self.pause_at.is_none() && !self.pause_rest.is_empty() { self.pause_at = Some(self.pause_rest.remove(0)); }
+        if let Some((t, n)) = self.pause_at { if self.total_ticks >= t { self.pause_at = None; for _ in 0..n { self.tick_inner(Input::default(), false, false, false); } } }
         let input = if self.laser_dodge {
             let sim = self.scene.sim.as_ref().unwrap();
             let bp = sim.bond.pos;
@@ -792,7 +832,11 @@ impl Walker {
     pub fn wait_enabled(&mut self, max_ticks: u32, what: &str) -> bool {
         for _ in 0..max_ticks {
             self.tick(Input::default(), false);
-            if !self.scene.sim.as_ref().unwrap().disabled { return true; }
+            if !self.scene.sim.as_ref().unwrap().disabled {
+                let n = take_post_intro_wait();
+                for _ in 0..n { self.tick(Input::default(), false); }
+                return true;
+            }
         }
         panic!("Bond still disabled after {max_ticks} ticks ({what})");
     }

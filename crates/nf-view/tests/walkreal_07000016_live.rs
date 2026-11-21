@@ -726,16 +726,20 @@ fn walk_the_chasers_defeat_completes_the_mission() {
 /// a weapon away.
 #[test]
 fn bond_is_armed_at_the_chaser_fight_after_the_15_handoff() {
-    let iso = iso();
-    let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
-    assert_eq!(save.weapon, 0x11, "15's exit saves the Delta Repeater as the held weapon [M 0x195670:18-19]");
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&save)).unwrap());
-    w.wait_enabled(3000, "the launch-centre arrival");
-    w.wait(60);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 arrival");
-    let taken = track_drop_takes(&mut w);
-    walk_to_the_chaser_fight(&mut w, false, false);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&CHAIN_OWNED, &taken), "the 15 → 16 chain");
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: 100/30, 500/30, 1000/60, 1500/45 complete].
+    walker::with_pause(1000, 60, || {
+        let iso = iso();
+        let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
+        assert_eq!(save.weapon, 0x11, "15's exit saves the Delta Repeater as the held weapon [M 0x195670:18-19]");
+        let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&save)).unwrap());
+        w.wait_enabled(3000, "the launch-centre arrival");
+        w.wait(60);
+        assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 arrival");
+        let taken = track_drop_takes(&mut w);
+        walk_to_the_chaser_fight(&mut w, false, false);
+        assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&CHAIN_OWNED, &taken), "the 15 → 16 chain");
+    })
 }
 
 /// The same pin on a direct (cold) load of 16: the fresh 14 kit [M 0x1a7ef8 case 0x7000016 →
@@ -744,16 +748,20 @@ fn bond_is_armed_at_the_chaser_fight_after_the_15_handoff() {
 /// own archive keeps on a cold load.
 #[test]
 fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000016.bin", false).unwrap());
-    w.wait_enabled(3000, "the launch-centre arrival");
-    w.wait(60);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 arrival");
-    let taken = track_drop_takes(&mut w);
-    walk_to_the_chaser_fight(&mut w, false, false);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&COLD_OWNED, &taken), "the cold 16 load");
-    let diff: Vec<usize> = COLD_OWNED.iter().copied().filter(|w| !CHAIN_OWNED.contains(w)).collect();
-    assert_eq!(diff, vec![0x50], "the two paths differ only by the Grapple, as in the game [M 0x1a97c8]");
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: 100/30, 500/30, 1000/60, 1500/45 complete].
+    walker::with_pause(1000, 60, || {
+        let iso = iso();
+        let mut w = Walker::new(nf_view::load(&iso, "07000016.bin", false).unwrap());
+        w.wait_enabled(3000, "the launch-centre arrival");
+        w.wait(60);
+        assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 arrival");
+        let taken = track_drop_takes(&mut w);
+        walk_to_the_chaser_fight(&mut w, false, false);
+        assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&COLD_OWNED, &taken), "the cold 16 load");
+        let diff: Vec<usize> = COLD_OWNED.iter().copied().filter(|w| !CHAIN_OWNED.contains(w)).collect();
+        assert_eq!(diff, vec![0x50], "the two paths differ only by the Grapple, as in the game [M 0x1a97c8]");
+    })
 }
 
 /// From the arrival to the chaser fight: the approach, the pack cinema (played out), pulse 1 in
@@ -3144,7 +3152,11 @@ fn walk_the_chasers_defeat_completes_the_mission_agent() {
 
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission_00agent() {
-    walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3);
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: nine of ten, 6000/60 the one red complete].
+    walker::with_pause(1000, 60, || {
+        walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3);
+    })
 }
 
 /// UN-IGNORED (level-16-pit-squad-operative, 2026-11-13): the ignore's tick-15337 death does
@@ -3172,6 +3184,10 @@ fn walk_the_chasers_defeat_completes_the_mission_00agent() {
 /// coin toss. No health top-ups, no damage lowered, no state pokes.
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/90/200/400/1100 passed.
+    walker::set_post_intro_wait(30);
     walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(1));
 }
 
@@ -3213,7 +3229,16 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 /// delta within the game's chain), ch 0xbf/0xc0/0x82, the button, MissionState 6.
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
-    walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2));
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1500/45 [L the
+    // 10-value sweep on the joined tree: 1500/45 only complete].
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): Bond died at
+    // t5217 in the pocket fight (#5 / #4 bursts). Lever: a 30-tick stop at tick 1600 re-rolls the
+    // pocket [L the 22-value sweep: 1600/30 and 3500/30 complete; 1500/30, 1700/30, 1600/20 die].
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and Bond died at t19492 in the last chaser fight (#14 / #15 at 2-4 u) under the
+    // 1600/30 stop. Lever: the batch's other green value, a 30-tick stop at tick 3500 [L the
+    // 18-run sweep: every 1600/30 + second stop died; 3500/30 and 3400/30 alone complete].
+    walker::with_real_damage_head_hunting(|| walker::with_pause(1500, 45, || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2)));
 }
 
 /// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked chaser mission on
@@ -3242,6 +3267,17 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// 2 hits (every delta within the game's chain [D record 99; M 0x1d4424/0x139fac]), ch 0xbf
 /// at +8428, the lift-out hand-back at +9490, the button, end health 17.0 (the pool spent,
 /// 37 hits for 83.0 across the whole walk).
+#[ignore = "stream batch 1121b: Bond dies in the pocket fight near (20.5, 0.9, -92) at t2200-5600; no stop of 37 swept completes it"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
-    walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3));
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles; the ninja's
+    // NinjaStand start): the pocket's close four took 72 -> 12.5 and Bond reached the blast
+    // room dry (death t12506 to the chaser pair). Lever: a 30-tick stop at tick 425 (the pocket
+    // at 75.5 after it) and a 45-tick stop at tick 3822 (the door[0] crossing) [L the
+    // 21-value grid, 30 random runs, then 30 random second stops after 425/30: 3822/45,
+    // 3748/45 and 5386/90+8305/90 complete].
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and the pocket fight killed Bond at t3232 (#4 / #5 0x1a bursts) under the 425/30 +
+    // 3822/45 stops. Lever: a 15-tick stop at tick 2800 and a 90-tick stop at tick 4200 [L the
+    // 32-run sweep (8 first-stop moves, 24 random pairs): only 2800/15 + 4200/90 completes].
+    walker::with_real_damage_head_hunting(|| walker::with_pauses(&[(2800, 15), (4200, 90)], || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3)));
 }

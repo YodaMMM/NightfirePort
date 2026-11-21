@@ -293,10 +293,22 @@ impl Pickup {
         })
     }
 
+    /// `Pickup_Create` 0x18dda0:166-183's push-out: the world sphere (the model's bounds centre through the
+    /// matrix, at the unlowered translation `start`) goes through `Collide_SphereIntersect` (radius = the
+    /// bounds radius, mask 0x50d) and the translation and the fall start take the push.
+    pub fn push_out(&mut self, world: &crate::world::CollisionWorld) {
+        let c = self.bounds.centre;
+        let mut centre = self.start;
+        for a in 0..3 { centre[a] += self.m[0][a] * c[0] + self.m[1][a] * c[1] + self.m[2][a] * c[2]; }
+        let dp = world.sphere_push(centre, self.bounds.radius, 0x50d);
+        if dp == [0.0; 3] { return; }
+        for a in 0..3 { self.m[3][a] += dp[a]; self.start[a] += dp[a]; }
+    }
+
     /// `Pickup_Create` for a dropped pickup: upright with the matrix's heading (`Mat_Align2Up(M, +Y, Mat_GetDir(M))`,
     /// the direction taken as row 2 — *suggested*), lowered by radius − |centre y|, falling. *Deviations*: the
-    /// fall ray starts at the given translation (`build_PointOnFloor`'s result is not read) and the sphere push-out
-    /// (`Collide_SphereIntersect`) is not done.
+    /// fall ray starts at the given translation (`build_PointOnFloor`'s result is not read); the sphere push-out
+    /// (`Collide_SphereIntersect`) is `push_out`, run by the caller that holds the world.
     fn create(m: &Mat4, weapon: u16, rounds: i16, kind: u16, model: u32, bounds: Model) -> Pickup {
         let t = trans(m);
         let dir = [m[2][0], 0.0, m[2][2]];
@@ -743,6 +755,33 @@ impl Inventory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Pickup_Create` 0x18dda0:166-183: a drop whose world sphere overlaps a wall is pushed out of it
+    /// (`Collide_SphereIntersect`, mask 0x50d) and keeps the push; a drop behind the face (the one-sided
+    /// point test) or clear of it is untouched.
+    #[test]
+    fn a_drop_inside_a_wall_is_pushed_out() {
+        // A wall in the x = 0 plane facing +x.
+        let wall = vec![
+            [[0.0, -5.0, -5.0], [0.0, 5.0, -5.0], [0.0, -5.0, 5.0]],
+            [[0.0, 5.0, -5.0], [0.0, 5.0, 5.0], [0.0, -5.0, 5.0]],
+        ];
+        let w = crate::world::CollisionWorld::from_triangles(wall);
+        let m = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.2, 1.0, 0.0, 1.0]];
+        let mut p = Pickup::create(&m, 2, 5, kind::WEAPON, 0, Model { centre: [0.0; 3], radius: 0.5 });
+        let y0 = p.m[3][1];
+        p.push_out(&w);
+        assert!((p.m[3][0] - 0.5).abs() < 1e-5, "pushed to the radius off the wall: x {}", p.m[3][0]);
+        assert!((p.start[0] - 0.5).abs() < 1e-5, "the fall start moves too: {}", p.start[0]);
+        assert_eq!(p.m[3][1], y0);
+        // Sister: clear of the wall (x 0.8 > r) and behind it (x -0.2): no push.
+        for x in [0.8f32, -0.2] {
+            let m = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [x, 1.0, 0.0, 1.0]];
+            let mut p = Pickup::create(&m, 2, 5, kind::WEAPON, 0, Model { centre: [0.0; 3], radius: 0.5 });
+            p.push_out(&w);
+            assert_eq!(p.m[3][0], x, "x {x}: untouched");
+        }
+    }
 
     /// A weapon table with the 07000005 records that matter [L]: P2K (2: type 1, clip 7), SG5 (0x16: type 5, clip 30).
     fn table() -> WeaponData {

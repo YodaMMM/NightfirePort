@@ -36,7 +36,12 @@ set 0's entry when the set's is 0; 0x06000000 (both 0) means no animation (`Dron
    `Drone+0x554` and played by `NDrone2_DSTATE_PlayScript` (0x15ba68).
 4. Start danim (`DroneAnim_SetAnimD`): type 0xB → 0x1A5, type 0x18 → 0x82; mode 2 / 0x19 with set 5 → set 0x12 and
    danim 0x7D / 0x32; otherwise **0x11A = 282**, `DroneAnimStates[0x24]`'s own danim: anim state 0x24, stand idle.
-   `DroneAnim_SetStandIdleAnim` (0x13ca68) later picks states 0x25–0x27 at random for some modes.
+   `DroneAnim_SetStandIdleAnim` (0x13ca68) later picks the stand idle [M 0x13ca68]: with its respect argument set
+   and the hold clock `+0x59c` running it returns (:19-21); SM state Idle (4) → `0x24 + Rand(3)`, PartyGirl (0x2f)
+   with property 0x47 → `0x24 + Rand(4)`, each held `(5 + Rand(5))` s (:31-42); every other state 0x24 with no hold;
+   model `+0xD8 == 0x10` always 0x26 (:46-48); a state the set cannot play → 0x24; always through `CallAnim` (:70 — the port keeps a pending-call guard here, see
+   `set_stand_idle`).
+   Ported in `nf-game` `Drone::set_stand_idle` (test `stand_idle_variants_live`).
 
 ## Calls, blends and speed [M, L] (WORKLOG 0023)
 
@@ -115,7 +120,8 @@ without are the 0x06000892 drones (07000011 ×2, 0700004A ×3; set 0xF has no st
 
 ## Deviations in nf-view
 
-- Drone mode (`Drone+0xC5`) comes from `NDrone2_DoModeSettings*` and is not modelled (0) except for parameter 1.
+- (nf-formats `start_script` only, the disc census) Drone mode (`Drone+0xC5`) is taken as 0 except for parameter 1;
+  the game sim (`nf-game` `Drone::mode`) carries the real `DoModeSettingsNEW` mode.
 - A finished non-looping start script restarts at once (the AI re-calls the same stand idle); the game's AI decides
   when and may choose a variant.
 - No AI, collision or gravity: drones stay at their placement x/z; height as docs/formats/animation.md.

@@ -466,10 +466,16 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(difficulty: u32) {
 /// choreography.
 #[test]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 3000/60 [L the
+    // 10-value sweep on the joined tree: 1500/45, 2500/90, 3000/60, 4000/90, 6000/60, 8000/60 complete].
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): Bond died at
+    // t9195 at (13.0, 12.1, -198.0) to drone #1's close bursts after #20's rifle hits from the
+    // far deck. Lever: a 60-tick stop at tick 1000 re-rolls the fights [L the 12-value sweep:
+    // 1000/60, 2000/60, 1000/200, 3000/200, 4000/200 complete].
     walker::with_yard_aimed_stands(|| {
         walker::with_far_sniper_stands(|| {
             walker::with_strip_rd_post_ride(|| {
-                walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff)
+                walker::walker::with_pause(3000, 60, || walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff))
             })
         })
     });

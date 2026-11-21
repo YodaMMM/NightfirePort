@@ -222,6 +222,12 @@ fn a_scene_starting_in_the_flash_window_holds_the_open_chime() {
         for _ in 0..120 { sim.step_bond(Input::default(), false, false, false); }
         drakes_reveal_first(sim);
         sim.hud.objective_msgs.clear();
+        sim.bond.pos = [94.2, 43.7, -45.9]; // TouchOnce #412's volume
+        // The plate writes ch 0x48 the tick after the contact, one more after the relinking
+        // teleport [L g031_object_order_live]: let the contact land first so the scene starts
+        // inside the banner's flash window queued below.
+        sim.step_bond(Input::default(), false, false, false);
+        assert!(!sim.drones.hud_frozen, "the scene has not started before the banner is queued");
         // Queue a fresh NEW-OBJECTIVE banner the game way (unopened): it opens on this tick's pane
         // frame and would chime on the next.
         sim.hud.objective_msgs.push_back(nf_view::scene::Msg {
@@ -229,7 +235,6 @@ fn a_scene_starting_in_the_flash_window_holds_the_open_chime() {
             life: 300.0, opened: false, second: false, label: 0, script: false,
             sfx1: false, image: 0, // sp-panes-new-drawing: the TXT_MSG+0x10 image id (0 = a text post)
         });
-        sim.bond.pos = [94.2, 43.7, -45.9]; // TouchOnce #412's volume
     }
     let mut sfx: Vec<(u32, u32)> = Vec::new();
     let mut opened = None;
