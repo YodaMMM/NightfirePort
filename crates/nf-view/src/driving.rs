@@ -43,6 +43,13 @@ fn player_car_stem(viv_upper: &str) -> &'static str {
         "MIS11" => "vanquishsub",
         "MIS13A" | "MIS13B" => "ultralight",
         "MIS13C" => "patrolboat",
+        // RACE: the archive's only player vehicle file is cobra_player.atr, whose
+        // RENDER_FILENAME.s is paradis_car.crp [D RACE.VIV]; RACE carries no vanquish.crp.
+        "RACE" => "paradis_car",
+        // MIS3 carries no vanquish.crp either; supersnow (8 colours, a bullet-streak weapon type) is
+        // taken as the player's over small_snowmobile (1 colour, no weapon) [S: the player vehicle
+        // pick is not traced].
+        "MIS3" => "supersnow",
         _ => "vanquish",
     }
 }
