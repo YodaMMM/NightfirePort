@@ -59,7 +59,7 @@ The type names are the GCC typeinfo strings at 0x397c28.. [D]; sizes + ctors fro
 | 6 | SRuleProg | 0x18 | 41 | |
 | 7 | SRuleRange | 0x28 | 0 | |
 | 8 | SRuleSpeed | 0x28 | 0 | |
-| 9 | SRuleTimer | 0x24 | 28 | |
+| 9 | SRuleTimer | 0x24 | 28 | a mission-timer crossing: timer / direction / threshold (`FUN_0020a858`, evaluator `FUN_0020a940`; driving-mis01-opening.md §8) |
 | 10 | SRuleProperty | 0x24 | 14 | |
 | 11 | SRuleCollision | 0x1c | 0 | |
 | 12 | SRulePlayerDir | 0x24 | 0 | |

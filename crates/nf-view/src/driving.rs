@@ -174,6 +174,52 @@ impl CollisionGrid {
     }
 }
 
+/// The player car's moving parts: the game's wheel rig (`FUN_001d2cb0`) posing the Skel-attached
+/// items (wheels, hubs) each tick (nf_formats::carpose, docs/formats/car-model.md §11).
+pub struct CarRig {
+    pub mesh: nf_formats::carmesh::CarMesh,
+    pub rig: nf_formats::carpose::WheelRig,
+    pub attrs: nf_formats::carpose::WheelAttrs,
+    pub mem: nf_formats::carpose::WheelMemory,
+    pub pose: nf_formats::carpose::CarPose,
+    pub spin: [f32; 2],
+    /// `(in#0 item index, palette slot)` of each posed part.
+    pub parts: Vec<(usize, u32)>,
+}
+
+impl CarRig {
+    /// One tick: roll by `speed / (WHEEL_RADIUS·6.32·60)` turns (the vehicle's +0x274 step, docs/
+    /// systems/drive-suspension.md §3; signed by the car's forward speed), steer, springs.
+    pub fn tick(&mut self, car: &Car, steer_in: f32) {
+        let fwd = [car.yaw.sin(), 0.0, car.yaw.cos()];
+        let v = car.vel[0] * fwd[0] + car.vel[2] * fwd[2];
+        let step = v / (self.attrs.wheel_radius.max(0.01) * 6.32 * 60.0);
+        self.spin = nf_formats::carpose::spin_step(self.spin, step);
+        let input = nf_formats::carpose::WheelInput {
+            spin: self.spin,
+            // The steer angle in turns, clamped to +-0.075 by the rig [S: the port's steer input
+            // scaled to the clamp, not the car's +0x28c].
+            steer: steer_in * 0.075,
+            compression: car.spring_prev,
+            slow_steer: false,
+            fins: None,
+        };
+        self.pose.frame += 1.0;
+        let _ = self.rig.update(&self.attrs, &input, &mut self.mem, &mut self.pose.skel);
+    }
+}
+
+/// The player car's tyre smoke and surface spray (nf_game::driving::effects: `FUN_001ee4a0`
+/// emitters, the 1024-particle pool, the ELF's built-in particle types; docs/systems/driving-effects.md).
+pub struct DriveFx {
+    pub lib: nf_game::driving::effects::ParticleLib,
+    pub veh: nf_game::driving::effects::VehicleFx,
+    pub pool: nf_game::driving::effects::ParticleSystem,
+    pub rng: nf_game::driving::effects::DriveRng,
+    /// The track sheet's 256x256 `MAIN` atlas in the scene's textures.
+    pub main_tex: Option<usize>,
+}
+
 /// Live driving mission simulation state.
 pub struct DrivingState {
     pub viv: String,
@@ -205,6 +251,9 @@ pub struct DrivingState {
     /// (`CarParams::half_extents` = the model bbox half extents [M FUN_001c9778]), so the model draws
     /// at `pos − rot·centre`.
     pub car_box_centre: [f32; 3],
+    /// The player car's posed parts (wheels, hubs); `None` when the model does not decode.
+    pub car_rig: Option<CarRig>,
+    pub fx: Option<DriveFx>,
 }
 
 const IDENT_MAT: Mat4 = [
@@ -248,13 +297,60 @@ impl DrivingState {
             steer: steer.clamp(-1.0, 1.0),
             handbrake,
         };
+        if let Some(r) = self.car_rig.as_mut() { r.tick(&self.car, input.steer); }
         if let Some(g) = &self.land {
             // The land pass owns the height, pitch and roll (its wheels stand on the triangles).
             self.car.step(&input, g, &self.rigid, DT);
         } else {
             self.step_flat(&input);
         }
+        self.step_fx();
         self.step_ai(&input);
+    }
+
+    /// The player car's effect emitters for this tick, then the pool steps [M FUN_001ee4a0,
+    /// FUN_001f3188]. The wheel inputs come from the land step: the slip ratio, the contact
+    /// triangle's surface byte; [S] which vtable value each input is (driving-effects.md).
+    fn step_fx(&mut self) {
+        let Some(fx) = self.fx.as_mut() else { return };
+        use nf_game::driving::effects::{CarFxInput, WheelFxInput};
+        let car = &self.car;
+        let wp = car.params.wheel_points();
+        let r = car.rot;
+        let wheels: [WheelFxInput; 4] = std::array::from_fn(|k| {
+            let l = wp[k];
+            let pos = [0, 1, 2].map(|c| car.pos[c] + r[0][c] * l[0] + r[1][c] * l[1] + r[2][c] * l[2]);
+            let plane = car.wheel_cache[k];
+            WheelFxInput { pos, surface: plane.map_or(1, |w| w.surface), flag_a: false, flag_b: plane.is_some(), slip: car.slip[k] }
+        });
+        let v = car.vel;
+        let cin = CarFxInput { vel: v, axis: r[2], speed: (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(), no_snow: false, attach: 0, attach_pos: car.pos };
+        fx.veh.update(self.land.is_some(), &cin, &wheels, self.ticks, false, &fx.lib);
+        fx.veh.tick(1, &fx.lib, &mut fx.rng, &mut fx.pool);
+        fx.pool.run_steps(self.ticks, &fx.lib);
+    }
+
+    /// This frame's particle billboards, grouped by (texture, additive) for the renderer.
+    pub fn particle_groups(&mut self, right: [f32; 3], up: [f32; 3]) -> Vec<(Option<usize>, bool, Vec<Vertex>)> {
+        let Some(fx) = self.fx.as_mut() else { return Vec::new() };
+        let mut groups: Vec<(Option<usize>, bool, Vec<Vertex>)> = Vec::new();
+        for d in fx.pool.draws(&fx.lib, |_| None) {
+            let nf_game::driving::effects::ParticleDraw::Quad { centre, size, rotation, cell, rgba, additive } = d else { continue };
+            let h = size * 0.5;
+            let (sn, cs) = rotation.sin_cos();
+            let ax = [0, 1, 2].map(|k| (right[k] * cs + up[k] * sn) * h);
+            let ay = [0, 1, 2].map(|k| (up[k] * cs - right[k] * sn) * h);
+            let corner = |sx: f32, sy: f32| [0, 1, 2].map(|k| centre[k] + ax[k] * sx + ay[k] * sy);
+            let (u0, v0, uv) = (cell[0], cell[1], cell[2]);
+            let vert = |p: [f32; 3], u: f32, v: f32| Vertex { pos: p, uv: [u, v], rgba, nrm: [0; 4] };
+            let (a, b, c, e) = (vert(corner(-1.0, 1.0), u0, v0), vert(corner(1.0, 1.0), u0 + uv, v0), vert(corner(1.0, -1.0), u0 + uv, v0 + uv), vert(corner(-1.0, -1.0), u0, v0 + uv));
+            let g = match groups.iter().position(|(t, ad, _)| *t == fx.main_tex && *ad == additive) {
+                Some(g) => g,
+                None => { groups.push((fx.main_tex, additive, Vec::new())); groups.len() - 1 }
+            };
+            groups[g].2.extend_from_slice(&[a, b, c, a, c, e]);
+        }
+        groups
     }
 
     fn step_flat(&mut self, input: &CarInput) {
@@ -411,6 +507,26 @@ impl DrivingState {
     /// Write player and AI car world transforms into `Scene` attachment palette slots.
     pub fn apply_to_palette(&self, attach_base: usize, pal: &mut [Mat4]) {
         if let Some(slot) = self.player_attach_slot {
+            let car_m: Mat4 = if self.land.is_some() {
+                let r = self.car.rot;
+                let c = self.car_box_centre;
+                let o = [0, 1, 2].map(|k| self.car.pos[k] - (r[0][k] * c[0] + r[1][k] * c[1] + r[2][k] * c[2]));
+                [[r[0][0], r[0][1], r[0][2], 0.0], [r[1][0], r[1][1], r[1][2], 0.0], [r[2][0], r[2][1], r[2][2], 0.0], [o[0], o[1], o[2], 1.0]]
+            } else {
+                yaw_pos_mat(self.car.pos, self.car.yaw)
+            };
+            // The posed parts: part-local -> car (the rig's run-time matrix) -> world, row vectors.
+            if let Some(r) = &self.car_rig {
+                for &(pi, ps) in &r.parts {
+                    let Some(part) = r.mesh.parts.get(pi) else { continue };
+                    let Some(m) = pal.get_mut(attach_base + ps as usize) else { continue };
+                    *m = match nf_formats::carpose::part_matrix(part, &r.pose) {
+                        nf_formats::carpose::PartMatrix::Drawn(pm) => mat_mul(&pm, &car_m),
+                        // A part the rig hides (or does not evaluate) folds away.
+                        _ => [[0.0; 4]; 4],
+                    };
+                }
+            }
             if let Some(m) = pal.get_mut(attach_base + slot as usize) {
                 *m = if self.land.is_some() {
                     let r = self.car.rot;
@@ -450,6 +566,13 @@ impl DrivingState {
 /// The lowest car-space y of attachment `slot`'s vertices.
 fn scene_char_min_y(cv: &[CharVertex], slot: u32) -> Option<f32> {
     cv.iter().filter(|v| v.attachment == Some(slot)).map(|v| v.pos[1]).reduce(f32::min)
+}
+
+/// Row-vector product: `v·a·b` = `v·(a·b)`.
+fn mat_mul(a: &Mat4, b: &Mat4) -> Mat4 {
+    let mut o = [[0.0f32; 4]; 4];
+    for i in 0..4 { for j in 0..4 { o[i][j] = (0..4).map(|k| a[i][k] * b[k][j]).sum(); } }
+    o
 }
 
 fn maybe_decompress(raw: &[u8]) -> Result<Vec<u8>> {
@@ -503,6 +626,7 @@ fn load_car_into_scene(
     textures: &mut Vec<TextureImage>,
     attachments: &mut Vec<Attachment>,
     light: Option<(&nf_formats::rendertun::LightEnv, &nf_formats::rendertun::CarRender)>,
+    mut posed: Option<&mut Vec<(usize, u32)>>,
 ) -> Option<u32> {
     let crp_raw = iso
         .read_bytes(viv_base + crp_off_sz.0 as u64, crp_off_sz.1 as u64)
@@ -544,10 +668,27 @@ fn load_car_into_scene(
     // not re-lit as the car turns); the specular and reflection passes are not drawn.
     let entry = light.and_then(|(_, cr)| cr.entries.iter().find(|e| e.name.eq_ignore_ascii_case(car_stem)).or_else(|| cr.entries.iter().find(|e| e.name == "default")));
     let mut strip_rgba: Vec<Vec<[u8; 4]>> = Vec::new();
+    // With `posed`, the Skel-attached parts (wheels, hubs) keep their part-local positions and get a
+    // palette slot each, posed per tick by `CarRig` (`(part index, slot)` out); the rest bake.
+    let mut strip_part: Vec<Option<usize>> = Vec::new();
+    let want_posed = posed.is_some();
     let strips: Vec<nf_formats::crp_mesh::MeshStrip> = match nf_formats::carmesh::car_mesh(&crp_bytes) {
         Ok(car) => {
             let mut v = Vec::new();
-            for part in car.drawn(None).into_iter().filter(|part| !part.hidden()) {
+            // The list the game draws in normal play (driver kind 0 = the player's car, others 2+:
+            // both pick vd#1 outside the dashboard camera and AutoDrive) and each part at its
+            // run-time matrix at rest (nf_formats::carpose; docs/formats/car-model.md §11) [M].
+            // The wheels' spin/steer/spring pose is baked at rest here [S: per-tick part pose not drawn].
+            let state = nf_formats::carpose::DrawState { owner: nf_formats::carpose::DrawOwner::Vehicle { driver_kind: 0 }, interior_view: false, auto_drive: false };
+            let pose = nf_formats::carpose::CarPose::rest(&car);
+            for part in car.list_for(&state).into_iter().filter(|part| !part.hidden()) {
+                let m = match nf_formats::carpose::part_matrix(part, &pose) {
+                    nf_formats::carpose::PartMatrix::Drawn(m) => m,
+                    nf_formats::carpose::PartMatrix::NotDrawn => continue,
+                    nf_formats::carpose::PartMatrix::Unported(_) => nf_formats::carpose::own_matrix(part),
+                };
+                let live = want_posed && matches!(part.attach, nf_formats::carmesh::Attach::Skel(_));
+                let place = |q: [f32; 3]| if live { q } else { [0, 1, 2].map(|k| q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k] + m[3][k]) };
                 for st in &part.strips {
                     let rgba: Vec<[u8; 4]> = match (light, entry, st.lighting) {
                         (Some((env, _)), Some(e), Some(class)) if st.normals.len() == st.positions.len() => {
@@ -562,8 +703,9 @@ fn load_car_into_scene(
                         _ => Vec::new(),
                     };
                     strip_rgba.push(rgba);
+                    strip_part.push(live.then_some(part.index));
                     v.push(nf_formats::crp_mesh::MeshStrip {
-                        positions: st.positions.iter().map(|&q| part.apply(q)).collect(),
+                        positions: st.positions.iter().map(|&q| place(q)).collect(),
                         uvs: st.uvs.clone(),
                         colors: st.normals.iter().map(|n| [(n[0] * 127.0) as i8 as u8, (n[1] * 127.0) as i8 as u8, (n[2] * 127.0) as i8 as u8]).collect(),
                         texture: st.texture.clone(),
@@ -579,6 +721,24 @@ fn load_car_into_scene(
     }
 
     let slot = attachments.len() as u32;
+    let new_attachment = || Attachment {
+        character: 0,
+        bone: 0,
+        local: IDENT_MAT,
+        flash: None,
+        tracer: None,
+        projectile: None,
+        dropped: false,
+        script: None,
+        aims_light: None,
+        gas: None,
+        effect: None,
+        silencer: false,
+        quiver_bolt: None,
+        swap_piece: false,
+        watch_hand: None,
+        pda_digit: None,
+    };
     attachments.push(Attachment {
         character: 0,
         bone: 0,
@@ -602,6 +762,18 @@ fn load_car_into_scene(
         if strip.positions.len() < 3 {
             continue;
         }
+        let slot = match (strip_part.get(si).copied().flatten(), posed.as_deref_mut()) {
+            (Some(pi), Some(out)) => match out.iter().find(|(q, _)| *q == pi) {
+                Some(&(_, s)) => s,
+                None => {
+                    let s = attachments.len() as u32;
+                    attachments.push(new_attachment());
+                    out.push((pi, s));
+                    s
+                }
+            },
+            _ => slot,
+        };
         let base_v = vertices.len() as u32;
         let first_i = indices.len() as u32;
         for (k, &p) in strip.positions.iter().enumerate() {
@@ -937,6 +1109,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     let car_render = read_tun("carrender").and_then(|t| nf_formats::rendertun::CarRender::parse(&t).ok());
     let car_light_ref = car_lighting.as_ref().zip(car_render.as_ref()).map(|(l, c)| (&l.world, c));
     let p_stem = player_car_stem(&viv_upper);
+    let mut posed_parts: Vec<(usize, u32)> = Vec::new();
     let player_attach_slot = find_car_entry(p_stem).and_then(|(c, s)| {
         load_car_into_scene(
             &iso,
@@ -951,6 +1124,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             &mut textures,
             &mut attachments,
             car_light_ref,
+            Some(&mut posed_parts),
         )
     });
 
@@ -1016,6 +1190,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
                                 &mut textures,
                                 &mut attachments,
                                 car_light_ref,
+                                None,
                             ) {
                                 ai_cars.push((drv, slot));
                             }
@@ -1195,8 +1370,45 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         let vmin = scene_char_min_y(&scene.char_verts, slot);
         if let Some(v) = vmin { car_box_centre = [0.0, v + car_params.half_extents[1] + car_params.spring_rest, 0.0]; }
     }
+    // The effects: the ELF's particle types and the track's particle sheet (`MAIN` atlas) [D].
+    let fx = (|| {
+        let e = iso.find("/DRIVING.ELF")?;
+        let elf = iso.read_bytes(e.lba as u64 * 2048, e.size as u64).ok()?;
+        let lib = nf_game::driving::effects::ParticleLib::from_elf_types(&nf_formats::drivefx::elf_types(&elf).ok()?);
+        let sheet = match viv_upper.as_str() { "MIS11" => "partic02", "MIS13A" | "MIS13B" | "MIS13C" => "ears_partic01", "MIS3" | "MIS4" => "sav_partic01", _ => "partic01" };
+        let want = ["data", "render", &format!("{sheet}.ssh")].join("\\");
+        let main_tex = bigf.entries.iter().find(|x| x.name.eq_ignore_ascii_case(&want))
+            .and_then(|e| iso.read_bytes(viv_base + e.offset as u64, e.size as u64).ok())
+            .and_then(|raw| maybe_decompress(&raw).ok())
+            .and_then(|b| Ssh::parse(&b).ok())
+            .and_then(|sh| sh.textures.into_iter().find(|t| t.name == "MAIN"))
+            .map(|t| {
+                let i = scene.textures.len();
+                scene.textures.push(TextureImage { key: (0, 0xfee0_0000 | i as u32), width: t.width, height: t.height, rgba: t.rgba, more: Vec::new(), rate: 1 });
+                i
+            });
+        Some(DriveFx { veh: nf_game::driving::effects::VehicleFx::new(&lib), lib, pool: Default::default(), rng: nf_game::driving::effects::DriveRng::seeded(0), main_tex })
+    })();
+    let car_rig = (!posed_parts.is_empty())
+        .then(|| find_car_entry(p_stem))
+        .flatten()
+        .and_then(|((o, n), _)| iso.read_bytes(viv_base + o as u64, n as u64).ok())
+        .and_then(|raw| maybe_decompress(&raw).ok())
+        .and_then(|b| nf_formats::carmesh::car_mesh(&b).ok())
+        .map(|mesh| {
+            let rig = nf_formats::carpose::WheelRig::new(&mesh, false);
+            let pose = nf_formats::carpose::CarPose::rest(&mesh);
+            let attrs = nf_formats::carpose::WheelAttrs {
+                rest: car_params.spring_rest,
+                limit_draw: car_params.spring_limit,
+                wheel_radius: car_params.wheel_radius,
+                is_sub: false,
+            };
+            CarRig { mesh, rig, attrs, mem: Default::default(), pose, spin: [0.0; 2], parts: posed_parts.clone() }
+        });
     let car = Car::new(car_params, start_pos, start_yaw);
     let state = DrivingState {
+        fx,
         viv: viv_upper,
         car,
         world: FlatWorld::paved(),
@@ -1219,6 +1431,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         cam_view: None,
         land,
         car_box_centre,
+        car_rig,
     };
     Ok((scene, state))
 }
@@ -1278,6 +1491,8 @@ mod tests {
             cam_view: None,
             land: None,
             car_box_centre: [0.0; 3],
+            car_rig: None,
+            fx: None,
         };
         state.step(1.0, 0.0, 0.0, false);
         assert_eq!(state.progress, 1);

@@ -181,9 +181,7 @@ places `as#k` with item k's matrix, drops mirrored items, decodes the batch behi
 `*(entry − 0x18)`, reads UVs at /1024 but normals as colours. On the vanquish 4,221 of its
 10,375 vertices lie on the car the new reading places.
 
-**Open**: which `vd` list the game selects for each vehicle (the caller of the `FUN_001d2618`
-vtable slot is not found; the constructor leaves none, which draws every item); the run-time
-`Skel` / 0xef matrices (identity at rest is not proven); the texture of 85 strips whose model
+**Open**: (the `vd` selection and the run-time `Skel` / 0xef matrices are §11); the texture of 85 strips whose model
 sets none before them (GS state carried from an earlier draw, not traced); the ultralights'
 `blck` texture, which no sheet of their archives holds; the two damage arrays' decode; the
 car microcode is read in §10: the /1024 UV rule, the normal rule and the strip-list unit 3 are
@@ -507,3 +505,133 @@ When `DAT_003349e0 + 0x30` is 1, steps 2-4 are replaced by a flat (0x80, 0x80, 0
 - Which `default` row the name lookup lands on.
 - Live check C-5: breakpoint `FUN_001c1778` during a paris drive. Expect k ∈ {0, 2, 3, 4, 5}, the
   vehicle name `vanquish`, and a return of `block + 16k` (§10.2).
+
+## 11. Which list is drawn, and how the parts move (`crates/nf-formats/src/carpose.rs`) [M + D]
+
+Code: `carpose::selected_list` / `CarMesh::list_for` (the list), `carpose::part_matrix` (one
+item's local → car matrix), `WheelRig::new` / `WheelRig::update` (the wheel and hub matrices),
+`dials`, `spin_step`, `lod_index`. Tests: the unit tests in `carpose.rs` and
+`crates/nf-formats/tests/carpose_disc.rs` (all 63 car files of the nine `/DRIVING/` archives,
+MISC included). Matrices are the game's row-vector 4x4s; `FUN_002cbb88(a, b, d)` is `d = a·b`
+with `a` applied first [M 0x2cbb88].
+
+### 11.1 The list [M]
+
+- The vehicle update `FUN_00188200` (run by both `pvehicle` vtables 0x379ef0 and 0x37a9f8) calls
+  the draw object's vtable slot +0x14 = `FUN_001d2618` every update that gets past its early
+  returns [M 0x1883b4-0x18844c]. `FUN_001d2618` stores `FUN_001c8ba8(obj, N)` = the `vd  #N`
+  payload at +0x348 (its count at +0x334); a missing record stores 0, and 0 draws every item
+  (`FUN_001d35d8`).
+- N: when the driver kind (+0x2c8) is below 2, **2** if the current camera mode has
+  `interiorView` (mode record byte +7, `*(DAT_00333ed8+4)+0x120`), else **5** if AutoDrive is
+  on (`DAT_0033a024+0x350`, written by `FUN_00206398` from the AutoDrive script event
+  `10EAutoDrive`, `FUN_00148220`), else **1**. Every other driver kind: **1**.
+- Driver kinds: the player's car is created with 0 [M FUN_00176658 :231]; script spawns with
+  2 or 4 (4 is stored as 2) [M FUN_0012cb08 :202-206, FUN_001862c0 :170-174]; `FUN_0013fae0`
+  with 3.
+- An `AHelicopter` (`FUN_00193408`, vtable 0x37a4e8) has its own update, which never calls the
+  slot, so it draws every item. A raw scan of the ELF for `lw v,0x3c(x)` followed by
+  `lw r,0x14(v)` finds only the two call sites above; the slot function has no other pointer.
+  So lists 3 and 4 are never selected.
+- camera.ini [D]: `interiorView = 1` is set on `[VanquishDashboardCam0]` and `[BumperCam]`.
+  A section whose name holds `Bumper` gets mode type 1 [M FUN_001a49e0 :641], and the player's
+  car is not drawn at all while the mode, or the other mode of a running transition (+0x128
+  while +0x12c > 0), has type 1 [M FUN_001d35d8 0x1d3650-0x1d369c].
+- No list depends on damage or distance. Distance only picks each part's LOD (§11.3).
+
+What that means on the disc [D, `carpose_disc.rs`]: `vd` numbers present: 1 on 7 files, 2 on 36,
+3 and 4 on 16, 5 on 13. List 1 differs from "every item" on six files: the two vanquish copies
+(MIS01, MIS4), the three supersnow copies (MIS3, MIS4, RACE) and the MIS01 helicopter (which
+never selects). Supersnow: list 1 = items 1-13, 15-17 (14 is hidden) + 25-31; list 5
+(AutoDrive) = 0, 18-24 + 25-31; list 2 (interior view) = 25-31 only. Vanquish: the 0xef items
+3, 4, 5, 7, 20 are in list 2 (the dashboard view) and not in list 1; 21 is in list 1 only.
+Which supersnow body looks like which form was not checked here.
+
+### 11.2 The item matrix [M FUN_001ad498 → FUN_001beee0 + table 0x333a60]
+
+`world = local · car`, `local` by the item's `+0x0d`:
+
+| kind | items [D] | function | local |
+|---|---|---|---|
+| 0xff | 725 | `FUN_001bf140` | own |
+| 0xfe | 333 | `FUN_001bf600` | `skel[+0x0e − 1] · own` (`FUN_001bef68`: past the count → matrix 0) |
+| 0xfc | 16 | `FUN_001bf3d8` | `R(s16(v)/256 · frame °, +y) · own` |
+| 0xfb | 11 | `FUN_001bf458` | `R(s16(v)/256 · frame °, +z) · own` |
+| 0xef | 13 | `FUN_001bf598` | `R(dials[v] °, +z) · own` (`FUN_001befc8`: v ≥ 12 → dials[0]) |
+| 0xf3 | 16 | `FUN_001bf338` → `FUN_001a30c0` | own (the keyframe branch needs `+0x0d` < 100) |
+| 0xee | 1 | `FUN_001bfc20` | faces the camera; not ported |
+| 0x64 | 0 | `FUN_001bf5f8` | not drawn |
+
+- `v` = the item's `+0x0e`, or the u16 at `+2` of its run-time entry when `+0x0c & 0x10`
+  [M FUN_001bf048]. No item on the disc sets 0x10 [D].
+- `R(deg, axis)` = `FUN_002d11c8` (degrees; identity at 0). `frame` = `DAT_00334000 =
+  (float)DAT_00339f54` [M FUN_001d1ef8], the sim tick counter (sim +0xdc4, +1 per tick unless
+  sim +0xdb4 == 3 [M FUN_001fef20]). So a rotor with v = 4864 turns 19° per tick.
+- The rotation is applied first, in the part's own frame, so a spun part keeps its origin. The
+  own matrix of a mirrored item (`+0x0c & 0x80`) has x negated, which flips the sense of a +y
+  turn: that is why the rig steers the right wheels by −s.
+- The dials (`car+0x40`, 12 floats) are written by `FUN_001d34a8` (vtable +0x7c, the model
+  update): slot 0 = the rig's front-left angle × −750 (a steering wheel); for the player's car
+  only, slot 1 = `FUN_001d3440(speed · 3.6 · 1.5, 1)` (speed 0 when the velocity points
+  backwards) and slot 2 = `FUN_001d3440(rpm, 2)` with rpm `FUN_0018aa88`. `FUN_001d3440` maps
+  through the rows at 0x3340f0 [D]: row 1 `{0, 330, 120, −225}`, row 2 `{0, 7000, 121, −210}`
+  (`base + (clamp(v) − min)/(max − min) · range`). No writer of slots 3-11 was found; they keep
+  the constructor's 0.
+
+### 11.3 LOD [M FUN_001ad2e0, FUN_001ad0b8]
+
+Measure `m = max(0, |camera − car| − 5) · K`, K the f32 at +0x30 of the camera holder
+(`*(DAT_00333760+4)`, not identified). `+0x0c & 8` → LOD 0; else the first LOD with `m ≤
+distance`; none → nothing drawn; a LOD without a model draws nothing.
+
+### 11.4 The wheel rig [M FUN_001d2648, FUN_001d2cb0]
+
+Setup (`FUN_001d2648`, vtable +0x94): the four slots in the order of the name tables at
+0x334070 / 0x334080 / 0x334090 (left front, right front, left rear, right rear) get the 1-based
+`Skel` index of `<slot>wheel` and `<slot>hub` (`leftfin`, `rightfin`, `leftrudder`,
+`rightrudder` instead of the hubs when the vehicle's +0x40 word is 1 and `IS_SUB` (+0xbc) is
+set). Without a `Skel` record the car gets 4 matrices and wheels 1..4. The wheel's rest offset
+(`car+0x238`) = `origin_y` of the first 0xfe item linked to that wheel, minus
+`Base[+0x38] − (Base[+0x24] − Base[+0x14])`. The item scan does not restart per wheel: one
+pointer walks on from the item after the previous match, `count` items per wheel (0x1d26c4 sets
+it once; 0x1d27d0 advances it in each iteration's delay slot). On `bus_paris` and `bus_tokyo`
+(MISC) the front wheels' items come after the rear ones, so both rear scans run off the end of
+the item array and the rear offsets keep 0, unless the memory after the array happens to match.
+
+`*(car+0xc)` is taken to be the `Base` payload: the model build `FUN_001c7940` reads it from item 0's `as` payload
+word 0, and every `as` payload on the disc starts with the `Base` tag [D]. Base word 0 is the
+0xffffffff placeholder, words 4-6 / 8-10 a box min / max [D]. The loader writing the pointer there
+is not traced.
+
+Per model update (`FUN_001d2cb0`, from `FUN_001d34a8`), only when the vehicle's +0x40 word is 1:
+
+1. steer `s = clamp(vehicle +0x28c, ±0.075)` turns, moved at most 0.01 per update from the last
+   value (+0x328); 0.002 when the driver kind is 0 or 1 and the camera mode has `interiorView`.
+2. angles `[s, −s, 0, 0]`. An `IS_SUB` vehicle adds the fin terms: `a` = vehicle +0x244 and
+   `b` = vehicle +0x254 (0 when +0x29c is set), each moved at most 0.075 / 0.1 from last time
+   (+0x32c / +0x338); `angle[0..1] += 0.07·a`, `angle[2] = −s − 0.15·b`, `angle[3] = −s + 0.15·b`.
+3. per slot k: hub = `R_y(angle[k] turns)` with translation y = `WHEEL_RADIUS +
+   min(compression[k], SPRING_COMPRESSION_LIMIT_DRAW) − off[k] − SPRING_REST_LENGTH`
+   (compression = vehicle +0x210 + 4k, the spring state of docs/systems/drive-suspension.md);
+   wheel = `R_x(roll[k] turns) · hub`, roll = vehicle +0x230 for slots 0-1 and +0x234 for 2-3. A
+   slot with index 0 writes a scratch matrix.
+
+`R_y` / `R_x` are `FUN_002cc590` / `FUN_002cc510`, whose sin/cos (`FUN_002cbd50` / `FUN_002cbeb0`)
+take turns. The rolls are wrapped into [0, 1] after each step (`spin_step`: both axles += the
+per-tick step +0x274 [M FUN_0018ecb8 :532-551]; the player pass `FUN_0018cef8` :768-782 varies
+it on flags not traced). The function returns `angle[0]`, which feeds dial 0.
+
+Before the rig, `FUN_001cc738` runs a hinge for each joint bit in `car+0x70` (set by
+`FUN_001cc6b0` for entries of type 8) and writes that part's `Skel` matrix. Which parts and what
+drives the hinge (`FUN_001cc9b0`) is not traced, so those matrices stay identity in
+`CarPose::rest`.
+
+### 11.5 Unproven
+
+- Which supersnow body is which form, and what the screen shows during each list: no render or
+  live capture was made.
+- The `Base` pointer (§11.4), and the memory past the item array in the bus scans.
+- The 0xee camera-facing item (the MIS01 helicopter), the hinge parts, the LOD factor K, the
+  run-time entry table of `+0x0c & 0x10`, and the player-pass roll variants.
+- The sin/cos are f32 `sin_cos` here; the game uses VU0 polynomials. The values agree to about
+  1e-6, not bit for bit.

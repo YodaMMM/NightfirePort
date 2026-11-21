@@ -276,3 +276,119 @@ missions keep the flat model and the view's own height follow until their SUB_PH
 ported. The body box is the player model's article `Base` bbox (centred on the origin); the model
 draws with the body's rotation rows, its lowest vertex at the body's rest contact
 (`pos.y - (half_y + spring_rest)`) [S: the game's render offset is not traced].
+
+## 10. The SUB_PHYSICS pass (`FUN_00190f88`) and the rigid integration
+
+Port: `crates/nf-game/src/driving/sub_physics.rs`; tests `crates/nf-game/tests/drive_sub_physics.rs`
+(unit) and `drive_sub_physics_disc.rs` (NF_ISO).
+
+**Who runs it.** `FUN_00188200` picks one pass per vehicle per tick [M 0x188bf8-0x188c60]:
+SUB_PHYSICS (attr +0xc0) != 0 → `FUN_00190f88`; else IS_SNOWMOBILE (+0xc8) → `FUN_00190510`;
+else the player (+0x2c8 == 0) → `FUN_0018cef8`, an AI → `FUN_0018ecb8`. A path-driven vehicle
+(the vtbl+0x5c object test at 0x188b70) takes `FUN_00192498`, which returns at once for
+SUB_PHYSICS [M 0x192498:86]. The attr names behind the offsets are the schema strings
+[M `FUN_001968f8`:261-277 → 0x37b238 IS_SUB +0xbc, 0x37b240 IS_SNOWMOBILE +0xc8, 0x37b250
+NO_WORLD_COLLISIONS +0xc4, 0x37b268 SUB_PHYSICS +0xc0, 0x37b278 IS_BOAT +0xcc]. `IS_FLYING` (in
+the ultralight files) is not registered, so the game ignores it.
+
+**Which vehicles** [D, the decompressed pvehicle files]: SUB_PHYSICS=1 in vanquishsub (MIS11,
+also IS_SUB=1), ultralight (MIS13A, MIS13B), ultralightbig (MIS13C), and the other subs, the
+plane and the subcopter. The patrol boat (MIS13B/C) has IS_BOAT=1 and no SUB_PHYSICS: it is a
+land-pass vehicle (IS_BOAT makes `FUN_001f7c60` scale its gravity by 0.2 and add a −v horizontal
+drag). The sub and the ultralights run the same code: nothing in `FUN_00190f88` reads IS_SUB.
+
+**No gravity, no buoyancy.** `FUN_001f7c60` skips the gravity force for a body whose attr
+SUB_PHYSICS == 1 [M 0x1f7c60, the `+0xc0 == 1` jump past `FUN_001f87d8(gravity)`]. The pass has
+no water surface, no buoyancy and no dive or surface state: the craft moves in 3-D under thrust
+along its nose and the pitch stick. The only vertical-only term is a position bob. The
+horizontal boundary sheets (driving-world-bounds.md; normal (0, −1, 0), so the allowed side is
+below) act as ceilings: sheet 0 at y 78.44 covers the MIS11 start (71.3, 2.2, 41.0) [M table +
+D start].
+
+**The pass, in order** [M 0x190f88; actor offsets; angles in TURNS: `FUN_002cbd50` /
+`FUN_002cbeb0` are sin/cos(2π·x) by a 9th-order polynomial]:
+
+1. Reverse latch: brake == 0 → counter +0x29a = 30; else local forward speed ≥ 2.5 → counter 0;
+   counter > 14 → reversing (+0x29c) when forward ≤ 0; else counter+1, and forward < 0.5 zeroes
+   the stored brake.
+2. Player (+0x2c8 == 0): steer³, pitch⁵; a profile flag (`DAT_003339bc[profile·0x1c+7]`,
+   meaning unproven) and the +0x259 pad byte choose the force frame: the body rows, or (byte
+   set, flag clear) a roll-free frame x = norm(up × nose), y = nose × x. With +0x259 set the axle
+   points lose their 0.19 height.
+3. Thrust: `(throttle − brake)·7`, doubled, along the body's nose (local (0, 0, 2f)); boost:
+   timer +0x294 counts down, adding BOOST_EXTRA_ACC while timer > 3·BOOST_TIME.
+4. Drag: −0.5·v (player) / −0.2·v (others), an acceleration. Player top speed 28 m/s. MAXACC and
+   the gear table are not read by this pass.
+5. `speed` +0x288 = |v|; curves `(1 − min(1, |v|/15))·2.5 + 1` (pitch) and `·3.0 + 1` (steer);
+   player braking or going backward → both 2.0 and the sticks ×min(|v|, 20)·0.05; going
+   backward negates the pitch stick and the stored speed.
+6. Yaw block: point velocities `u = ω_l × axle + v_l` (front (0, 0.19, 1.25), rear
+   (0, 0.19, −1.25), `DAT_00379e50/60`); slip = clamp(steer·curve·(0.125 player / 0.222),
+   ±0.222) → +0x28c; the front u rotated about y by −slip; lateral force `−5·u.x` clamped ±12.5
+   (front) / ±9.375 (rear, unrotated), world y lane zeroed (unless flag and +0x259); torque
+   `offset × F`; an AI below 5 m/s gets a low-speed assist that replaces the forces, and an
+   AI's torque z is ×4.
+7. Pitch block (when |pitch term| > 0.01 or |steer term| < 0.01): the same with the pitch slip
+   about x, the y lane, `−4·u.y` clamped ±12 on both axles.
+8. Angular drag `−2·L` (local) plus the roll leveller `−10·m·(up'·r0)` on local z (skipped when
+   |nose.y| ≥ 0.7; the +0x44c/+0x44d/+0x44f/+0x2d6 script bytes change the target roll), added
+   without the mass factor (`FUN_001f8778`).
+9. Bob: pos.y −= old; `(sin p1 + 1 + sin p2)·0.075`, p1 += 0.0022, p2 += 0.0035 (wrapped at 1);
+   pos.y += new. p1 starts at a 16-bit random draw / 65536 (`FUN_00187350`:101).
+10. The 19 boundary sheets (driving-world-bounds.md §3-§4), every holder applied, each push
+    feeding the next sheet's accumulator read, plus the scrape torque.
+11. +0x29e (a script flag, `FUN_001931b8`): a local angular impulse (pitch, steer, 0)·throttle·m.
+
+**The integration** is the VU0 microprogram at micro 0xad (`FUN_001f89e0` → `vcallms 0xad`;
+the program is the `.vutext` overlays at EE 0x324e70 → VU 0x000 (0x800 bytes) and 0x325678 → VU
+0x800 (0x2f8 bytes), disassembled with tools/vu1dis.py) [M]. It replaces the Euler guess of §6
+for every body:
+
+```
+p   = clamp(p, ±M_LIMIT·m)            0xad/0xb1   (momentum inst+0x40, before the force)
+p  += F·dt;  L += τ·dt                0xaf-0xb6
+v   = p/m                             0xb9        (Q = 1/vf24.w, the mass lane)
+ω   = W·L                             0xba-0xbc   (W = last tick's world inverse inertia)
+pos += v·dt                           0xbd/0xd5
+ω   = clamp(ω, ±AM_LIMIT)             0xc0/0xc4
+L   = R·I·Rᵀ·ω                        0xc8-0xd4   (I = data qword 19 = 1/(inst+0x1c,+0x2c,+0x3c))
+q   = norm(q + ½(ω·dt, 0)⊗q)          0xd6-0x10c
+R   = rows(q); W = R·diag(inv I)·Rᵀ   0x110-0x14f
+```
+
+`FUN_001f8cf0` writes q to inst+0x00, pos/vel/ω/p/L to +0x10..+0x50, R to class+0x00..+0x2f and
+W to class+0x40..+0x6f. The inverse inertia comes from `FUN_00210938(mass, half extents)` with
+the half extents of the model header box (`FUN_001c9778`). `physics::Car::step` (the land car)
+still integrates with its own Euler form; it does not use `Body::integrate`.
+
+## 11. Function table (SUB_PHYSICS layer)
+
+| function | role | port | status |
+|---|---|---|---|
+| `FUN_00188200` 0x188bf8-0x188c60 | per-vehicle pass choice | `sub_physics::drive_pass`, `Vehicle::player` | ported (the path-driven test is a bool input) |
+| `FUN_00190f88` 0x190f88 | the SUB_PHYSICS pass | `SubCraft::controller` | ported; unproven parts below |
+| `FUN_00192498` 0x192498 | path-driven pass | `DrivePass::Path` | choice only; returns at once for SUB_PHYSICS [M :86] |
+| `FUN_00190510` | IS_SNOWMOBILE pass | `DrivePass::Snowmobile` | not ported |
+| `FUN_001f7c60` 0x1f7c60 | reset + gravity | the tail of `Body::integrate` (zero accumulators, no gravity) | ported for SUB_PHYSICS == 1 only |
+| `FUN_001f89e0` + VU0 micro 0xad-0x15b | rigid integration | `Body::integrate` | ported op for op |
+| `FUN_001f8cf0` | VU0 result flush | the `Body` fields | ported (the hull-point transform is not) |
+| `FUN_001f8088` | angular ×0.995 for kind > 3 | none | not applied: vehicles are kind 1-3 |
+| `FUN_001fcfc0` | low-motion check → `FUN_001fd170` | none | not ported |
+| `FUN_001f87d8` / `FUN_001f8888` / `FUN_001f8778` / `FUN_001f8168` | force and torque API | `Body::add_accel` / `add_torque_mass` / `add_torque` / `add_ang_impulse_local` | ported |
+| `FUN_001f82e8` / `FUN_001f8380` / `FUN_001f8250` / `FUN_001f8508` / `FUN_001f84d0` | world↔local | `to_local` / `to_world` | ported (row 3 = (0,0,0,1) per `FUN_00210540`) |
+| `FUN_002cbd50` / `FUN_002cbeb0` | sin/cos in turns | `sin_turns` / `cos_turns` | ported with the stored polynomial |
+| `FUN_002cc590` / `FUN_002cc510` | y / x rotation matrices | inlined in the two blocks | ported |
+| `FUN_002104a8` | input slew | `approach` | ported (the pad layer itself is not) |
+| `FUN_00210938` | inverse inertia | `inv_inertia` | ported |
+| `FUN_001c9778` | model half extents | none | the disc test uses the decoded LOD-0 box instead [S] |
+| `FUN_00190e08` / sheets 0x331a60 | boundary sheets | `bounds::ZoneQuad`, called from the pass | ported (bounds.rs) |
+| `FUN_00195a30` | health ratio (> 0 = alive) | `SubCraft::alive` | flag only |
+| `FUN_001fc2f0` | car↔world collision | none | not ported for any vehicle; vanquishsub has no NO_WORLD_COLLISIONS line, so the game's sub does collide with the level |
+
+**Unproven or not done.** The model box the game reads for the inertia (the disc test's LOD-0
+box stands in). Which option the profile flag is. The start speed (`EStartMission` argument ×
+car+0x4c: MIS13A 35, MIS13B 2) is not applied. The world collision for the sub. Which vehicle
+the MIS13A/B/C player drives: the view picks `ultralight` for 13A/B and the patrol boat for 13C,
+and the player vehicle choice (`DAT_0033196c`, the profile's car name) is not traced. Inside
+one port tick the order is controller then integration; the game integrates at the top of the
+next frame, which gives the same sequence of values.

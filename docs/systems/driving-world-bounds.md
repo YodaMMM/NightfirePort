@@ -82,7 +82,9 @@ frame rate, also used as frames-per-second elsewhere: `fps*300`, `fps<<2`, `x*fp
 `inside_quad`, `hit`, `first_hit` (0x190eb8), `hits` (every holder), `penetration_scale`,
 `clamped_approach_speed`, `boundary_force` (steps 4-5, returns None when the gate fails),
 `scrape_torque_local` (step 6 before the transform) and `sheet_pass` (the whole loop for one
-body). No vehicle in the port runs SUB_PHYSICS yet, so nothing calls `sheet_pass`.
+body). `sub_physics::SubCraft::controller` (the SUB_PHYSICS pass, drive-physics.md §8) runs
+the sheets with its own loop, which feeds each applied push into the accumulator before the next
+sheet reads it and applies the scrape torque; `sheet_pass` keeps the fixed-accumulator form.
 
 ## 6. Corrections to the first draft
 
