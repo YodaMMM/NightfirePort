@@ -191,6 +191,11 @@ impl CarRig {
     /// One tick: roll by `speed / (WHEEL_RADIUS·6.32·60)` turns (the vehicle's +0x274 step, docs/
     /// systems/drive-suspension.md §3; signed by the car's forward speed), steer, springs.
     pub fn tick(&mut self, car: &Car, steer_in: f32) {
+        self.tick_springs(car, steer_in, car.spring_prev);
+    }
+
+    /// `tick` with the springs' compression given.
+    fn tick_springs(&mut self, car: &Car, steer_in: f32, compression: [f32; 4]) {
         let fwd = [car.yaw.sin(), 0.0, car.yaw.cos()];
         let v = car.vel[0] * fwd[0] + car.vel[2] * fwd[2];
         let step = v / (self.attrs.wheel_radius.max(0.01) * 6.32 * 60.0);
@@ -200,13 +205,101 @@ impl CarRig {
             // The steer angle in turns, clamped to +-0.075 by the rig [S: the port's steer input
             // scaled to the clamp, not the car's +0x28c].
             steer: steer_in * 0.075,
-            compression: car.spring_prev,
+            compression,
             slow_steer: false,
             fins: None,
         };
         self.pose.frame += 1.0;
         let _ = self.rig.update(&self.attrs, &input, &mut self.mem, &mut self.pose.skel);
     }
+
+    /// One tick for a traffic or hostile car: the rig's attributes from that car's own `.atr`,
+    /// the steer taken back from its +0x28c angle (`steer_angle = steer · max(maxsteering, 0.2)`,
+    /// the AI step in physics.rs) [S: the rig's input for an AI driver is not traced].
+    /// `sprung` = the car runs the land pass on the drawn track, so its spring state is that
+    /// ground's; otherwise (the flat model, its height set to the rest height over the track
+    /// surface) the springs draw at their rest length.
+    pub fn tick_ai(&mut self, car: &Car, sprung: bool) {
+        self.attrs.rest = car.params.spring_rest;
+        self.attrs.limit_draw = car.params.spring_limit;
+        self.attrs.wheel_radius = car.params.wheel_radius;
+        let steer = (car.steer_angle / car.params.maxsteering.max(0.2)).clamp(-1.0, 1.0);
+        let springs = if sprung { car.spring_prev } else { [car.params.spring_rest; 4] };
+        self.tick_springs(car, steer, springs);
+    }
+
+    /// Writes each posed part's world matrix (`part-local · car_m`): the `Skel` parts from the
+    /// rig's pose; the rotors (0xfc / 0xfb, `R(v/256 · frame °)` [M FUN_001bf3d8 / FUN_001bf458])
+    /// at `frame`; the camera-facing item (0xee [M FUN_001bfc20]) turned towards `eye` from the
+    /// car's row 3. No allocation: the non-`Skel` pose holds no matrices.
+    pub fn write_parts(&self, car_m: &Mat4, frame: f32, eye: [f32; 3], attach_base: usize, pal: &mut [Mat4]) {
+        let live = nf_formats::carpose::CarPose {
+            frame,
+            skel: Vec::new(),
+            dials: self.pose.dials,
+            inv_fps: self.pose.inv_fps,
+            car_pos: [car_m[3][0], car_m[3][1], car_m[3][2]],
+            camera: eye,
+        };
+        for &(pi, ps) in &self.parts {
+            let Some(part) = self.mesh.parts.get(pi) else { continue };
+            let Some(m) = pal.get_mut(attach_base + ps as usize) else { continue };
+            let pose = if matches!(part.attach, nf_formats::carmesh::Attach::Skel(_)) { &self.pose } else { &live };
+            *m = match nf_formats::carpose::part_matrix(part, pose) {
+                nf_formats::carpose::PartMatrix::Drawn(pm) => mat_mul(&pm, car_m),
+                // A part the rig hides (or does not evaluate) folds away.
+                _ => [[0.0; 4]; 4],
+            };
+        }
+    }
+}
+
+/// Whether the view poses `part` per frame (its own palette slot, part-local vertices): the
+/// `Skel` items (wheels, hubs), the rotors (0xfc / 0xfb) and the camera-facing item (0xee),
+/// the last three only without the run-time entry flag 0x10 (`part_matrix` leaves those
+/// unported; no disc item sets it [D car-model.md §11.2]).
+fn part_is_live(part: &nf_formats::carmesh::CarPart) -> bool {
+    match part.attach {
+        nf_formats::carmesh::Attach::Skel(_) => true,
+        nf_formats::carmesh::Attach::Other(0xfc | 0xfb | 0xee, _) => part.flags & 0x10 == 0,
+        _ => false,
+    }
+}
+
+/// A traffic or hostile vehicle's rig over the parts `load_car_into_scene` posed; `None` when
+/// no part is live or the model does not decode.
+fn vehicle_rig(iso: &IsoImage, viv_base: u64, crp: (u32, u32), parts: Vec<(usize, u32)>, params: &CarParams) -> Option<CarRig> {
+    if parts.is_empty() { return None; }
+    let raw = iso.read_bytes(viv_base + crp.0 as u64, crp.1 as u64).ok()?;
+    let mesh = nf_formats::carmesh::car_mesh(&maybe_decompress(&raw).ok()?).ok()?;
+    let rig = nf_formats::carpose::WheelRig::new(&mesh, false);
+    let pose = nf_formats::carpose::CarPose::rest(&mesh);
+    let attrs = nf_formats::carpose::WheelAttrs { rest: params.spring_rest, limit_draw: params.spring_limit, wheel_radius: params.wheel_radius, is_sub: false };
+    Some(CarRig { mesh, rig, attrs, mem: Default::default(), pose, spin: [0.0; 2], parts })
+}
+
+/// The lowest car-space y of the model loaded on body slot `slot` with `rig`'s posed parts at
+/// rest (the wheels at the springs' rest length).
+fn rest_min_y(cv: &[CharVertex], slot: u32, rig: Option<&CarRig>) -> Option<f32> {
+    let mut v = scene_char_min_y(cv, slot);
+    let Some(r) = rig else { return v };
+    // The wheels at the springs' rest length (as `tick_ai` draws a flat-model car), unsteered.
+    let mut rest = nf_formats::carpose::CarPose::rest(&r.mesh);
+    let input = nf_formats::carpose::WheelInput { spin: [0.0; 2], steer: 0.0, compression: [r.attrs.rest; 4], slow_steer: false, fins: None };
+    let _ = r.rig.update(&r.attrs, &input, &mut Default::default(), &mut rest.skel);
+    for &(pi, ps) in &r.parts {
+        let Some(part) = r.mesh.parts.get(pi) else { continue };
+        let m = match nf_formats::carpose::part_matrix(part, &rest) {
+            nf_formats::carpose::PartMatrix::Drawn(m) => m,
+            _ => nf_formats::carpose::own_matrix(part),
+        };
+        for c in cv.iter().filter(|c| c.attachment == Some(ps)) {
+            let q = c.pos;
+            let y = q[0] * m[0][1] + q[1] * m[1][1] + q[2] * m[2][1] + m[3][1];
+            v = Some(v.map_or(y, |w| w.min(y)));
+        }
+    }
+    v
 }
 
 /// The player car's tyre smoke and surface spray (nf_game::driving::effects: `FUN_001ee4a0`
@@ -284,6 +377,8 @@ pub struct HostilePool {
     /// The model file stem (`data\car\model\<stem>.crp`).
     pub model: String,
     pub slots: Vec<u32>,
+    /// Per slot (`slots` order): that copy's posed parts, ticked from the element holding it.
+    pub rigs: Vec<Option<CarRig>>,
     /// Where the drawn model sits on the body: the body position minus `rot·centre` (the player
     /// car's rule: the model's lowest vertex at the body's rest contact) [S]; 0 for a helicopter.
     pub centre: [f32; 3],
@@ -364,6 +459,8 @@ pub struct DrivingState {
     pub car_box_centre: [f32; 3],
     /// The player car's posed parts (wheels, hubs); `None` when the model does not decode.
     pub car_rig: Option<CarRig>,
+    /// Per traffic car (`ai_cars` order): its own posed parts (wheels, rotors, the 0xee item).
+    pub ai_rigs: Vec<Option<CarRig>>,
     pub fx: Option<DriveFx>,
     /// The land car's righting reset (nf_game::driving::reset: tipped and touching for 30 ticks
     /// -> righted where it lies [M 0x188200]) and the triangles it reads.
@@ -573,6 +670,15 @@ impl DrivingState {
             match free {
                 Some(s) => h.assigned.push((d.element, pi, s)),
                 None => h.undrawn += 1,
+            }
+        }
+        // Each drawn ground vehicle's wheels from its own car (a helicopter's rotors need only the tick).
+        for &(e, pi, s) in &h.assigned {
+            let Some(k) = h.pools[pi].slots.iter().position(|&t| t == s) else { continue };
+            let Some(Some(r)) = h.pools[pi].rigs.get_mut(k) else { continue };
+            if let Some(nf_game::driving::hostiles::LiveKind::Car { car, .. }) = h.world.live.iter().find(|v| v.element == e).map(|v| &v.kind) {
+                // The hostile cars run the flat model at their rest height (hostiles.rs) [S].
+                r.tick_ai(car, false);
             }
         }
     }
@@ -931,6 +1037,11 @@ impl DrivingState {
             }
         }
 
+        // Each traffic car's own wheels: spin, steer and springs from its own step.
+        for ((drv, _), r) in self.ai_cars.iter().zip(self.ai_rigs.iter_mut()) {
+            if let Some(r) = r { r.tick_ai(&drv.car, self.land.is_some()); }
+        }
+
         // Watercraft (`MIS11`, `MIS13C`) and aerial rotor (`MIS13A`, `MIS13B`) passes.
         let mut speed = (self.car.vel[0].powi(2) + self.car.vel[2].powi(2)).sqrt();
         match self.viv.as_str() {
@@ -1069,8 +1180,16 @@ impl DrivingState {
         self.mission_state = self.mission.state;
     }
 
-    /// Write player and AI car world transforms into `Scene` attachment palette slots.
+    /// Write player and AI car world transforms into `Scene` attachment palette slots, the
+    /// camera-facing parts turned towards the chase camera.
     pub fn apply_to_palette(&self, attach_base: usize, pal: &mut [Mat4]) {
+        let eye = self.chase_camera().0;
+        self.apply_to_palette_eye(attach_base, pal, eye);
+    }
+
+    /// `apply_to_palette` with the camera at `eye` (a headless shot's `--cam`).
+    pub fn apply_to_palette_eye(&self, attach_base: usize, pal: &mut [Mat4], eye: [f32; 3]) {
+        let frame = self.ticks as f32;
         if let Some(slot) = self.player_attach_slot {
             let car_m: Mat4 = if self.land.is_some() || self.sub.is_some() {
                 let r = self.car.rot;
@@ -1082,15 +1201,7 @@ impl DrivingState {
             };
             // The posed parts: part-local -> car (the rig's run-time matrix) -> world, row vectors.
             if let Some(r) = &self.car_rig {
-                for &(pi, ps) in &r.parts {
-                    let Some(part) = r.mesh.parts.get(pi) else { continue };
-                    let Some(m) = pal.get_mut(attach_base + ps as usize) else { continue };
-                    *m = match nf_formats::carpose::part_matrix(part, &r.pose) {
-                        nf_formats::carpose::PartMatrix::Drawn(pm) => mat_mul(&pm, &car_m),
-                        // A part the rig hides (or does not evaluate) folds away.
-                        _ => [[0.0; 4]; 4],
-                    };
-                }
+                r.write_parts(&car_m, r.pose.frame, eye, attach_base, pal);
             }
             if let Some(m) = pal.get_mut(attach_base + slot as usize) {
                 *m = if self.land.is_some() || self.sub.is_some() {
@@ -1103,19 +1214,21 @@ impl DrivingState {
                 };
             }
         }
-        for (drv, slot) in &self.ai_cars {
+        for (k, (drv, slot)) in self.ai_cars.iter().enumerate() {
+            let car_m = yaw_pos_mat(drv.car.pos, drv.car.yaw);
             if let Some(m) = pal.get_mut(attach_base + *slot as usize) {
-                *m = yaw_pos_mat(drv.car.pos, drv.car.yaw);
+                *m = car_m;
             }
+            if let Some(Some(r)) = self.ai_rigs.get(k) { r.write_parts(&car_m, frame, eye, attach_base, pal); }
         }
         // The hostiles: each live element's world matrix on its slot; every free slot folds away.
         if let Some(h) = &self.hostiles {
             let draws = h.world.draw_list();
             for (pi, p) in h.pools.iter().enumerate() {
-                for &s in &p.slots {
-                    let Some(m) = pal.get_mut(attach_base + s as usize) else { continue };
+                for (si, &s) in p.slots.iter().enumerate() {
+                    let rig = p.rigs.get(si).and_then(|r| r.as_ref());
                     let d = h.assigned.iter().find(|(_, q, t)| *q == pi && *t == s).and_then(|(e, _, _)| draws.iter().find(|d| d.element == *e));
-                    *m = match d {
+                    let w = match d {
                         Some(d) => {
                             let mut w = d.matrix;
                             let c = p.centre;
@@ -1124,6 +1237,15 @@ impl DrivingState {
                         }
                         None => [[0.0; 4]; 4],
                     };
+                    if let Some(m) = pal.get_mut(attach_base + s as usize) { *m = w; }
+                    // A free slot folds its posed parts away with the body.
+                    if let Some(r) = rig {
+                        if d.is_some() {
+                            r.write_parts(&w, frame, eye, attach_base, pal);
+                        } else {
+                            for &(_, ps) in &r.parts { if let Some(m) = pal.get_mut(attach_base + ps as usize) { *m = [[0.0; 4]; 4]; } }
+                        }
+                    }
                 }
             }
         }
@@ -1252,9 +1374,13 @@ fn load_car_into_scene(
     // not re-lit as the car turns); the specular and reflection passes are not drawn.
     let entry = light.and_then(|(_, cr)| cr.entries.iter().find(|e| e.name.eq_ignore_ascii_case(car_stem)).or_else(|| cr.entries.iter().find(|e| e.name == "default")));
     let mut strip_rgba: Vec<Vec<[u8; 4]>> = Vec::new();
-    // With `posed`, the Skel-attached parts (wheels, hubs) keep their part-local positions and get a
-    // palette slot each, posed per tick by `CarRig` (`(part index, slot)` out); the rest bake.
+    // With `posed`, the live parts (`part_is_live`: the Skel-attached wheels and hubs, the rotors,
+    // the camera-facing item) keep their part-local positions and get a palette slot each, posed
+    // per tick by `CarRig` (`(part index, slot)` out); the rest bake.
     let mut strip_part: Vec<Option<usize>> = Vec::new();
+    // Strips of a spun part (0xfc / 0xfb: rotor blades reach 5.57 from the hub [D openheli.crp])
+    // triangulate without the 3.5 edge cut: the decoded strip list already splits them.
+    let mut strip_long: Vec<bool> = Vec::new();
     let want_posed = posed.is_some();
     let strips: Vec<nf_formats::crp_mesh::MeshStrip> = match nf_formats::carmesh::car_mesh(&crp_bytes) {
         Ok(car) => {
@@ -1271,7 +1397,7 @@ fn load_car_into_scene(
                     nf_formats::carpose::PartMatrix::NotDrawn => continue,
                     nf_formats::carpose::PartMatrix::Unported(_) => nf_formats::carpose::own_matrix(part),
                 };
-                let live = want_posed && matches!(part.attach, nf_formats::carmesh::Attach::Skel(_));
+                let live = want_posed && part_is_live(part);
                 let place = |q: [f32; 3]| if live { q } else { [0, 1, 2].map(|k| q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k] + m[3][k]) };
                 for st in &part.strips {
                     let rgba: Vec<[u8; 4]> = match (light, entry, st.lighting) {
@@ -1288,6 +1414,7 @@ fn load_car_into_scene(
                     };
                     strip_rgba.push(rgba);
                     strip_part.push(live.then_some(part.index));
+                    strip_long.push(matches!(part.attach, nf_formats::carmesh::Attach::Other(0xfc | 0xfb, _)));
                     v.push(nf_formats::crp_mesh::MeshStrip {
                         positions: st.positions.iter().map(|&q| place(q)).collect(),
                         uvs: st.uvs.clone(),
@@ -1386,7 +1513,8 @@ fn load_car_into_scene(
                 morph: -1,
             });
         }
-        push_strip_tris(&strip.positions, base_v, 3.5 * 3.5, indices);
+        let max_edge = if strip_long.get(si).copied().unwrap_or(false) { f32::MAX } else { 3.5 * 3.5 };
+        push_strip_tris(&strip.positions, base_v, max_edge, indices);
         let index_count = indices.len() as u32 - first_i;
         if index_count == 0 {
             continue;
@@ -1763,6 +1891,7 @@ pub fn load_driving_scene_at(iso_path: &str, viv_name: &str, game_difficulty: u3
 
     // Spawn up to 4 AI traffic cars on RoadNet segments.
     let mut ai_cars = Vec::new();
+    let mut ai_rigs: Vec<Option<CarRig>> = Vec::new();
     if let Some(rn) = &rn_opt {
         if rn.segs.len() >= 4 {
             let traffic_stem = bigf
@@ -1818,6 +1947,7 @@ pub fn load_driving_scene_at(iso_path: &str, viv_name: &str, game_difficulty: u3
                             if ys.iter().any(|y| y.is_none_or(|y| (y - drv.car.pos[1]).abs() > 1.0)) { continue; }
                             let gy = ys.iter().map(|y| y.unwrap()).fold(f32::MIN, f32::max);
                             drv.car.pos[1] = gy + drv.car.rest_height() + 0.02;
+                            let mut parts = Vec::new();
                             if let Some(slot) = load_car_into_scene(
                                 &iso,
                                 viv_base,
@@ -1831,8 +1961,9 @@ pub fn load_driving_scene_at(iso_path: &str, viv_name: &str, game_difficulty: u3
                                 &mut textures,
                                 &mut attachments,
                                 car_light_ref,
-                                None,
+                                Some(&mut parts),
                             ) {
+                                ai_rigs.push(vehicle_rig(&iso, viv_base, c, parts, &drv.car.params));
                                 ai_cars.push((drv, slot));
                                 placed += 1;
                             }
@@ -1941,15 +2072,18 @@ pub fn load_driving_scene_at(iso_path: &str, viv_name: &str, game_difficulty: u3
             let heli = set.iter().find(|a| a.name.eq_ignore_ascii_case(&need.vehicle)).is_some_and(|a| a.is_heli);
             let cap = if heli { slots[2] } else { slots[1] }.max(1) as usize;
             let n = users.len().clamp(1, cap.min(8));
-            let mut pool = HostilePool { model: need.model.clone(), slots: Vec::new(), centre: [0.0; 3] };
+            let mut pool = HostilePool { model: need.model.clone(), slots: Vec::new(), rigs: Vec::new(), centre: [0.0; 3] };
+            let p = set.iter().find(|a| a.name.eq_ignore_ascii_case(&need.vehicle)).map(|a| a.params.clone()).unwrap_or_else(CarParams::game_defaults);
             for _ in 0..n {
-                let Some(slot) = load_car_into_scene(&iso, base, &need.model, c, s, &mut vertices, &mut char_verts, &mut indices, &mut materials, &mut textures, &mut attachments, car_light_ref, None) else { break };
+                let mut parts = Vec::new();
+                let Some(slot) = load_car_into_scene(&iso, base, &need.model, c, s, &mut vertices, &mut char_verts, &mut indices, &mut materials, &mut textures, &mut attachments, car_light_ref, Some(&mut parts)) else { break };
                 pool.slots.push(slot);
+                pool.rigs.push(vehicle_rig(&iso, viv_base, c, parts, &p));
             }
             if let Some(&s0) = pool.slots.first() {
                 if !heli {
-                    let p = set.iter().find(|a| a.name.eq_ignore_ascii_case(&need.vehicle)).map(|a| a.params.clone()).unwrap_or_else(CarParams::game_defaults);
-                    if let Some(v) = scene_char_min_y(&char_verts, s0) { pool.centre = [0.0, v + p.half_extents[1] + p.spring_rest, 0.0]; }
+                    // The whole model at rest: body slot + its posed parts, the wheels at the springs' rest length.
+                    if let Some(v) = rest_min_y(&char_verts, s0, pool.rigs[0].as_ref()) { pool.centre = [0.0, v + p.half_extents[1] + p.spring_rest, 0.0]; }
                 }
                 hostile_pools.push(pool);
             }
@@ -2339,6 +2473,7 @@ pub fn load_driving_scene_at(iso_path: &str, viv_name: &str, game_difficulty: u3
         road_nodes,
         collision,
         ai_cars,
+        ai_rigs,
         player_attach_slot,
         mission,
         mission_state,
@@ -2394,6 +2529,7 @@ mod tests {
             road_nodes: Vec::new(),
             collision: CollisionGrid::build(Vec::new()),
             ai_cars: Vec::new(),
+            ai_rigs: Vec::new(),
             player_attach_slot: None,
             mission: Mission::load(&[], None, 3),
             mission_state: MissionState::Playing,
