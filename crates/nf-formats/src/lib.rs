@@ -50,6 +50,7 @@ pub mod rendertun;
 pub mod sfn;
 pub mod sfx;
 pub mod soundbank;
+pub mod workcount;
 pub mod ssh;
 pub mod sha1;
 pub mod sha256;
