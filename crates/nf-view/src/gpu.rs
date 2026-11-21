@@ -638,6 +638,24 @@ pub struct Renderer {
     pub probe_skip: Vec<bool>,
 }
 
+
+/// A buffer filled through the queue instead of `create_buffer_init`'s mapped-at-creation path.
+/// Under memory pressure a mapped-init buffer can come back invalid and its mapped range then
+/// panics (seen on a busy machine loading Night Shift); a queue write to an invalid buffer only
+/// reports through the device's error handler, so the level still loads.
+fn init_buffer(device: &wgpu::Device, queue: &wgpu::Queue, label: Option<&str>, contents: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
+    let size = ((contents.len() as u64 + 3) & !3).max(16);
+    let buf = device.create_buffer(&wgpu::BufferDescriptor { label, size, usage: usage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+    let whole = contents.len() & !3;
+    if whole > 0 { queue.write_buffer(&buf, 0, &contents[..whole]); }
+    if whole < contents.len() {
+        let mut tail = [0u8; 4];
+        tail[..contents.len() - whole].copy_from_slice(&contents[whole..]);
+        queue.write_buffer(&buf, whole as u64, &tail);
+    }
+    buf
+}
+
 impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, scene: &Scene, notex: bool, nofog: bool) -> Renderer {
         // batch-draws: the bindless decision comes first — it picks the shader variant and the layout.
@@ -816,8 +834,14 @@ impl Renderer {
         // attrs' mtb −1 keeps the shader off them.
         let wts_buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("morph weights"), size: ((skin_layout.wt_stride as u64 * scene.characters.len() as u64) * 16).max(16), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let blob = scene.morph_target_blob();
-        let mtg_contents = if blob.is_empty() { vec![0u8; 16] } else { blob };
-        let mtg_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("morph targets"), contents: &mtg_contents, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST });
+        // A blob past the device's storage-binding limit would make an invalid buffer: keep the
+        // 16-byte dummy instead (faces stay neutral; the bind and draw still work).
+        let max_mtg = device.limits().max_storage_buffer_binding_size as usize;
+        let mtg_contents = if blob.is_empty() { vec![0u8; 16] } else if blob.len() > max_mtg {
+            eprintln!("GPU: morph targets {} bytes exceed the {} byte storage limit; facial morphs off", blob.len(), max_mtg);
+            vec![0u8; 16]
+        } else { blob };
+        let mtg_buf = init_buffer(device, queue, Some("morph targets"), &mtg_contents, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST);
         let slots = (scene.materials.len() + 2) as u64;
         let make_uniform = || {
             let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: UNIFORM_SLOT as u64 * slots, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
@@ -923,14 +947,14 @@ impl Renderer {
         // The Character-layer tail holds the bind-pose positions; the shader poses them with the palette.
         let mut verts = scene.vertices.clone();
         for (v, cv) in verts[scene.char_vertex_start..].iter_mut().zip(&scene.char_verts) { v.pos = cv.pos; }
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&verts), usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST });
+        let vbuf = init_buffer(device, queue, None, bytemuck::cast_slice(&verts), wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST);
         let stat = crate::scene::SkinAttr { a: u32::MAX, b: u32::MAX, w: 1.0, col: 0, mtb: -1, mwb: 0, cnt: 0, tend: 0 };
         let mut attrs = vec![stat; scene.char_vertex_start];
         attrs.extend_from_slice(&char_attrs);
         attrs.resize(verts.len(), stat);
-        let skin_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("skin attrs"), contents: bytemuck::cast_slice(&attrs), usage: wgpu::BufferUsages::VERTEX });
-        let snow_skin = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("snow attrs"), contents: bytemuck::cast_slice(&vec![stat; SNOW_MAX]), usage: wgpu::BufferUsages::VERTEX });
-        let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&scene.indices), usage: wgpu::BufferUsages::INDEX });
+        let skin_buf = init_buffer(device, queue, Some("skin attrs"), bytemuck::cast_slice(&attrs), wgpu::BufferUsages::VERTEX);
+        let snow_skin = init_buffer(device, queue, Some("snow attrs"), bytemuck::cast_slice(&vec![stat; SNOW_MAX]), wgpu::BufferUsages::VERTEX);
+        let ibuf = init_buffer(device, queue, None, bytemuck::cast_slice(&scene.indices), wgpu::BufferUsages::INDEX);
         let sub_runs = sub_runs_for(scene, &attrs, &verts);
         let sub_meta = sub_runs.iter().map(|runs| runs.iter().fold((u32::MAX, 0u32, false), |(lo, hi, un), r|
             if r[2] == u32::MAX { (lo, hi, true) } else { (lo.min(r[2]), hi.max(r[2]), un) })).collect();
