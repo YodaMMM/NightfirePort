@@ -782,9 +782,8 @@ pub fn inflict(car: &mut CarDamage, player: &mut PlayerHealth, hit: &Hit, cx: &H
     r
 }
 
-/// The `DamageZones` the car microcode reads per zone (car-model.md §10.5: position += DmgVec ·
-/// zone.x …). Which of (a, b) lands in .x/.y/.z is set by the model's upload, which is not
-/// traced; this returns the stored pair as is.
+/// The stored (a, b) pair per zone (+0x2f0, `FUN_0018aa78`). The quadwords the car microcode
+/// reads are `deform::damage_zone_upload` of these: (a, b, 3·b, glass word) [M `FUN_001d3138`].
 pub fn damage_zones(car: &CarDamage) -> [[f32; 2]; 16] {
     car.zones
 }

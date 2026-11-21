@@ -39,8 +39,8 @@
 //!   (every textured batch spans 0..1024 raw — the track's /256 would put car UVs at 0..4),
 //!   `V3-8` normal = byte / 127.5 − 1 (|n| = 1 ± 5 % on 99.9 % of them; these are NOT vertex
 //!   colours: car batches carry no colour upload), then two `V4-16` arrays, the microcode's
-//!   `DmgVec` / `DmgNrm` damage offsets (not decoded) [M bondrm.o parameter names, §10 of the doc];
-//! - layout B: five `V4-32` arrays: position (w = 1), normal, UV (u, v, 1, 1), two not decoded;
+//!   `DmgVec` / `DmgNrm` damage offsets ([`CarDamageVertex`], [`deformed`]; §10.8 of the doc);
+//! - layout B: five `V4-32` arrays: position (w = 1), normal, UV (u, v, 1, 1), `DmgVec`, `DmgNrm`;
 //! - positions only (`V3-32`).
 //!
 //! Strip list: the `V4-8` bytes before the positions, as on the track, but in units of 3 per
@@ -173,6 +173,154 @@ impl CarMaterial {
     pub fn textured(self) -> bool {
         !matches!(self, CarMaterial::Gouraud | CarMaterial::GouraudPacked | CarMaterial::GouraudDull | CarMaterial::GouraudDullPacked | CarMaterial::Shadow)
     }
+
+    /// The VU1 addresses (relative to `vi14`, XTOP) the damage pass reads `DmgVec` and `DmgNrm`
+    /// from [M bondrm.o, each program's damage set-up `IADDIU vi04, vi14, A` / `IADDIU vi08, vi14,
+    /// B` right before the 31-pair damage loop; the loop is bit-identical in all twelve `MatCar*`
+    /// programs]. `None` for `BondCarShadow` (no damage loop: it never loads `DamageZones`).
+    pub fn damage_slots(self) -> Option<(u16, u16)> {
+        Some(match self {
+            CarMaterial::Texture | CarMaterial::TexturePacked | CarMaterial::Chrome | CarMaterial::Dash => (0xa6, 0xd2),
+            CarMaterial::TextureDull | CarMaterial::TextureDullPacked => (0x98, 0xc4),
+            CarMaterial::TextureSwitchPacked => (0x99, 0xc5),
+            CarMaterial::Gouraud | CarMaterial::GouraudPacked => (0x73, 0x9f),
+            CarMaterial::GouraudDull | CarMaterial::GouraudDullPacked => (0x65, 0x91),
+            CarMaterial::Glass => (0x9e, 0xc6),
+            CarMaterial::GlassPacked => (0xa5, 0xcd),
+            CarMaterial::Shadow => return None,
+        })
+    }
+
+    /// The program runs the packed set-up loop first (`ITOF0` of the UV, normal and damage
+    /// arrays, then `× 1/1024 − 32` / `× 1/127.5 − 1`) [M bondrm.o 0x01a-0x035 of
+    /// MatCarTexturePacked; the same loop opens every `…Packed` program and `MatCarChrome`]. The
+    /// other programs read their arrays as floats.
+    pub fn packed_setup(self) -> bool {
+        matches!(
+            self,
+            CarMaterial::TexturePacked
+                | CarMaterial::Chrome
+                | CarMaterial::TextureDullPacked
+                | CarMaterial::TextureSwitchPacked
+                | CarMaterial::GouraudPacked
+                | CarMaterial::GouraudDullPacked
+                | CarMaterial::GlassPacked
+        )
+    }
+
+    /// The program copies `DamageZones[zone].w` into each vertex's alpha before its first draw
+    /// (the glass-damage loop) [M bondrm.o MatCarGlassPacked 0x0f1-0x0ff: `ILWR.w` of the
+    /// `DmgNrm` word, `LQ.w vf18, 0x56 + zone`, `SQIw` into `ColourSlot` 0x11a; MatCarGlass
+    /// 0x0d6.. the same with 0xc6].
+    pub fn glass_alpha(self) -> bool { matches!(self, CarMaterial::Glass | CarMaterial::GlassPacked) }
+}
+
+/// The packed damage-array rule of the set-up loop: `ITOF0`, `× 1/1024` (I = 0x3a7ffff7), `+
+/// (−32, −32, −32, −33)` [M bondrm.o MatCarTexturePacked 0x01b-0x022 builds vf24 = (−32, −32,
+/// −32, −32 + I) with I = −1 from the 0x01f pair, 0x02c/0x02d `MULAi` + `MADDw` for `DmgVec`
+/// (xyzw), 0x02e/0x02f for `DmgNrm` (xyz only: the w word keeps the raw zone index)]. The I
+/// pairing is the doc's `{I}` convention (§10.5), under which the normals come out unit length.
+pub const DAMAGE_SCALE: f32 = 1024.0;
+pub const DAMAGE_BIAS: [f32; 4] = [-32.0, -32.0, -32.0, -33.0];
+
+/// Number of `DamageZones` quadwords: `MatCarPerCar` uploads 16 from `DAT_00424620` to absolute
+/// VU1 0x56 [M DRIVING.ELF `FUN_001ada20`: the parameter pair (0x10, &DAT_00424620);
+/// `FUN_001d2b38` copies 0x100 bytes there].
+pub const DAMAGE_ZONES: usize = 16;
+/// The absolute VU1 address of `DamageZones[0]` (`IADDIU vi05, vi00, 0x0056`) [M bondrm.o].
+pub const DAMAGE_ZONES_VU: u16 = 0x56;
+
+/// One vertex's damage data as the damage loop reads it, after the set-up conversion.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CarDamageVertex {
+    /// `DmgVec`: xyz = the position offset per unit of zone `.x`, w = the darkening per unit of
+    /// zone `.y` / `.z`.
+    pub vec: [f32; 4],
+    /// `DmgNrm` xyz: the normal offset per unit of zone `.x`.
+    pub nrm: [f32; 3],
+    /// The zone index: the low 16 bits of the `DmgNrm` w word (`ILWR.w`, an integer read of the
+    /// unconverted word) [M bondrm.o 0x03d / 0x045 / 0x059 = `ILWR.w vi09, (vi08)` (the
+    /// disassembler prints `BAD_LOWER(802943fe)`: lower-special 0x3e, index 0x0f), then `IADD
+    /// vi09, vi05, vi09` with vi05 = 0x56].
+    pub zone: u16,
+}
+
+/// One `DamageZones` quadword: `.x/.y/.z` floats; `.w` is read only by the glass programs, as the
+/// raw word that becomes the vertex alpha (`FUN_001d3138` stores the integer 127 or 0).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DamageZone {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: u32,
+}
+
+/// A strip after the damage loop.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeformedStrip {
+    /// `Coordinates` += `DmgVec.xyz · zone.x`.
+    pub positions: Vec<[f32; 3]>,
+    /// `Normals` += `DmgNrm.xyz · zone.x` (not renormalised).
+    pub normals: Vec<[f32; 3]>,
+    /// The base colour C.rgb: `FTOI0(max(0, 127 · (1 − DmgVec.w · zone.y)))`, 127 undamaged.
+    pub rgb: Vec<u32>,
+    /// `C_w` = `max(0, 127 · (1 − DmgVec.w · zone.z))` (a float, written back into `DmgVec.w`),
+    /// the scale of the specular and reflection colours.
+    pub c_w: Vec<f32>,
+    /// The vertex alpha of every pass: 127, or for the glass programs the zone's `.w` word
+    /// (low 8 bits as the GS reads RGBAQ.A).
+    pub alpha: Vec<u32>,
+}
+
+/// The damage loop of every `MatCar*` program, per vertex [M bondrm.o MatCarTexturePacked
+/// 0x036-0x05b, bit-identical in all twelve programs]:
+/// - `vf18 = DamageZones[zone]` (absolute 0x56 + zone);
+/// - position = P + DmgVec.xyz · zone.x (`ADDA` P, `MADDx`);
+/// - normal = N + DmgNrm.xyz · zone.x;
+/// - `t = 1 − DmgVec.w · zone.y` and `u = 1 − DmgVec.w · zone.z` (`MULA.w` 1, `MSUBy.w` /
+///   `MSUBz.w`);
+/// - C = (127, 127, 127, 127) × (t, t, t, u), `MAXi` 0 on all four, then `FTOI0.xyz` into
+///   `ColourSlot` and the float `.w` back into `DmgVec.w`. No upper clamp: the base pass's
+///   `min(255, C·L)` is the only one.
+///
+/// The glass programs then overwrite each vertex's alpha with the zone's `.w` word
+/// ([`CarMaterial::glass_alpha`]). `None` when the strip carries no damage arrays, or a zone
+/// index is ≥ 16 (that would read VU1 memory past `DamageZones`; no car vertex does [D,
+/// carmesh_disc]).
+pub fn deformed(strip: &CarStrip, zones: &[DamageZone; DAMAGE_ZONES]) -> Option<DeformedStrip> {
+    if strip.damage.len() != strip.positions.len() || strip.normals.len() != strip.positions.len() {
+        return None;
+    }
+    let n = strip.positions.len();
+    let mut out = DeformedStrip { positions: Vec::with_capacity(n), normals: Vec::with_capacity(n), rgb: Vec::with_capacity(n), c_w: Vec::with_capacity(n), alpha: Vec::with_capacity(n) };
+    for ((p, nm), d) in strip.positions.iter().zip(&strip.normals).zip(&strip.damage) {
+        let z = zones.get(d.zone as usize)?;
+        out.positions.push([p[0] + d.vec[0] * z.x, p[1] + d.vec[1] * z.x, p[2] + d.vec[2] * z.x]);
+        out.normals.push([nm[0] + d.nrm[0] * z.x, nm[1] + d.nrm[1] * z.x, nm[2] + d.nrm[2] * z.x]);
+        let t = 1.0 - d.vec[3] * z.y;
+        let u = 1.0 - d.vec[3] * z.z;
+        out.rgb.push((UNDAMAGED_CW * t).max(0.0) as u32);
+        out.c_w.push((UNDAMAGED_CW * u).max(0.0));
+        out.alpha.push(if strip.material.glass_alpha() { z.w } else { CAR_VERTEX_ALPHA as u32 });
+    }
+    Some(out)
+}
+
+/// Converts the two raw damage arrays of a batch (the 32-bit words the VIF unpack leaves in VU1)
+/// as `material`'s program reads them. `packed` = the arrays came as `V4-16` (the set-up loop's
+/// ITOF rule) rather than `V4-32` floats.
+fn damage_vertices(vec: &[[u32; 4]], nrm: &[[u32; 4]], packed: bool) -> Vec<CarDamageVertex> {
+    vec.iter()
+        .zip(nrm)
+        .map(|(v, m)| {
+            let conv = |w: u32, k: usize| if packed { w as i32 as f32 / DAMAGE_SCALE + DAMAGE_BIAS[k] } else { f32::from_bits(w) };
+            CarDamageVertex {
+                vec: [conv(v[0], 0), conv(v[1], 1), conv(v[2], 2), conv(v[3], 3)],
+                nrm: [conv(m[0], 0), conv(m[1], 1), conv(m[2], 2)],
+                zone: (m[3] & 0xffff) as u16,
+            }
+        })
+        .collect()
 }
 
 /// One decoded strip of a car model, in the model's frame.
@@ -206,6 +354,14 @@ pub struct CarStrip {
     /// run-time `GAME::SpecularMap` / `GAME::ReflectionMap` uploads are not module textures and are
     /// not listed (see [`CarPassTexture`]). Carried over within the model.
     pub slot_textures: BTreeMap<u16, String>,
+    /// Per vertex the `DmgVec` / `DmgNrm` data the damage loop reads ([`CarDamageVertex`], see
+    /// [`deformed`]); empty when the batch uploads no damage arrays (positions-only batches).
+    pub damage: Vec<CarDamageVertex>,
+    /// The VU1 addresses (unpack `ADDR`, relative to the double buffer) the two damage arrays went
+    /// to, in upload order.
+    pub damage_vu: Option<[u16; 2]>,
+    /// The damage arrays came as `V4-16` (converted by the packed set-up loop) rather than `V4-32`.
+    pub damage_packed: bool,
 }
 
 impl CarStrip {
@@ -430,6 +586,9 @@ pub fn decode_car_vif(img: &[u8], ranges: &[(usize, usize)], label: usize, mater
     // Attribute arrays after the positions (any format), for the strip-list unit.
     let mut extra = 0usize;
     let mut v4_arrays = 0usize;
+    // The two damage arrays as the 32-bit words the unpack leaves in VU1, with their addresses.
+    let mut dmg: Vec<(u16, Vec<[u32; 4]>)> = Vec::new();
+    let mut dmg_packed = false;
     for &(start, end) in ranges {
         if end > img.len() {
             return invalid(format!("batch {po:#x}: VIF range {start:#x}..{end:#x} runs past the image"));
@@ -520,8 +679,47 @@ pub fn decode_car_vif(img: &[u8], ranges: &[(usize, usize)], label: usize, mater
                                             .collect(),
                                     );
                                 }
+                                (3, 1) if v4_arrays == 0 => {
+                                    // Layout A: the two V4-16 damage arrays (DmgVec, DmgNrm). The VIF
+                                    // sign- or zero-extends each 16-bit field (USN) and adds the row in
+                                    // offset mode.
+                                    if masked {
+                                        return invalid(format!("batch {po:#x}: damage unpack {code:#x} masked"));
+                                    }
+                                    let words = (0..num)
+                                        .map(|i| {
+                                            let mut q = [0u32; 4];
+                                            for (k, w) in q.iter_mut().enumerate() {
+                                                let h = u16::from_le_bytes([data[i * 8 + k * 2], data[i * 8 + k * 2 + 1]]);
+                                                let x = if usn { h as u32 } else { h as i16 as i32 as u32 };
+                                                *w = if mode == 1 { x.wrapping_add(row[k]) } else { x };
+                                            }
+                                            q
+                                        })
+                                        .collect();
+                                    dmg.push((addr as u16, words));
+                                    dmg_packed = true;
+                                }
                                 (3, 0) if v4_arrays > 0 => {
-                                    // Layout B: array 1 = normal (x, y, z, ~1/255), array 2 = UV (u, v, 1, 1).
+                                    // Layout B: array 1 = normal (x, y, z, ~1/255), array 2 = UV (u, v, 1, 1),
+                                    // arrays 3 and 4 = DmgVec / DmgNrm as floats (the zone index is the
+                                    // DmgNrm w word's low 16 bits).
+                                    if v4_arrays >= 3 && dmg.len() < 2 {
+                                        if masked {
+                                            return invalid(format!("batch {po:#x}: damage unpack {code:#x} masked"));
+                                        }
+                                        let words = (0..num)
+                                            .map(|i| {
+                                                let mut q = [0u32; 4];
+                                                for (k, w) in q.iter_mut().enumerate() {
+                                                    let x = u32_at(data, i * 16 + k * 4)?;
+                                                    *w = if mode == 1 { x.wrapping_add(row[k]) } else { x };
+                                                }
+                                                Ok(q)
+                                            })
+                                            .collect::<Result<_>>()?;
+                                        dmg.push((addr as u16, words));
+                                    }
                                     if v4_arrays == 1 && normals.is_none() {
                                         normals = Some((0..num).map(|i| Ok([fl(i, 0, 16)?, fl(i, 1, 16)?, fl(i, 2, 16)?])).collect::<Result<_>>()?);
                                     } else if v4_arrays == 2 && uvs.is_none() {
@@ -551,6 +749,11 @@ pub fn decode_car_vif(img: &[u8], ranges: &[(usize, usize)], label: usize, mater
             return invalid(format!("batch {po:#x}: {n} {what} for {count} positions"));
         }
     }
+    if !dmg.is_empty() && (dmg.len() != 2 || dmg.iter().any(|(_, w)| w.len() != count)) {
+        return invalid(format!("batch {po:#x}: {} damage arrays for {count} vertices", dmg.len()));
+    }
+    let damage = if dmg.len() == 2 { damage_vertices(&dmg[0].1, &dmg[1].1, dmg_packed) } else { Vec::new() };
+    let damage_vu = (dmg.len() == 2).then(|| [dmg[0].0, dmg[1].0]);
     let starts = strip_starts(&ends, count, if extra == 0 { 2 } else { 3 })
         .ok_or_else(|| FormatError::Invalid(format!("batch {po:#x}: strip list {ends:?} invalid for {count} vertices")))?;
     Ok(starts
@@ -564,6 +767,9 @@ pub fn decode_car_vif(img: &[u8], ranges: &[(usize, usize)], label: usize, mater
             normals: if normals.is_empty() { Vec::new() } else { normals[w[0]..w[1]].to_vec() },
             states: BTreeMap::new(),
             slot_textures: BTreeMap::new(),
+            damage: if damage.is_empty() { Vec::new() } else { damage[w[0]..w[1]].to_vec() },
+            damage_vu,
+            damage_packed: dmg_packed,
         })
         .collect())
 }
@@ -990,7 +1196,7 @@ pub struct CarPass {
 pub const CAR_VERTEX_ALPHA: u8 = 127;
 
 /// `C_w` of an undamaged vertex: the `ColourSlot` w (127) the damage pass scales by
-/// `1 − DmgVec.w · zone.z` (docs/formats/car-model.md §10.5; the zone index is not followed).
+/// `1 − DmgVec.w · zone.z` (docs/formats/car-model.md §10.8; a damaged car's is [`deformed`]).
 pub const UNDAMAGED_CW: f32 = 127.0;
 
 /// A pass vertex: the ST the microcode stores (Q = 1) and the R = G = B value it FTOI0s (alpha is
@@ -1043,8 +1249,8 @@ impl CarMaterial {
     ///   0xfb+0x0a, `GouraudDull` 0x11e, `GouraudDullPacked` 0xc6 (base only);
     /// - `MatCarDash`: 0xfe+0x0a, 0x106+0x11 (no reflection);
     /// - `MatCarGlassPacked`: 0xfd+0x23, 0xfd+0x0a, 0x105+0x11, 0x105+0x18 (its lists also upload a
-    ///   state to 0xf5, which the program never kicks; the branches around the first draw are not
-    ///   followed).
+    ///   state to 0xf5, which the program never kicks; both paths of the program reach the first
+    ///   draw, whose vertex alpha is the zone's glass word, [`deformed`]).
     ///
     /// 0x11 is the `SpecularMap` slot and 0x18 `ReflectionMap2` (§10.1); the car lists upload
     /// `GAME::SpecularMap` / `GAME::ReflectionMap` there [D]. `None` for `Glass`, `Gouraud[Packed]`
@@ -1236,6 +1442,12 @@ mod tests {
     /// A layout-A batch: header, strip list, V3-32 masked positions (mode 1, row w), V2-16 UV,
     /// V3-8 normals, two V4-16 arrays (DmgVec, DmgNrm), MSCNT — the vanquish shape [D].
     fn batch_a(pos: &[[f32; 3]], list: [u8; 4], uv: &[[u16; 2]], nrm: &[[u8; 3]]) -> Vec<u8> {
+        let z = vec![[0x8000u16; 4]; pos.len()];
+        batch_a_dmg(pos, list, uv, nrm, &z, &z, [0xa6, 0xd2])
+    }
+
+    /// [`batch_a`] with the raw `V4-16` damage words (DmgVec, DmgNrm) and their unpack addresses.
+    fn batch_a_dmg(pos: &[[f32; 3]], list: [u8; 4], uv: &[[u16; 2]], nrm: &[[u8; 3]], dv: &[[u16; 4]], dn: &[[u16; 4]], at: [u32; 2]) -> Vec<u8> {
         let n = pos.len() as u32;
         let mut v = Vec::new();
         put(&mut v, 0x6c01_c000);
@@ -1273,11 +1485,12 @@ mod tests {
         while v.len() % 4 != 0 {
             v.push(0);
         }
-        for a in [0xa6u32, 0xd2] {
+        for (a, arr) in [(at[0], dv), (at[1], dn)] {
             put(&mut v, 0x6d00_c000 | a | (n << 16));
-            for _ in 0..n {
-                put(&mut v, 0x8000_8000);
-                put(&mut v, 0x8000_8000);
+            for q in arr {
+                for c in q {
+                    v.extend_from_slice(&c.to_le_bytes());
+                }
             }
         }
         put(&mut v, 0x1700_0000);
@@ -1310,6 +1523,109 @@ mod tests {
         // A list byte that is not a multiple of 3 is refused.
         let bad = batch_a(&pos, [10, 0, 0, 0], &uv, &nrm);
         assert!(decode_car_vif(&bad, &[(0, bad.len())], 0, CarMaterial::TexturePacked).is_err());
+    }
+
+    #[test]
+    fn damage_arrays_decode_with_the_setup_rule_and_deform_as_the_damage_loop_does() {
+        let pos = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let uv = [[0x8000, 0x8000]; 3];
+        let nrm = [[0x80, 0xff, 0x80]; 3];
+        // raw/1024 − 32 (xyz) and raw/1024 − 33 (w): 0x8400 → 1, 0x7c00 → −1, 0x8000 → 0 / −1.
+        let dv = [[0x8400, 0x8000, 0x7c00, 0x8600], [0x8000, 0x8800, 0x8000, 0x8000], [0x8000, 0x8000, 0x8000, 0x8400]];
+        // DmgNrm w = the zone index, read raw (not converted).
+        let dn = [[0x8000, 0x7e00, 0x8000, 3], [0x8200, 0x8000, 0x8000, 15], [0x8000, 0x8000, 0x8000, 0]];
+        let b = batch_a_dmg(&pos, [0, 0, 0, 0], &uv, &nrm, &dv, &dn, [0xa6, 0xd2]);
+        let s = decode_car_vif(&b, &[(0, b.len())], 0, CarMaterial::TexturePacked).unwrap();
+        assert_eq!(s.len(), 1);
+        let s = &s[0];
+        assert_eq!(s.damage_vu, Some([0xa6, 0xd2]));
+        assert!(s.damage_packed);
+        assert_eq!(s.damage[0], CarDamageVertex { vec: [1.0, 0.0, -1.0, 0.5], nrm: [0.0, -0.5, 0.0], zone: 3 });
+        assert_eq!(s.damage[1], CarDamageVertex { vec: [0.0, 2.0, 0.0, -1.0], nrm: [0.5, 0.0, 0.0], zone: 15 });
+        assert_eq!(s.damage[2].vec[3], 0.0);
+        assert_eq!(s.damage[2].zone, 0);
+
+        // Undamaged zones leave everything as decoded, with C = 127 and C_w = 127.
+        let none = [DamageZone::default(); DAMAGE_ZONES];
+        let d = deformed(s, &none).unwrap();
+        assert_eq!(d.positions, s.positions);
+        assert_eq!(d.normals, s.normals);
+        assert_eq!(d.rgb, vec![127; 3]);
+        assert_eq!(d.c_w, vec![127.0; 3]);
+        assert_eq!(d.alpha, vec![127; 3]);
+
+        let mut z = none;
+        z[3] = DamageZone { x: 0.5, y: 0.4, z: 1.2, w: 0x7f };
+        z[15] = DamageZone { x: 1.0, y: 2.0, z: 6.0, w: 0 };
+        z[0] = DamageZone { x: 0.25, y: 1.0, z: 3.0, w: 0x7f };
+        let d = deformed(s, &z).unwrap();
+        // v0, zone 3: P + (1, 0, −1)·0.5; N + (0, −0.5, 0)·0.5; C = 127·(1 − 0.5·0.4) = 101.6 → 101;
+        // C_w = 127·(1 − 0.5·1.2) = 50.8.
+        assert_eq!(d.positions[0], [0.5, 0.0, -0.5]);
+        let n0 = s.normals[0];
+        assert_eq!(d.normals[0], [n0[0], n0[1] - 0.25, n0[2]]);
+        assert_eq!(d.rgb[0], 101);
+        assert!((d.c_w[0] - 50.8).abs() < 1e-4, "{}", d.c_w[0]);
+        // v1, zone 15, DmgVec.w = −1: C = 127·(1 + 2) = 381 (no upper clamp), C_w = 127·7.
+        assert_eq!(d.positions[1], [1.0, 2.0, 0.0]);
+        assert_eq!(d.rgb[1], 381);
+        assert_eq!(d.c_w[1], 889.0);
+        // v2, zone 0, DmgVec.w = 0: colour untouched although the zone is dented.
+        assert_eq!((d.rgb[2], d.c_w[2]), (127, 127.0));
+        // Not a glass program: alpha stays 127 whatever .w says.
+        assert_eq!(d.alpha, vec![127; 3]);
+
+        // The clamp at 0 (MAXi): DmgVec.w = 0.5 with zone.y = 4 → 127·(1 − 2) → 0.
+        z[3].y = 4.0;
+        z[3].z = 4.0;
+        let d = deformed(s, &z).unwrap();
+        assert_eq!((d.rgb[0], d.c_w[0]), (0, 0.0));
+
+        // The glass programs take the vertex alpha from the zone's .w word.
+        let mut g = s.clone();
+        g.material = CarMaterial::GlassPacked;
+        assert_eq!(deformed(&g, &z).unwrap().alpha, vec![0x7f, 0, 0x7f]);
+
+        // A zone index past the 16 DamageZones is refused.
+        let mut bad = s.clone();
+        bad.damage[1].zone = 16;
+        assert!(deformed(&bad, &z).is_none());
+    }
+
+    #[test]
+    fn layout_b_damage_arrays_are_floats_with_the_zone_in_the_w_word() {
+        // Five V4-32 arrays: position, normal, UV, DmgVec, DmgNrm (w = integer zone).
+        let n = 3u32;
+        let mut v = Vec::new();
+        put(&mut v, 0x6c01_c000);
+        put(&mut v, n);
+        for _ in 0..3 {
+            put(&mut v, 0);
+        }
+        put(&mut v, 0x6e01_c01f);
+        v.extend_from_slice(&[0, 0, 0, 0]);
+        let arrays: [(u32, [[u32; 4]; 3]); 5] = [
+            (0x22, [[0, 0, 0, 1.0f32.to_bits()]; 3]),
+            (0x7a, [[0, 0, 1.0f32.to_bits(), 0]; 3]),
+            (0x4e, [[0, 0, 0, 0]; 3]),
+            (0xa6, [[0.25f32.to_bits(), 0, 0, 0.5f32.to_bits()]; 3]),
+            (0xd2, [[0, 0, 0, 7], [0, 0, 0, 2], [0, 0, 0, 0x0001_0004]]),
+        ];
+        for (a, arr) in arrays {
+            put(&mut v, 0x6c00_8000 | a | (n << 16));
+            for q in arr {
+                for w in q {
+                    put(&mut v, w);
+                }
+            }
+        }
+        put(&mut v, 0x1700_0000);
+        let s = decode_car_vif(&v, &[(0, v.len())], 0, CarMaterial::Dash).unwrap();
+        assert_eq!(s[0].damage_vu, Some([0xa6, 0xd2]));
+        assert!(!s[0].damage_packed);
+        assert_eq!(s[0].damage[0], CarDamageVertex { vec: [0.25, 0.0, 0.0, 0.5], nrm: [0.0; 3], zone: 7 });
+        // ILWR reads the low 16 bits of the word.
+        assert_eq!(s[0].damage[2].zone, 4);
     }
 
     #[test]

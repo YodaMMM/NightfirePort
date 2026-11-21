@@ -183,7 +183,7 @@ places `as#k` with item k's matrix, drops mirrored items, decodes the batch behi
 
 **Open**: (the `vd` selection and the run-time `Skel` / 0xef matrices are §11); the texture of 85 strips whose model
 sets none before them (GS state carried from an earlier draw, not traced); the ultralights'
-`blck` texture, which no sheet of their archives holds; the two damage arrays' decode; the
+`blck` texture, which no sheet of their archives holds; the
 car microcode is read in §10: the /1024 UV rule, the normal rule and the strip-list unit 3 are
 [M] there; unit 2 of positions-only batches is data-proven only.
 
@@ -334,8 +334,7 @@ Per batch, in order:
    - UV = raw/1024 − 32, normal = byte/127.5 − 1.
    - Damage pass: position += DmgVec · DamageZones[zone].x, normal += DmgNrm · zone.x, and
      C.rgb × (1 − DmgVec.w · zone.y). C.w × (1 − … zone.z) goes into DmgVec.w (call it C_w).
-     On an undamaged car this leaves 127. These damage terms are read off the code, but the
-     zone index and the clamps are not followed.
+     On an undamaged car this leaves 127. The details are §10.8.
 1. **Base pass** (every `MatCar*`; textured unless Gouraud).
    - n_w = the model normal rotated by the WorldMatrix with each row normalised (`ERLENG`).
    - L = D·L1rgb·max(0, n_w·dir1) + L2rgb·max(0, n_w·dir2) + Ground·max(0, n_w·(0,1,0)) + A·Sky,
@@ -422,8 +421,9 @@ VIF words.
   every archive's common.ssh [D].
 - `GAME::ReflectionMap` is `RReflection + 0xbc`, the 256 × 256 render target (§10.6.3).
 - GlassPacked's lists also upload a state to 0xf5, which its program never kicks. Its base draw
-  kicks the `name=glassdmgmap` state at 0xfd. The branches around the damage draw are not
-  followed.
+  kicks the `name=glassdmgmap` state at 0xfd. Both strip/list paths of the program reach the
+  0xfd + 0x23 kick (0x177-0x17c), so it is unconditional; its vertex alpha is the zone's glass
+  word (§10.8).
 
 **The states** (`FUN_001ce158` builds the 0x80-byte GS packet: `+0x10` PRIM, `+0x30` TEST_1,
 `+0x40` ALPHA_1, then FRAME_1 / ZBUF_1 / FBA_1).
@@ -498,13 +498,66 @@ When `DAT_003349e0 + 0x30` is 1, steps 2-4 are replaced by a flat (0x80, 0x80, 0
 - Whether the `.tun` `Refl ANGLE` is in place before the constructor's one projection call. The
   same question applies to `FUN_001b0158`'s light directions.
 - What uploads VU1 0x40..0x48 (the positional lights, and 0x48, which the clip/fog block uses).
-- The glass-damage pass of `MatCarGlassPacked` (its branches) and `MatCarTextureSwitchPacked`'s
-  `SwitchData`. The `Glass` and `Gouraud[Packed]` slot layouts are not read (no car strip uses
+- How the GS draws the glass-damage pass (alpha 127 against the `glassdmgmap` alpha test), and
+  `MatCarTextureSwitchPacked`'s `SwitchData`. The `Glass` and `Gouraud[Packed]` slot layouts are not read (no car strip uses
   them).
-- The damage pass in detail; C_w on a damaged car.
 - Which `default` row the name lookup lands on.
 - Live check C-5: breakpoint `FUN_001c1778` during a paris drive. Expect k ∈ {0, 2, 3, 4, 5}, the
   vehicle name `vanquish`, and a return of `block + 16k` (§10.2).
+
+### 10.8 The damage arrays and `DamageZones` [M bondrm.o + DRIVING.ELF; D all 58 car files]
+
+Code: `carmesh::{CarDamageVertex, DamageZone, deformed, CarMaterial::{damage_slots, packed_setup,
+glass_alpha}}`, `nf_game::driving::deform`. Tests: the unit tests in `carmesh.rs` / `deform.rs`
+and `crates/nf-formats/tests/carmesh_damage_disc.rs`.
+
+**The arrays** [M + D]. Every strip of every car file uploads two damage arrays, to exactly the
+VU1 addresses its program reads them from (TexturePacked / Chrome / Texture / Dash 0xa6 / 0xd2,
+TextureDull[Packed] 0x98 / 0xc4, SwitchPacked 0x99 / 0xc5, Gouraud[Packed] 0x73 / 0x9f,
+GouraudDull[Packed] 0x65 / 0x91, Glass 0x9e / 0xc6, GlassPacked 0xa5 / 0xcd). They come as
+unsigned `V4-16` (mode 0) for the programs with the packed set-up loop and as `V4-32` floats
+(layout B, arrays 3 and 4) for Dash, the only non-packed material in use.
+- Packed: `DmgVec` = raw/1024 + (−32, −32, −32, **−33**), `DmgNrm.xyz` = raw/1024 − 32. The w bias
+  comes from `ADDi.w vf24, vf24, I` at 0x022 with I = −1 (loaded at 0x01f; both I-timing readings
+  agree there). On the disc most `DmgVec.w` values lie in −1..−0.5.
+- The zone index is the low 16 bits of the unconverted `DmgNrm` w word: `ILWR.w vi09, (vi08)`
+  (the disassembler prints `BAD_LOWER(802943fe)`; lower-special 0x3e, index 0x0f), then
+  `IADD vi09, vi05, vi09` with vi05 = 0x56. Every index on the disc is 0..15.
+
+**The loop** (MatCarTexturePacked 0x036-0x05b; the 31 pairs from the first `ILWR` are
+bit-identical in all twelve `MatCar*` programs; `BondCarShadow` has none):
+- position += DmgVec.xyz · zone.x; normal += DmgNrm.xyz · zone.x (not renormalised);
+- C.rgb = FTOI0(max(0, 127 · (1 − DmgVec.w · zone.y))), C_w = max(0, 127 · (1 − DmgVec.w · zone.z))
+  (`MAXi` with I = 0 on all four, no upper clamp; C_w stays a float in DmgVec.w).
+- Glass and GlassPacked then copy `DamageZones[zone].w` (`LQ.w`) into each vertex's alpha
+  (`SQIw` to `ColourSlot`, GlassPacked 0x0f1-0x0ff).
+
+**DamageZones** [M DRIVING.ELF]. `MatCarPerCar`'s parameter object (`FUN_001ada20`) holds
+`(0x10, &DAT_00424620)`. Per drawn vehicle:
+1. `FUN_001d35d8` (the vehicle draw) calls `FUN_001d3138`, which fills the render object's
+   `EAGL::DamageZones` block (+0xe0; `FUN_001d2588` answers that name) from the owner's zone
+   array (owner vtable +0x24 = `FUN_0018aa78`: `car + 0x2f0`, count 16): per zone
+   `(a, b, 3·b, a > 0.75 ? 127 : 0)`, the last word an integer. No owner: all zero.
+2. `FUN_001adea8` → `FUN_001d2b38` copies those 0x100 bytes to `DAT_00424620` (bit 28 of the
+   object's +0x18, set by the constructor `FUN_001d2338`; the other branch `FUN_001d2a50` zeroes
+   them).
+
+`a` is the zone's first word (the `scuff` sum of `damage::inflict`), `b` the second. 0.75 is
+`DAT_00332090`, which the ELF only reads. So a zone shows broken glass once `a` passes 0.75.
+
+**Who writes the zones**: the damage virtual (`FUN_00189598`), `ESetVisualDamage`
+(`FUN_00159660` → vtable +0x1a4 = `FUN_001876c8`: each zone set to a random point of
+[a_lo, a_hi] × [b_lo, b_hi], two driving-RNG draws per zone, then the stage events and model
+calls 10 / 9) and the repair (`FUN_00187578`, which also rebuilds the model:
+`FUN_001c7940` clears the render object's +0x1c / +0x1e masks). Nothing decays them.
+
+**Model calls 9 / 10** (`FUN_001caba8`): 10 fires effect event 0x12 for zones not already in
++0x1c and then stores the call's mask there; 9 adds new zones to +0x1e and runs the item swap
+`FUN_001ca7a0` (not ported).
+
+**Unproven**: what the 0x12 event and the item swap show; the GS result of the glass-damage
+draw; how a darkening factor below 0 (DmgVec.w ≈ −1, which brightens) looks on screen. No live
+capture backs any of this section.
 
 ## 11. Which list is drawn, and how the parts move (`crates/nf-formats/src/carpose.rs`) [M + D]
 
