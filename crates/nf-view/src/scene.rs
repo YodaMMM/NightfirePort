@@ -8784,6 +8784,11 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // Level coronas are dynamic objects too (`Corona_Create`, class 1 with no update function): added
             // below from their placements so the alpha-list pass draws them (docs/systems/world-objects.md).
             if inst.placement.flags & 0xff == 0xfc { continue; }
+            // Static cels whose glist carries 0x8 are camera-facing too: `View_DrawCelGlist` 0x1e6538:61-69
+            // takes the viewer's rotation (`Mat_CopyRot(viewer+0x1a0)`) instead of the cel's angles when
+            // `cel+0x94 & 8` (the glist flags word). They are added below with the level coronas (the
+            // 06/0b `Corona_*` lamp glows, 01 `Corona_test1`, 0c `obj_turbine_volumecorona` [D census]).
+            if inst.placement.flags & 0xff == 0x19 && obj.flags & 0x8 != 0 { continue; }
             // Debug: `NF_HIDE=name,name` leaves out world objects whose name contains one of them.
             if let Ok(h) = std::env::var("NF_HIDE") { if h.split(',').any(|n| !n.is_empty() && obj.name.contains(n)) { continue; } }
             // The static 0x800 world objects (pickups and props flagged `celglist+0x44 & 0x800`): the game dims
@@ -10337,7 +10342,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // searchlight parts, their LOD slots and the searchlight coronas' list-2 copies (`sl_l2`); a
             // corona glist without 0x8 (none on the disc) keeps the static World draw at its placement matrix.
             corona_slot0 = (sl_parts.len() + sl_lod.len() + sl_l2.len()) as u16;
-            for pl in nf_game::corona::placements(&level.maps[m].placements) {
+            let cel_coronas: Vec<usize> = level.maps[m].placements.iter().enumerate()
+                .filter(|(_, p)| p.flags & 0xff == 0x19)
+                .filter(|(_, p)| {
+                    let t = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                        else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };
+                    t.is_some_and(|(om, oi)| level.maps[om].objects[oi].flags & 0x8 != 0)
+                })
+                .map(|(i, _)| i).collect();
+            for pl in nf_game::corona::placements(&level.maps[m].placements).into_iter().chain(cel_coronas) {
                 let p = &level.maps[m].placements[pl];
                 let target = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
                     else if (p.index as usize) < level.maps[m].objects.len() { Some((m, p.index as usize)) } else { None };

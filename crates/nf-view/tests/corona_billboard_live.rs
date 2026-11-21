@@ -110,14 +110,35 @@ fn the_0x4_coronas_wobble_without_touching_the_sim_rng() {
 
 /// The other levels that place coronas carry 0x8 on every corona glist too (07000004 `corona` 0x29,
 /// 07000015 `corona1`/`corona_small`/`corona_red` 0x2d, 07000016 `Corona_Glow2` 0x2d [D]), so every
-/// placement rides a billboard slot; sister: levels without type-0xFC placements get none.
+/// placement rides a billboard slot. 06 and 0c have no type-0xFC placements; their slots are the 0x8 static
+/// cels (`View_DrawCelGlist` 0x1e6538:61-69): 06 Corona_1 ×14 / Corona_2 ×8 / Corona_4 ×4 (0x2d, wobbling),
+/// 0c obj_turbine_volumecorona ×1 (0x2c, also wobbling) [D census].
 #[test]
 fn every_placed_corona_gets_a_billboard_slot() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     // (level, slots, of which 0x4-wobbling: 04's `corona` is 0x29, 15/16's glists are 0x2d [D])
-    for (lvl, n, w) in [("07000004.bin", 2usize, 0usize), ("07000015.bin", 76, 76), ("07000016.bin", 21, 21), ("07000006.bin", 0, 0), ("0700000c.bin", 0, 0)] {
+    for (lvl, n, w) in [("07000004.bin", 2usize, 0usize), ("07000015.bin", 76, 76), ("07000016.bin", 21, 21), ("07000006.bin", 26, 26), ("0700000c.bin", 1, 1)] {
         let scene = nf_view::load(&iso, lvl, false).expect("load");
         assert_eq!(scene.corona_pos.len(), n, "{lvl}: corona billboard slots");
         assert_eq!(scene.corona_wobbles.iter().filter(|&&x| x).count(), w, "{lvl}: 0x4 wobbling coronas");
+    }
+}
+
+/// Static cels whose glist carries 0x8 face the camera too: `View_DrawCelGlist` 0x1e6538:61-69 takes the
+/// viewer's rotation (`Mat_CopyRot(viewer+0x1a0)`) instead of the cel's angles when `cel+0x94 & 8`.
+/// 07000001's four `Corona_test1` hall glows are kind-0x19 cels with glist flags 0x2d [D census] — each
+/// must ride a billboard slot with its vertices on it. (Before, they drew at their authored rotation and
+/// had no slot: this fails on that path.)
+#[test]
+fn the_01_hall_cel_glows_ride_billboard_slots() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let scene = nf_view::load(&iso, "07000001.bin", false).expect("load");
+    let glows = [[-10.240885f32, 7.862701, 12.080767], [-13.758194, 7.8716493, 12.065666],
+                 [-19.745941, 7.8716493, 13.226841], [-24.12151, 7.8716493, 13.226841]];
+    for g in glows {
+        let ci = scene.corona_pos.iter().position(|p| (0..3).all(|k| (p[k] - g[k]).abs() < 1e-3))
+            .unwrap_or_else(|| panic!("the hall glow at {g:?} has a billboard slot (corona_pos {:?})", scene.corona_pos));
+        let slot = scene.corona_slot0 + ci as u16;
+        assert!(scene.char_verts.iter().any(|v| v.searchlight == Some(slot)), "the glow at {g:?} has vertices on its slot");
     }
 }
