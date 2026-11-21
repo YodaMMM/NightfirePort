@@ -48,6 +48,11 @@ mod win {
                 loop {
                     let mut n = 0u32;
                     if ReadFile(r as Handle, buf.as_mut_ptr().cast(), buf.len() as u32, &mut n, std::ptr::null_mut()) == 0 || n == 0 { break; }
+                    let tee = super::TEE.load(std::sync::atomic::Ordering::Relaxed);
+                    if tee != 0 {
+                        let mut done = 0u32;
+                        WriteFile(tee as Handle, buf.as_ptr().cast(), n, &mut done, std::ptr::null_mut());
+                    }
                     if alive {
                         let mut done = 0u32;
                         if WriteFile(orig as Handle, buf.as_ptr().cast(), n, &mut done, std::ptr::null_mut()) == 0 { alive = false; }
@@ -60,12 +65,21 @@ mod win {
     }
 }
 
-/// Makes the game's stdout/stderr survive their reader going away (see the module doc). Call once,
-/// first thing in the game's `run`.
+/// A file handle every relayed byte is also written to (0 = none): the game's own log when the game was started
+/// with its output piped to another program (bin/NightfirePort.rs), so the log on disk holds the start either way.
+pub static TEE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Makes the game's stdout/stderr survive their reader going away (see the module doc). Call first thing in
+/// the game's `run` (later calls do nothing).
 pub fn install() {
+    // Once per process: `main` installs it before opening the log (so the copy of a piped log starts with the
+    // first line) and the game's `run` again.
+    static ONCE: std::sync::Once = std::sync::Once::new();
     #[cfg(windows)]
-    {
+    ONCE.call_once(|| {
         win::guard(win::STD_OUTPUT_HANDLE);
         win::guard(win::STD_ERROR_HANDLE);
-    }
+    });
+    #[cfg(not(windows))]
+    ONCE.call_once(|| {});
 }

@@ -2056,6 +2056,10 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, _label
     }
 }
 
-/// 00 Agent real damage (difficulty 3, the top-up off): the 0c walk's own levers below run only here,
-/// so the Operative/Agent sisters and the top-up walk keep their timelines byte-exact.
-fn hard_0c(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() }
+/// Agent and 00 Agent real damage (difficulty >= 2, the top-up off): the 0c walk's own levers run
+/// only here, so the Operative sister and the top-up walk keep their timelines byte-exact.
+/// The real-health deck answers (the display-ground armour and drops, the deck snipers): Agent
+/// and 00 Agent. walks-1121-08-0c: the Agent walk without them died on the deck crossing to the
+/// balcony pair #19/#20 (weapon 0x1e, -28.00 a hit at d2, three hits) at tick 5026 (53.72, 6.01,
+/// -157.63) [L the 2026-11-21 run on master 7283c8a76]; with them it completes (79.0 at the 0d).
+fn hard_0c(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 && !w.tops_up() }

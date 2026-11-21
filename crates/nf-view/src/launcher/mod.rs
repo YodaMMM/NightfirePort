@@ -221,7 +221,7 @@ struct VO { @builtin(position) p: vec4<f32> };
 
 impl Gfx {
     fn new(window: Arc<Window>) -> Result<Gfx> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance = wgpu::Instance::new(crate::instance_desc());
         let surface = instance.create_surface(window.clone())?;
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: Some(&surface), power_preference: wgpu::PowerPreference::LowPower, ..Default::default() }))?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
