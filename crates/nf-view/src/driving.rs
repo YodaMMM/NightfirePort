@@ -317,6 +317,9 @@ pub struct DriveHostiles {
     pub undrawn: usize,
     /// Script AI events applied so far: activate, deactivate, command (resolved to an element).
     pub applied: [usize; 3],
+    /// The script's `sr` words that name `AIEl` records, with the element index
+    /// (`hostiles::element_refs`): the keys of the rules' element facts.
+    pub script_refs: Vec<(u32, usize)>,
 }
 
 /// The record index an `sr` reference names when it is `CARP::<<Map>>::{<chunk>}::<offset>`
@@ -388,6 +391,12 @@ pub struct DrivingState {
     /// main's remap (0 / 1 / 2 for picks 1 / 2 / 3-4) [M 0x204de8:67-69, 0x174bf0:70-81]; every
     /// DRIVING reader during the drive takes this form (`nf_game::ptp::driving_difficulty`).
     pub difficulty: u32,
+    /// The mission script's rule log (`DriveScript::take_fired_rules`, drained every tick): rule
+    /// entry index to (first tick it fired, times fired). A port log for tests and the dev tools.
+    pub rule_log: std::collections::BTreeMap<usize, (u32, u32)>,
+    /// The trigger log (`DriveScript::take_fired`): trigger index to (first tick, the walk slot of
+    /// the car that first ran it).
+    pub trigger_log: std::collections::BTreeMap<usize, (u32, i32)>,
 }
 
 /// The front end's boot difficulty (`GameState+0x28` = 2, Agent [M 0x1c7e78:25]).
@@ -981,15 +990,27 @@ impl DrivingState {
         };
         if self.mission.script.is_some() {
             let h = self.car.params.half_extents;
+            // The trigger walk's other cars: the traffic (created as type 3, kind byte 3, flag
+            // bit 6 [M 0x13fae0, 0x1862c0]), then the AI elements' ground vehicles (kind 2,
+            // `HostileWorld::trigger_cars`). The game walks them in car-slot order; the port's
+            // order (traffic, then elements) is not the traced slot order [S].
+            let mut cars: Vec<nf_game::driving::script::CarFacts> = self.ai_cars.iter().map(|(d, _)| nf_game::driving::script::CarFacts {
+                kind: 3,
+                pos: d.car.pos,
+                vel: d.car.vel,
+                radius: (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt(),
+                // The traffic cars' own boxes are not built here: the sphere stand-in [S].
+                bbox: None,
+            }).collect();
+            // The rules' element facts: every element the script names, live or not (the
+            // selector reads the element's record in any state) [M 0x12c640 / 0x209820].
+            let elements = self.hostiles.as_ref().map(|hh| {
+                cars.extend(hh.world.trigger_cars());
+                hh.world.elements_for(&hh.script_refs, self.car.pos)
+            }).unwrap_or_default();
             let facts = nf_game::driving::script::Facts {
-                cars: self.ai_cars.iter().map(|(d, _)| nf_game::driving::script::CarFacts {
-                    kind: 0, // traffic: neither 1 (player) nor 2 [S: +0x6d of a traffic car not traced]
-                    pos: d.car.pos,
-                    vel: d.car.vel,
-                    radius: (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt(),
-                    // The traffic cars' own boxes are not built here: the sphere stand-in [S].
-                    bbox: None,
-                }).collect(),
+                cars,
+                elements,
                 player_pos: self.car.pos,
                 player_vel: self.car.vel,
                 // +0x7c = |half extents| [M 0x1f6e98].
@@ -1003,6 +1024,15 @@ impl DrivingState {
             };
             let _ = snap;
             self.mission.step_facts(&facts);
+            if let Some(sc) = self.mission.script.as_mut() {
+                let now = self.ticks;
+                for r in sc.take_fired_rules() {
+                    self.rule_log.entry(r).or_insert((now, 0)).1 += 1;
+                }
+                for (t, car) in sc.take_fired() {
+                    self.trigger_log.entry(t).or_insert((now, car));
+                }
+            }
             // The script's AI events go to the hostile runtime (applied on its next step).
             if let (Some(sc), Some(h)) = (self.mission.script.as_mut(), self.hostiles.as_mut()) {
                 if self.intro.is_none() {
@@ -2254,6 +2284,7 @@ pub fn load_driving_scene_at(iso_path: &str, viv_name: &str, game_difficulty: u3
             damage_dealt: 0.0,
             undrawn: 0,
             applied: [0; 3],
+            script_refs: mission.script.as_ref().map(|sc| nf_game::driving::hostiles::element_refs(&sc.map)).unwrap_or_default(),
         }
     });
     // The car reflection map's inputs (crate::drive_reflection): the track items, the vehicles,
@@ -2269,6 +2300,8 @@ pub fn load_driving_scene_at(iso_path: &str, viv_name: &str, game_difficulty: u3
     let state = DrivingState {
         hostiles,
         difficulty,
+        rule_log: Default::default(),
+        trigger_log: Default::default(),
         fx,
         reset,
         hud,
@@ -2395,6 +2428,8 @@ mod tests {
             intro: None,
             hostiles: None,
             difficulty: 1,
+            rule_log: Default::default(),
+            trigger_log: Default::default(),
         };
         state.step(1.0, 0.0, 0.0, false);
         assert_eq!(state.progress, 1);
