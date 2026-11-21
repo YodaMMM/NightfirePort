@@ -80,6 +80,7 @@ default.tun) means a port needs to parse them **once** and can pin them as fixed
 |---|---|---|
 | `bigf.rs` | all 23 archives | parses: 1,499/1,499 entries, golden-pinned (`driving_golden.rs`) |
 | `symfile.rs` | `DRIVING.SYM` | parses: 12,719 entries (`driving_golden.rs`) |
+| `easnd.rs` | every `.bnk`, `.asf`, `banks.ini`, `.h`, mix `.ini` | decodes: 56 banks, 236 streams (docs/formats/driving-audio.md) |
 | everything else | entry contents | **not yet**: contents are RefPack-compressed or plain formats with no reader in the repo (see the table above) |
 
 ## RefPack decompression (phase 0, *implemented* — `crates/nf-formats/src/refpack.rs`)

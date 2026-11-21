@@ -17,6 +17,7 @@ pub mod disc;
 pub mod drivefx;
 pub mod drive_script;
 pub mod drone;
+pub mod easnd;
 pub mod ee;
 pub mod elf;
 pub mod filelist;
