@@ -284,6 +284,12 @@ pub struct AiCommand {
     pub guns: (u8, u8),
     pub rockets: u8,
     pub missiles: u8,
+    /// +0x93 → AI +0x130 and +0x94 → AI +0x131 (signed bytes) [M 0x145ff8 tail: `+0x131 =
+    /// cmd+0x94`, `+0x130 = cmd+0x93`]. +0x130 is the aim skill and +0x131 the damage modifier
+    /// `FUN_0014ca60` reads off the shooter's driver (`weapons::aim_is_exact` /
+    /// `weapons::ai_damage_scale`) [S: that 0x14ca60's driver record is this AIVehicle].
+    pub accuracy: i8,
+    pub damage_mod: i8,
 }
 
 impl AiCommand {
@@ -316,6 +322,8 @@ impl AiCommand {
             guns: (b[0x87], b[0x92]),
             rockets: b[0x90],
             missiles: b[0x91],
+            accuracy: b[0x93] as i8,
+            damage_mod: b[0x94] as i8,
         })
     }
 }
@@ -537,7 +545,10 @@ mod tests {
         b[0x79] = 4;
         b[0x7a] = 0xf;
         b[0x7e] = 0xff;
+        b[0x93] = 40;
+        b[0x94] = 0xf6;
         let c = AiCommand::parse(&b).unwrap();
+        assert_eq!((c.accuracy, c.damage_mod), (40, -10));
         assert_eq!((c.follow, c.catchup, c.speed_cap, c.fire_rate, c.ram_chance), (15.0, 1.1, 60.0, 2.0, 0.1));
         assert_eq!((c.pattern, c.profile, c.lane), (4, 0xf, -1));
     }

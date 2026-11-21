@@ -826,3 +826,99 @@ the writers of AI +0x148 / +0x204 / +0x208 / +0x118 / +0xd8; the tracking flag o
 `FUN_00131770`; `FUN_00226c88`; nav +0x96. No live capture backs any of §12.5. Nothing in the
 port calls `lane_pick` or `nav_for_pattern` per frame yet (no chase brain drives a kind-3/4
 navigator).
+
+## 13. The hostile runtime (2026-11-21, branch `s/drive-hostile-runtime`)
+
+Port: `crates/nf-game/src/driving/hostiles.rs` (`HostileWorld`), plus AICo +0x93 / +0x94 in
+`crates/nf-formats/src/driveai.rs`. Tests: `crates/nf-game/tests/driving_hostiles_runtime.rs`
+(12; the last reads the disc). The runtime adds no game rule of its own: it owns the element
+database (§10) and, per live element, the controller the game attaches, and calls the ported
+functions of §10-§12 and `weapons.rs` in turn. Driving generator only.
+
+### 13.1 What one `step` does
+
+1. `ElementDb::tick` (FUN_0012bec8) with the player's position and velocity, the live elements'
+   positions and health. Each Spawn becomes a live object as `FUN_0012cb08` creates it [M
+   0x12cb08:152-260]: a ground vehicle is a `Car` from its own pvehicle `.atr`, at the record's
+   +0x30 facing its +0x20 row, with an AIVehicle chase brain for sim kind 2 (flag 8) and none for
+   kind 4 (`FUN_0013f118` has no kind-4 arm); a helicopter (+0x77) is a `heli::Heli`, attached
+   (`FUN_0013fa28`); a henchman is held at its record. The health starts at AIEl +0x4c
+   (`FUN_00195a08`). The spawn command +0xf8 is applied (`FUN_00145fc8` → `FUN_00145ff8`) and the
+   vehicle spawn asks for the traffic within box + 6 to be parked.
+2. Each live ground vehicle with a brain: `sight_tick`, `ram_tick`, `aim_point`, the profile-0xd
+   `pursue_switch` / `finish_rejoin`, the pattern 3/4 `road_heading_latch`,
+   `chase_target_speed`, the road carrot (`RoadNav::advance_with`, kinds 3/4 as `FUN_0012e468`
+   joins them, with the 0x130140 hint), `dispatch`, `avoid_chase`, `chase_drive` (or
+   `gated_stop`), then `Car::step`; the turret `turret_step`, `line_clear` and `fire_step`.
+3. Each helicopter: `Heli::update`. Each seated rider: the window / snowmobile / sunroof sight
+   and fire cadence (`riders.rs`), the window class with its `gunner_sweep`.
+4. Shots: a gun / cannon burst is one shell (`weapons::delivery` damage with
+   `ai_damage_scale(AI +0x131)`, the aim roll `aim_is_exact(AI +0x130)`, one draw); a rocket or
+   missile channel (0x33a0b0 barrel lists: 5/6 Rocket, 7/8 Missile, 9 Gun, 0x48 Cannon) launches a
+   `Projectile` (`launch_params` with an AI launcher) that `Projectile::step` flies at the player.
+   A shell that lands and a projectile that reaches the player return a `damage::Hit` (kind 2;
+   dent 0.25 for the shell as `FUN_0015de48`, 0 for the projectile) for `damage::inflict`.
+
+`command(element, record)` applies a script's `EAICommand`; `activate` / `deactivate` are
+`EActivateAIElement` (clear HELD, 0x1476b8) and `EDeactivateAIElement` (set HELD and despawn,
+0x14b510). `draw_list()` gives per live element the model stem, the world matrix (rows right /
+up / forward, translation row 3), the wheel centres, steer angle and roll angle, and a
+helicopter's +0x74 spin; `projectiles` the rounds in flight. `models_needed(map, set)` lists each
+vehicle of the track's set with its `RENDER_FILENAME`.
+
+### 13.2 Read for this branch [M]
+
+- `FUN_00145ff8` tail: +0x93 → AI +0x130, +0x94 → AI +0x131 (now `AiCommand::accuracy` /
+  `damage_mod`); +0x86 → +0x119, +0x88/+0x8c → +0x11c/+0x120 (the flying car's hold, ceiling,
+  floor: not used by the runtime; +0x118 is the actor's +0xbc byte, whose writer was not traced); +0x7b also puts the car at
+  the record's +0x40 facing its +0x20 row (vtbl+0x164) after parking the overlapping traffic
+  (radius = both boxes); +0x70 (unless 0 or 1.5) sets the velocity along the forward row; the
+  same record is not re-applied (+0x88).
+- `FUN_001476b8` (`EActivateAIElement`): clears HELD unless `DAT_00327c2c` is set, the element is
+  a non-persistent vehicle and `FUN_0012c5d0` (db+0x50 < db+4) is false. No writer of
+  DAT_00327c2c was found; the port clears HELD.
+- `FUN_0014b510` (`EDeactivateAIElement`): sets HELD; a vehicle is despawned through
+  `FUN_0012da78` → `FUN_0012c740`.
+- `FUN_0012e468`: pattern 3 → navigator kind 3 joined at the car along its forward row
+  (`FUN_00225c48(…, 0)`); pattern 4 → kind 4 (last argument 1 when +0x154 is clear) and the bob
+  height 2.5 with `IS_HELI` (string 0x36b528) else 10, the phase from DAT_00327c38 stepping 0.25;
+  pattern 5 → kind 0 and the path follower.
+- `FUN_00182978`: a projectile's contact with the player's car calls only `FUN_00200088` (the
+  explosion with the projectile's +0x718 damage, kind 2); the direct `vtbl+0x1ac` / `vtbl+0x1c(32,
+  0, …)` pair runs only when the projectile is the player's (`FUN_00195c70`).
+
+### 13.3 Stand-ins [S]
+
+- The nearest-road join `FUN_00225c48` / `FUN_00225490`: the nearest of five samples per piece.
+- The shell's flight (`FUN_001fffa8`): an exact shot hits; a wobbled one hits when its line passes
+  within the player's box half length. The explosion's radius rule (`FUN_00159fb8` →
+  `FUN_001847e8`): a projectile that comes within the player's box half length + 0.5 books its
+  full damage once.
+- The launcher channel busy test (`FUN_001a2d10`): 30 ticks after a shot.
+- The helicopter physics class: the integration of §12.6; the EAGL path pose: none.
+- The rider round is not traced: rider shots are events with no damage.
+- `FUN_001351d0` (the road under the target): pattern 2 re-joins only when the target is lost.
+  The bump probe's contact flag, the avoidance's side rays and the element target (AICo +0x50)
+  are not used. The order of the element manager against the controllers in `FUN_00159d10`.
+- On the rail stand-in (`FlatWorld`) the land controller's reverse rule (0x18cef8 brake-hold) is
+  applied by the runtime and the steer mirrored while reversing; a `surface` ground gives the
+  height (as the view does for its traffic).
+
+### 13.4 The disc test
+
+`mis01_and_mis4_for_3600_ticks`: a scripted player drives the road network at 20 u/s from the
+track's start for 3600 ticks; each element is released when the player first comes within 200
+of it (the mission triggers are not run). Checked every tick: a spawn is within 200 (+ the
+1..4-tick range period) unless PERSISTENT; a despawn is beyond 220, a slot lost to priority or
+HELD; live vehicles ≤ max(`VEHICLE_SLOTS_AVAIL`, live persistent) (the 0x12bec8 rule: persistent
+elements keep their slots even past the budget), helicopters ≤ the heli budget, henchmen +
+riders ≤ the hench budget; the database's live count equals the live list. Results on the rail
+stand-in: MIS01 5 spawns (all persistent, the pursuers end within 2-36 of the player), worst
+stray from the road 1.5 past the spawn's own distance, 113 rider shots, no vehicle weapon (no
+MIS01 hostile `.atr` declares one [D]); MIS4 8 spawns, 4 despawns, worst stray 15.9, 494 shells,
+240 damage calls of 2.5 (gun 10 × `ai_damage_scale(−75)` [D AICo +0x94]).
+
+On the land physics (`CollisionGround`) the same run is reported, not asserted: a MIS01 pursuer
+hits a kerb or wall about 4 s in, is thrown up (v.y 7.5), rolls over and falls through the
+ground mesh (y −2400 by the end); a MIS4 car strays 140 (cause not traced). The MIS01 case is the
+`Car::step` land model under AI inputs, not the runtime.
