@@ -4,6 +4,8 @@
 //! write-ups; `ai::SimCar` is the physics seam (506's `Car` plugs in — see `ai::AiDriver`).
 
 pub mod ai;
+// The nearest-road join (FUN_00225c48), the chasers' lane pick (FUN_00135f70), the car box.
+pub mod join;
 // The sound logic (banks, mix groups, engine/skid/road-noise voices) — DRIVING.ELF audio classes.
 pub mod audio;
 // The hostile AI and the AI element lifecycle (AIEl/AICo, FUN_0012bec8 and the chase arms).

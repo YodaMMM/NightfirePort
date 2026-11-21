@@ -61,11 +61,11 @@ pub const GATED_MIN_SPEED: f32 = 0.1;
 /// FUN_00223f98's junction take chance: `rand/65536 < 0.3` (0x3fd3333333333333) [M 0x223f98].
 pub const JUNCTION_TAKE_CHANCE: f64 = 0.3;
 
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+pub(crate) fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn len(a: [f32; 3]) -> f32 {
+pub(crate) fn len(a: [f32; 3]) -> f32 {
     let s = dot(a, a);
     if s <= 0.0 {
         0.0
@@ -74,13 +74,13 @@ fn len(a: [f32; 3]) -> f32 {
     }
 }
 
-fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+pub(crate) fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 /// The VU normalize `v · rsqrt(|v|²)`; a zero vector stays zero [S — the VU's RSQRT of 0 is the
 /// largest float, times 0 gives 0].
-fn normalize(a: [f32; 3]) -> [f32; 3] {
+pub(crate) fn normalize(a: [f32; 3]) -> [f32; 3] {
     let l = len(a);
     if l > 0.0 {
         [a[0] / l, a[1] / l, a[2] / l]
@@ -89,7 +89,7 @@ fn normalize(a: [f32; 3]) -> [f32; 3] {
     }
 }
 
-fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+pub(crate) fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 }
 
@@ -395,6 +395,9 @@ pub struct RoadNav {
     /// takes the hint from (0x130140: +0xb1 toward the target, +0xb2 away) [M 0x2235c8, 0x130140].
     pub hint_toward: bool,
     pub hint_away: bool,
+    /// +0x04: the car group a kind-4 navigator joins by (rs+0x5a; AICo +0x7f writes it)
+    /// [M 0x225490 `lbu 4(nav)` against `lbu 0x5a(rs)`, 0x145ff8:259].
+    pub group: u8,
 }
 
 /// The road the chase choosers steer by: the direction hint and the target piece the carrot
@@ -441,7 +444,7 @@ fn lane_ctrl_point(net: &RoadNet, nav: &RoadNav, seg: usize, start: bool, keep: 
 /// `FUN_002267d8` 0x2267d8: one lane-offset end point. `start` = P0 (param_5 = 1). Toward B
 /// (end 1): P0 = A + side_a·off, P1 = B + side_b·off; toward A: P0 = B − side_b·off,
 /// P1 = A − side_a·off [M 0x2267d8:17-56].
-fn lane_point(net: &RoadNet, seg: usize, end: u8, start: bool, off: f32) -> Result<[f32; 3], String> {
+pub(crate) fn lane_point(net: &RoadNet, seg: usize, end: u8, start: bool, off: f32) -> Result<[f32; 3], String> {
     let s = net.seg(seg)?;
     let (node, side, sign) = match (end, start) {
         (1, true) => (s.node_a(), s.side_a(), 1.0),
@@ -455,7 +458,7 @@ fn lane_point(net: &RoadNet, seg: usize, end: u8, start: bool, off: f32) -> Resu
 
 /// `FUN_002270e8` 0x2270e8: the first link of `node` other than `exclude` whose flag bit 0 is
 /// clear (a plain road piece, not a junction connector) [M].
-fn first_plain_link(net: &RoadNet, node: u16, exclude: Option<u16>) -> Result<Option<usize>, String> {
+pub(crate) fn first_plain_link(net: &RoadNet, node: u16, exclude: Option<u16>) -> Result<Option<usize>, String> {
     let n = net.node(node as usize)?;
     for i in 0..n.link_count() {
         let Some(l) = n.link(i) else { break };
@@ -707,6 +710,7 @@ impl RoadNav {
             slot: -1,
             hint_toward: false,
             hint_away: false,
+            group: 0,
         };
         nav.rebuild_points(net, off)?;
         nav.pos = nav.eval(net)?;
@@ -714,7 +718,7 @@ impl RoadNav {
     }
 
     /// `FUN_00226a28` (P0/P1 at offset `off`) then `FUN_00226788` (the curve controls) [M].
-    fn rebuild_points(&mut self, net: &RoadNet, off: f32) -> Result<(), String> {
+    pub(crate) fn rebuild_points(&mut self, net: &RoadNet, off: f32) -> Result<(), String> {
         self.p0 = lane_point(net, self.seg, self.end, true, off)?;
         self.p1 = lane_point(net, self.seg, self.end, false, off)?;
         self.rebuild_ctrl(net)
@@ -1082,8 +1086,9 @@ pub struct AiCar {
     pub stop_query: i32,
     /// +0x134: the speed multiplier (1.0 at construction) [M 0x12ded8].
     pub speed_mul: f32,
-    /// sim+0x5c → +0x4c8: the box z extent FUN_00132f80 pads the lookahead with [M 0x1f6e98:162].
-    /// The extent's source (FUN_001f6e98's param_10) is not traced; the floor is the default.
+    /// sim+0x5c → +0x4c8: the box z half extent FUN_00132f80 pads the lookahead with [M 0x1f6e98:162]:
+    /// half the car model's `Base` box length (`join::car_half_extents`, via FUN_001c9778), floored at
+    /// 0.001. A car built without its model keeps the floor.
     pub box_z: f32,
     /// +0x178: the scripted-path flag; FUN_00133ab0 issues nothing while it is set [M 0x133ab0:31].
     pub scripted: bool,
@@ -2003,6 +2008,8 @@ pub struct TrafficWorld {
     pub now: i32,
     pub rng: DriveRng,
     pub light_objects: Vec<[f32; 3]>,
+    /// sim+0x5c → +0x4c0: the traffic cars' box x half extent (the yield's radius reads it).
+    pub box_x: f32,
 }
 
 impl TrafficWorld {
@@ -2020,13 +2027,25 @@ impl TrafficWorld {
             drv.car.vel = [0.0; 3];
             cars.push(TrafficCar { drv, status: 3 });
         }
-        Ok(TrafficWorld { director, grid, cars, now, rng: DriveRng::game_reset(), light_objects: Vec::new() })
+        Ok(TrafficWorld { director, grid, cars, now, rng: DriveRng::game_reset(), light_objects: Vec::new(), box_x: BOX_FLOOR })
     }
 
-    fn vehicle_of(c: &TrafficCar) -> Vehicle {
+    /// Give every traffic car the sim box of its model: `half` = `join::car_half_extents` of the
+    /// car's `.crp`, floored at 0.001 as `FUN_001f6e98` stores it (+0x4c0 x, +0x4c8 z) [M]. The
+    /// stop-behind rule (`stop_short`, `1.5·box_z`), the yield radius (`max(box_x, box_z)`), the
+    /// lookahead pad and the placement ring read these.
+    pub fn set_extents(&mut self, half: [f32; 3]) {
+        let h = super::join::floored_extents(half);
+        self.box_x = h[0];
+        for c in &mut self.cars {
+            c.drv.brain.box_z = h[2];
+        }
+    }
+
+    fn vehicle_of(c: &TrafficCar, box_x: f32) -> Vehicle {
         Vehicle {
             pos: c.drv.car.pos,
-            box_x: BOX_FLOOR,
+            box_x,
             box_z: c.drv.brain.box_z,
             kind: 3,
             status: c.status,
@@ -2042,7 +2061,7 @@ impl TrafficWorld {
     /// test (FUN_001c65b0, a sphere against the view frustum, not ported) [S].
     pub fn step(&mut self, net: &RoadNet, player: Vehicle, view: &TrafficView, visible: &dyn Fn([f32; 3], f32) -> bool, dt: f32) -> Result<(), String> {
         self.director.lights.tick(self.now);
-        let mut vehicles: Vec<Vehicle> = std::iter::once(player).chain(self.cars.iter().map(Self::vehicle_of)).collect();
+        let mut vehicles: Vec<Vehicle> = std::iter::once(player).chain(self.cars.iter().map(|c| Self::vehicle_of(c, self.box_x))).collect();
         for i in 0..self.cars.len() {
             let car = &mut self.cars[i];
             let pos = car.drv.car.pos;
@@ -2080,7 +2099,7 @@ impl TrafficWorld {
                 let w = YieldWorld { now: self.now, lights, vehicles: &vehicles, me: Some(i + 1), light_objects: &self.light_objects };
                 car.drv.step_shared(net, dt, Some(&w), &mut self.rng)?;
             }
-            vehicles[i + 1] = Self::vehicle_of(&self.cars[i]);
+            vehicles[i + 1] = Self::vehicle_of(&self.cars[i], self.box_x);
         }
         self.now += 1;
         Ok(())
