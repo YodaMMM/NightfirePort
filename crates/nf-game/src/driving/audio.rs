@@ -31,10 +31,9 @@
 //!
 //! Not ported / not traced (stated plainly): which mission-script event starts which music or
 //! speech stream (the `CHAR::` names in the track `.crp` — e.g. `CHAR::snipeintro` — are read by
-//! event records this port does not decode); what sets the scrape counters (+0x17c/+0x180/+0x184);
-//! when a horn sounds; the 3-D positioning (the listener argument's +4/+8 and the scene object);
-//! weapon fire sounds other than the sniper bolt; the traffic / AI vehicle classes beyond the
-//! group choice. No sound is played by the viewer from this module yet.
+//! event records this port does not decode). The scrape counters' writer (`FUN_002e0890`), the
+//! horn timing, the 3-D model, impacts, landings, the traffic engine and the car-weapon fire
+//! one-shots are in `sound_events.rs`. No sound is played by the viewer from this module yet.
 
 use nf_formats::easnd::MixLine;
 
@@ -220,13 +219,16 @@ pub struct VoiceOut {
     pub pitch: f32,
 }
 
-/// The per-update listener arguments every vehicle voice multiplies by (`param_2` of the
-/// `+0xc` update calls): +0 the volume scale, +4 the pitch scale, +0x14 the camera blend the
-/// engine uses (≤ 1 interior, ≥ 2 exterior). Their producer is not traced [S]; 1/1/2 is neutral.
+/// The per-update arguments every sound's update (vtable +0x24) gets: the output of the 3-D model
+/// `FUN_002f1f40` (`sound_events::listen`) [M]. +0 gain (distance attenuation), +4 pitch (doppler),
+/// +8 pan (turns, + = right), +0xc cone (direction . the sound's facing), +0x10 send ((d-25)/400),
+/// +0x14 the listener distance (the engine's interior / exterior blend: <= 1 interior, >= 2
+/// exterior), +0x18 the listener (its +0x5c index picks the voice channel). Default = a sound at
+/// distance 2 straight ahead with no attenuation.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Listener { pub gain: f32, pub pitch: f32, pub camera: f32 }
+pub struct Listener { pub gain: f32, pub pitch: f32, pub pan: f32, pub cone: f32, pub send: f32, pub distance: f32, pub index: u32 }
 
-impl Default for Listener { fn default() -> Self { Listener { gain: 1.0, pitch: 1.0, camera: 2.0 } } }
+impl Default for Listener { fn default() -> Self { Listener { gain: 1.0, pitch: 1.0, pan: 0.0, cone: 0.0, send: 0.0, distance: 2.0, index: 2 } } }
 
 /// The sim → audio inputs one vehicle carries (`FUN_00188200`'s writes into the audio object).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -344,7 +346,7 @@ impl EngineSound {
     }
 
     /// `FUN_002ff320` [M] (after the base step): the vacuum timer and pitch wobble, the low/high
-    /// crossfade at 2000 rpm, the interior/exterior split by the listener's camera value, and the ten
+    /// crossfade at 2000 rpm, the interior/exterior split by the listener distance, and the ten
     /// layer voices. `car_volume` = the `Player Car` group's effective volume × the vehicle's +0x6c.
     pub fn layer_update(&mut self, ticks: u32, l: &Listener, car_volume: f32) -> EngineFrame {
         let t = ticks as f32;
@@ -368,10 +370,10 @@ impl EngineSound {
             self.w_low = 0.0;
             self.w_high = 1.0;
         }
-        let (v_in, v_out) = if 2.0 < l.camera {
+        let (v_in, v_out) = if 2.0 < l.distance {
             (0.0, car_volume)
-        } else if 1.0 < l.camera {
-            let f = l.camera - 1.0;
+        } else if 1.0 < l.distance {
+            let f = l.distance - 1.0;
             ((1.0 - f).sqrt() * car_volume, f.sqrt() * car_volume)
         } else {
             (car_volume, 0.0)
@@ -677,9 +679,9 @@ mod tests {
     }
 
     #[test]
-    fn engine_layers_crossfade_and_camera() {
+    fn engine_layers_crossfade_and_distance() {
         let mut e = EngineSound { rpm: 1500.0, load: 0.36, w_load: 0.6, w_idle: 0.8, pitch: 0.5, ..EngineSound::new(PLAYER_ENGINE_RPM) };
-        let f = e.layer_update(1, &Listener { gain: 1.0, pitch: 1.0, camera: 0.5 }, 0.5);
+        let f = e.layer_update(1, &Listener { distance: 0.5, ..Listener::default() }, 0.5);
         // vacuum fires on the first update past load 0.2; load <= 0.5 so no pitch wobble
         assert!(f.vacuum);
         assert_eq!(e.vacuum_t, 1.0);
@@ -690,10 +692,10 @@ mod tests {
         assert!((f.voices[1].volume - 0.5 * 0.6).abs() < 1e-6, "IN-lowload");
         assert!((f.voices[3].volume - 0.5 * hi * 0.6).abs() < 1e-6, "IN-hiload");
         assert!((f.voices[4].volume - 0.5 * hi * 0.8).abs() < 1e-6, "IN-cruz");
-        assert!(f.voices[5..].iter().all(|v| v.volume == 0.0), "interior camera: exterior silent");
-        // camera 1.5: sqrt(0.5) each side
+        assert!(f.voices[5..].iter().all(|v| v.volume == 0.0), "interior distance: exterior silent");
+        // distance 1.5: sqrt(0.5) each side
         let mut e2 = EngineSound { rpm: 2500.0, load: 0.1, w_load: 1.0, w_idle: 0.0, ..EngineSound::new(PLAYER_ENGINE_RPM) };
-        let f = e2.layer_update(1, &Listener { gain: 1.0, pitch: 1.0, camera: 1.5 }, 1.0);
+        let f = e2.layer_update(1, &Listener { distance: 1.5, ..Listener::default() }, 1.0);
         assert!((f.voices[1].volume - 0.5f32.sqrt()).abs() < 1e-6);
         assert!((f.voices[6].volume - 0.5f32.sqrt()).abs() < 1e-6);
         assert_eq!(f.voices[0].volume, 0.0, "rpm >= 2000: no low layer");

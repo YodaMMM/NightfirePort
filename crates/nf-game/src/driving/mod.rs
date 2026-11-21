@@ -30,6 +30,8 @@ pub mod pov;
 pub mod road;
 // The weapon table, ammo/reload, projectiles and hit damage (FUN_0020f2b8 + the WeaponMan).
 pub mod weapons;
+// The 3-D listener, pan law, impacts, landings, horns, traffic engine (DRIVING.ELF audio).
+pub mod sound_events;
 
 // The car physics lives in `physics.rs` (a single `driving.rs` beside this `driving/`
 // directory would collide, rustc E0761). The re-export keeps every public path the tests and
