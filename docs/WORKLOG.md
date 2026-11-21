@@ -36,3 +36,15 @@
   The v2 lesson: a lure grind on the walled guards drew them onto the unattended contact —
   he died mid-grind and the exit fired as the escort-fail restart; the windows are gone
   (walled = left at once).
+- d2 WON: the ledger's levers in order — the lure/hold crouch (in), the pocket tap loop (in),
+  the fight-order pass measured a NO-OP (agent_order already put the shotgunners first; the
+  sort gate now admits d2, same tick [L the v2 run]). The decisive lever: the d3 volley-race
+  FIGHT KIT joined d2 (SMG pre-arm + head-box ladder + loose gates + lane fire, d2/d3-gated,
+  d1 byte-identical) — the one-frame 33.6 hall volley is gone. Exit t15479, end health 31.8 +
+  armour 50.0 [L the v3 run].
+- d3 verified byte-identical to round 1: the same death t75294 at (-25.98,14.46) [L the run].
+  Ledger refreshed in the ignore: the named next lever is a level-scoped walker field relaxing
+  the no_fetch_z_above zone west of the hall door plane (the west-corridor drop fetch), then
+  the #11 window cap, then the #3 trade posture.
+- Ran whole on this tree: walkreal_07000001_live = 7 passed / 0 failed / 1 ignored (509 s),
+  interactables_07000001_live = 10 passed / 0 failed (25.5 s).
