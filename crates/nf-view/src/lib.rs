@@ -1103,7 +1103,12 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // the match settings (or the bare `--mp` flag builds the local default).
             Ok(mut w) => {
                 if mp || mp_settings.is_some() { w.apply_player_init_mp_override(); }
-                else { w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0)); }
+                else {
+                    w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0));
+                    // `Upgrade_Weapon`'s 0x54 arm: the zoom doubles with the profile's upgrade byte
+                    // `Upgrades[2]` (`Menu_SetBonus` over the bonus word) [M 0x1a8ff4-0x1a9020].
+                    if nf_game::progress::upgrades_from_bonus(bonus)[2] != 0 { w.apply_upgrade_zoom(true); }
+                }
                 Some(w)
             }
             Err(e) => { eprintln!("weapon_data: {e} — drones drawn unarmed"); None }
@@ -1139,7 +1144,12 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // The same one-arm pick as the merge path above [M Player_Init 0x1910f8:83-113].
             Ok(mut w) => {
                 if mp || mp_settings.is_some() { w.apply_player_init_mp_override(); }
-                else { w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0)); }
+                else {
+                    w.apply_player_init_override(u32::from_str_radix(&archive[..8], 16).unwrap_or(0));
+                    // `Upgrade_Weapon`'s 0x54 arm: the zoom doubles with the profile's upgrade byte
+                    // `Upgrades[2]` (`Menu_SetBonus` over the bonus word) [M 0x1a8ff4-0x1a9020].
+                    if nf_game::progress::upgrades_from_bonus(bonus)[2] != 0 { w.apply_upgrade_zoom(true); }
+                }
                 Some(w)
             }
             Err(e) => { eprintln!("weapon_data: {e} — drones drawn unarmed"); None }
@@ -1891,6 +1901,11 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             sim.mp_combat.gate_setup(humans, &sim.mp.as_ref().unwrap().settings, &sim.weapons, loaded);
             equipped
         } else {
+            // The player-0 `Upgrades` row `Upgrade_Weapon` reads in the kit and every later pickup:
+            // `Menu_SetBonus` 0x1ff898 rebuilds it from the bonus word whenever the word changes
+            // (the save load, the results award), so it is already live when `Player_InitWeapon`
+            // runs [M 0x1ff898:73-98, 0x1a7ef8:126-133].
+            sim.drones.inventory.upgrades = nf_game::progress::upgrades_from_bonus(bonus);
             nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
                 &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded)
         };
@@ -4334,6 +4349,8 @@ impl App {
         if let (Some(saved), Some(sim)) = (saved, self.scene.sim.as_mut()) {
             let p = &mut sim.drones.progress;
             (p.table, p.bonus, p.nightfire_status, p.game_complete) = (saved.table, saved.bonus, saved.nightfire_status, saved.game_complete);
+            // The pickups' `Upgrade_Weapon` row follows the same word [M Menu_SetBonus 0x1ff898].
+            sim.drones.inventory.upgrades = nf_game::progress::upgrades_from_bonus(saved.bonus[0]);
         }
         if let Some(fe) = self.fe.as_ref() {
             if let Some(sim) = self.scene.sim.as_mut() {
@@ -6051,13 +6068,15 @@ impl App {
                                     }
                                 }
                             }
-                            // The lock's rising edge auto-draws the handgun (`Upgrade_Weapon(6)` = 2 [L])
+                            // The lock's rising edge auto-draws the handgun (`Upgrade_Weapon(6)`, 2 on a fresh profile [L])
                             // [M 0x1a24c8:247-250]. `prev` = last tick's channel (the game's
                             // `switch_channels_prev` semantics).
                             let on = sim.drones.channels.on(nf_game::player::WEAPON_LOCK_CHANNEL);
                             if nf_game::player::weapon_lock_auto_draw(sim.level, on, self.prev_lock_ch) {
-                                eprintln!("[weapon-lock] ch 0x48 rising edge: switch request → 2 (P2K)");
-                                sim.gun.switch_request = 2;
+                                // `Upgrade_Weapon(6)`: the profile's handgun upgrade row[0] picks 2/4/6/8.
+                                let hg = nf_game::pickup::Inventory::upgrade_weapon(6, &sim.drones.inventory.upgrades, 0) as u8;
+                                eprintln!("[weapon-lock] ch 0x48 rising edge: switch request → {hg:#x} (handgun)");
+                                sim.gun.switch_request = hg;
                             }
                             self.prev_lock_ch = on;
                             if let Some(s) = self.sound.as_mut() { sound_tick(s, sim); self.sound_ticked = true; }

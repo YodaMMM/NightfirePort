@@ -19429,18 +19429,21 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // is the view's held weapon (one tick stale at most). pickups-g029: the flag is
             // now READ — `(&DAT_002a38d2)[idx·0x158] != 0` [M 0x1a8a58:76] — instead of
             // standing in as always-on.
-            // options-census: ANY pickup take resets the pane fade [M Pickup_Handler 0x18e650:225
-            // writes BLData+0x8bc = 1.0].
-            self.pain_alpha = 1.0;
+            // The pane fade reset (`BLData+0x8bc = 1.0`) is the ARMOUR arm's alone: it sits inside
+            // `case 3` after the `+0x8b0 = 50.0` store and before the `default:` label [M
+            // Pickup_Handler 0x18e650:220-226]; the weapon/ammo/key/bonus takes leave the fade
+            // running. (The port used to reset it on every take, so a faded health pane came
+            // back on each ammo pickup.)
+            if matches!(t, crate::pickup::Taken::Armour) { self.pain_alpha = 1.0; }
             if self.auto_switch && matches!(t, crate::pickup::Taken::Weapon { .. }) {
-                let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, &self.inventory.upgrades, clock);
                 if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
                     self.weapon_switch_request = Some(id);
                 }
             }
             // The Ronin case re-take [M 0x1a8a58:81-85]: holding the remote 0x53 → the request 0x52.
             if matches!(t, crate::pickup::Taken::Weapon { .. }) {
-                let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, &self.inventory.upgrades, clock);
                 if let Some(r) = crate::pickup::Inventory::ronin_retake_request(id, self.bond_weapon) { self.weapon_switch_request = Some(r); }
             }
             // `PlrStat_LogBondBonus(0)` 0x1999e0 — `Pickup_Handler` case 6 0x18e650:234-236
@@ -19538,13 +19541,13 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                         eprintln!("[take-net] tick {} slot {} weapon {:#x} kind {} → {:?}", frame, b.slot, p.weapon, p.kind, taken);
                     }
                     if self.auto_switch && matches!(taken, Some(crate::pickup::Taken::Weapon { .. })) {
-                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, &self.inventory.upgrades, clock);
                         if crate::pickup::Inventory::is_better_weapon(d.weapons, self.bond_weapon, id) {
                             self.weapon_switch_request = Some(id);
                         }
                     }
                     if matches!(taken, Some(crate::pickup::Taken::Weapon { .. })) {
-                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock);
+                        let id = crate::pickup::Inventory::upgrade_weapon(p.weapon, &self.inventory.upgrades, clock);
                         if let Some(r) = crate::pickup::Inventory::ronin_retake_request(id, self.bond_weapon) { self.weapon_switch_request = Some(r); }
                     }
                     if matches!(taken, Some(crate::pickup::Taken::Bonus)) { self.progress.log_bond_bonus(self.mission.status()); }

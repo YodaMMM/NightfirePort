@@ -90,9 +90,39 @@ Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] read in our decomp export (work/decom
 - 07000005 [L]: guards hold SG5 (0x16: base 0x16, clip 30, ammo type 5, cap 90, model 0x02000B44); the sniper holds
   0x24 (clip 5, ammo type 7, cap 30). Bond's P2K uses type 1 (cap 70).
 
+## Weapon upgrades (`Upgrade_Weapon` 0x1a8f30, `Menu_SetBonus` 0x1ff898) [M, L, D]
+
+- `Upgrades` (0x2beea8, 4 players x 9 bytes). `Menu_SetBonus` rebuilds a player's row whenever the bonus word is
+  written (save load, results award, codename/cheat paths): `ResetUpgrade`, then for each of the 12 `sp_level`
+  hashes and counters 1..4, a kind-4 (gold) reward the player holds sets `Upgrades[bit / 3]` = the set count of its
+  reward group [M 0x1ff898:73-98, `PlrStarts_ProcessRewardCounter` 0x199210, `Set_Upgrade` 0x1a98a8].
+- `Upgrade_Weapon` (single player, row 0) by its jump table at 0x2fc9a0 [M disasm 0x1a8f5c-0x1a9038]:
+  6 → `UpgradedHandguns[row[0]]` = [2,4,6,8] (gold group bits 0..2: 07000005, 07000009, 07000011);
+  0x1e / 0x24 → snipers [0x1e,0x20,0x22,0x22] / [0x24,0x26,0x28,0x28] by row[3] (bits 9..10: 07000001,
+  0700001B); 0x43 → [0x43,0x44,..] by row[4] (bit 12: 0700000C); 0x56 → [0x56,0x57,..] by row[5] (bit 15:
+  09000002); 0x4a → [0x4a,0x4c,..] by row[6] (bit 18: 09000003); 0x4e → [0x4e,0x4f,..] by row[7] (bit 21:
+  07000014); 0x54 keeps its id and writes records 0x54/0x55 `+0x88` (zoom) = 16.0 when row[2] != 0 (bit 6:
+  09000006), else 8.0; 10 → 0xC with `GameState[0x52]` (game complete). Tables [L ee_start_05 0x2bee08..].
+- Callers: `Pickup_Handler` (the take id), `Player_EquipWeapon` (SP: its id goes through it after the model check
+  [M 0x1a8a58:24-30]), `Player_EquipAmmo` (0x1f / 0x25 → upgraded base + 1), `Player_InitWeapon` (the kit's
+  handgun, stunner, sniper, dart gun, decryptor, the tail's laser [M 0x1a7ef8:126-133]) and `Player_Weapon`'s
+  07000007 re-arm (`Upgrade_Weapon(6)` [M 0x1a24c8:248]).
+- Every level whose kit holds a handgun ships the four handgun first-person models 0x05000088 / 0x050000a9 /
+  0x05000047 / 0x050000a8 [D the archives' skin tables, all of `dev::LEVELS`], so the upgraded kits load.
+
 ## Port
 
-`nf_game::pickup` (WORKLOG 0040): drops from Death_Anim / Dead, captain grenades, falling, resting, touch, lifetime,
-the handler for types 0 / 1 with `EquipWeapon` / `EquipAmmo` on an inventory that feeds Bond's `Gun`; the pickup sound
-goes to the hearing list. *Deviations*: the rest height (U-036), no sphere push-out at creation, static world only
-(no moving platforms), `hashtable_getitem` taken as loaded, no weapon switching (Bond keeps the P2K; G-029), no text.
+`nf_game::pickup` (WORKLOG 0040 and later): drops from Death_Anim / Dead, captain grenades, falling, resting, touch,
+lifetime, respawn (state 2), spin, the handler for every kind (weapon, ammo, key, armour, label, message, bonus) with
+`EquipWeapon` / `EquipAmmo`, the take messages and sounds (scene.rs), the auto-switch through `is_better_weapon` and
+the `PlayerSetting+0xA` flag, and the weapon upgrades: `Inventory::upgrades` is the row
+(`progress::upgrades_from_bonus`, set at level load from the profile's bonus word), read by the take, the
+auto-switch, the level kit (`player::init_level_loadout`, whose `equip` runs the SP `Upgrade_Weapon` remap) and the
+07000007 re-arm. The 0x54 zoom is applied once at level load (`WeaponData::apply_upgrade_zoom`) rather than on each
+equip. The health-pane fade reset happens on the armour take only [M 0x18e650:220-226].
+
+*Deviations / not ported*: the rest height (U-036), no sphere push-out at creation, static world only (no moving
+platforms), `hashtable_getitem` taken as the level skin table. Multiplayer: `Player_CheckForDeath`'s MP arm drops the
+dead player's held gun (and the 0x1B launcher for 0x1A) through `Pickup_CreateSimple` with the MP 30 s lifetime and
+spin [M 0x190810:42-56, 0x18f348] - the port creates no pickup on an MP player death. The MP respawn wait in
+`update_pickups_net` restores one tick earlier than the game's `elapsed > limit` test (the SP path has the +1).

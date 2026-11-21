@@ -250,7 +250,10 @@ fn the_switch_default_gives_everything_and_holds_the_p2k() {
     assert_eq!(req, 2, "the default holds the P2K (s0 = Upgrade_Weapon(6)) [M 001a8990]");
     // The equip marks the BASE owned (`Player_EquipWeapon` 0x1a8a58:48-55) — the list's variants
     // 0x18 (base 0x19) and 0x15 (base 0x14) own their bases' slots.
-    let mut owned_expected = [6usize, 0x12, 0x18, 0x46, 0x37, 0x36, 0x35, 0x34, 0x3a, 0x52, 0x2c,
+    // The list's `EquipWeapon(6, 999)` is remapped inside the equip: the SP `Player_EquipWeapon`
+    // runs `Upgrade_Weapon` on its id first [M 0x1a8a58:24-30], and on a fresh profile
+    // `Upgrade_Weapon(6)` = 2 — the P2K, not record 6 (g029-pickups; this pin listed 6).
+    let mut owned_expected = [2usize, 0x12, 0x18, 0x46, 0x37, 0x36, 0x35, 0x34, 0x3a, 0x52, 0x2c,
         0x2e, 0x30, 0x4a, 0x50, 0x1e, 0x24, 0xe, 0x10, 0x54, 0x1c, 0x15, 10, 0xd, 0x56, 0x58, 0x41,
         0x59, 0x3b, 0x1a, 0x33, 0x11, 2, 0x2a, 0x42, 0x43, 0x45, 0x16, 0x4e, 1]
         .iter().map(|&w| wd.base(w) as usize).collect::<Vec<_>>();

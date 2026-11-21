@@ -422,6 +422,11 @@ pub struct Inventory {
     /// `+0x70C + id`: key flags (`Player_EquipKey` 0x1a97a0 writes 1; `Lock_Activate` 0x1aed00:19
     /// reads them) [M]. Indexed by the pickup's key id, or by a lock's record u16[1].
     pub keys: Vec<bool>,
+    /// The player-0 `Upgrades` row (0x2beea8, 9 bytes) `Upgrade_Weapon` 0x1a8f30 reads: rebuilt
+    /// from the bonus word by `Menu_SetBonus` 0x1ff898 (`crate::progress::upgrades_from_bonus`).
+    /// All zero on a fresh profile [L ee_start_05 0x2beea8]. Not part of the RAM save: the game
+    /// keeps it beside the bonus word, not in BLData.
+    pub upgrades: [u8; 9],
 }
 
 impl Inventory {
@@ -432,6 +437,7 @@ impl Inventory {
             owned: vec![false; weapons],
             keys: vec![false; 0x100],
             fire_mode: vec![0; weapons],
+            upgrades: [0; 9],
         }
     }
 
@@ -524,8 +530,13 @@ impl Inventory {
     /// 0x2bee38 = [0x24,0x26,0x28,0x28], DartGuns 0x2bee68 = [0x43,0x44,0x44,0x44], Tasers 0x2bee48 =
     /// [0x4a,0x4c,0x4c,0x4c], Lasers 0x2bee18 = [0x4e,0x4f,0x4f,0x4f], PDAs 0x2bee58 = [0x56,0x57,0x57,0x57],
     /// Upgrades 0x2beea8 = 0].
-    pub fn upgrade_weapon(id: u16, upgrades: usize, game_complete: u32) -> u16 {
-        // Table slot `upgrades`; only slot 0 is live without the upgrade shop.
+    pub fn upgrade_weapon(id: u16, upgrades: &[u8; 9], game_complete: u32) -> u16 {
+        // Each table reads its own byte of the player-0 `Upgrades` row (0x2beea8), filled from the
+        // gold-medal rewards (`crate::progress::upgrades_from_bonus`, `Menu_SetBonus` 0x1ff898) —
+        // [M the jump table at 0x2fc9a0: 6 → `lbu 0x2beea8` (row[0]), 0x4e → 0x2beeaf ([7]),
+        // 0x1e / 0x24 → 0x2beeab ([3]), 0x4a → 0x2beeae ([6]), 0x56 → 0x2beead ([5]), 0x43 →
+        // 0x2beeac ([4]), 0x54 → 0x2beeaa ([2])]. The game indexes the table with the byte
+        // unclamped; the byte is a kind-4 group's set count (at most 3), so `min(3)` never bites.
         const HANDGUNS: [u16; 4] = [2, 4, 6, 8];
         const SNIPERS: [u16; 4] = [0x1e, 0x20, 0x22, 0x22];
         const SILENCED_SNIPERS: [u16; 4] = [0x24, 0x26, 0x28, 0x28];
@@ -533,20 +544,20 @@ impl Inventory {
         const TASERS: [u16; 4] = [0x4a, 0x4c, 0x4c, 0x4c];
         const LASERS: [u16; 4] = [0x4e, 0x4f, 0x4f, 0x4f];
         const PDAS: [u16; 4] = [0x56, 0x57, 0x57, 0x57];
-        let t = |tab: &[u16; 4]| tab[upgrades.min(3)];
+        let t = |tab: &[u16; 4], k: usize| tab[(upgrades[k] as usize).min(3)];
         match id {
-            6 => t(&HANDGUNS),
+            6 => t(&HANDGUNS, 0),
             10 if game_complete != 0 => 0xC,
-            0x1e => t(&SNIPERS),
-            0x24 => t(&SILENCED_SNIPERS),
-            0x43 => t(&DART_GUNS),
-            0x4a => t(&TASERS),
-            0x4e => t(&LASERS),
-            0x56 => t(&PDAS),
-            // 0x54 (Laser Watch): writes weapon_data[0x54/0x55]+0x88 (zoom) = 8.0 / 16.0 [M 0x1a8f30:43-51];
-            // the id itself is unchanged, and the port has no shop flag (`DAT_002beeaa`) — 8.0 is the
-            // un-upgraded value [L ee_start_05.bin record 0x54 +0x88]. Not modelled: the port has no
-            // mutable weapon_data at take time.
+            0x1e => t(&SNIPERS, 3),
+            0x24 => t(&SILENCED_SNIPERS, 3),
+            0x43 => t(&DART_GUNS, 4),
+            0x4a => t(&TASERS, 6),
+            0x4e => t(&LASERS, 7),
+            0x56 => t(&PDAS, 5),
+            // 0x54: the id is unchanged; the arm writes weapon_data[0x54/0x55]+0x88 (the zoom) =
+            // 16.0 when row[2] != 0, else 8.0 [M 0x1a8ff4-0x1a9020]. The port's weapon table is
+            // shared and immutable here, so the zoom is applied once at level load
+            // (`WeaponData::apply_upgrade_zoom`).
             _ => id,
         }
     }
@@ -573,7 +584,7 @@ impl Inventory {
     /// remap through their BASE's upgrade then +1 — 0x1f → `Upgrade_Weapon(0x1e) + 1`, 0x25 →
     /// `Upgrade_Weapon(0x24) + 1` (identity without the upgrade shop: slot 0). EquipWeapon's remap
     /// (`Upgrade_Weapon` alone) does NOT do this.
-    pub fn upgrade_ammo_id(id: u16, upgrades: usize, game_complete: u32) -> u16 {
+    pub fn upgrade_ammo_id(id: u16, upgrades: &[u8; 9], game_complete: u32) -> u16 {
         match id {
             0x1f => Self::upgrade_weapon(0x1e, upgrades, game_complete).wrapping_add(1),
             0x25 => Self::upgrade_weapon(0x24, upgrades, game_complete).wrapping_add(1),
@@ -592,14 +603,14 @@ impl Inventory {
     /// returned `Taken` carries `p.weapon` for display.
     pub fn take(&mut self, w: &WeaponData, p: &Pickup, loaded: bool, armour: &mut f32, game_complete: u32) -> Option<Taken> {
         // The remapped id decides the owned-check and the equip; the display id stays raw [M 0x18e650:142-144, :246].
-        let id = Self::upgrade_weapon(p.weapon, 0, game_complete) as usize;
+        let id = Self::upgrade_weapon(p.weapon, &self.upgrades, game_complete) as usize;
         // The ammo path's id: `Pickup_Handler` passes `uVar5 = Upgrade_Weapon(raw)` to
         // `Player_EquipAmmo` for BOTH the owned kind-0 arm and kind 1 [M 0x18e650:142-144, case 0
         // else branch + case 1], and `Player_EquipAmmo` then applies its own 0x1f/0x25 remap
         // [M 0x1a8d18:11-19] — the COMPOSITION, not the raw id alone. The id-6 ammo boxes
         // (07000001/07000005) therefore credit `weapon_data[2]`'s pool: ammo type 1, cap 70
         // [L weapon_data: record 6 is ammo type 2 cap-90-clipped — the port credited type 2].
-        let ammo_id = Self::upgrade_ammo_id(Self::upgrade_weapon(p.weapon, 0, game_complete), 0, game_complete) as usize;
+        let ammo_id = Self::upgrade_ammo_id(Self::upgrade_weapon(p.weapon, &self.upgrades, game_complete), &self.upgrades, game_complete) as usize;
         match p.kind {
             kind::WEAPON if !self.owned.get(id).copied().unwrap_or(true) => {
                 self.equip_weapon(w, id, p.rounds, loaded).then_some(Taken::Weapon { weapon: p.weapon })
@@ -694,18 +705,66 @@ mod tests {
     /// [M 0x1a8f30:18-22].
     #[test]
     fn pickup_ids_go_through_upgrade_weapon() {
-        assert_eq!(Inventory::upgrade_weapon(6, 0, 100), 2, "UpgradedHandguns[0] = 2 [L]");
-        assert_eq!(Inventory::upgrade_weapon(0x24, 0, 100), 0x24, "UpgradedSilencedSnipers[0] = 0x24 [L]");
-        assert_eq!(Inventory::upgrade_weapon(0x1e, 0, 100), 0x1e, "UpgradedSnipers[0] = 0x1e [L]");
-        assert_eq!(Inventory::upgrade_weapon(10, 0, 0), 10, "game not complete: 10 is not remapped [M]");
-        assert_eq!(Inventory::upgrade_weapon(10, 0, 1), 0xC, "game complete: 10 → 0xC [M]");
-        assert_eq!(Inventory::upgrade_weapon(0x35, 0, 100), 0x35, "other ids unchanged");
+        const Z: [u8; 9] = [0; 9];
+        assert_eq!(Inventory::upgrade_weapon(6, &Z, 100), 2, "UpgradedHandguns[0] = 2 [L]");
+        assert_eq!(Inventory::upgrade_weapon(0x24, &Z, 100), 0x24, "UpgradedSilencedSnipers[0] = 0x24 [L]");
+        assert_eq!(Inventory::upgrade_weapon(0x1e, &Z, 100), 0x1e, "UpgradedSnipers[0] = 0x1e [L]");
+        assert_eq!(Inventory::upgrade_weapon(10, &Z, 0), 10, "game not complete: 10 is not remapped [M]");
+        assert_eq!(Inventory::upgrade_weapon(10, &Z, 1), 0xC, "game complete: 10 → 0xC [M]");
+        assert_eq!(Inventory::upgrade_weapon(0x35, &Z, 100), 0x35, "other ids unchanged");
         // Sister: an upgrade level shifts the table (the shop path).
-        assert_eq!(Inventory::upgrade_weapon(6, 2, 100), 6, "UpgradedHandguns[2] = 6 [L]");
+        assert_eq!(Inventory::upgrade_weapon(6, &[2, 0, 0, 0, 0, 0, 0, 0, 0], 100), 6, "UpgradedHandguns[2] = 6 [L]");
     }
 
     /// A kind-2 pickup is always taken: `Player_EquipKey` (0x1a97a0) sets `BLData+0x70C+id = 1` and
     /// `Pickup_Handler` case 2 never refuses [M 0x18e650:217-219].
+    /// g029: each `Upgrade_Weapon` arm reads its OWN byte of the `Upgrades` row [M the jump table
+    /// at 0x2fc9a0 and each arm's `lbu`, 0x1a8f5c-0x1a8ff8]: [0] handguns, [3] both sniper
+    /// tables, [4] dart guns, [5] decryptors, [6] stunners, [7] lasers. The old port took one
+    /// level for every table and always passed 0.
+    #[test]
+    fn each_upgrade_table_reads_its_own_row_byte() {
+        let row = |k: usize, v: u8| { let mut r = [0u8; 9]; r[k] = v; r };
+        assert_eq!(Inventory::upgrade_weapon(6, &row(0, 1), 0), 4, "handguns: row[0] = 1 → 4");
+        assert_eq!(Inventory::upgrade_weapon(6, &row(0, 3), 0), 8, "handguns: row[0] = 3 → 8");
+        assert_eq!(Inventory::upgrade_weapon(6, &row(3, 1), 0), 2, "sister: the sniper byte leaves the handgun alone");
+        assert_eq!(Inventory::upgrade_weapon(0x1e, &row(3, 2), 0), 0x22, "snipers: row[3]");
+        assert_eq!(Inventory::upgrade_weapon(0x24, &row(3, 1), 0), 0x26, "silenced snipers: row[3] too");
+        assert_eq!(Inventory::upgrade_weapon(0x43, &row(4, 1), 0), 0x44, "dart guns: row[4]");
+        assert_eq!(Inventory::upgrade_weapon(0x56, &row(5, 1), 0), 0x57, "decryptors: row[5]");
+        assert_eq!(Inventory::upgrade_weapon(0x4a, &row(6, 1), 0), 0x4c, "stunners: row[6]");
+        assert_eq!(Inventory::upgrade_weapon(0x4a, &row(7, 1), 0), 0x4a, "sister: the laser byte leaves the stunner alone");
+        assert_eq!(Inventory::upgrade_weapon(0x4e, &row(7, 1), 0), 0x4f, "lasers: row[7]");
+        assert_eq!(Inventory::upgrade_weapon(0x54, &row(2, 1), 0), 0x54, "0x54 keeps its id (its arm writes the zoom)");
+        assert_eq!(Inventory::upgrade_ammo_id(0x1f, &row(3, 1), 0), 0x21, "the sniper ammo follows: Upgrade_Weapon(0x1e) + 1");
+    }
+
+    /// g029: a pickup take remaps through the inventory's live `Upgrades` row — with the stunner
+    /// upgrade a 0x4a pickup lands on record 0x4c, with the handgun upgrade an id-6 ammo box
+    /// credits weapon 4 [M Pickup_Handler 0x18e650:142-144 → Upgrade_Weapon 0x1a8f30].
+    #[test]
+    fn a_take_uses_the_inventory_upgrade_row() {
+        let mut w = table();
+        for (id, t, clip, fp) in [(0x4cusize, 20u8, 100u16, 0x0500_003eu32), (0x4a, 20, 100, 0x0500_003e), (4, 1, 7, 0x0500_00a9)] {
+            let r = &mut w.records[id];
+            r[0..2].copy_from_slice(&(id as u16).to_le_bytes());
+            r[2..4].copy_from_slice(&(id as u16).to_le_bytes());
+            r[0x90] = t;
+            r[0x92..0x94].copy_from_slice(&clip.to_le_bytes());
+            r[0xdc..0xe0].copy_from_slice(&fp.to_le_bytes());
+        }
+        let m = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0; 4]];
+        let stunner = Pickup::create(&m, 0x4a, 100, kind::WEAPON, 0, Model { centre: [0.0; 3], radius: 0.5 });
+        let mut armour = 0.0;
+        let mut inv = Inventory::empty(0x73, 34);
+        inv.upgrades[6] = 1;
+        assert_eq!(inv.take(&w, &stunner, true, &mut armour, 0), Some(Taken::Weapon { weapon: 0x4a }));
+        assert!(inv.owned[0x4c] && !inv.owned[0x4a], "the upgraded stunner record is the one owned");
+        let mut plain = Inventory::empty(0x73, 34);
+        plain.take(&w, &stunner, true, &mut armour, 0);
+        assert!(plain.owned[0x4a] && !plain.owned[0x4c], "sister: no upgrade → record 0x4a");
+    }
+
     #[test]
     fn a_key_is_always_taken_and_sets_its_flag() {
         let w = table();
@@ -890,12 +949,13 @@ mod tests {
     /// type 2] — not type 2. The message's name stays the RAW id's type (a game quirk, scene.rs's side).
     #[test]
     fn the_id_6_ammo_boxes_credit_the_p2k_pool_through_upgrade_weapon() {
+        const Z: [u8; 9] = [0; 9];
         let w = table();
         let mut inv = Inventory::level_start(0x73, 34);
         // The composition targets record 2's pool (the disc: weapon 6 is ammo type 2 [L],
         // weapon 2 type 1 — the live NF_ISO test pins those; here the synthetic table's
         // record 2 is type 1 and the cap-70 pool).
-        assert_eq!(Inventory::upgrade_ammo_id(Inventory::upgrade_weapon(6, 0, 1), 0, 1), 2, "Upgrade_Weapon(6) = 2 [L UpgradedHandguns[0]], EquipAmmo's remap is the identity on 2");
+        assert_eq!(Inventory::upgrade_ammo_id(Inventory::upgrade_weapon(6, &Z, 1), &Z, 1), 2, "Upgrade_Weapon(6) = 2 [L UpgradedHandguns[0]], EquipAmmo's remap is the identity on 2");
         let p = Pickup::create(&[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0; 4]], 6, 20, kind::AMMO, 0, Model { centre: [0.0; 3], radius: 0.5 });
         let mut armour = 0.0;
         let taken = inv.take(&w, &p, true, &mut armour, 1).expect("the box is taken");
@@ -906,8 +966,8 @@ mod tests {
         inv.carried[1] = 70;
         assert_eq!(inv.take(&w, &p, true, &mut armour, 1), None, "at the type-1 cap the box is refused");
         // The composition is the identity for ids outside the tables.
-        assert_eq!(Inventory::upgrade_ammo_id(Inventory::upgrade_weapon(0x18, 0, 1), 0, 1), 0x18);
-        assert_eq!(Inventory::upgrade_ammo_id(Inventory::upgrade_weapon(0x1f, 0, 1), 0, 1), 0x1f, "0x1f: Upgrade_Weapon(0x1e) = SNIPERS[0] = 0x1e, +1 = 0x1f — the identity at slot 0 (it bites only with the shop upgrade [L 0x2bee28])");
+        assert_eq!(Inventory::upgrade_ammo_id(Inventory::upgrade_weapon(0x18, &Z, 1), &Z, 1), 0x18);
+        assert_eq!(Inventory::upgrade_ammo_id(Inventory::upgrade_weapon(0x1f, &Z, 1), &Z, 1), 0x1f, "0x1f: Upgrade_Weapon(0x1e) = SNIPERS[0] = 0x1e, +1 = 0x1f — the identity at slot 0 (it bites only with the shop upgrade [L 0x2bee28])");
     }
 
     /// `Pickup_Create`'s rounds override [M 0x18dda0: `GameState+0x12 == 0x7000008 && id == 0x2c →

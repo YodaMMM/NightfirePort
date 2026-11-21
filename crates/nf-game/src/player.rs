@@ -2658,8 +2658,18 @@ pub fn init_ammo_weapons(inv: &mut crate::pickup::Inventory, w: &nf_formats::wea
 
 /// `Player_EquipWeapon` is `Inventory::equip_weapon` [M 0x1a8a58]; the game looks the model up in the
 /// hashtable and refuses when missing — the port's `loaded` closure stands in.
+///
+/// The single-player `Player_EquipWeapon` remaps its id through `Upgrade_Weapon` after the model
+/// check [M 0x1a8a58:24-30: the `+0xDC` / hashtable test reads the RAW id's record, then
+/// `if (MPSettings+0x180 == 0) id = Upgrade_Weapon(id)`], so the loadout's `EquipWeapon(6, 999)`
+/// (the default arm) and `EquipWeapon(Upgrade_Weapon(0x4e), 999)` (the tail) land on the
+/// upgraded records. `Upgrade_Weapon` is idempotent on its own outputs (the handgun table's 6
+/// sits at slot 2, so `Upgrade_Weapon(Upgrade_Weapon(x)) == Upgrade_Weapon(x)` for every row),
+/// so ids the caller already upgraded stay put. The 10 → 0xC arm needs
+/// `GameState[0x52]`, which the loadout does not carry (0 here).
 fn equip(inv: &mut crate::pickup::Inventory, w: &nf_formats::weapon::WeaponData, id: u16, rounds: i16, loaded: impl Fn(u8) -> bool) {
-    inv.equip_weapon(w, id as usize, rounds, loaded(id as u8));
+    let up = crate::pickup::Inventory::upgrade_weapon(id, &inv.upgrades, 0);
+    inv.equip_weapon(w, up as usize, rounds, loaded(id as u8));
 }
 
 /// `Player_InitWeapon` (0x1a7ef8) — the per-level loadout switch on `GameState+0x0C`, the whole
@@ -2718,9 +2728,12 @@ pub fn init_level_loadout(
     w: &nf_formats::weapon::WeaponData,
     loaded: impl Fn(u8) -> bool + Copy,
 ) -> u8 {
-    // `Upgrade_Weapon(6)` (0x1a8f30 case 6 → `UpgradedHandguns[Upgrades]`, slot 0 = 2 [L]).
-    const HANDGUN: u16 = 2;
-    let mut req = HANDGUN as u8;
+    // `Upgrade_Weapon(6)` (0x1a8f30 case 6 → `UpgradedHandguns[Upgrades[0]]`: 2 on a fresh profile
+    // [L], 4/6/8 with the handgun gold-medal rewards) — `iVar8` at 0x1a7ef8:126, the handgun every
+    // kit equips, the request of the 01/05/default arms and the RamLoad cases' continuation gate.
+    let upgrades = inv.upgrades;
+    let handgun: u16 = crate::pickup::Inventory::upgrade_weapon(6, &upgrades, 0);
+    let mut req = handgun as u8;
     // A cold load (`save = None`, `IsWarmReset == 0`) skips `Player_RamLoad`'s whole body [M
     // 0x1957a8:9], so the inventory `Player_InitWeapon` reads behind it is the game's boot state —
     // the one `Player_InitAmmoWeapons` (0x1a17f8) zeroed (the [L] boot snapshot proves the zero arm
@@ -2733,20 +2746,20 @@ pub fn init_level_loadout(
     if save.is_none() { init_ammo_weapons(inv, w, loaded); }
     // `Player_RamLoad` (0x1957a8): the saved health/armour/weapon/inventory/channels.
     let saved_weapon = save.map(|s| s.restore(health, inv, ch)).unwrap_or(0);
-    let p2k_owned = |inv: &crate::pickup::Inventory| inv.owned.get(HANDGUN as usize).copied().unwrap_or(false);
-    let up = |id: u16| crate::pickup::Inventory::upgrade_weapon(id, 0, 0);
+    let p2k_owned = |inv: &crate::pickup::Inventory| inv.owned.get(handgun as usize).copied().unwrap_or(false);
+    let up = |id: u16| crate::pickup::Inventory::upgrade_weapon(id, &upgrades, 0);
     // [M 0x1a7ef8 case 0x7000001 → LAB_001a8980]: P2K 48, taser 999, then the shared tail-label equip
     // of uVar11 = 0x5b (the 60 Hz pick) with 999; held = s0 = 2.
     let fresh_01 = |inv: &mut crate::pickup::Inventory, health: &mut crate::bullet::PlayerHealth| {
         init_ammo_weapons(inv, w, loaded);
-        equip(inv, w, HANDGUN, 0x30, loaded);
+        equip(inv, w, handgun, 0x30, loaded);
         equip(inv, w, up(0x4a), 999, loaded);
         equip(inv, w, 0x5b, 999, loaded);
         let _ = health;
     };
     let fresh_05 = |inv: &mut crate::pickup::Inventory, health: &mut crate::bullet::PlayerHealth| {
         init_ammo_weapons(inv, w, loaded);
-        equip(inv, w, HANDGUN, 0x30, loaded);
+        equip(inv, w, handgun, 0x30, loaded);
         equip(inv, w, up(0x4a), 999, loaded);
         equip(inv, w, 0x50, 0, loaded);
         equip(inv, w, 0x54, 0, loaded);
@@ -2755,7 +2768,7 @@ pub fn init_level_loadout(
     let party = |inv: &mut crate::pickup::Inventory, health: &mut crate::bullet::PlayerHealth| {
         init_ammo_weapons(inv, w, loaded);
         *armour_in(health) = 0.0;
-        equip(inv, w, HANDGUN, 0x30, loaded);
+        equip(inv, w, handgun, 0x30, loaded);
         equip(inv, w, up(0x4a), 999, loaded);
         equip(inv, w, 0x50, 0, loaded);
         equip(inv, w, 0x54, 0, loaded);
@@ -2780,7 +2793,7 @@ pub fn init_level_loadout(
     // the sniper (`+0x63 = uVar3`).
     let fresh_0c = |inv: &mut crate::pickup::Inventory| {
         init_ammo_weapons(inv, w, loaded);
-        equip(inv, w, HANDGUN, 0x30, loaded);
+        equip(inv, w, handgun, 0x30, loaded);
         equip(inv, w, up(0x1e), 999, loaded);
         equip(inv, w, up(0x4a), 999, loaded);
         equip(inv, w, 0x50, 0, loaded);
@@ -2799,7 +2812,7 @@ pub fn init_level_loadout(
     // (the crossbow starts in hand [L the 2026-10-14 measurement]).
     let fresh_14 = |inv: &mut crate::pickup::Inventory| {
         init_ammo_weapons(inv, w, loaded);
-        equip(inv, w, HANDGUN, 0x30, loaded);
+        equip(inv, w, handgun, 0x30, loaded);
         equip(inv, w, 0x11, 0xc, loaded);
         equip(inv, w, 0x34, 5, loaded);
         equip(inv, w, 0x37, 5, loaded);
@@ -2809,17 +2822,17 @@ pub fn init_level_loadout(
         equip(inv, w, up(0x56), 0, loaded);
     };
     match level {
-        0x0700_0001 => { fresh_01(inv, health); req = HANDGUN as u8; }
+        0x0700_0001 => { fresh_01(inv, health); req = handgun as u8; }
         // [M 0x1a7ef8 cases 0x7000002/3/4]: RamLoad keeps the carry and re-selects the saved weapon;
         // without the P2K the fresh 01 kit re-runs (switchD_001a8284_caseD_7000001).
         0x0700_0002 | 0x0700_0003 | 0x0700_0004 => {
             req = saved_weapon;
-            if !p2k_owned(inv) { fresh_01(inv, health); req = HANDGUN as u8; }
+            if !p2k_owned(inv) { fresh_01(inv, health); req = handgun as u8; }
         }
         0x0700_0005 => fresh_05(inv, health),
         0x0700_0006 => {
             req = saved_weapon;
-            if !p2k_owned(inv) { fresh_05(inv, health); req = HANDGUN as u8; }
+            if !p2k_owned(inv) { fresh_05(inv, health); req = handgun as u8; }
         }
         0x0700_0007 => { party(inv, health); req = 1; }
         0x0700_0008 => {
@@ -2881,11 +2894,11 @@ pub fn init_level_loadout(
             inv.equip_ammo(w, 0x25, 999);
             inv.equip_ammo(w, 0x1b, 999);
             equip(inv, w, 0x16, 999, loaded);
-            req = HANDGUN as u8;
+            req = handgun as u8;
         }
     }
     // Common tail [M 0x1a7ef8:318-319].
-    equip(inv, w, 0x4e, 999, loaded);
+    equip(inv, w, up(0x4e), 999, loaded);
     equip(inv, w, 1, 0, loaded);
     // `Player_CheckWeaponsLoaded` (0x1a97c8): a selectable weapon whose first-person skin (+0xDC)
     // misses the hashtable loses owned — the RamLoad restore can carry owned across a level boundary

@@ -309,7 +309,13 @@ fn every_on_foot_level_boots_with_the_discs_loadout_rows() {
         // weapon whose skin is missing.
         let mut expected = vec![false; sim.drones.inventory.owned.len()];
         for &(id, _rounds) in &d.rows {
-            let (fp, base) = (wd.first_person(id as usize), wd.base(id as usize) as usize);
+            // The SP equip remaps its id through `Upgrade_Weapon` after the raw id's model check
+            // [M 0x1a8a58:24-30]; at the boot `Upgrades` = 0 that is the tables' slot 0 (the
+            // default arm's raw `EquipWeapon(6)` owns the P2K 2). 10 stays 10: its 0xC arm needs
+            // the game-complete byte, 0 on these boots.
+            let fp = wd.first_person(id as usize);
+            let eq = if id == 0xa { id } else { elf.up(id) };
+            let base = wd.base(eq as usize) as usize;
             if fp != 0 && loaded(id as u8) && base < expected.len() { expected[base] = true; }
         }
         for id in 0..expected.len().min(0x72) {

@@ -751,7 +751,7 @@ impl MpCombat {
         // The take covers the weapon (raw and the `Upgrade_Weapon` remap): the lazy seed must
         // not double-grant it later.
         g.set_seen_bit(p.weapon as usize);
-        g.set_seen_bit(crate::pickup::Inventory::upgrade_weapon(p.weapon, 0, clock) as usize);
+        g.set_seen_bit(crate::pickup::Inventory::upgrade_weapon(p.weapon, &[0; 9], clock) as usize);
         let _ = g.inv.take(wd, p, true, armour, clock);
     }
 
