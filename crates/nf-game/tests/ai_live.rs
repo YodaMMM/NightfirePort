@@ -765,6 +765,42 @@ fn auto_aim_snaps_to_a_guard_near_the_crosshair() {
     assert!(sim.aim_target.is_none() && (far[0] - look(0.6)[0]).abs() > 1e-4, "sister: the offset still eases back, not a new snap");
 }
 
+/// s-auto-aim [M Check_AutoAim 0x1a73f8 disasm 0x1a7778-0x1a77d4, Player_AutoAim 0x1a7c98 disasm
+/// 0x1a7e78-0x1a7ecc, HUD_UpdateCrossHair 0x19e6d0:87-92]: the stored offset is a SCREEN position —
+/// the projected target ((sx − W/2)/(W/4), (sy − H/2)/(H/4)) halved, i.e. where the crosshair sits —
+/// not the old (yaw, pitch) radians. A guard to the right of the view sits at x > 0 (screen right);
+/// the old store held −0.025 rad. The next tick with no target halves it in screen space and the
+/// shot goes through that point (`Player_GetAimingPoint` 0x1a4a98).
+#[test]
+fn auto_aim_offset_is_the_targets_screen_position() {
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let (drones, i, rng) = l.drones(None, 61.342);
+    let mut sim = l.sim(drones, rng);
+    let p = bond_at([69.3, 26.5, 99.5]);
+    sim.tick(&d, &p);
+    let bone2 = sim.list[i].palette(&d).unwrap()[2][3];
+    let bone2 = [bone2[0], bone2[1], bone2[2]];
+    let to = [bone2[0] - p.eye[0], bone2[1] - p.eye[1], bone2[2] - p.eye[2]];
+    let yaw = to[0].atan2(to[2]) + 0.05;
+    let look = [yaw.sin(), 0.0, yaw.cos()];
+    sim.auto_aim(&d, p.eye, look, 2);
+    assert_eq!(sim.aim_target, Some(i));
+    let b = nf_game::autoaim::view_basis(look[0].atan2(look[2]), 0.0f32.asin(), look);
+    let s = nf_game::autoaim::project_offset(p.eye, &b, bone2).unwrap();
+    let want = [s[0] * 0.5, s[1] * 0.5];
+    assert_eq!(sim.aim_offset.map(f32::to_bits), want.map(f32::to_bits), "the stored offset is the halved screen position");
+    assert!(sim.aim_offset[0] > 0.05, "a guard right of the view sits right on the screen: {:?}", sim.aim_offset);
+    // The guard drops out (not drawn): the offset halves again and the shot aims through it.
+    sim.list[i].drawn = false;
+    let dir = sim.auto_aim(&d, p.eye, look, 2);
+    assert_eq!(sim.aim_target, None);
+    let want2 = [want[0] * 0.5, want[1] * 0.5];
+    assert_eq!(sim.aim_offset.map(f32::to_bits), want2.map(f32::to_bits));
+    let exp = nf_game::autoaim::aim_dir(&b, want2, 1.0);
+    for k in 0..3 { assert!((dir[k] - exp[k]).abs() < 1e-6, "{dir:?} vs {exp:?}"); }
+}
+
 /// Bond on 07000005's collision (docs/systems/player.md): at the level-start position of the snapshot [L] (104.954,
 /// 24.9633, 108.8253; yaw −2.14675) he stays put — the floor ray finds the ground within the 0.1 band, as live (1.0891
 /// above it). Walking forward for 5 s he stays on the ground (no fall-through), covers ≤ 0.1 per tick and stops at the wall

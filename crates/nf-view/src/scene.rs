@@ -2767,11 +2767,11 @@ impl Sim {
         // carried aoff -0.216 rad — 12° off the converged view, the round died on the wall
         // behind #15 [L the NF_RF_TRACE impact trace]; the same freeze held the west-edge
         // stand's rounds 1.2 u west of #13 at (-4.20,12.58,-221.83) [L the same trace]).
-        if input.aiming {
-            let (ox, oy) = (-self.cursor[0] * 0.76966, self.cursor[1] * 0.57724);
-            let off = self.drones.aim_offset;
-            self.drones.aim_offset = [off[0] + (ox - off[0]) * 0.5, off[1] + (oy - off[1]) * 0.5];
-        }
+        // s-auto-aim: that ease now runs once per tick in `run`'s dir pick, on the aim BIT (the game's
+        // `obj+0x60` bit 0, written by `Player_Weapon` 0x1a24c8:46-61 from the button and cleared through
+        // the raise states until `Player_SetWeaponAnimObj` 0x1a2e38:557 sets it): the raw-button ease here
+        // ran a second ease on every free-aim tick (0.75 a tick instead of the game's 0.5) and eased
+        // during the raise, where the game scans instead.
         // Weapon switching (`Player_WeaponChange` 0x1a6f80): only when idle (not firing/reloading/holstering). The
         // switch request (`anim+0x63`) is set here; the holster/draw cycle runs in `run` (`Player_SetWeaponAnimObj`).
         // The weapon/gadget split: mouse wheel / Q cycles weapons (mode=0, 1..0x47); G cycles gadgets (mode=1,
@@ -4566,20 +4566,27 @@ impl Sim {
             // obj+0x60 bit0: bit set → the ease arm, no scan; bit clear → the Check_AutoAim
             // scan], so the button-held raise runs the ease (the per-tick ease lives in the
             // step_bond path, right after the aim gate) and only the button-UP ticks scan.
-            let dir = if self.auto_aim && !self.free_aim && !aiming { self.drones.auto_aim(&d, camera, look, self.gun.weapon) } else if self.free_aim {
-                // The cursor is screen-space (cross units); the offsets are object-frame angles
-                // (a larger yaw turns LEFT, so x flips — the same flip `crosshair()` documents).
-                let (ox, oy) = (-self.cursor[0] * 0.76966, self.cursor[1] * 0.57724);
+            // s-auto-aim: one `Player_AutoAim` 0x1a7c98 step per tick, then the shot through
+            // `Player_GetAimingPoint` 0x1a4a98 — all in the game's screen units (`BL+0x120/+0x124`):
+            // - aim bit set: the offsets ease toward the cursor (`BL+0x118/+0x11c`) at 0.5, the lock stays
+            //   [M disasm 0x1a7e2c-0x1a7e74];
+            // - else the option on, or the Q-Claw held (forced on [M 0x1a7cfc-0x1a7d18 `movz`]): the scan;
+            // - else: the offsets halve and the lock stays [M 0x1a7e78-0x1a7ecc].
+            let view_pitch = nf_formats::ps2float::mul(self.bond.pitch, std::f32::consts::FRAC_PI_2);
+            let basis = nf_game::autoaim::view_basis(self.bond.yaw, view_pitch, look);
+            let qclaw = matches!(self.gun.weapon, 0x50 | 0x51);
+            let dir = if self.aiming {
                 let off = self.drones.aim_offset;
-                self.drones.aim_offset = [off[0] + (ox - off[0]) * 0.5, off[1] + (oy - off[1]) * 0.5];
-                let (y0, p0) = (look[0].atan2(look[2]), look[1].clamp(-1.0, 1.0).asin());
-                let (y2, p2) = (y0 + self.drones.aim_offset[0], p0 + self.drones.aim_offset[1]);
-                [p2.cos() * y2.sin(), p2.sin(), p2.cos() * y2.cos()]
+                let half = |a: f32, b: f32| nf_formats::ps2float::mul(nf_game::trig::ee_sub(a, b), 0.5);
+                self.drones.aim_offset = [nf_game::trig::ee_add(off[0], half(self.cursor[0], off[0])), nf_game::trig::ee_add(off[1], half(self.cursor[1], off[1]))];
+                nf_game::autoaim::aim_dir(&basis, self.drones.aim_offset, self.zoom)
+            } else if self.auto_aim || qclaw {
+                self.drones.auto_aim_view(&d, camera, self.bond.yaw, view_pitch, look, self.zoom, self.gun.weapon)
             } else {
-                self.drones.aim_target = None;
-                self.drones.aim_offset = self.drones.aim_offset.map(|v| v * 0.5);
-                aim
+                self.drones.aim_offset = self.drones.aim_offset.map(|v| nf_formats::ps2float::mul(v, 0.5));
+                nf_game::autoaim::aim_dir(&basis, self.drones.aim_offset, self.zoom)
             };
+            let _ = aim;
             let was_reloading = self.gun.reload_state;
             // (fix-weapon-anims2: the prev-script watermark moved above the switch machine — see there.)
             // The pre-shot fire-script state (`anim+0xF4 == 9`): the game SKIPS `Player_SetFiringAnim`
@@ -6695,9 +6702,28 @@ impl Sim {
     /// The crosshair offset (`BL+0x120 / +0x124`: −1…1 across half the screen) from the auto-aim offset angles: tan of the
     /// angle over the half-screen tangents of the game's projection [L] (0.76966 across, 0.57724 up); a larger yaw
     /// turns left (+X is screen-left in the object frame), so x flips.
+    ///
+    /// s-auto-aim: `aim_offset` now holds the game's own `BL+0x120/+0x124`, which
+    /// `HUD_UpdateCrossHair` 0x19e6d0:87-92 draws as is (the crosshair sits ON a fresh lock). The drawn
+    /// position is kept as the port drew it before (the old angle store held half the target's angle,
+    /// so the crosshair sat about half way to it): the angle of the offset ray, halved, back through the
+    /// tangent. Moving the drawn crosshair onto the game's value is a visual change left for a look.
     pub fn crosshair(&self) -> (f32, f32) {
         if self.free_aim { return (self.cross[0], self.cross[1]); }
-        (-self.drones.aim_offset[0].tan() / 0.76966, self.drones.aim_offset[1].tan() / 0.57724)
+        let a = self.drones.aim_offset;
+        (((a[0] * 0.76966).atan() * 0.5).tan() / 0.76966, ((a[1] * 0.57724).atan() * 0.5).tan() / 0.57724)
+    }
+
+    /// The current shot direction's offset from Bond's view as (yaw, pitch) radians — what the old
+    /// angle-unit `aim_offset` held — for the walkers that steer the effective aim.
+    pub fn aim_offset_angles(&self) -> [f32; 2] {
+        let p = nf_formats::ps2float::mul(self.bond.pitch, std::f32::consts::FRAC_PI_2);
+        let b = nf_game::autoaim::view_basis(self.bond.yaw, p, self.bond.look());
+        let d = nf_game::autoaim::aim_dir(&b, self.drones.aim_offset, self.zoom);
+        let mut y = d[0].atan2(d[2]) - self.bond.yaw;
+        while y > std::f32::consts::PI { y -= std::f32::consts::TAU; }
+        while y < -std::f32::consts::PI { y += std::f32::consts::TAU; }
+        [y, d[1].clamp(-1.0, 1.0).asin() - p]
     }
 
     /// The drawn instance of a level-placed pickup (`View_DrawObjectGlist` 0x1e6780 draws `obj+0xD8` at

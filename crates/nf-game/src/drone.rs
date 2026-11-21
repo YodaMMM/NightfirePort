@@ -13726,8 +13726,9 @@ pub struct Drones {
     /// Gates `DroneFunc_DoForcedAttack` 0x148c60's forced attacks on 07000007 (without it one punch
     /// turned every guest hostile). The interrogate state itself is not ported yet, so only the gate is.
     pub party_loud: bool,
-    /// Auto-aim: the last target (`BL+0x114`) and the crosshair offset as (yaw, pitch) radians (`BL+0x120` / `+0x124`,
-    /// screen units in the game; *approximation*: small angles).
+    /// Auto-aim: the lock pointer (`BL+0x114`) and, in `aim_offset`, the smoothed crosshair offset `BL+0x120` /
+    /// `+0x124` in the game's screen units (x right, y up, ±1 at the screen edges [M HUD_UpdateCrossHair
+    /// 0x19e6d0:87-92]); the shot aims through it (`autoaim::aim_dir`, `Player_GetAimingPoint` 0x1a4a98).
     pub aim_target: Option<usize>,
     /// weapon-handling: the next `fire_player` shot's player-owner spread scale
     /// (`bullet::player_spread` — `Bullet_init` 0x12c5a0:139-170's class-3 arm: the pull bloom and
@@ -18014,95 +18015,91 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.player_bullets.retain(|b| !b.dead);
     }
 
-    /// `Sound_Play3D` (0x1dd548) with the table's radii: the sound enters the hearing list for the next tick. Looped
-    /// sounds are never heard (`Sound_Alertness` skips them).
-    /// `Player_AutoAim` (0x1a7c98) / `Check_AutoAim` (0x1a73f8), once per tick when auto-aim is on and Bond is not in aim
-    /// mode: the nearest qualifying drone's bone 2 within `Autoaim_Range` (25): drawn, alive, not type 0xB; |yaw to it −
-    /// Bond's yaw| < `Autoaim_Angle_H` · k and |pitch to it − Bond's pitch| < `Autoaim_Angle_V` · k with k = weapon
-    /// `+0x14` / 100 · (1 − d / 25) · the difficulty multiplier (Easy 1.9, Normal 1, Hard 0), ×1.4 (`LockOnMul`) for the
-    /// last target; line of sight from the head. A target snaps the crosshair offset onto it; the offset then halves
-    /// every tick. Returns the direction the next bullet takes (`Player_GetAimingPoint`), given Bond's view `look`.
+    /// `Player_AutoAim` (0x1a7c98) / `Check_AutoAim` (0x1a73f8) from a bare view direction: the yaw and
+    /// pitch taken back out of `look`, zoom 1. The Sim calls [`Self::auto_aim_view`] with Bond's own
+    /// angles and zoom; this wrapper serves the probes that only hold a direction.
     pub fn auto_aim(&mut self, d: &Data, head: V3, look: V3, weapon: u8) -> V3 {
-        let t = d.tuning;
         let yaw = look[0].atan2(look[2]);
-        // The game's pitch angle is `asinf` 0x232d48 (jal at 0x1a7710 in `Check_AutoAim` 0x1a73f8 [M ELF jal
-        // scan]); asinf's own callees — `dptofp` 0x225378 (jal 0x232e18, the f64→f32 result narrowing) and
-        // `matherr` 0x2352e8 → `dpcmp` 0x225108 (the |x|>1 domain-error path, jal 0x2352f4 [M]) — are the
-        // SDK soft-float/libm internals this Rust `.asin()` + `.clamp(-1.0, 1.0)` replace [M unported-misc-7].
         let pitch = look[1].clamp(-1.0, 1.0).asin();
-        let wf = d.weapons.records.get(weapon as usize).map_or(100.0, |w| f32::from_le_bytes(w[0x14..0x18].try_into().unwrap()));
+        self.auto_aim_view(d, head, yaw, pitch, look, 1.0, weapon)
+    }
+
+    /// `Player_AutoAim` (0x1a7c98)'s scan arm and `Player_GetAimingPoint` (0x1a4a98): the per-tick
+    /// auto-aim with the option on (or the Q-Claw held) and the aim bit clear. Returns the next shot's
+    /// direction. Spec: docs/systems/auto-aim.md.
+    /// - The cap starts at `Autoaim_Range` (25), the Q-Claw's (0x50/0x51) at its record's +0x1c
+    ///   [M 0x1a7d30-0x1a7d6c]. Each candidate must sit no farther than the cap (`*cap < dist` skips,
+    ///   so an equal distance later in the scan wins [M 0x1a75a8]); a pass lowers the cap to its distance.
+    /// - The window: k = ((w+0x14 · 0.01) · (1 − dist/25)) · difficulty mul (Easy 1.9, Normal 1, Hard 0),
+    ///   forced to 1 for the Q-Claw; H = `Autoaim_Angle_H`·k, V = `Autoaim_Angle_V`·k, both ×1.4
+    ///   (`LockOnMul`) for the current lock `BL+0x114` [M disasm 0x1a75f8-0x1a76c8]. Skipped when both are 0.
+    /// - |`Vec_AngleDifference`(`atan2f`(dx, dz), yaw)| < H, then |… (`asinf`(dy/dist), pitch)| < V, then
+    ///   `Collide_LineOfSight` mask 0xa from the head [M 0x1a75c8-0x1a7764].
+    /// - The lock: the cap takes the distance; only when `View_3DPoint2Screen` returns > 0 do the
+    ///   offset (`BL+0x120/+0x124`, the target's screen position ×2) and the lock pointer change
+    ///   [M 0x1a7778-0x1a77d8].
+    /// - The release: the pointer clears only when the cap still equals `Autoaim_Range` after the scan
+    ///   [M 0x1a7e0c-0x1a7e20] — so a Q-Claw scan (cap 50/100) never clears it.
+    /// - Then all four offsets halve (`BL+0x118..0x124`, the port's cursor halves in the Sim) and the shot
+    ///   aims through the halved offset [M 0x1a7e78-0x1a7ecc; Player_Update 0x193600 runs
+    ///   `Player_Weapon` (→ `Player_AutoAim`) before `Player_WeaponFiring`, jal 0x194064 / 0x194070].
+    pub fn auto_aim_view(&mut self, d: &Data, head: V3, yaw: f32, pitch: f32, look: V3, zoom: f32, weapon: u8) -> V3 {
+        use nf_formats::ps2float::{div, mul};
+        let t = d.tuning;
+        let basis = crate::autoaim::view_basis(yaw, pitch, look);
+        let qclaw = matches!(weapon, 0x50 | 0x51);
+        let rec_f32 = |o: usize| d.weapons.records.get(weapon as usize).map(|w| f32::from_le_bytes(w[o..o + 4].try_into().unwrap()));
+        let wf = rec_f32(0x14).unwrap_or(100.0);
         let diff = match self.difficulty { 1 => t.Autoaim_EasyMul, 3 | 4 => t.Autoaim_HardMul, _ => t.Autoaim_NormalMul };
-        // The initial cap: `Autoaim_Range` (25.0 [L], `ReadTuningVars` 0x1d3a80:20, stored at
-        // 0x1d3bcc) — except the Q-Claw (0x50/0x51), whose cap is its own record's +0x1c
-        // [M `Player_AutoAim` 0x1a7c98 disasm 0x1a7d54-0x1a7d68 `lwc1 $f0, 0x1c($v0)` from
+        // The initial cap [M `Player_AutoAim` 0x1a7c98 disasm 0x1a7d54-0x1a7d68 `lwc1 $f0, 0x1c($v0)` from
         // `weapon_data + type·0x10c`; L ee_start_05: 50.0 / 100.0]. (The per-difficulty
-        // MAX_AUTO_AIM_DIST_NEAR/MIDL that `Player_InitWeapon` 0x1a7ef8 writes are never read
-        // in ACTION.ELF — see the fix-progress-remainder report.)
-        let mut best = if matches!(weapon, 0x50 | 0x51) {
-            d.weapons.records.get(weapon as usize).map_or(t.Autoaim_Range, |w| f32::from_le_bytes(w[0x1c..0x20].try_into().unwrap()))
-        } else { t.Autoaim_Range };
-        let mut found = None;
-        // weapon-handling [M Player_AutoAim 0x1a7c98:63-78]: the Q-Claw (0x50/0x51) scans ONLY the
-        // class-'Q' objects (the grapple points, `Grapple_Create` 0x198298) — never the drones —
-        // with k forced to 1 [M Check_AutoAim 0x1a73f8:150-152] and the object position (`obj+0x30`
-        // for a class other than 2/3 [M :113-120]); the port's point is the placement plus its
-        // object's sphere centre [S — the centre offset, not obj+0x30]. Grapple points carry an
-        // index past `GRAPPLE_AIM` in `aim_target` (the lock-on ×1.4 memory).
+        // MAX_AUTO_AIM_DIST_NEAR/MIDL that `Player_InitWeapon` 0x1a7ef8 writes are never read in ACTION.ELF.)
+        let mut best = if qclaw { rec_f32(0x1c).unwrap_or(t.Autoaim_Range) } else { t.Autoaim_Range };
+        // weapon-handling [M Player_AutoAim 0x1a7c98:63-78]: the Q-Claw scans ONLY the class-'Q' objects
+        // (the grapple points, `Grapple_Create` 0x198298), never the drones; the object position
+        // (`obj+0x30` for a class other than 2/3 [M :113-120]); the port's point is the placement plus its
+        // object's sphere centre [S — the centre offset, not obj+0x30]. Grapple points carry an index past
+        // `GRAPPLE_AIM` in `aim_target`.
         const GRAPPLE_AIM: usize = 1 << 20;
-        if matches!(weapon, 0x50 | 0x51) {
-            for (gi, g) in self.grapple_points.iter().enumerate() {
-                let p = g.pos;
-                let dv = [p[0] - head[0], p[1] - head[1], p[2] - head[2]];
-                let dist = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
-                if dist > best || dist <= 0.0 { continue; }
-                let (mut h, mut v) = (t.Autoaim_Angle_H, t.Autoaim_Angle_V);
-                if self.aim_target == Some(GRAPPLE_AIM + gi) { h *= t.Autoaim_LockOnMul; v *= t.Autoaim_LockOnMul; }
-                let dyaw = angle_difference(yaw, dv[0].atan2(dv[2]));
-                if dyaw.abs() >= h { continue; }
-                let dpitch = angle_difference(pitch, (dv[1] / dist).clamp(-1.0, 1.0).asin());
-                if dpitch.abs() >= v || !d.world.line_of_sight_masked(head, p, crate::world::LOS_SENSOR) { continue; }
-                best = dist;
-                found = Some((GRAPPLE_AIM + gi, dyaw, dpitch));
+        let mut cands: Vec<(usize, V3)> = Vec::new();
+        if qclaw {
+            for (gi, g) in self.grapple_points.iter().enumerate() { cands.push((GRAPPLE_AIM + gi, g.pos)); }
+        } else {
+            for (i, dr) in self.list.iter().enumerate() {
+                // `Check_AutoAim` (0x1a73f8): skip drawn==0 (`obj+0xFC`), dead (`+0xAC <= 0`), voice set 0xB
+                // (`+0xD8`), the Disabled state (`obj+0xF4 == 1`, covered by `enabled`), and — single player —
+                // every non-enemy team (`+0x44 != 1`; the MP build's `MP_areObjectsOnSameTeam` is not
+                // modelled). Bone 2 (`AnimGetBoneWorldTrans(obj, 0x80000002)`).
+                if !dr.present || !dr.enabled || !dr.drawn || dr.corpse || dr.health <= 0.0 || dr.kind == 0xb || dr.team != 1 { continue; }
+                let Some(p) = dr.palette(d).and_then(|m| m.get(2).map(|r| [r[3][0], r[3][1], r[3][2]])) else { continue };
+                cands.push((i, p));
             }
         }
-        for (i, dr) in self.list.iter().enumerate() {
-            if matches!(weapon, 0x50 | 0x51) { break; }
-            // `Check_AutoAim` (0x1a73f8): skip drawn==0 (`obj+0xFC`), dead (`+0xAC <= 0`), voice set 0xB (`+0xD8`),
-            // the Disabled state (`obj+0xF4 == 1`, covered by `enabled`), and — single player — **every non-enemy
-            // team** (`+0x44 != 1` → skip; the MP build checks `MP_areObjectsOnSameTeam` instead, not modelled).
-            // This keeps Bond's crosshair off allies, hostages and civilians (drone.md `+0x44`: 1 = enemies,
-            // 10/11/13/14 → 3 friends, 12 → 2 bots) — the 07000002 "shootable civilians" report.
-            if !dr.present || !dr.enabled || !dr.drawn || dr.corpse || dr.health <= 0.0 || dr.kind == 0xb || dr.team != 1 { continue; }
-            let Some(p) = dr.palette(d).and_then(|m| m.get(2).map(|r| [r[3][0], r[3][1], r[3][2]])) else { continue };
-            let dv = [p[0] - head[0], p[1] - head[1], p[2] - head[2]];
-            let dist = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
-            if dist > best || dist <= 0.0 { continue; }
-            let mut k = wf * 0.01 * (1.0 - dist / t.Autoaim_Range) * diff;
-            if matches!(weapon, 0x50 | 0x51) { k = 1.0; }
-            let (mut h, mut v) = (t.Autoaim_Angle_H * k, t.Autoaim_Angle_V * k);
-            if self.aim_target == Some(i) { h *= t.Autoaim_LockOnMul; v *= t.Autoaim_LockOnMul; }
+        for (id, p) in cands {
+            let dist = crate::autoaim::dist3d(head, p);
+            if best < dist { continue; }
+            let mut k = mul(mul(mul(wf, f32::from_bits(0x3c23_d70a)), crate::trig::ee_sub(1.0, div(dist, t.Autoaim_Range))), diff);
+            if qclaw { k = 1.0; }
+            let (mut v, mut h) = (mul(t.Autoaim_Angle_V, k), mul(t.Autoaim_Angle_H, k));
+            if self.aim_target == Some(id) { v = mul(v, t.Autoaim_LockOnMul); h = mul(h, t.Autoaim_LockOnMul); }
             if h == 0.0 && v == 0.0 { continue; }
-            let dyaw = angle_difference(yaw, dv[0].atan2(dv[2]));
-            if dyaw.abs() >= h { continue; }
-            let dpitch = angle_difference(pitch, (dv[1] / dist).clamp(-1.0, 1.0).asin());
-            // The game's sensor LOS passes the stairwell's 0x40-material well panes [M
-            // Check_AutoAim 0x1a73f8:164-165 calls Collide_LineOfSight with mask 0xa;
-            // Collide_Intersect 0x1ebaa8:305-309/317-319 drop surface-0x40/0x80 hits under its
-            // 0x8 bit] — the plain segment test blocked the lock from every landing behind the
-            // pane, so the auto-aim never took the roping guard it visibly faces.
-            if dpitch.abs() >= v || !d.world.line_of_sight_masked(head, p, crate::world::LOS_SENSOR) { continue; }
+            let to_yaw = crate::trig::atan2f_libm(crate::trig::ee_sub(p[0], head[0]), crate::trig::ee_sub(p[2], head[2]));
+            if crate::trig::angle_difference(to_yaw, yaw).abs() >= h { continue; }
+            let to_pitch = crate::trig::asinf_libm(div(crate::trig::ee_sub(p[1], head[1]), dist));
+            if crate::trig::angle_difference(to_pitch, pitch).abs() >= v { continue; }
+            // The game's sensor LOS passes the stairwell's 0x40-material well panes [M Check_AutoAim
+            // 0x1a73f8:164-165 calls Collide_LineOfSight with mask 0xa; Collide_Intersect 0x1ebaa8:305-309/
+            // 317-319 drop surface-0x40/0x80 hits under its 0x8 bit].
+            if !d.world.line_of_sight_masked(head, p, crate::world::LOS_SENSOR) { continue; }
+            if let Some(s) = crate::autoaim::project_offset(head, &basis, p) {
+                self.aim_offset = s;
+                self.aim_target = Some(id);
+            }
             best = dist;
-            found = Some((i, dyaw, dpitch));
         }
-        match found {
-            Some((i, dyaw, dpitch)) => { self.aim_target = Some(i); self.aim_offset = [dyaw, dpitch]; }
-            None => { self.aim_target = None; }
-        }
-        let (y, p) = (yaw + self.aim_offset[0], pitch + self.aim_offset[1]);
-        // The offset is halved after use (the game halves it at the end of `Player_AutoAim`; `Player_GetAimingPoint`
-        // doubles it back, so a fresh target is aimed at exactly).
-        self.aim_offset = [self.aim_offset[0] * 0.5, self.aim_offset[1] * 0.5];
-        [p.cos() * y.sin(), p.sin(), p.cos() * y.cos()]
+        if best == t.Autoaim_Range { self.aim_target = None; }
+        self.aim_offset = [mul(self.aim_offset[0], 0.5), mul(self.aim_offset[1], 0.5)];
+        crate::autoaim::aim_dir(&basis, self.aim_offset, zoom)
     }
 
     /// `NDrone2_SpeechSFX(idx, force, 0, 0)` → `NDrone2_PlaySFX(2.0, …)` for each request of a drone's update: closed

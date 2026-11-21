@@ -1979,8 +1979,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // convention): a launch whose own first 12 u are clear air cannot detonate on the
         // cabin next to Bond. D3-GATED: the sisters' timelines stay byte-exact.
         let effective_corridor_clear = difficulty < 3 || {
-            let ey = sim.bond.yaw + sim.drones.aim_offset[0];
-            let ep = sim.bond.pitch * std::f32::consts::FRAC_PI_2 + sim.drones.aim_offset[1];
+            let ey = sim.bond.yaw + sim.aim_offset_angles()[0];
+            let ep = sim.bond.pitch * std::f32::consts::FRAC_PI_2 + sim.aim_offset_angles()[1];
             let eff = [ey.sin() * ep.cos(), ep.sin(), ey.cos() * ep.cos()];
             let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
             let right = [cy, 0.0, -fy];

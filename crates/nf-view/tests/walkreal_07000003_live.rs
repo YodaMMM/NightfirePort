@@ -306,7 +306,7 @@ fn aimed_stand_03(w: &mut Walker, di: usize, label: &str, cap: u32, keep_aim: bo
                 let cur = sim.cursor;
                 let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
                 let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
-                let aoff = sim.drones.aim_offset;
+                let aoff = sim.aim_offset_angles();
                 let err = { let mut a = yaw_err - aoff[0];
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };

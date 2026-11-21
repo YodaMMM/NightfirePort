@@ -281,6 +281,87 @@ pub fn acosf_libm(x: f32) -> f32 {
     add(dw, dw)
 }
 
+/// The PS2 libm's `asinf` (ACTION.ELF `asinf` 0x232d48, the fdlibm w_asinf wrapper, around
+/// `__ieee754_asinf` 0x233658, fdlibm e_asinf), ported operation for operation from the disassembly
+/// [M 0x233658-0x2339f0]: every mul/div an EE product (`ps2float::mul` chop, `div.s` nearest), every
+/// add/sub guard-less and chopped (this module's `add`/`sub`), the constants the `lui/ori` immediates:
+/// pio2_hi 0x3fc90fda, pio2_lo 0x33a22168, pio4_hi 0x3f490fdb and the pS/qS table `acosf_libm` shares.
+/// - |x| = 1: x·pio2_hi + x·pio2_lo [M 0x233690-0x2336b4].
+/// - |x| < 0.5: x for |x| < 2⁻²⁷ (the `huge + x > 1` test always passes), else x + x·(P/Q) at t = x²
+///   [M 0x2336dc-0x23380c].
+/// - 0.5 ≤ |x| < 1: t = (1 − |x|)·0.5, s = `__ieee754_sqrtf` 0x2345c8 (the bitwise fdlibm root: integer
+///   code, correctly rounded, so `f32::sqrt`); above 0x3f799999: pio2_hi − (2(s + s·P/Q) − pio2_lo);
+///   else the split form with w = s & 0xfffff000 [M 0x233810-0x2339c4]; the sign of x last.
+/// - |x| > 1: the core gives NaN, but the wrapper's domain branch runs because `__fdlib_version` 0x30ba00
+///   is 1 (_XOPEN_) [D ELF .data, L ee_snapshot.bin 0x30ba00 = 1]: the exception's `retval` is 0 and
+///   `matherr` 0x2352e8 leaves it, so the result is **0.0** [M 0x232d64-0x232e24]. NaN stays NaN.
+pub fn asinf_libm(x: f32) -> f32 {
+    use nf_formats::ps2float::{div as ee_div, mul};
+    const PIO2_HI: f32 = f32::from_bits(0x3fc9_0fda);
+    const PIO2_LO: f32 = f32::from_bits(0x33a2_2168);
+    const PIO4_HI: f32 = f32::from_bits(0x3f49_0fdb);
+    const PS: [f32; 6] = [
+        f32::from_bits(0x3e2a_aaab),
+        f32::from_bits(0xbea6_b090),
+        f32::from_bits(0x3e4e_0aa8),
+        f32::from_bits(0xbd24_1146),
+        f32::from_bits(0x3a4f_7f04),
+        f32::from_bits(0x3811_ef08),
+    ];
+    const QS: [f32; 4] = [
+        f32::from_bits(0xc019_d139),
+        f32::from_bits(0x4001_572d),
+        f32::from_bits(0xbf30_3361),
+        f32::from_bits(0x3d9d_c62e),
+    ];
+    // The compiled Horner order (both branches) [M 0x23372c-0x2337f4, 0x233818-0x2338f8].
+    let pq = |t: f32| -> (f32, f32) {
+        let mut p = mul(t, PS[5]);
+        p = add(p, PS[4]); p = mul(t, p);
+        p = add(p, PS[3]); p = mul(t, p);
+        p = add(p, PS[2]); p = mul(t, p);
+        p = add(p, PS[1]); p = mul(t, p);
+        p = add(p, PS[0]); p = mul(t, p);
+        let mut q = mul(t, QS[3]);
+        q = add(q, QS[2]); q = mul(t, q);
+        q = add(q, QS[1]); q = mul(t, q);
+        q = add(q, QS[0]); q = mul(t, q);
+        q = add(q, 1.0);
+        (p, q)
+    };
+    if x.is_nan() { return x; }
+    let hx = x.to_bits();
+    let ix = hx & 0x7fff_ffff;
+    if ix == 0x3f80_0000 {
+        return add(mul(x, PIO2_HI), mul(x, PIO2_LO));
+    }
+    if ix > 0x3f80_0000 {
+        return 0.0; // the _XOPEN_ wrapper's domain result (see above)
+    }
+    if ix < 0x3f00_0000 {
+        if ix < 0x3200_0000 { return x; }
+        let t = mul(x, x);
+        let (p, q) = pq(t);
+        return add(x, mul(x, ee_div(p, q)));
+    }
+    let w = sub(1.0, x.abs());
+    let t = mul(w, 0.5);
+    let (p, q) = pq(t);
+    let s = t.sqrt();
+    let r = if ix > 0x3f79_9999 {
+        let w = ee_div(p, q);
+        sub(PIO2_HI, sub({ let a = add(s, mul(s, w)); add(a, a) }, PIO2_LO))
+    } else {
+        let w = f32::from_bits(s.to_bits() & 0xffff_f000);
+        let c = ee_div(sub(t, mul(w, w)), add(s, w));
+        let r = ee_div(p, q);
+        let p = sub(mul(add(s, s), r), sub(PIO2_LO, add(c, c)));
+        let q = sub(PIO4_HI, add(w, w));
+        sub(PIO4_HI, sub(p, q))
+    };
+    if (hx as i32) > 0 { r } else { -r }
+}
+
 /// The libm layer this module's ports stand in for — the never-mentioned scan block of task
 /// unported-misc-8, all REACHED in the shipped game [M jal census over ACTION.ELF]:
 /// - `fabsf` 0x2355b8 — called by the game's `acosf` 0x232c48 (jal 0x232c88), `asinf` 0x232d48
@@ -537,5 +618,32 @@ mod tests {
         // A full turn from the middle lands back inside the range.
         let r = limit_rad_angle(limit_rad_angle(100.0) + TAU);
         assert!(r >= -PI && r <= PI, "wrap of a wrapped value left the range: {r}");
+    }
+
+    /// `asinf` 0x232d48 (s-auto-aim): outside [−1, 1] the game's wrapper returns 0.0, not ±π/2 — the
+    /// `__fdlib_version` 1 domain arm [M 0x232d64-0x232e24; D/L 0x30ba00 = 1]. The port's old
+    /// `x.clamp(-1, 1).asin()` gave ±π/2 there. Inside the domain the op-for-op core stays within
+    /// 4 ulp (chopped EE ops) of the f64 arcsine on every branch (|x| < 0.5, the split 0.5-0.975 form, above 0.975, ±1).
+    #[test]
+    fn asinf_libm_is_the_games_wrapper_and_core() {
+        let old = |x: f32| x.clamp(-1.0, 1.0).asin();
+        for x in [1.0000001f32, 1.5, -2.0, 7.0] {
+            assert_eq!(asinf_libm(x).to_bits(), 0, "asinf({x}) is the wrapper's 0.0");
+            assert_ne!(old(x).to_bits(), 0, "the old clamp gave ±π/2 for {x}");
+        }
+        assert!(asinf_libm(f32::NAN).is_nan());
+        assert_eq!(asinf_libm(1.0).to_bits(), add(mul(1.0, f32::from_bits(0x3fc9_0fda)), mul(1.0, f32::from_bits(0x33a2_2168))).to_bits());
+        assert_eq!(asinf_libm(1e-9), 1e-9, "|x| < 2^-27 returns x");
+        let mut n = 0;
+        for i in 0..=20000 {
+            let x = -1.0 + i as f32 * 1e-4;
+            let r = asinf_libm(x);
+            let want = (x as f64).asin() as f32;
+            let ulps = (r.to_bits() as i64 - want.to_bits() as i64).abs();
+            assert!(ulps <= 4, "asinf({x}) = {r} vs {want}");
+            if r.to_bits() != old(x).to_bits() { n += 1; }
+            assert_eq!(asinf_libm(-x).to_bits(), (-r).to_bits(), "odd at {x}");
+        }
+        eprintln!("{n} of 20001 inputs differ from the host asin in the last bits");
     }
 }

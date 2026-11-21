@@ -78,8 +78,9 @@ aspect 4/3, near 0.1.
 
 ## Aim and bullets [M]
 
-- Bullet origin = the eye; aim point = eye + 256 · (−tx, −ty, 1) through the view (tx = 0.76966 cx, ty = 0.57724 cy,
-  cx / cy the smoothed crosshair offset `BL+0x120 / +0x124`); the first world hit replaces it (same ray).
+- Bullet origin = the eye; aim point = eye + 256 · (−tx, −ty, 1) through the view (tx = 0.76966 cx / zoom, ty = 0.57724
+  cy / zoom, cx / cy the smoothed crosshair offset `BL+0x120 / +0x124`, zoom = viewer+0x108); the first world hit
+  replaces it (same ray). Auto-aim in full: docs/systems/auto-aim.md.
 - Aim mode (action 0x13 held): cursor `BL+0x118` += stick · 0.1275 · 0.125 (x), 0.136 · 0.125 (y), box ±0.296 /
   ±0.4; edge-turn ramps. Smoothed cursor += (raw − smoothed) · 0.5. The P2K has no zoom (`weapon+0x88` = 1).
 - Auto-aim (`PlayerSetting+1` = 1 [L, checked — on]; D-001: off by default with a mouse): the crosshair snaps onto
