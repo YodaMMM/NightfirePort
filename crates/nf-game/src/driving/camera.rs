@@ -26,7 +26,9 @@
 //!    `offset += (target - offset) * rate` [M 0x1b3330-0x1b33c0]. eye = anchor + offset.
 //! 6. checkCollisions: three segment casts car.pos -> the eye (x1.075, +-the camera basis) pull
 //!    the eye in, never nearer than 2.5; a fourth cast lowers the eye while something stands
-//!    between it and the car [M FUN_001b9198].
+//!    between it and the car [M FUN_001b9198]. The casts see `CDat` collision only ([`CamWorld`]);
+//!    then the eye is lifted out of other vehicles' and type-8 bodies' ellipsoids ([`push_out`],
+//!    `FUN_001b8ae0` / `FUN_001b8d08`).
 //! 7. look: forward = normalize(anchor + up*lookUp - eye), right = normalize(up x forward),
 //!    up' = forward x right [M FUN_001d5700]. fov = the mode's defaultFov (33.0 unless set).
 
@@ -134,6 +136,207 @@ pub const DIP_FROM: f32 = 0.125; // 0x3e000000
 pub const DIP_TO: f32 = 0.975; // 0x3f79999a
 pub const DIP_MAX: i32 = 0x50;
 pub const DIP_STEP: f32 = -0.0125; // eye += up * count * -0.0125
+
+/// `kCameraObjectRadiusEx.x/.y/.z` (`DAT_00333650/54/58`): camera.ini `[Global]` sets 1.5 each [D];
+/// the loader's defaults are 1.675 / 1.925 / 1.325 [M FUN_001a49e0 :801-803].
+pub const OBJECT_RADIUS_EX: [f32; 3] = [1.5, 1.5, 1.5];
+pub const OBJECT_RADIUS_EX_DEFAULT: [f32; 3] = [1.675, 1.925, 1.325];
+/// `kCameraObjectSphereRad` (`DAT_00333660`): 2.598 in camera.ini [D], loader default 2.875
+/// (0x40380000) [M FUN_001a49e0 :804].
+pub const OBJECT_SPHERE_RAD: f32 = 2.598;
+pub const OBJECT_SPHERE_RAD_DEFAULT: f32 = 2.875;
+/// The driving camera's near and far planes: `RCamera` ctor `FUN_001d40f0` sets +0x20 = 0.17
+/// (0x3e2e147b) and +0x2c = 3000.0 (0x453b8000); `FUN_001d4878` hands both to the projection
+/// `FUN_00295910` [M]. No write that moves the near plane while driving was found.
+pub const NEAR_PLANE: f32 = 0.17;
+pub const FAR_PLANE: f32 = 3000.0;
+
+/// One collision triangle as the camera cast sees it: a `CDat` `ci` item's `ca` strip triangle
+/// in world space with its class byte (vertex k+2's +0x2d) [M FUN_00213d68 reads +0x2d].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CamTri {
+    pub v: [[f32; 3]; 3],
+    pub class: u8,
+}
+
+/// The world the chase camera's segment casts test (`FUN_002127f0` -> `FUN_002166f8` on
+/// `DAT_0033a540`, the CDat collision world) [M]:
+///
+/// - the gatherer the camera keeps at +0x35c (`FUN_002117e8`, flags 0xc) collects, around the
+///   car-to-eye midpoint, from the `CGrd` grid (`DAT_0033a5c8`, `FUN_0021cf30`) the cells' kind-0
+///   entries: u16 indices into the `ci` item array (world +8, 0x40-byte items) plus the cells'
+///   linked kind-0 nodes (moved `ci` items, `FUN_0021cad0`) [M FUN_00217228]. Flag 8 keeps the
+///   items' triangle groups (`FUN_00216ec0`), flag 4 their `ca` wall edges (`FUN_00219a50`);
+/// - the cast tests the edges (`FUN_0021a248` -> `FUN_00219328`) and, flag 8 set, the triangles
+///   (`FUN_00232638` -> `FUN_00214c08` -> `FUN_00213d68`, both windings accepted, a triangle whose
+///   class byte meets the world's +0x2c mask skipped); `FUN_00216d30` keeps the nearer hit.
+///
+/// So the camera sees `CDat` collision only: no scene objects (`RSceneObj` props such as RACE's
+/// `POS2_Cautionguard` rails are not `ci` items), no smackables, no cars (cars are handled by the
+/// ellipsoid push-out, [`push_out`]). There is no slope filter: walls count.
+///
+/// Port: the triangle half only (the `ca` wall-edge list is not extracted by the port yet); a
+/// 16-unit XZ grid stands in for the game's sphere gather (a port choice: same set of candidate
+/// triangles along the segment). The world class mask is runtime state; 0 (nothing skipped)
+/// unless set.
+#[derive(Clone, Debug, Default)]
+pub struct CamWorld {
+    tris: Vec<CamTri>,
+    cells: std::collections::HashMap<(i32, i32), Vec<u32>>,
+    /// The world +0x2c class mask (unproven value; 0 skips nothing).
+    pub class_mask: u8,
+}
+
+impl CamWorld {
+    const CELL: f32 = 16.0;
+
+    pub fn new(tris: Vec<CamTri>) -> CamWorld {
+        let mut cells: std::collections::HashMap<(i32, i32), Vec<u32>> = std::collections::HashMap::new();
+        for (i, t) in tris.iter().enumerate() {
+            let (mut x0, mut x1, mut z0, mut z1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+            for p in &t.v {
+                x0 = x0.min(p[0]);
+                x1 = x1.max(p[0]);
+                z0 = z0.min(p[2]);
+                z1 = z1.max(p[2]);
+            }
+            for cx in (x0 / Self::CELL).floor() as i32..=(x1 / Self::CELL).floor() as i32 {
+                for cz in (z0 / Self::CELL).floor() as i32..=(z1 / Self::CELL).floor() as i32 {
+                    cells.entry((cx, cz)).or_default().push(i as u32);
+                }
+            }
+        }
+        CamWorld { tris, cells, class_mask: 0 }
+    }
+
+    pub fn len(&self) -> usize {
+        self.tris.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tris.is_empty()
+    }
+
+    /// The nearest hit point of segment a->b (two-sided), or None: the camera's `FUN_002127f0`.
+    pub fn cast(&self, a: [f32; 3], b: [f32; 3]) -> Option<[f32; 3]> {
+        let d = sub(b, a);
+        let (cx0, cx1) = ((a[0].min(b[0]) / Self::CELL).floor() as i32, (a[0].max(b[0]) / Self::CELL).floor() as i32);
+        let (cz0, cz1) = ((a[2].min(b[2]) / Self::CELL).floor() as i32, (a[2].max(b[2]) / Self::CELL).floor() as i32);
+        let mut best: Option<f32> = None;
+        for cx in cx0..=cx1 {
+            for cz in cz0..=cz1 {
+                let Some(list) = self.cells.get(&(cx, cz)) else { continue };
+                for &i in list {
+                    let t = &self.tris[i as usize];
+                    if t.class & self.class_mask != 0 {
+                        continue;
+                    }
+                    if let Some(s) = segment_tri(a, d, t.v) {
+                        if best.is_none_or(|b| s < b) {
+                            best = Some(s);
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|s| add(a, scale(d, s)))
+    }
+}
+
+/// Segment a + d*s (s in [0, 1]) against a triangle, either winding: the s of the hit.
+fn segment_tri(a: [f32; 3], d: [f32; 3], v: [[f32; 3]; 3]) -> Option<f32> {
+    let e1 = sub(v[1], v[0]);
+    let e2 = sub(v[2], v[0]);
+    let h = cross(d, e2);
+    let det = e1[0] * h[0] + e1[1] * h[1] + e1[2] * h[2];
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let sv = sub(a, v[0]);
+    let u = inv * (sv[0] * h[0] + sv[1] * h[1] + sv[2] * h[2]);
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = cross(sv, e1);
+    let w = inv * (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]);
+    if w < 0.0 || u + w > 1.0 {
+        return None;
+    }
+    let s = inv * (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]);
+    (0.0..=1.0).contains(&s).then_some(s)
+}
+
+/// A body the eye is pushed out of (`FUN_001b8ae0` -> `FUN_001b8d08`) [M]:
+///
+/// - every vehicle in the sim's vehicle list (`DAT_00339f5c..60`) except the camera's own target
+///   (camera +0x118): half-extents = the vehicle's size vector (its +0x5c object's +0x4c0) times
+///   `kCameraObjectRadiusEx`, gate `|eye - pos|^2 <= |size|^2 * kCameraObjectSphereRad`;
+/// - every live physics body of the 0x60-slot table (`0x339190`, `DAT_003394c0`) whose type byte
+///   +0x1c is 8: half-extents = `kCameraObjectRadiusEx * radius (+0x2c)`, gate
+///   `|eye - pos|^2 <= radius * kCameraObjectSphereRad` (the radius itself, not squared, as the
+///   code compares).
+///
+/// `rows` are the body's orientation rows (right, up, forward), the frame the test runs in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Obstacle {
+    pub pos: [f32; 3],
+    pub rows: [[f32; 3]; 3],
+    pub half: [f32; 3],
+    /// The squared-distance gate described above.
+    pub gate2: f32,
+}
+
+impl Obstacle {
+    /// A vehicle of size `size` (its +0x4c0 vector, unnamed in the code) [M FUN_001b8ae0 loop 1].
+    pub fn vehicle(pos: [f32; 3], rows: [[f32; 3]; 3], size: [f32; 3]) -> Obstacle {
+        let half = [size[0] * OBJECT_RADIUS_EX[0], size[1] * OBJECT_RADIUS_EX[1], size[2] * OBJECT_RADIUS_EX[2]];
+        let s2 = size[0] * size[0] + size[1] * size[1] + size[2] * size[2];
+        Obstacle { pos, rows, half, gate2: s2 * OBJECT_SPHERE_RAD }
+    }
+
+    /// A type-8 physics body of radius `radius` (+0x2c) [M FUN_001b8ae0 loop 2].
+    pub fn body(pos: [f32; 3], rows: [[f32; 3]; 3], radius: f32) -> Obstacle {
+        let half = [OBJECT_RADIUS_EX[0] * radius, OBJECT_RADIUS_EX[1] * radius, OBJECT_RADIUS_EX[2] * radius];
+        Obstacle { pos, rows, half, gate2: radius * OBJECT_SPHERE_RAD }
+    }
+}
+
+/// `FUN_001b8d08`: if `eye` is inside the obstacle's ellipsoid (half-extents `half` on its rows),
+/// lift it to the ellipsoid's surface along the local up row: local y = sqrt((1 - x^2/rx^2 -
+/// z^2/rz^2) * ry^2), back to world, world offset y made positive, + pos. None when outside
+/// (any |local| >= its half-extent, or the ellipsoid sum >= 1) [M].
+pub fn push_out(eye: [f32; 3], o: &Obstacle) -> Option<[f32; 3]> {
+    let d = sub(eye, o.pos);
+    let dot = |r: [f32; 3]| r[0] * d[0] + r[1] * d[1] + r[2] * d[2];
+    let l = [dot(o.rows[0]), dot(o.rows[1]), dot(o.rows[2])];
+    let [rx, ry, rz] = o.half;
+    if !(l[0].abs() < rx && l[1].abs() < ry && l[2].abs() < rz) {
+        return None;
+    }
+    let fx = l[0] * l[0] / (rx * rx);
+    let fz = l[2] * l[2] / (rz * rz);
+    if fx + l[1] * l[1] / (ry * ry) + fz >= 1.0 {
+        return None;
+    }
+    let ly = ((1.0 - fx - fz) * ry * ry).sqrt();
+    let mut w = add(add(scale(o.rows[0], l[0]), scale(o.rows[1], ly)), scale(o.rows[2], l[2]));
+    w[1] = w[1].abs();
+    Some(add(w, o.pos))
+}
+
+/// `FUN_001b8ae0`: each obstacle in order, gated by its sphere test, may move the eye [M].
+pub fn push_out_all(mut eye: [f32; 3], obstacles: &[Obstacle]) -> [f32; 3] {
+    for o in obstacles {
+        let d = sub(o.pos, eye);
+        if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= o.gate2 {
+            if let Some(e) = push_out(eye, o) {
+                eye = e;
+            }
+        }
+    }
+    eye
+}
 
 /// The car as the camera reads it: the physics object's position (+0x10) and velocity (+0x20)
 /// and its orientation rows (FUN_001d5b90: row 0 right, row 1 up, row 2 forward).
@@ -298,7 +501,7 @@ impl ChaseCamera {
     }
 
     /// One camera update (`FUN_001b2b48`, normal path). `ray(from, to)` is the world segment
-    /// cast (`FUN_002127f0`): the first hit point on from->to, or None.
+    /// cast (`FUN_002127f0`): the first hit point on from->to, or None. No obstacles.
     pub fn update(
         &mut self,
         p: &HeliParams,
@@ -306,6 +509,20 @@ impl ChaseCamera {
         car: &CarPose,
         look_back: bool,
         ray: &mut dyn FnMut([f32; 3], [f32; 3]) -> Option<[f32; 3]>,
+    ) -> CamView {
+        self.update_full(p, arm, car, look_back, ray, &[])
+    }
+
+    /// [`ChaseCamera::update`] with the bodies `FUN_001b8ae0` pushes the eye out of (other
+    /// vehicles, type-8 bodies; never the target itself), applied at the end of the pull-in.
+    pub fn update_full(
+        &mut self,
+        p: &HeliParams,
+        arm: &ArmParams,
+        car: &CarPose,
+        look_back: bool,
+        ray: &mut dyn FnMut([f32; 3], [f32; 3]) -> Option<[f32; 3]>,
+        obstacles: &[Obstacle],
     ) -> CamView {
         let (target, s) = arm_target(p, arm, car, look_back, self.vertigo);
         self.vertigo = s;
@@ -320,6 +537,8 @@ impl ChaseCamera {
         let mut eye = add(anchor, self.offset);
         if p.check_collisions {
             eye = self.pull_in(p, car, eye, ray);
+            // FUN_001b9198 ends with FUN_001b8ae0(cam, &eye) [M 0x1b9198 tail].
+            eye = push_out_all(eye, obstacles);
         }
         // up target (+0x2c0): only upRate > 0 moves it [M 0x1b34f0..: lerp toward the car up].
         if p.up_rate > 0.0 {
@@ -580,14 +799,14 @@ mod tests {
     }
 
     #[test]
-    fn the_race_barrier_pulls_the_eye_in_front_of_it() {
+    fn a_wall_behind_the_car_pulls_the_eye_in_front_of_it() {
         let (p, arm) = ANYCAR_HELI_CAM0;
         let car = race_start();
         let mut cam = ChaseCamera::new(&p, &arm, &car);
         let (u, r) = (cam.up, cam.right);
         let mut w = wall(173.0);
         let v = cam.update(&p, &arm, &car, false, &mut w);
-        assert!(v.eye[2] < 173.0, "eye {:?} still behind the barrier", v.eye);
+        assert!(v.eye[2] < 173.0, "eye {:?} still behind the wall", v.eye);
         // the least t = 4.2 / (cast end z) of the three casts is the scale.
         let d = [0.0, 1.15, 5.0];
         let k = cast_ends(d, u, r).iter().map(|e| 4.2 / e[2]).fold(1.0f32, f32::min);
@@ -630,6 +849,121 @@ mod tests {
         // where the flat triangle is a line and every point passes.
         let (b, c) = (c, b);
         assert!(in_triangle([0.9, 0.9, 0.0], a, b, c));
+    }
+
+    /// A vertical wall quad at z = `wz` (x -10..10, y -5..5) as two triangles of `class`.
+    fn wall_tris(wz: f32, class: u8) -> Vec<CamTri> {
+        let (a, b, c, d) = ([-10.0, -5.0, wz], [10.0, -5.0, wz], [10.0, 5.0, wz], [-10.0, 5.0, wz]);
+        vec![CamTri { v: [a, b, c], class }, CamTri { v: [a, d, c], class }]
+    }
+
+    #[test]
+    fn the_camera_world_hits_walls_either_winding_and_keeps_the_nearest() {
+        let mut tris = wall_tris(-3.0, 0);
+        tris.extend(wall_tris(-4.0, 0));
+        let w = CamWorld::new(tris);
+        let h = w.cast([0.0, 1.0, 0.0], [0.0, 1.0, -5.0]).expect("a vertical wall is in the cast set");
+        assert!(close(h, [0.0, 1.0, -3.0], 1e-5), "{h:?}");
+        // the other way round meets the far wall first (both windings count).
+        let h = w.cast([0.0, 1.0, -5.0], [0.0, 1.0, 0.0]).expect("hit");
+        assert!(close(h, [0.0, 1.0, -4.0], 1e-5), "{h:?}");
+        assert_eq!(w.cast([0.0, 1.0, 0.0], [0.0, 1.0, -2.9]), None, "the segment ends short of it");
+    }
+
+    #[test]
+    fn the_world_class_mask_skips_matching_triangles() {
+        let mut w = CamWorld::new(wall_tris(-3.0, 0x04));
+        assert!(w.cast([0.0, 1.0, 0.0], [0.0, 1.0, -5.0]).is_some(), "mask 0: the class-4 wall counts");
+        w.class_mask = 0x04;
+        assert_eq!(w.cast([0.0, 1.0, 0.0], [0.0, 1.0, -5.0]), None);
+    }
+
+    #[test]
+    fn a_wall_in_the_camera_world_pulls_the_eye_in() {
+        let (p, arm) = ANYCAR_HELI_CAM0;
+        let car = race_start();
+        let mut cam = ChaseCamera::new(&p, &arm, &car);
+        let (u, r) = (cam.up, cam.right);
+        let w = CamWorld::new(wall_tris(173.0, 0));
+        let v = cam.update(&p, &arm, &car, false, &mut |a, b| w.cast(a, b));
+        let d = [0.0, 1.15, 5.0];
+        let k = cast_ends(d, u, r).iter().map(|e| 4.2 / e[2]).fold(1.0f32, f32::min);
+        let exp = add(add([0.0, 0.0, 168.8], scale(d, k)), scale(u, 0.5 * (1.0 - k)));
+        assert!(close(v.eye, exp, 1e-3), "{:?} vs {exp:?}", v.eye);
+    }
+
+    const ID: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+    #[test]
+    fn push_out_lifts_the_eye_to_the_ellipsoid_top() {
+        // a type-8 body of radius 1: half-extents 1.5 on every row.
+        let o = Obstacle::body([0.0; 3], ID, 1.0);
+        assert_eq!(o.half, [1.5, 1.5, 1.5]);
+        let ly = (2.25f32 - 0.25 - 0.09).sqrt();
+        let e = push_out([0.5, 0.2, 0.3], &o).expect("inside");
+        assert!(close(e, [0.5, ly, 0.3], 1e-5), "{e:?}");
+        // below the centre it still goes to the top (the world offset y is made positive).
+        let e = push_out([0.5, -0.2, 0.3], &o).expect("inside");
+        assert!(close(e, [0.5, ly, 0.3], 1e-5), "{e:?}");
+        // an upside-down body: its up row points down, the offset y is still made positive.
+        let flipped = Obstacle::body([0.0; 3], [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]], 1.0);
+        let e = push_out([0.5, 0.2, 0.3], &flipped).expect("inside");
+        assert!(close(e, [0.5, ly, 0.3], 1e-5), "{e:?}");
+        assert_eq!(push_out([1.2, 0.0, 1.2], &o), None, "inside the box, outside the ellipsoid");
+        assert_eq!(push_out([1.6, 0.0, 0.0], &o), None);
+    }
+
+    #[test]
+    fn push_out_runs_in_the_bodys_frame() {
+        // a vehicle of size (1, 1, 2) facing +x: half-extents (1.5, 1.5, 3) on (right, up, fwd).
+        let pose = CarPose::from_yaw([10.0, 0.0, 0.0], std::f32::consts::FRAC_PI_2, [0.0; 3]);
+        let rows = [pose.right, pose.up, pose.fwd];
+        let o = Obstacle::vehicle(pose.pos, rows, [1.0, 1.0, 2.0]);
+        assert!((o.gate2 - 6.0 * OBJECT_SPHERE_RAD).abs() < 1e-5);
+        let e = push_out_all([12.9, 0.0, 0.0], &[o]);
+        let ly = ((1.0f32 - 2.9 * 2.9 / 9.0) * 2.25).sqrt();
+        assert!(close(e, [12.9, ly, 0.0], 1e-4), "2.9 along the car's forward is inside: {e:?}");
+        // the same offset across the car is outside (half-extent 1.5 there).
+        assert_eq!(push_out_all([10.0, 0.0, 2.9], &[o]), [10.0, 0.0, 2.9]);
+    }
+
+    #[test]
+    fn the_body_gate_compares_the_radius_unsquared() {
+        // radius 4: half-extents 6, gate |d|^2 <= 4 * 2.598 = 10.39. At 3.3 (|d|^2 10.89) the eye
+        // is inside the ellipsoid but past the gate, so it stays.
+        let o = Obstacle::body([0.0; 3], ID, 4.0);
+        assert!(push_out([3.3, 0.0, 0.0], &o).is_some(), "inside the ellipsoid");
+        assert_eq!(push_out_all([3.3, 0.0, 0.0], &[o]), [3.3, 0.0, 0.0]);
+        let e = push_out_all([3.2, 0.0, 0.0], &[o]);
+        assert!(e[1] > 4.0, "3.2 (|d|^2 10.24) passes the gate: {e:?}");
+    }
+
+    #[test]
+    fn another_car_at_the_eye_lifts_it_but_no_obstacle_leaves_it() {
+        let (p, arm) = ANYCAR_HELI_CAM0;
+        let car = race_start();
+        let mut a = ChaseCamera::new(&p, &arm, &car);
+        let mut b = a;
+        let plain = a.update(&p, &arm, &car, false, &mut |_, _| None);
+        let other = CarPose::from_yaw([0.0, 0.0, 173.8], std::f32::consts::PI, [0.0; 3]);
+        let o = Obstacle::vehicle(other.pos, [other.right, other.up, other.fwd], [1.0, 0.7, 2.2]);
+        let v = b.update_full(&p, &arm, &car, false, &mut |_, _| None, &[o]);
+        assert!(close(plain.eye, [0.0, 1.15, 173.8], 1e-3));
+        // local y = 1.15 is past the 0.7*1.5 = 1.05 half height: outside, no push.
+        assert!(close(v.eye, plain.eye, 1e-6), "{:?}", v.eye);
+        let tall = Obstacle::vehicle(other.pos, [other.right, other.up, other.fwd], [1.0, 1.0, 2.2]);
+        let mut c = ChaseCamera::new(&p, &arm, &car);
+        let v = c.update_full(&p, &arm, &car, false, &mut |_, _| None, &[tall]);
+        let ly = (1.0f32 * 2.25).sqrt();
+        assert!(close(v.eye, [0.0, ly, 173.8], 1e-3), "lifted to the top, 1.5: {:?}", v.eye);
+    }
+
+    #[test]
+    fn the_near_plane_is_0_17() {
+        assert_eq!(NEAR_PLANE.to_bits(), 0x3e2e147b);
+        assert_eq!(FAR_PLANE.to_bits(), 0x453b8000);
+        assert_eq!(OBJECT_SPHERE_RAD_DEFAULT.to_bits(), 0x40380000);
+        assert_eq!(OBJECT_RADIUS_EX_DEFAULT.map(f32::to_bits), [0x3fd66666, 0x3ff66666, 0x3fa9999a]);
     }
 
     #[test]
