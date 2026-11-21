@@ -45,8 +45,9 @@
 //!      −14.0078..14.207 × −3.5..4.5 × −30.0078..30.0078];
 //!    - UVs: `UNPACK V2-16` unsigned with the same rule, or `UNPACK V2-32` floats [D: road strips
 //!      span v = 0..1 exactly].
-//!    The VU1 microcode that consumes these (eaglrm.o) was not disassembled — there is no VU
-//!    disassembler in the repo — so the /256 scale and the strip-list unit are data-proven only.
+//!    The strip-list unit is the microcode's output quadwords per vertex: 3 for the textured
+//!    methods, 2 for `BondGouraud` [M bondrm.o, `tools/vu1dis.py`; see [`MC_GOURAUD`]]. Water
+//!    batches carry no UVs: the water microcode makes them ([`WaterLayers`]).
 //! 5. **Draw chain** — the batch stored in a group entry is NOT what that entry draws. The model
 //!    draw sets the part index (`+0xc0`) and runs each entry's render list; the list's op 4 puts
 //!    `table[part]` (a DMA call) into the chain, which leads to that part's colour upload and the
@@ -114,6 +115,56 @@ pub struct LocalStrip {
     /// texture; that the VU1 microcode passes these to the GS unscaled is not proven (eaglrm.o is
     /// not disassembled).
     pub colors: Vec<[u8; 3]>,
+    /// Set when the batch is drawn by the water microcode (`MatBondWater` / `MatBondWaterPacked`):
+    /// its UVs are generated on VU1 from the world position, see [`WaterLayers`].
+    pub water: Option<WaterLayers>,
+}
+
+/// The microcode that draws untextured Gouraud batches (`texture=off`): two output quadwords per
+/// vertex (RGBAQ, XYZ2), so its strip lists count in 2s [M bondrm.o `BondGouraud0__EAGLMicroCode`:
+/// it stores RGBA + XYZ per vertex from VU 0xf1 and sets the ADC bit at `0xf2 + b` and `0xf4 + b`
+/// for each strip-list byte b of VU 0x0d..0x0f].
+pub const MC_GOURAUD: &str = "BondGouraud0__EAGLMicroCode";
+/// The two water microcodes (positions as floats / as 16-bit) [D: every water render list's op 1
+/// loads one of them; M bondrm.o].
+pub const MC_WATER: [&str; 2] = ["MatBondWater0__EAGLMicroCode", "MatBondWaterPacked0__EAGLMicroCode"];
+/// `GAME::UVScale1..4` as the water object sets them (`FUN_001f03e0` 0x1f03e0: object `+0x50`,
+/// `+0x60`, `+0x70`, `+0x80` = (0.01, 0.01)); `FUN_001a8930` resolves `UVScaleN` to
+/// `DAT_00335b20 + 0x50 + (N - 1) * 0x10` [M]. Only the debug tuners "Water scale X/Y" change them.
+pub const WATER_UV_SCALE: [[f32; 2]; 4] = [[0.01, 0.01]; 4];
+/// `GAME::UVScroll1..4` (object `+0xb0`, `+0xc0`, `+0xd0`, `+0xe0` [M 0x1f03e0 / 0x1a8930]), in
+/// UV units per `SimStep` unit.
+pub const WATER_UV_SCROLL: [[f32; 2]; 4] = [[0.01, 0.01], [-0.01, 0.01], [-0.01, -0.01], [0.01, -0.01]];
+
+/// The water microcode's texture layers [M bondrm.o `MatBondWater0` / `MatBondWaterPacked0`]: it
+/// draws the batch four times; pass i kicks the texture registers the render list uploaded for
+/// descriptor i (VU 9, 0x10, 0x17, 0x1e = the op-3 words in order) and generates, per vertex,
+/// - `w` = the position through `gpModelMatrix` (the instance matrix) and `T` its translation;
+/// - `base = (w.x * S.x - trunc(T.x * S.x), w.z * S.y - trunc(T.z * S.y))` (S = `UVScale_i`,
+///   VU 0x2a + i; the whole part taken off only keeps the numbers small);
+/// - `uv = base + frac(Scroll_i * SimStep.x)` (Scroll = `UVScroll_i`, VU 0x2e + i; SimStep at VU
+///   0x29 = `GAME::SimStep` = `DAT_00334000`, which `FUN_001d1ef8` sets to the integer counter
+///   `DAT_00339f54` as a float), then ST = uv * Q.
+/// Not traced: the counter's rate, the four passes' blend states and colours, and the
+/// `WaterRotToSun` / `CameraPos` terms.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaterLayers {
+    /// The sheet name of each pass's texture (op 3's words in order), `None` when unresolved.
+    pub textures: Vec<Option<String>>,
+}
+
+impl WaterLayers {
+    /// The layer-`layer` UV of a vertex at world position `w` of a model whose matrix translation
+    /// is `origin`, at `SimStep.x = sim_step` [M, see the type docs].
+    pub fn uv(layer: usize, w: [f32; 3], origin: [f32; 3], sim_step: f32) -> [f32; 2] {
+        let s = WATER_UV_SCALE[layer & 3];
+        let r = WATER_UV_SCROLL[layer & 3];
+        let frac = |x: f32| x - x.trunc();
+        [
+            w[0] * s[0] - (origin[0] * s[0]).trunc() + frac(r[0] * sim_step),
+            s[1] * w[2] - (s[1] * origin[2]).trunc() + frac(r[1] * sim_step),
+        ]
+    }
 }
 
 /// One world-space strip: a placed model strip.
@@ -128,6 +179,8 @@ pub struct WorldStrip {
     pub uvs: Vec<[f32; 2]>,
     /// Per-vertex RGB, see [`LocalStrip::colors`].
     pub colors: Vec<[u8; 3]>,
+    /// Water batches: the layers; `uvs` then holds layer 0 at `SimStep` 0 ([`WaterLayers::uv`]).
+    pub water: Option<WaterLayers>,
 }
 
 impl WorldStrip {
@@ -269,6 +322,8 @@ pub struct ModelIndex<'m> {
     pub data_offset: usize,
     models: HashMap<String, u32>,
     textures: HashMap<u32, String>,
+    /// Image offset -> undefined symbol (`TrackModule::external_refs`); empty if that fails.
+    ext: HashMap<usize, String>,
 }
 
 impl<'m> ModelIndex<'m> {
@@ -301,7 +356,8 @@ impl<'m> ModelIndex<'m> {
                 }
             }
         }
-        Ok(ModelIndex { module, data_offset: data.data_offset as usize, models, textures })
+        let ext = module.external_refs().unwrap_or_default();
+        Ok(ModelIndex { module, data_offset: data.data_offset as usize, models, textures, ext })
     }
 
     fn img(&self) -> &[u8] { &self.module.image }
@@ -427,6 +483,33 @@ impl<'m> ModelIndex<'m> {
         None
     }
 
+    /// The microcode a group entry's render list loads: op 1's `+4` word, relocated against
+    /// `<method>0__EAGLMicroCode` [M `FUN_002a3290` case 1; D the relocation]. `None` = the list
+    /// loads none (the previous one stays resident).
+    pub fn entry_microcode(&self, po: usize) -> Option<&str> {
+        let ops = self.render_ops(po).ok()?;
+        let (at, _) = ops.iter().find(|(_, o)| o >> 24 == 1)?;
+        self.ext.get(&(at + 4)).map(|s| s.as_str())
+    }
+
+    /// Every texture word of the list's first op 3, in order, resolved for `part` (the water
+    /// microcode's four passes take them in this order [M bondrm.o]).
+    pub fn packet_textures(&self, po: usize, part: u32) -> Vec<Option<String>> {
+        let Ok(ops) = self.render_ops(po) else { return Vec::new() };
+        let Some(&(at, o)) = ops.iter().find(|(_, o)| o >> 24 == 3) else { return Vec::new() };
+        (0..(o & 0xffff) as usize)
+            .map(|j| {
+                let w = u32_at(self.img(), at + 4 + j * 4).ok()?;
+                let a = match w >> 30 {
+                    0 => w & 0x3fff_ffff,
+                    1 => (w & 0x3fff_ffff).wrapping_add(part.wrapping_mul(0x60)),
+                    _ => return None,
+                };
+                self.textures.get(&a).cloned()
+            })
+            .collect()
+    }
+
     /// The VIF byte ranges the game sends for group entry `po` drawn as `part`
     /// [M `FUN_002a3290` case 4 + the PS2 DMA tag rules; D shapes]. The render list's op 4
     /// (`0x04000002`; exactly one per list in the 8 tracks [D]) copies one quadword from
@@ -484,16 +567,30 @@ impl<'m> ModelIndex<'m> {
     /// texture ([`Self::packet_texture`]). An entry whose list names no texture keeps the previous
     /// entry's [inferred from the list contents; the EAGL state machine itself is not traced].
     /// Each model starts untextured.
+    ///
+    /// The strip-list unit follows the resident microcode (the last op 1 of the model's lists): 2
+    /// for [`MC_GOURAUD`], 3 for every other one; with none loaded yet, the batch layout decides
+    /// ([`decode_vif`]). Batches drawn by a [`MC_WATER`] microcode get [`LocalStrip::water`].
     pub fn model_strips(&self, sym_value: u32) -> Result<Vec<LocalStrip>> {
         let part = self.model_part(sym_value)?;
         let mut out = Vec::new();
         let mut tex = None;
+        let mut mc: Option<String> = None;
         for po in self.model_packets(sym_value)? {
             if let Some(t) = self.packet_texture(po, part) {
                 tex = Some(t);
             }
-            for mut s in decode_vif(self.img(), &self.draw_chain(po, part)?, po)? {
+            if let Some(m) = self.entry_microcode(po) {
+                mc = Some(m.to_owned());
+            }
+            let unit = mc.as_deref().map(|m| if m == MC_GOURAUD { 2 } else { 3 });
+            let water = mc
+                .as_deref()
+                .filter(|m| MC_WATER.contains(m))
+                .map(|_| WaterLayers { textures: self.packet_textures(po, part) });
+            for mut s in decode_vif_unit(self.img(), &self.draw_chain(po, part)?, po, unit)? {
                 s.texture = tex.clone();
+                s.water = water.clone();
                 out.push(s);
             }
         }
@@ -513,8 +610,20 @@ pub fn decode_packet(img: &[u8], po: usize) -> Result<Vec<LocalStrip>> {
 /// across the ranges, as one DMA chain feeds one VIF. `label` names the batch in errors.
 /// Colours: the masked `UNPACK V3-8` unsigned (every one in the 8 tracks has STMASK 0x40404040 —
 /// x/y/z data, w from the row — mode 0, and `num` = the vertex count [D]).
+///
+/// The strip-list unit is the layout's: 2 for the `BondGouraud` layout (`V4-32` positions at VU
+/// 0x10), 3 otherwise ([`decode_vif_unit`] takes it explicitly).
 pub fn decode_vif(img: &[u8], ranges: &[(usize, usize)], label: usize) -> Result<Vec<LocalStrip>> {
+    decode_vif_unit(img, ranges, label, None)
+}
+
+/// [`decode_vif`] with the strip-list unit given: the microcode's output quadwords per vertex,
+/// 3 (ST, RGBAQ, XYZ2) or 2 (RGBAQ, XYZ2: [`MC_GOURAUD`]) [M bondrm.o: each microcode sets the
+/// ADC bit at its output base + the list byte]. `None` = the layout's default.
+pub fn decode_vif_unit(img: &[u8], ranges: &[(usize, usize)], label: usize, unit: Option<usize>) -> Result<Vec<LocalStrip>> {
     let po = label;
+    let mut gouraud = false;
+    let mut rgba: Option<Vec<[u8; 3]>> = None;
     let mut mode = 0u32;
     let mut row = [0u32; 4];
     let mut mask = 0u32;
@@ -567,17 +676,17 @@ pub fn decode_vif(img: &[u8], ranges: &[(usize, usize)], label: usize) -> Result
                     let offset = |k: usize, v: u32| if mode == 1 { v.wrapping_add(row[k]) } else { v };
                     match (vn, vl) {
                         (3, 0) if num == 1 && addr == 0 && count.is_none() => count = Some(u32_at(data, 0)? as usize),
-                        // Positions as unmasked `V4-32` floats (x, y, z, 1.0) at VU 0x36: the first
-                        // unpack after the strip list, `num` = the header count, every w lane exactly
-                        // 1.0f [D: the MIS11 water `AnthWater`, `Siloroom1Water`, `Tanker_Ocean1`/`1b`/
-                        // `1c`/`2b`/`3` — the slot the sibling `EndCoast_Ocean_*` layout fills with
-                        // `V3-16`, colours at VU 0x7a in both; the decoded vertices lie in each
-                        // article's `Base` box]. The other `V4-32` position form (VU 0x10, after
-                        // strip lists at 0x0d..0x0f: `Rock_Collapse`, `JA_SAL`, `JB_SAL`,
-                        // `LookOutTowerExplosion`) is NOT decoded: its strip-list bytes are not
-                        // multiples of 3 (e.g. 14, 30, 40 for 54 vertices), so that layout's
-                        // strip-list unit differs and is not traced.
-                        (3, 0) if positions.is_none() && addr == 0x36 && count == Some(num) => {
+                        // Positions as unmasked `V4-32` floats (x, y, z, 1.0): the first unpack after
+                        // the strip list, `num` = the header count, every w lane exactly 1.0f.
+                        // - VU 0x36: the water layout [D: MIS11 `AnthWater`, `Siloroom1Water`,
+                        //   `Tanker_Ocean*`, the slot `EndCoast_Ocean_*` fills with `V3-16`; M the
+                        //   water microcode reads positions from VU 0x36, colours from 0x7a];
+                        // - VU 0x10: the `BondGouraud` layout (strip lists at 0x0d..0x0f, `V4-8`
+                        //   RGBA at 0x80, no UVs: `Rock_Collapse`, `JA_SAL`, `JB_SAL`, `JB_FOD`, the
+                        //   fish and shark, `LookOutTowerExplosion`, ...; 22 chains) [M BondGouraud0
+                        //   reads positions at VU 0x10 and colours at 0x80].
+                        (3, 0) if positions.is_none() && (addr == 0x36 || addr == 0x10) && count == Some(num) => {
+                            gouraud = addr == 0x10;
                             if masked {
                                 return invalid(format!("packet {po:#x}: V4-32 position unpack {code:#x} masked"));
                             }
@@ -592,6 +701,13 @@ pub fn decode_vif(img: &[u8], ranges: &[(usize, usize)], label: usize) -> Result
                             positions = Some(v);
                         }
                         (3, 2) if num == 1 && positions.is_none() => ends.extend_from_slice(&data[..4]),
+                        // The Gouraud layout's colours: unmasked `V4-8` RGBA at VU 0x80, num = the
+                        // count (A is 0x80 in the data; dropped) [M BondGouraud0: `LQI` from VU 0x80 straight to
+                        // the RGBAQ output].
+                        // It comes before the positions when the part's colour call carries it.
+                        (3, 2) if num > 1 && addr == 0x80 && !masked && rgba.is_none() => {
+                            rgba = Some((0..num).map(|i| [data[i * 4], data[i * 4 + 1], data[i * 4 + 2]]).collect());
+                        }
                         (2, 1) | (2, 0) if positions.is_none() => {
                             if !(0..3).all(comp_is_data) || (vl == 1 && !usn) {
                                 return invalid(format!("packet {po:#x}: position unpack {code:#x} masked or signed"));
@@ -650,16 +766,18 @@ pub fn decode_vif(img: &[u8], ranges: &[(usize, usize)], label: usize) -> Result
     if !uvs.is_empty() && uvs.len() != count {
         return invalid(format!("packet {po:#x}: {} uvs for {count} positions", uvs.len()));
     }
-    let colors = colors.unwrap_or_default();
+    let colors = if gouraud { colors.or(rgba) } else { colors }.unwrap_or_default();
     if !colors.is_empty() && colors.len() != count {
         return invalid(format!("packet {po:#x}: {} colours for {count} positions", colors.len()));
     }
+    let unit = unit.unwrap_or(if gouraud { 2 } else { 3 });
     let mut starts = vec![0usize];
     for &b in ends.iter().take_while(|&&b| b != 0) {
-        if b % 3 != 0 || (b / 3) as usize <= *starts.last().unwrap() || (b / 3) as usize >= count {
-            return invalid(format!("packet {po:#x}: strip list {ends:?} invalid for {count} vertices"));
+        let b = b as usize;
+        if b % unit != 0 || b / unit <= *starts.last().unwrap() || b / unit >= count {
+            return invalid(format!("packet {po:#x}: strip list {ends:?} invalid for {count} vertices (unit {unit})"));
         }
-        starts.push((b / 3) as usize);
+        starts.push(b / unit);
     }
     starts.push(count);
     Ok(starts
@@ -669,6 +787,7 @@ pub fn decode_vif(img: &[u8], ranges: &[(usize, usize)], label: usize) -> Result
             positions: positions[w[0]..w[1]].to_vec(),
             uvs: if uvs.is_empty() { Vec::new() } else { uvs[w[0]..w[1]].to_vec() },
             colors: if colors.is_empty() { Vec::new() } else { colors[w[0]..w[1]].to_vec() },
+            water: None,
         })
         .collect())
 }
@@ -695,14 +814,21 @@ pub fn track_geometry(crp_bytes: &[u8]) -> Result<TrackGeometry> {
             cache.insert(sym, index.model_strips(sym)?);
         }
         for s in &cache[&sym] {
+            let positions: Vec<[f32; 3]> = s.positions.iter().map(|&v| p.apply(v)).collect();
+            let uvs = if s.water.is_some() {
+                positions.iter().map(|&w| WaterLayers::uv(0, w, p.origin, 0.0)).collect()
+            } else {
+                s.uvs.clone()
+            };
             g.strips.push(WorldStrip {
                 article: p.article.clone(),
                 part: p.part,
                 placement: p.index,
                 texture: s.texture.clone(),
-                positions: s.positions.iter().map(|&v| p.apply(v)).collect(),
-                uvs: s.uvs.clone(),
+                positions,
+                uvs,
                 colors: s.colors.clone(),
+                water: s.water.clone(),
             });
         }
     }
@@ -889,5 +1015,68 @@ mod tests {
         assert_eq!(ix.packet_texture(0x200, 0).as_deref(), Some("pb01"));
         // A part past the table (not an empty DMA call) is refused.
         assert!(ix.draw_chain(0x200, 2).is_err());
+    }
+
+    /// A `BondGouraud`-layout batch: count, strip list at 0x0d, `V4-32` positions at 0x10,
+    /// `V4-8` RGBA at 0x80 [D the 22 track chains; M BondGouraud0].
+    fn gouraud_batch(list: [u8; 4], pos: &[[f32; 3]], rgba: &[[u8; 4]]) -> Vec<u8> {
+        let mut v = Vec::new();
+        put_u32(&mut v, 0x6c01_c000);
+        put_u32(&mut v, pos.len() as u32);
+        for _ in 0..3 {
+            put_u32(&mut v, 0);
+        }
+        put_u32(&mut v, 0x6e01_c00d);
+        v.extend_from_slice(&list);
+        put_u32(&mut v, 0x6c00_c010 | ((pos.len() as u32) << 16));
+        for p in pos {
+            for c in p {
+                v.extend_from_slice(&c.to_le_bytes());
+            }
+            v.extend_from_slice(&1.0f32.to_le_bytes());
+        }
+        put_u32(&mut v, 0x6e00_c080 | ((rgba.len() as u32) << 16));
+        for c in rgba {
+            v.extend_from_slice(c);
+        }
+        put_u32(&mut v, 0x1700_0000);
+        v
+    }
+
+    #[test]
+    fn a_gouraud_batch_counts_its_strip_list_in_twos_and_carries_rgba_colours() {
+        // 6 vertices, one break at vertex 4: byte 8 = 2 x 4 (BondGouraud's two output qwords per
+        // vertex). Read in 3s, 8 is refused; the old decoder dropped the batch entirely.
+        let pos: Vec<[f32; 3]> = (0..6).map(|i| [i as f32, 0.5 * i as f32, -1.0]).collect();
+        let rgba: Vec<[u8; 4]> = (0..6).map(|i| [10 + i as u8, 20, 30, 0x80]).collect();
+        let b = gouraud_batch([8, 0, 0, 0], &pos, &rgba);
+        let s = decode_vif(&b, &[(0, b.len())], 0).unwrap();
+        assert_eq!(s.len(), 2);
+        assert_eq!(s[0].positions, pos[..4].to_vec());
+        assert_eq!(s[1].positions, pos[4..].to_vec());
+        assert_eq!(s[0].colors[3], [13, 20, 30]);
+        assert_eq!(s[1].colors, vec![[14, 20, 30], [15, 20, 30]]);
+        assert!(s[0].uvs.is_empty());
+        assert!(decode_vif_unit(&b, &[(0, b.len())], 0, Some(3)).is_err());
+        // Byte 6 = vertex 3 in 2s.
+        let b6 = gouraud_batch([6, 0, 0, 0], &pos, &rgba);
+        assert_eq!(decode_vif(&b6, &[(0, b6.len())], 0).unwrap()[0].positions.len(), 3);
+    }
+
+    #[test]
+    fn water_uvs_follow_the_microcodes_world_xz_rule_and_scroll_per_layer() {
+        // Layer 0: S = (0.01, 0.01); a model at x = 250 subtracts trunc(2.5) = 2 from u.
+        let o = [250.0, 0.0, -120.0];
+        let uv = WaterLayers::uv(0, [260.0, 5.0, -100.0], o, 0.0);
+        assert!((uv[0] - (2.6 - 2.0)).abs() < 1e-5 && (uv[1] - (-1.0 + 1.0)).abs() < 1e-5, "{uv:?}");
+        // y does not enter; z drives v (not y).
+        assert_eq!(WaterLayers::uv(0, [260.0, 99.0, -100.0], o, 0.0), uv);
+        // Scroll: frac(0.01 x 150) = 0.5 added; layer 1 scrolls u the other way.
+        let t = WaterLayers::uv(0, [260.0, 5.0, -100.0], o, 150.0);
+        assert!((t[0] - uv[0] - 0.5).abs() < 1e-5 && (t[1] - uv[1] - 0.5).abs() < 1e-5);
+        let t1 = WaterLayers::uv(1, [260.0, 5.0, -100.0], o, 150.0);
+        assert!((t1[0] - uv[0] + 0.5).abs() < 1e-5 && (t1[1] - uv[1] - 0.5).abs() < 1e-5);
+        // Whole scroll steps wrap away: SimStep 100 adds frac(1.0) = 0.
+        assert_eq!(WaterLayers::uv(0, [260.0, 5.0, -100.0], o, 100.0), uv);
     }
 }

@@ -264,7 +264,111 @@ fn ca_triangles(
     Ok(())
 }
 
+/// One `CDat ci#0` collision item with its article's `ca#0` strips, kept in the article's LOCAL
+/// frame — the frame the game's ground query works in [M 0x213ff8 / 0x214338: the world point is
+/// moved into the item's frame and tested against the untransformed `ca` vertices].
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollisionInstance {
+    /// The `ci` item's index in `ci#0`.
+    pub index: usize,
+    /// The article the item's `sr` reference names.
+    pub article: String,
+    /// The raw 0x40-byte item (rows +0x00/+0x20, flags +0x18, extents +0x0c/+0x2c, translation
+    /// +0x30, bounding radius +0x3c; see [`Crp::extract_collision_tris`]).
+    pub item: [u8; 64],
+    /// The article's `ca#0` payload.
+    pub ca: Vec<u8>,
+}
+
+impl CollisionInstance {
+    fn f(&self, o: usize) -> f32 { f32::from_le_bytes(self.item[o..o + 4].try_into().unwrap()) }
+    /// `+0x18` flags: bit 0 = the ground query measures upward; bits 0|1 = row 1 is r2 × r0
+    /// instead of (0, 1, 0) [M 0x212ed0, 0x213ff8].
+    pub fn flags(&self) -> u32 { u32::from_le_bytes(self.item[0x18..0x1c].try_into().unwrap()) }
+    /// The world→local rows r0, r1, r2 and translation t [M 0x212ed0].
+    pub fn rows(&self) -> ([[f32; 3]; 3], [f32; 3]) {
+        let r0 = [self.f(0), self.f(4), self.f(8)];
+        let r2 = [self.f(0x20), self.f(0x24), self.f(0x28)];
+        let r1 = if self.flags() & 3 == 0 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [r2[1] * r0[2] - r2[2] * r0[1], r2[2] * r0[0] - r2[0] * r0[2], r2[0] * r0[1] - r2[1] * r0[0]]
+        };
+        ([r0, r1, r2], [self.f(0x30), self.f(0x34), self.f(0x38)])
+    }
+    /// World → local: `l_j = Σ_i p_i · r_i[j] + t[j]` [M 0x25b890 with the 0x212ed0 matrix].
+    pub fn to_local(&self, p: [f32; 3]) -> [f32; 3] {
+        let (r, t) = self.rows();
+        [0, 1, 2].map(|j| p[0] * r[0][j] + p[1] * r[1][j] + p[2] * r[2][j] + t[j])
+    }
+    /// Local → world (the inverse the game builds with `FUN_002d19b0` for the hit triangle).
+    pub fn to_world(&self, l: [f32; 3]) -> Result<[f32; 3]> {
+        let (inv, t) = item_local_to_world(&self.item)?;
+        let d = [l[0] - t[0], l[1] - t[1], l[2] - t[2]];
+        Ok([0, 1, 2].map(|j| d[0] * inv[0][j] + d[1] * inv[1][j] + d[2] * inv[2][j]))
+    }
+    /// `+0x0c` / `+0x2c`: the local x / z half extents the ground query requires [M 0x213ff8].
+    pub fn half_extents(&self) -> (f32, f32) { (self.f(0x0c), self.f(0x2c)) }
+    /// `+0x3c`: the bounding radius the instance gather compares with [M 0x217228].
+    pub fn radius(&self) -> f32 { self.f(0x3c) }
+    /// The world centre the gather measures from: `(−t·r0, −t·r2)` in x and z [M 0x212da8].
+    pub fn centre_xz(&self) -> (f32, f32) {
+        let (r, t) = self.rows();
+        let dot = |a: [f32; 3]| -(t[0] * a[0] + t[1] * a[1] + t[2] * a[2]);
+        (dot(r[0]), dot(r[2]))
+    }
+}
+
 impl<'a> Crp<'a> {
+    /// Every `CDat ci#0` item with its article's `ca#0` payload, in item order [D layout, see
+    /// [`Self::extract_collision_tris`]].
+    pub fn collision_instances(&self) -> Result<Vec<CollisionInstance>> {
+        let mut arti_ca: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut cdat_sr: HashMap<u16, String> = HashMap::new();
+        let mut ci: Vec<&[u8]> = Vec::new();
+        for rec in self.pool()? {
+            let (start, end) = rec.window(self.data)?;
+            if rec.tag == tag::ARTI {
+                let (mut name, mut ca) = (None, None);
+                for o in (start..end).step_by(0x10) {
+                    let r = Record::parse(self.data, o)?;
+                    if r.tag == tag::NAME {
+                        name = Some(payload_string(self.payload(&r)?));
+                    } else if r.tag_code() == TAG_CA {
+                        ca = Some(self.payload(&r)?.to_vec());
+                    }
+                }
+                if let (Some(n), Some(c)) = (name, ca) {
+                    arti_ca.insert(n, c);
+                }
+            } else if rec.tag == tag::CDAT {
+                for o in (start..end).step_by(0x10) {
+                    let r = Record::parse(self.data, o)?;
+                    if r.tag_code() == TAG_SR {
+                        if let Some(i) = r.instance() {
+                            let s = payload_string(self.payload(&r)?);
+                            cdat_sr.insert(i, s.strip_prefix("CARP::").unwrap_or(&s).to_string());
+                        }
+                    } else if r.tag_code() == TAG_CI {
+                        ci.push(self.payload(&r)?);
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        let mut n = 0usize;
+        for p in ci {
+            for it in p.chunks_exact(64) {
+                n += 1;
+                let idx = u32_at(it, 0x1c)? as u16;
+                let Some(article) = cdat_sr.get(&idx) else { continue };
+                let Some(ca) = arti_ca.get(article) else { continue };
+                out.push(CollisionInstance { index: n - 1, article: article.clone(), item: it.try_into().unwrap(), ca: ca.clone() });
+            }
+        }
+        Ok(out)
+    }
+
     /// Every pool article's mesh metadata: name, bounding box, part references. Errors only on
     /// malformed records (the game's data always carries `Base`+`Name` [D, all 8 tracks]).
     pub fn track_articles(&self) -> Result<Vec<ArticleMeta>> {

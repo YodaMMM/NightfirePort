@@ -19,11 +19,11 @@ use nf_formats::iso9660::IsoImage;
 /// MIS01/MIS3/MIS4/RACE — §4b).
 const COUNTS: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
     ("MIS01", 2552, 86, 60327, 257412, 880, 806),
-    ("MIS11", 1958, 107, 40307, 281672, 136, 0),
+    ("MIS11", 1958, 107, 40365, 281898, 136, 0),
     ("MIS13A", 3021, 76, 55963, 325807, 88, 88),
     ("MIS13B", 1412, 24, 22347, 121974, 56, 50),
     ("MIS13C", 371, 21, 5657, 32086, 0, 0),
-    ("MIS3", 3689, 65, 61842, 283733, 348, 336),
+    ("MIS3", 3689, 65, 61862, 283773, 348, 336),
     ("MIS4", 3331, 45, 43977, 184494, 440, 419),
     ("RACE", 3314, 45, 43421, 180393, 345, 332),
 ];
@@ -247,7 +247,7 @@ fn collision_strips(crp: &Crp<'_>) -> Vec<WorldStrip> {
                 let v: Vec<[f32; 3]> = (0..n).map(|k| world([f(c, cur + k * 16), f(c, cur + k * 16 + 4), f(c, cur + k * 16 + 8)])).collect();
                 for k in 2..n {
                     if u32::from_le_bytes(c[cur + k * 16 + 12..cur + k * 16 + 16].try_into().unwrap()) & 1 != 0 {
-                        out.push(WorldStrip { article: name.clone(), part: 0, placement: 0, texture: None, positions: v[k - 2..=k].to_vec(), uvs: Vec::new(), colors: Vec::new() });
+                        out.push(WorldStrip { article: name.clone(), part: 0, placement: 0, texture: None, positions: v[k - 2..=k].to_vec(), uvs: Vec::new(), colors: Vec::new(), water: None });
                     }
                 }
                 cur += n * 16;
@@ -301,11 +301,11 @@ fn every_texture_a_track_names_is_in_its_sheets() {
 /// batches, models whose chain lies in the box, models whose own batches do, coloured strips).
 const CHAIN: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
     ("MIS01", 1357, 1357, 81, 1871, 394, 59950),
-    ("MIS11", 314, 304, 0, 716, 254, 40802),
-    ("MIS13A", 743, 743, 24, 1232, 424, 27314),
-    ("MIS13B", 851, 851, 86, 1834, 472, 28578),
+    ("MIS11", 314, 309, 0, 715, 251, 40858),
+    ("MIS13A", 743, 743, 24, 1232, 424, 27317),
+    ("MIS13B", 851, 851, 86, 1834, 472, 28583),
     ("MIS13C", 237, 237, 36, 616, 244, 12124),
-    ("MIS3", 762, 744, 8, 1750, 754, 26622),
+    ("MIS3", 762, 752, 8, 1748, 751, 26671),
     ("MIS4", 1142, 1136, 94, 1792, 452, 21418),
     ("RACE", 1142, 1136, 106, 1789, 448, 21539),
 ];
@@ -424,7 +424,7 @@ fn mis11_float_position_water_decodes_inside_its_base_box() {
 /// render geometry both have a surface just under the start.
 const SPAWN: &[(&str, usize, f32, f32)] = &[
     ("MIS01", 684, -7.601536, -46.0),
-    ("MIS11", 29, 1.1834754, 25.0),
+    ("MIS11", 29, 1.1834755, 25.0),
     ("MIS13A", 28, 0.00078201294, 0.0),
     ("MIS13B", 67, -185.80664, 137.0),
     ("MIS13C", 16, -588.21674, 59.0),
@@ -478,4 +478,150 @@ fn every_track_starts_on_a_surface_at_its_start_mission_trigger() {
         got.push((viv, s.trigger, ground, (s.yaw.to_degrees() * 10.0).round() / 10.0));
     }
     assert_eq!(got, SPAWN.to_vec());
+}
+
+/// The `BondGouraud` batches (untextured, `V4-32` positions at VU 0x10, strip lists in units of 2)
+/// and the water batches (`MatBondWater[Packed]`, UVs made on VU1) on every track [M bondrm.o,
+/// docs/formats/geoprim.md §4c/§4d]. Pinned per track: (Gouraud entries, their strips, water
+/// entries, placed water strips). Checks: the microcode-chosen strip unit and the layout default
+/// agree on every entry of every model; every Gouraud batch decodes, coloured and without UVs, and
+/// its list does not also fit 3 per vertex (unless it is one strip); every water entry names four
+/// textures; every placed water strip carries one UV per vertex equal to the microcode rule.
+const DRAWN_BY: &[(&str, usize, usize, usize, usize)] = &[
+    ("MIS01", 0, 0, 0, 0),
+    ("MIS11", 10, 56, 54, 89),
+    ("MIS13A", 1, 3, 0, 0),
+    ("MIS13B", 2, 5, 0, 0),
+    ("MIS13C", 0, 0, 0, 0),
+    ("MIS3", 9, 49, 0, 0),
+    ("MIS4", 0, 0, 0, 0),
+    ("RACE", 0, 0, 0, 0),
+];
+
+#[test]
+fn gouraud_and_water_batches_decode_as_their_microcode_draws_them() {
+    use nf_formats::crp_mesh::TrackModule;
+    use nf_formats::geoprim::{decode_vif, decode_vif_unit, ModelIndex, WaterLayers, MC_GOURAUD, MC_WATER};
+    let Ok(path) = std::env::var("NF_ISO") else { eprintln!("skip: NF_ISO not set"); return };
+    let iso = IsoImage::open(&path).expect("open NF_ISO");
+    if track_crp(&iso, "MIS01").is_none() {
+        eprintln!("skip: no /DRIVING/ extents in this image");
+        return;
+    }
+    let mut got = Vec::new();
+    for &(viv, ..) in DRAWN_BY {
+        let dec = track_crp(&iso, viv).unwrap();
+        let crp = Crp::parse(&dec).unwrap();
+        let module = TrackModule::load(&crp).unwrap();
+        let ix = ModelIndex::new(&module).unwrap();
+        let (mut ge, mut gs, mut we) = (0, 0, 0);
+        for s in &module.symbols {
+            if !s.name.starts_with("__Model:::") {
+                continue;
+            }
+            let part = ix.model_part(s.value).unwrap();
+            let mut mc: Option<String> = None;
+            for po in ix.model_packets(s.value).unwrap() {
+                if let Some(m) = ix.entry_microcode(po) {
+                    mc = Some(m.to_owned());
+                }
+                let ch = ix.draw_chain(po, part).unwrap();
+                let by_layout = decode_vif(&module.image, &ch, po).unwrap();
+                let unit = mc.as_deref().map(|m| if m == MC_GOURAUD { 2 } else { 3 });
+                assert_eq!(decode_vif_unit(&module.image, &ch, po, unit).unwrap(), by_layout, "{viv} {} {po:#x}", s.name);
+                if mc.as_deref() == Some(MC_GOURAUD) {
+                    ge += 1;
+                    gs += by_layout.len();
+                    assert!(!by_layout.is_empty(), "{viv} {}", s.name);
+                    assert!(by_layout.iter().all(|t| t.uvs.is_empty() && t.colors.len() == t.positions.len()), "{viv} {}", s.name);
+                    assert!(by_layout.len() == 1 || decode_vif_unit(&module.image, &ch, po, Some(3)).is_err(), "{viv} {}: list fits 3 too", s.name);
+                }
+                if mc.as_deref().map_or(false, |m| MC_WATER.contains(&m)) {
+                    we += 1;
+                    assert_eq!(ix.packet_textures(po, part).len(), 4, "{viv} {}", s.name);
+                }
+            }
+        }
+        let g = track_geometry(&dec).unwrap();
+        let placements = nf_formats::geoprim::map_placements(&crp).unwrap();
+        let origin: HashMap<usize, [f32; 3]> = placements.iter().map(|p| (p.index, p.origin)).collect();
+        let water: Vec<&WorldStrip> = g.strips.iter().filter(|s| s.water.is_some()).collect();
+        for s in &water {
+            let l = s.water.as_ref().unwrap();
+            assert!(l.textures.len() == 4 && l.textures.iter().all(|t| t.is_some()), "{viv} {}: {:?}", s.article, l.textures);
+            assert_eq!(s.uvs.len(), s.positions.len(), "{viv} {}", s.article);
+            for (p, uv) in s.positions.iter().zip(&s.uvs) {
+                assert_eq!(*uv, WaterLayers::uv(0, *p, origin[&s.placement], 0.0));
+            }
+        }
+        let arts: std::collections::BTreeSet<&str> = water.iter().map(|s| s.article.as_str()).collect();
+        let tex: std::collections::BTreeSet<String> = water.iter().flat_map(|s| s.water.as_ref().unwrap().textures.iter().flatten().cloned()).collect();
+        eprintln!("{viv}: Gouraud entries {ge} strips {gs} | water entries {we}, placed water strips {} over {:?} textures {tex:?}", water.len(), arts);
+        got.push((viv, ge, gs, we, water.len()));
+    }
+    assert_eq!(got, DRAWN_BY.to_vec());
+}
+
+/// The traced ground query (`nf_formats::trackstart::game_ground`, `FUN_002151b8` and callees) and
+/// the all-triangle reading give the same start ground on all 8 tracks. MIS13B's marker floats
+/// over 150 units above the only surface under it, and the trigger 1.2 units away (a 2.5-unit
+/// sphere) holds the intro actions `EControlToSpline` (202), `EPlayCameraAnim` (63) and
+/// `ELetterBoxOn` (104) [M creator table 0x36fda0 and the vtables' type names]. Also pins each
+/// track's sky articles (placed articles named `sky*` or holding `cloud`).
+const SKY: &[(&str, &[&str])] = &[
+    ("MIS01", &["sky01", "sky02"]),
+    ("MIS11", &[]),
+    ("MIS13A", &["sky01", "sky02", "skycloudlayer"]),
+    ("MIS13B", &["sky01", "skycloudlayer"]),
+    ("MIS13C", &["sky01", "skycloudlayer"]),
+    ("MIS3", &["sky01_G", "sky02_G"]),
+    ("MIS4", &["sky01_snow2", "sky04_snow2cloud"]),
+    ("RACE", &["sky01_snow2", "sky04_snow2cloud"]),
+];
+
+#[test]
+fn the_traced_ground_query_agrees_at_every_start_and_each_tracks_sky_is_listed() {
+    use nf_formats::trackstart::{game_ground, ground_height, map_triggers, track_spawn};
+    let Ok(path) = std::env::var("NF_ISO") else { eprintln!("skip: NF_ISO not set"); return };
+    let iso = IsoImage::open(&path).expect("open NF_ISO");
+    if track_crp(&iso, "MIS01").is_none() {
+        eprintln!("skip: no /DRIVING/ extents in this image");
+        return;
+    }
+    let mut skies = Vec::new();
+    for &(viv, _) in SKY {
+        let dec = track_crp(&iso, viv).unwrap();
+        let crp = Crp::parse(&dec).unwrap();
+        let tris = crp.extract_collision_tris().unwrap();
+        let s = track_spawn(&crp, &tris).unwrap();
+        let insts = crp.collision_instances().unwrap();
+        let hit = game_ground(&insts, s.marker).unwrap_or_else(|| panic!("{viv}: no ground"));
+        let flat = ground_height(&tris, s.marker[0], s.marker[1], s.marker[2]).unwrap();
+        assert!((hit.height - flat).abs() < 1e-3, "{viv}: {} vs {flat}", hit.height);
+        assert_eq!(s.ground, Some(hit.height));
+        if viv == "MIS13B" {
+            assert!(s.marker[1] - hit.height > 150.0, "{viv}: marker {:?} ground {}", s.marker, hit.height);
+            let trig = map_triggers(&crp).unwrap();
+            let intro = trig.iter().find(|t| t.actions.iter().any(|a| a.id == 202)).unwrap();
+            let d = ((intro.pos[0] - s.marker[0]).powi(2) + (intro.pos[2] - s.marker[2]).powi(2)).sqrt();
+            assert!(d < 2.5 && (intro.pos[1] - s.marker[1]).abs() < 1.0, "{viv}: intro trigger {:?}", intro.pos);
+            assert!(intro.actions.iter().any(|a| a.id == 63) && intro.actions.iter().any(|a| a.id == 104));
+        }
+        let g = track_geometry(&dec).unwrap();
+        let mut sky: Vec<String> = g
+            .strips
+            .iter()
+            .map(|w| w.article.clone())
+            .filter(|a| {
+                let l = a.to_ascii_lowercase();
+                l.starts_with("sky") || l.contains("cloud")
+            })
+            .collect();
+        sky.sort();
+        sky.dedup();
+        eprintln!("{viv}: start ground {} on {} (item {}), sky articles {sky:?}", hit.height, hit.article, hit.item);
+        skies.push((viv, sky));
+    }
+    let want: Vec<(&str, Vec<String>)> = SKY.iter().map(|&(v, s)| (v, s.iter().map(|x| x.to_string()).collect())).collect();
+    assert_eq!(skies, want);
 }
