@@ -254,6 +254,31 @@ docs/reports/retune-nb-08-13.md.
 ## retune-nb-08-14
 2026-11-21. Round 14 of the 08 whole-mission 00 Agent real-damage walk
 (walk_the_whole_mission_on_real_input_real_damage_00agent). Branch s/retune-nb-08-14 off
-origin/master (b69bacbc9) with s/retune-nb-08-13 merged in (clean). Work in progress: reading
-the 08-13 report and the walk's ignore message to pick the next untried lever. Fresh sandbox:
-repo, game files and toolchain all re-setup this session.
+origin/master (b69bacbc9) with s/retune-nb-08-13 merged in (clean); fresh sandbox (repo, game
+files, toolchain re-setup). The baseline reproduces round 13 byte-exact: death t29801 (frame
+29803) at (113.08,13.09,-179.88), 62 hits for 100.0, health 6.0 entering the killer salvo
+[L the 2026-11-21 baseline NF_DMG_TRACE run, 24.71 s]. The ledger's lever (1) THE LAUNCH
+STARVATION (the west window: stop 0.7 + band 21.0 for west passes only, rockets >= 1,
+stalemate-only) TRIED and DEAD on its own run: a second launch fired t1802 at the machine's
+west-high pass (53.07,18.54,-174.05) but the death moved t27583 — 2218 ticks WORSE (the window
+held Bond standing through the volume's burst rows −2.00 × 10 and the 60.3-u ride froze him
+mid-ride standing; the reply kind-44 100.0 blast landed d 2.8; also measured: the fired pass's
+own ray stops were t0.862-0.875 ≥ 0.8 — the 0.7 stop widening contributed nothing, the 21.0
+band was the whole lever). Reverted. SHIPPED lever (2) THE TRENCH-PINNED STANDING DODGE
+(d3-gated, test-file only): the driving dodge stands Bond from the crouch (the shipped flip
+press under the 60-tick lockout [M Player_ChangeSubState 0x190630:48]), burst_hold clears and
+the fresh-zap arm is gated off while the dodge drives (prefix-byte-exact: all 112 baseline w62
+rows are the t3160-4030 crouched stalemate [L the baseline run]); the latch's both-open pick
+scores the trench side (the east-walking diagonal wins; a west-pointing chosen diagonal drops
+its forward). MEASURED: the FIRST killer salvo is now SURVIVED — the miss grows 0.58 → 3.24 →
+2.41 standing (the crouched strafe held 0.56-0.58) and the falloff drops −6.00 → −3.98 (health
+6.0 → 2.0); but the east-side diagonal walked Bond 1.4 u NORTH off the plate (z −177.65) where
+the east lane wedges the standing strafe (0.05 u/30 ticks) and the walk-back south crawls
+~0.016 u/tick, and the SECOND missile (north-flying, dir (−0.194,-0.109,0.975)) arrived
+mid-walk-back with the miss stuck 1.40-1.41 for 40 ticks — its falloff −2.02 closed the
+2.0-health walk t29924 (frame 29926) at (113.08,13.47,-178.98), 123 ticks deeper than round 13.
+Whole binary 6 passed / 1 failed (the target walk), 176.48 s [L the final-tree run — the d1/d2
+sisters, the plain walks, the d2 Agent sister and both ally tests byte-exact]. The refreshed
+ledger + the next levers (the second-salvo lane; the west launch starvation measured dead from
+the rim; the reply-cadence live check) are in the ignore message. Report:
+docs/reports/retune-nb-08-14.md.
