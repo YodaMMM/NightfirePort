@@ -2983,7 +2983,11 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         // west INTO the pocket pack (the t83962 shape). d3 real damage only: the green
         // d1/d2 walks keep their streams byte-identical.
         let prev_flank_point = w.flank_point_x_min;
-        if difficulty >= 3 && !w.tops_up() { w.flank_point_x_min = Some(-27.0); }
+        let prev_fight_hold = w.fight_hold_west_of;
+        if difficulty >= 3 && !w.tops_up() {
+            w.flank_point_x_min = Some(-27.0);
+            w.fight_hold_west_of = Some(-27.0);
+        }
         for sweep in 0..3 {
             let near: Vec<usize> = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -3079,6 +3083,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         w.dmg.back_off = prev_back_off;
         w.flank_hold_x = prev_flank_hold;
         w.flank_point_x_min = prev_flank_point;
+        w.fight_hold_west_of = prev_fight_hold;
     }
     // The player route descends the stairwell from the west hall's corner (the AI's own path
     // climbs over the top floor — the sister proved the descent through this anchor).
@@ -3095,7 +3100,11 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     // t83962 death: flank (-31.6,16.6), #3/#17 at 0.8-0.9 u [L the 01-2 v3 run]). d3 real
     // damage only; d1/d2 keep their streams byte-identical.
     let prev_flank_point = w.flank_point_x_min;
-    if difficulty >= 3 && !w.tops_up() { w.flank_point_x_min = Some(-27.0); }
+    let prev_fight_hold = w.fight_hold_west_of;
+    if difficulty >= 3 && !w.tops_up() {
+        w.flank_point_x_min = Some(-27.0);
+        w.fight_hold_west_of = Some(-27.0);
+    }
     w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head", 1.2);
     // retune-nb-01 (d1, the 2026-11-21 run): the plate lane's pocket pair — REAL-DAMAGE
     // ONLY (the top-up walks keep their route byte-identical; this block walks and fights
@@ -3216,6 +3225,7 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
     w.walk_nav_to(plate, "the plate", 1.2);
     w.flank_hold_x = prev_flank_hold;
     w.flank_point_x_min = prev_flank_point;
+    w.fight_hold_west_of = prev_fight_hold;
     let sim = w.scene.sim.as_ref().unwrap();
     let on_plate = sim.bond.pos[0] < -32.0 && sim.bond.pos[2] > 12.0;
     if !on_plate {

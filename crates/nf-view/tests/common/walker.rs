@@ -293,6 +293,15 @@ pub struct Walker {
     /// ×2 TooClose band [M Drone_ModBulletDamage 0x139f50]). Default None: every other walk
     /// keeps master's flank machinery byte-identical.
     pub flank_point_x_min: Option<f32>,
+    /// OPT-IN (retune-nb-01-3, the 07000001 d3 walk): inside `shoot_bounded`, while Bond stands
+    /// WEST of this x and the fight is blocked, the sidestep strafe and the far forward push
+    /// are replaced by a back-off (forward -0.6, no strafe). The walls that pin the pocket
+    /// guards' rays also shield the east stands — but the fight's own drift does not know that:
+    /// the v5 run's stairwell-head return-fire fight KILLED #3 in ~200 ticks and then strafed
+    /// Bond to (-31.43,16.36), inside the pack's lines, and he died there on the crossfire
+    /// (55 hits [L the d3_r12_v5 run]). Facing the guard, back-off is east, out of the pocket.
+    /// Default None: every other walk keeps master's fight machinery byte-identical.
+    pub fight_hold_west_of: Option<f32>,
     /// OPT-IN (the 0700001b 00 Agent walk): steer the zero-g float away from a charging space
     /// laser's locked target when no hostile is within 10 u (see tick_inner). False by default.
     pub laser_dodge: bool,
@@ -461,6 +470,7 @@ impl Walker {
             flank_hold_x: None,
             flank_hold_z: None,
             flank_point_x_min: None,
+            fight_hold_west_of: None,
             laser_dodge: false,
             record_inputs: None,
             record_states: None,
@@ -1211,11 +1221,16 @@ impl Walker {
                 // in the first half of each window when the guard is far.
                 let far = dxz(bp, dp) > 8.0;
                 let window = (blocked_streak / 90) % 2 == 0;
+                // fight_hold_west_of (OPT-IN): west of the line and blocked, the fight backs off
+                // instead of strafing/pushing — the sidesteps and the far push both walked Bond
+                // INTO the pocket pack's lines (the v5 death, walker.rs field doc).
+                let held_west = blocked
+                    && self.fight_hold_west_of.is_some_and(|bx| bp[0] < bx);
                 let input = Input {
                     turn: err.clamp(-0.08, 0.08),
                     look: perr.clamp(-0.08, 0.08),
-                    forward: if backing { -1.0 } else if blocked && far && window { 1.0 } else { 0.0 },
-                    strafe: if backing { 0.0 } else if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
+                    forward: if backing { -1.0 } else if held_west { -0.6 } else if blocked && far && window { 1.0 } else { 0.0 },
+                    strafe: if backing { 0.0 } else if held_west { 0.0 } else if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
                     ..Default::default()
                 };
                 // replay-parity-walker-side-effects: the fight's step is a real walker-stepped
