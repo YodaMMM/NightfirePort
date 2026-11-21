@@ -335,6 +335,18 @@ pub fn limit_rad_angle(a: f32) -> f32 {
     a
 }
 
+/// `Vec_Normalise(out, in)` (ACTION.ELF 0x1e3000) op for op [M disasm 0x1e3008-0x1e3058]: the
+/// squares on VU0 (`vmul.xyz`, chopped products), the sum on the EE FPU in x, y, z order
+/// (`add.s f0,f0,f1; add.s f0,f0,f2`), `sqrt.s`, a zero length stores (0, 0, 0) (the
+/// `c.eq.s`/`bc1tl` arm), else `div.s 1.0/len` and `vmulx.xyz` (each lane × the reciprocal,
+/// chopped). The EE `sqrt.s` / `div.s` are the port's shared models (`ps2float::sqrt`/`div`).
+pub fn vec_normalise(v: [f32; 3]) -> [f32; 3] {
+    let l = nf_formats::ps2float::sqrt(add(add(mul(v[0], v[0]), mul(v[1], v[1])), mul(v[2], v[2])));
+    if l == 0.0 { return [0.0; 3]; }
+    let inv = nf_formats::ps2float::div(1.0, l);
+    [mul(v[0], inv), mul(v[1], inv), mul(v[2], inv)]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

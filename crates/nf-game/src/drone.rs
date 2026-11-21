@@ -18585,7 +18585,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         }
         let (muzzle, dir) = {
             let g = &self.props.gunimps[gi];
-            (g.muzzle(), g.barrel_dir())
+            // G-046: the raw `Mat_GetDir` row — `Bullet_init` normalises it (`bullet::cone`).
+            (g.muzzle(), g.barrel_row())
         };
         let weapon = tg.weapon;
         let Some(w) = weapons.records.get(weapon as usize) else { return };

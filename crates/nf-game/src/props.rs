@@ -286,16 +286,17 @@ impl Props {
                     // map alone is not enough: the load's session mesh merge re-points shared
                     // hashes at foreign objects with sentinel-scale bounds, so the candidates are
                     // scanned for the sane-bounds art (the placement's own box [D]: |min.z| < 2).
+                    // `ext+0x68 = glist+0x28 · 0.75` is an EE mul.s [M GunImp_Create 0x131f20:81] (G-046).
                     let seat = {
                         let by_ref = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() } else { None };
                         let mut seat = 0.0f32;
                         if let Some(o) = if p.by_hash() { None } else { level.maps[m].objects.get(p.index as usize) } {
-                            seat = o.min[2] * 0.75;
+                            seat = nf_formats::ps2float::mul(o.min[2], 0.75);
                         } else {
                             for mp in &level.maps {
                                 for o in &mp.objects {
                                     if o.hashcode == p.hashcode && o.min.iter().all(|v| v.abs() < 100.0) {
-                                        seat = o.min[2] * 0.75;
+                                        seat = nf_formats::ps2float::mul(o.min[2], 0.75);
                                         break;
                                     }
                                 }
@@ -303,7 +304,7 @@ impl Props {
                             }
                             if seat == 0.0 {
                                 if let Some((mm, oo)) = by_ref {
-                                    seat = level.maps[mm].objects[oo].min[2] * 0.75;
+                                    seat = nf_formats::ps2float::mul(level.maps[mm].objects[oo].min[2], 0.75);
                                 }
                             }
                         }

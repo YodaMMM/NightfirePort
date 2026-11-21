@@ -69,6 +69,11 @@
 use crate::world::V3;
 use nf_formats::anim::Mat4;
 
+/// `RotMatrixY(a)` / `RotMatrixX(a)`'s two lanes (sin a, cos a) [M 0x1e4718:15 / 0x1e46a0:15]:
+/// `PS2Sinf2(a + 1.5707964, a)` — the cos lane's argument an EE add.s — i.e. `trig::sinf` and
+/// `trig::cosf` (PS2Sinf2 0x11f968 reduces each lane like PS2Sinf).
+fn rot_lanes(a: f32) -> (f32, f32) { (crate::trig::sinf(a), crate::trig::cosf(a)) }
+
 /// The `TurretGuns` table [D ACTION.ELF @0x26f520 (file 0x169420), 12 entries × 0x1c].
 pub struct TurretGun {
     /// The muzzle offset in the barrel's frame (+0x00, 3 floats).
@@ -187,6 +192,14 @@ impl GunImp {
         [f[0] / l, f[1] / l, f[2] / l]
     }
 
+    /// `Mat_GetDir(dir, cel+0x90)` as the fire arm reads it [M GunImp_Update 0x1320d8:325-331]:
+    /// the barrel matrix's third row, un-normalised — `Bullet_init` 0x12c5a0:180 normalises it
+    /// itself (the port's `bullet::cone`), so the shot sees the game's bits.
+    pub fn barrel_row(&self) -> V3 {
+        let m = self.barrel_matrix();
+        [m[2][0], m[2][1], m[2][2]]
+    }
+
     /// `TurretGuns[turret]`'s 12-byte muzzle offset through the drawn barrel matrix, plus its
     /// translation [M GunImp_Update 0x1320d8:196-211 — the offset vector against the gun cel's
     /// matrix rows (its +0x90/+0xA0/+0xB0) with the cel's +0xC0 translation added; :165-172
@@ -197,12 +210,12 @@ impl GunImp {
     pub fn muzzle(&self) -> V3 {
         let m = self.barrel_matrix();
         let o = TURRET_GUNS[(self.turret as usize).min(TURRET_GUNS.len() - 1)].muzzle;
-        // The row-vector product o·M (columns of the rotation rows) + the translation row.
-        [
-            m[3][0] + m[0][0] * o[0] + m[1][0] * o[1] + m[2][0] * o[2],
-            m[3][1] + m[0][1] * o[0] + m[1][1] * o[1] + m[2][1] * o[2],
-            m[3][2] + m[0][2] * o[0] + m[1][2] * o[1] + m[2][2] * o[2],
-        ]
+        // The row-vector product o·M + the translation row, as VU0 runs it [M 0x1320d8:205-211]:
+        // `vmula.x` ACC = row0·o.x, `vmadda.y` ACC += row1·o.y, `vmadd.z` out = ACC + row2·o.z, then
+        // `vadd` the +0xC0 translation (G-046: chopped products, guard-bit sums).
+        use crate::ps2math::{mul, vu_add, vu_madd};
+        let lane = |c: usize| vu_add(m[3][c], vu_madd(m[2][c], o[2], vu_madd(m[1][c], o[1], mul(m[0][c], o[0]))));
+        [lane(0), lane(1), lane(2)]
     }
 
     /// The mounted player pose the game writes every tick [M 0x1320d8:175-194]: the player
@@ -212,8 +225,12 @@ impl GunImp {
     /// Returns (pos, yaw, view_pitch).
     pub fn mounted_pose(&self) -> (V3, f32, f32) {
         let yaw = self.yaw_base + self.yaw_s;
-        let (sy, cy) = yaw.sin_cos();
-        ([self.pos[0] + sy * self.seat, self.pos[1], self.pos[2] + cy * self.seat], yaw, -self.pitch_s * 0.5)
+        let (sy, cy) = rot_lanes(yaw);
+        // G-046: the seat vector (0, 0, seat) through the RotY rows on VU0 — the x/y terms are exact
+        // zeros, so each lane is one chopped product — then `vadd` the base translation
+        // [M 0x1320d8:176-189]; the view pitch is a mul.s [M :194].
+        use crate::ps2math::{mul, vu_add};
+        ([vu_add(self.pos[0], mul(sy, self.seat)), self.pos[1], vu_add(self.pos[2], mul(cy, self.seat))], yaw, mul(-self.pitch_s, 0.5))
     }
 
     /// The barrel matrix for the draw: base·RotY(yaw_s)·RotX(pitch_s) with the base
@@ -228,7 +245,7 @@ impl GunImp {
     /// 0x1320d8:162-170 — `obj+0x90 = base · RotY(ext+0x84)`]; the gun child adds the pitch
     /// (`barrel_matrix`, `*ext+0x90 = obj+0x90 · RotX(ext+0x80)` [M :171-173]).
     pub fn base_matrix(&self) -> Mat4 {
-        let (sy, cy) = (self.yaw_base + self.yaw_s).sin_cos();
+        let (sy, cy) = rot_lanes(self.yaw_base + self.yaw_s);
         [[cy, 0.0, -sy, 0.0], [0.0, 1.0, 0.0, 0.0], [sy, 0.0, cy, 0.0], [self.pos[0], self.pos[1], self.pos[2], 1.0]]
     }
 
@@ -241,14 +258,78 @@ impl GunImp {
 
     pub fn barrel_matrix(&self) -> Mat4 {
         let yaw = self.yaw_base + self.yaw_s;
-        let (sy, cy) = yaw.sin_cos();
-        let (sp, cp) = self.pitch_s.sin_cos();
+        let (sy, cy) = rot_lanes(yaw);
+        let (sp, cp) = rot_lanes(self.pitch_s);
         // RotX(p) maps (0,0,1) → (0, −sin p, cos p) [M barrel_dir]; rows: right, up, forward.
+        // G-046: `Concat(barrel, RotX)` on VU0 [M Concat 0x1e4a90: row i = Σk RotX[i][k]·(RotY·base)[k]];
+        // with the identity base every other term is an exact zero, so each entry is one chopped
+        // product of the PS2Sinf2 lanes.
+        use crate::ps2math::mul;
         [
             [cy, 0.0, -sy, 0.0],
-            [sy * sp, cp, cy * sp, 0.0],
-            [sy * cp, -sp, cy * cp, 0.0],
+            [mul(sy, sp), cp, mul(cy, sp), 0.0],
+            [mul(sy, cp), -sp, mul(cy, cp), 0.0],
             [self.pos[0], self.pos[1], self.pos[2], 1.0],
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nf_formats::anim::sinf;
+    use nf_formats::ps2float::{add, add_noguard, mul};
+
+    fn mount(yaw_s: f32, pitch_s: f32) -> GunImp {
+        GunImp {
+            placement: 0, pos: [137.27, 9.33, -324.66], yaw_base: 0.0, pitch: pitch_s, yaw: yaw_s, pitch_s, yaw_s,
+            active: true, heat: 0.0, cooldown: 0.0, hot: false, turret: 0xb, seat: mul(-1.4362069, 0.75), radius: 0.0,
+            beam: None, fire_handle: 0, owner: 0,
+        }
+    }
+
+    /// G-046: the 0700000d mount's aim is `GunImp_Update` 0x1320d8:162-211 op for op — RotMatrixY /
+    /// RotMatrixX lanes `PS2Sinf2(a + 1.5707964, a)` [M 0x1e4718 / 0x1e46a0], `Concat`'s chopped VU0
+    /// products [M 0x1e4a90], the TurretGuns muzzle through `vmula/vmadda/vmadd` + `vadd` [M :205-211],
+    /// the seat through RotY + `vadd` [M :176-189]. Written out from the primitives here; the old
+    /// `f32::sin_cos` + IEEE products gave other bits for the laser's fire direction, the muzzle and
+    /// Bond's seat at most aims, so the round flew a different line.
+    #[test]
+    fn the_turret_aim_is_the_games_rotmatrix_lanes() {
+        let half_pi = f32::from_bits(0x3fc9_0fdb);
+        let cos = |a: f32| sinf(add_noguard(a, half_pi, true));
+        let (mut row_differs, mut muzzle_differs, mut seat_differs) = (0, 0, 0);
+        for k in 0..48 {
+            let yaw = -2.9 + k as f32 * 0.1237;
+            let pitch = -1.5 + (k as f32 * 0.071) % 2.2;
+            let g = mount(yaw, pitch);
+            let (sy, cy, sp, cp) = (sinf(yaw), cos(yaw), sinf(pitch), cos(pitch));
+            let row = [mul(sy, cp), -sp, mul(cy, cp)];
+            assert_eq!(g.barrel_row().map(f32::to_bits), row.map(f32::to_bits), "barrel row at yaw {yaw} pitch {pitch}");
+            let m = [[cy, 0.0, -sy], [mul(sy, sp), cp, mul(cy, sp)], row];
+            let o = TURRET_GUNS[0xb].muzzle;
+            let muzzle: [f32; 3] = std::array::from_fn(|c| add(g.pos[c], add(add(mul(m[0][c], o[0]), mul(m[1][c], o[1])), mul(m[2][c], o[2]))));
+            assert_eq!(g.muzzle().map(f32::to_bits), muzzle.map(f32::to_bits), "muzzle at yaw {yaw} pitch {pitch}");
+            let (seat, _, view_pitch) = g.mounted_pose();
+            let want_seat = [add(g.pos[0], mul(sy, g.seat)), g.pos[1], add(g.pos[2], mul(cy, g.seat))];
+            assert_eq!(seat.map(f32::to_bits), want_seat.map(f32::to_bits), "seat at yaw {yaw}");
+            assert_eq!(view_pitch, -pitch * 0.5);
+            // The old IEEE forms, for the discrimination count.
+            let (osy, ocy) = yaw.sin_cos();
+            let (osp, ocp) = pitch.sin_cos();
+            let orow = [osy * ocp, -osp, ocy * ocp];
+            if orow.map(f32::to_bits) != row.map(f32::to_bits) { row_differs += 1; }
+            let om = [[ocy, 0.0, -osy], [osy * osp, ocp, ocy * osp], orow];
+            let omz: [f32; 3] = std::array::from_fn(|c| g.pos[c] + om[0][c] * o[0] + om[1][c] * o[1] + om[2][c] * o[2]);
+            if omz.map(f32::to_bits) != muzzle.map(f32::to_bits) { muzzle_differs += 1; }
+            if [g.pos[0] + osy * g.seat, g.pos[2] + ocy * g.seat].map(f32::to_bits) != [want_seat[0], want_seat[2]].map(f32::to_bits) { seat_differs += 1; }
+        }
+        assert!(row_differs > 0 && muzzle_differs > 0 && seat_differs > 0,
+            "the sampled aims include ones the IEEE form got wrong: row {row_differs}, muzzle {muzzle_differs}, seat {seat_differs}");
+        // The laser's fire direction: the row through `Bullet_init`'s normalise (spread 0 [L]).
+        let g = mount(0.4, -0.3);
+        let mut rng = crate::drone::Rng::new(3);
+        let shot = crate::bullet::cone(g.barrel_row(), 0.0, &mut rng);
+        assert_eq!(shot, crate::trig::vec_normalise(crate::trig::vec_normalise(g.barrel_row())));
     }
 }
