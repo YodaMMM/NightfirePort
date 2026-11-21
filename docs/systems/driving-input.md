@@ -160,11 +160,16 @@ writes through the record's +0x2c/+0x30 pointers].
 
 ## 6. `SendGameMessage` — `FUN_00165850` 0x165850
 
-The message id must be `0 < id < 0x41` (the GAMEACTION range) [M 0x165850]. With
-`DAT_00339f54 == 0` (a global flag, purpose unpinned) id 0x1f (GAMEACTION_FIRESECONDARY) is
-dropped [M 0x165850 — the `== 0x1f return` between the flag test and the send]. The message is
-then pushed to every listener in the singleton list at 0x3c8760 (`FUN_00165720` builds it,
-`FUN_001654d8` delivers) [M 0x165720/0x165850 tail].
+0x168678 sends an entry only when its action id is non-zero [M the `iStack_d0 != 0` test]. In
+SendGameMessage the `0 < id < 0x41` test guards **only** the FIRESECONDARY drop: inside that window,
+with `DAT_00339f54 == 0` (a global word, purpose unpinned), id 0x1f is dropped; every other id —
+including the FRONTENDACTION ids 0x41.., the frame marker 0x73 and the unknown-name id 0x75 — goes
+to the listener loop [M disassembly 0x165884 `blez a0 → 0x1658b0`, 0x165890 `beqz (id < 0x41) →
+0x1658b0`, 0x1658b0 = the send loop]. (An earlier reading of this section said ids outside the
+window were dropped; the disassembly shows they branch to the send. The pause page's drain
+0x241210 switches on 0x41/0x46/0x49, which is where FrontEnd.def's actions arrive.) The message is
+pushed to every listener in the singleton list at 0x3c8760 (`FUN_00165720` builds it,
+`FUN_001654d8` delivers) [M 0x165720/0x165850 tail]. Port: `send_game_message_delivers`.
 
 ## 7. The action enum — data table at 0x32c098
 
@@ -238,13 +243,15 @@ deflection) and does not re-stretch the surviving range.
 
 - The fill of the 0x419840 slot structs from the IOP (PADMAN mailbox) is not pinned to a function
   [S: it sits behind `FUN_0025a4a8`; the driving ELF strings contain PADMAN and PsIIlibpad].
-- The binding DATA (which value index binds to which GAMEACTION with which type/arg) is runtime
-  data parsed from the control configs (`data\Control\Master.def`/`FrontEnd.def` [D, in the
-  mission VIVs; not extractable from the slim ISO — its DRIVING extents are zero-byte]).
-  The evaluator and the action ids are decoded; the shipped default bindings are not [S].
-- The type-6/7 flag `*(u32*)(0x3c8780+0x20)` semantics (frontend active? paused?) is unpinned [M
-  read, S meaning].
-- `DAT_00339f54` (the FIRESECONDARY-send gate) semantics unpinned [M read].
+- The binding DATA is decoded: §13 (the full image carries the configs).
+- The type-6/7 flag `*(u32*)(0x3c8780+0x20)` is the invert setting (§13) [M]. Its boot value is
+  `uRam00100a24 != 0` [M 0x1668a0]; which code first writes that low-memory word is not pinned
+  (ACTION.ELF's decompile has no literal reference to it).
+- The repeat-delay timer rate `FUN_00261170` (a gp-relative word) is not pinned, so the delays are
+  known only as 300 ms / 150 ms of that clock (§13).
+- `DAT_00339f54` (the FIRESECONDARY-send gate) semantics unpinned [M read]. Since the shipped
+  driving config fires only through FIRESECONDARY (§13), the word must be non-zero whenever the
+  car's gun works in play [S — inference, not traced].
 - The USB keyboard/mouse device (`FUN_00259668` case table) is decoded only at the shape level;
   its byte synthesis into the pad-shaped state is its own pass [S].
 
@@ -263,3 +270,79 @@ brake down through the Y negation), A/D → LX bytes 0/255 (steer left/right), S
 (camera). These are the port's bindings, not the shipped ones (§11) — a driving level would call
 `poll_device` on its pad slot each tick (where `FUN_00168280` runs in the engine) and feed the
 result through its own binding table; the driving levels themselves stay unwired.
+
+## 13. The control configs — `data\Control\*.def` [D + M]
+
+The full image carries them in nine archives (MIS01, MIS11, MIS13A/B/C, MIS3, MIS4, RACE: 11 RefPack
+entries each; MISC: 12 plain entries, the extra one `DbgCfg.def`). Every copy of a name is
+byte-identical across archives — 12 distinct files [D, `nf-game/tests/driving_controls_disc.rs`].
+They are CRLF text; `nf_formats::controldef` parses them.
+
+**Loader** `FUN_001668a0` 0x1668a0 [M]: `FUN_00166548` reads `data/Control/Master.def`
+(`POV 8` + povcfg0..7.def, `Driving 1` + drivecfg.def, `End`; keywords by stricmp
+`FUN_002a9198`), each listed file is loaded as `data/Control/<name>` into a 0x5c-byte record (name
++0, text +0x20, FRONTEND fields +0x24..+0x58), `data/Control/FrontEnd.def` into the manager's
++0x28, and each record's FRONTEND block is read by `FUN_00166788`. The manager singleton
+0x3c8780 (`FUN_001664c0`): +4 mode (0 Driving list, 1 POV list), +8/+0xc the per-mode index
+(boot values `uRam00100a14`/`uRam0010098c`, reset to 0 with "invalid control config" when out of
+range), +0x10/+0x14 counts, +0x18/+0x1c record arrays, +0x20 the invert flag. `DbgCfg.def` is never
+named by Master.def or the ELF [M-negative: no `DbgCfg` string in DRIVING.ELF] — dead data.
+
+**Active set** `FUN_00166f28` [M]: the pad's binding set (`FUN_00167d80()+0x50+4·pad`) is cleared
+(`FUN_00167678`), then `FUN_001674d0` appends FrontEnd.def's bindings, then the selected config's.
+`FUN_00166cb0(m, mode, index)` re-selects (the mission/POV switch 0x206398 passes mode 0 / 1; the
+pause page's controller list 0x2411a0 passes its index).
+
+**Binding line** `FUN_001674d0` [M]: header line skipped; per line `strtok(" \t")`:
+`<action> <value> [<method> [<param>]]`, ending at `FRONTEND` or `END` (stricmp). Action → id via
+the 117-name table at 0x32c090 (ids 0..0x74; unknown → 0x75, `FUN_001651a0`); value → the 32
+InputTable names (§4); method letter via the table at 0x32e5c0: `U`0 `+`1 `-`2 `>`3 `<`4 `=`5 `I`6
+`N`7 `R`8 `M`9 (missing/unknown → 0); param defaults 0.5 for types 3/4, else 0, then `%f`
+overrides. Names are strcmp-exact (`FUN_002a9508`; binary search over the name-sorted copy,
+`FUN_002cedf0`). An unknown value name is not checked (the game would index the set at −1) — none
+occurs on the disc [D].
+
+**The invert flag** (types 6/7): FRONTENDACTION_INVERT (0x49, FrontEnd.def: DButtonCircle `+`) on
+the pause page's controller state flips manager +0x20 (`FUN_00166d60(m, flag ^ 1)`, which also
+stores `uRam00100a24`) [M 0x241210 case 0x49]. The POV configs bind `CAMROTATEY ... N` (type 7, sent
+while not inverted) and `CAMROTATEYINV ... I` (type 6, sent while inverted) [D].
+
+**Auto-repeat delays** [M 0x168368]: container +0xa8 = `rate·300/1000`, +0xac = `rate·150/1000`
+(C integer division), `rate = FUN_00261170()` — 300 ms before the first repeat, 150 ms after.
+FrontEnd.def's menu moves use `R`/`M` (types 8/9) [D].
+
+**The shipped driving mapping** (drivecfg.def, after FrontEnd.def) [D]:
+
+| pad | binding | action |
+|---|---|---|
+| left stick X | U; `-`/`+`; `=` | STEER, CAMROTATEX; SOUND_STEERLEFT/RIGHT; SOUND_STEERHORIZONTALRELEASE |
+| left stick Y | U; `+`/`-`; `=` | STEERVERTICAL, CAMROTATEY; SOUND_STEERUP/DOWN; SOUND_STEERVERTICALRELEASE |
+| ✕ pressure | U | GAS |
+| □ pressure | U | BRAKE |
+| ○ pressure | `>` 0.1 / `<` 0.1 | HANDBRAKE / HANDBRAKERELEASE |
+| R1 | `+` / `-` | FIRESECONDARY / RELEASE (nothing binds FIREPRIMARY) |
+| L1 | `+` / `-` | FIREGADGET / RELEASE |
+| R2 | `+` | TOGGLESECONDARYDOWN (previous weapon) |
+| d-pad Left / Right | `+` | TOGGLESECONDARYUP (next) / TOGGLESECONDARYDOWN (previous) |
+| △ | `+` | CHANGECAMERA |
+| L2 | `+` / `-` | CAMLOOKBACK / RELEASE |
+| Start | `+` (FrontEnd.def) | FRONTENDACTION_START (pause) |
+
+FrontEnd.def also puts ACCEPT/SKIPMOVIE on ✕, CANCEL on △, INVERT on ○, SCREENSHOT on Select,
+the menu moves on the d-pad and left stick, and the cheat-code entries (CHEATACTION_*) on the face
+buttons, d-pad and L1/R1 — all live while driving, since the sets are merged [D + M 0x166f28].
+There is **no horn** action anywhere (the 117-name table has none) and no reload while driving
+(POVRELOAD is bound only in the POV configs) [M + D].
+
+**Analog shaping**: no curve exists in the data or the path — the stick is raw `b·2/255 − 1`
+chopped at ±0.3 (§3), the pedals are raw pressures `min(1, b/192)`, the handbrake is a 0.1
+pressure threshold, and the vehicle layer chops steer at ±0.2 and ramps it 0.25/tick
+(driving-pc-input.md §1).
+
+**Port** (`nf_game::input::driving_cfg`): `ACTION_NAMES`/`action_id`, `VALUE_NAMES`/`value_index`,
+`binding_kind`, `binding_set` (load order), `repeat_delays`, `DrivingKeys` (a keyboard front end:
+each key presses the pad button the shipped file binds the wanted action to, bit + full pressure,
+analog mode) and `ShippedDrivingInput::tick` (keys → `poll_device` → the shipped set → messages
+with the 0x1f gate → `CarInputStage`). The key choice is the port's [S]; the button → action
+routing is the disc's. Unproven: the timer rate, the boot invert value, what `DAT_00339f54`
+mirrors. Nothing wires a driving level to it yet.

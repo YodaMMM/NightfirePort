@@ -137,8 +137,8 @@ pub struct Binding {
     pub kind: BindingKind,
     /// The threshold argument (types 3/4; ignored elsewhere) [M entry[1]].
     pub arg: f32,
-    /// The GAMEACTION id sent when the condition fires [M entry[2]; validated 1..0x40 by
-    /// SendGameMessage 0x165850].
+    /// The action id sent when the condition fires [M entry[2]; 0 is never sent, every other id
+    /// is delivered except 0x1f behind the SendGameMessage gate 0x165850].
     pub action: u8,
 }
 
@@ -158,7 +158,7 @@ pub enum BindingKind {
     /// 5: returned to centre, |cur| ≤ 0.2 after |prev| > 0.2 [M 0x167b18, 0x3e4ccccd].
     Centred,
     /// 6/7: the global flag read (caller supplies it; the game reads *(u32*)(0x3c8780+0x20),
-    /// semantics unpinned) [M 0x1664c0/0x166d78].
+    /// = the invert setting, docs/systems/driving-input.md §13) [M 0x1664c0/0x166d78, 0x241210].
     GlobalSet,
     GlobalClear,
     /// 8: pressed edge + auto-repeat (state machine below) [M case 8].
@@ -269,8 +269,13 @@ pub fn evaluate_value(
     out: &mut Vec<ActionMsg>,
 ) {
     let send = |out: &mut Vec<ActionMsg>, action: u8| {
-        // SendGameMessage's range check [M 0x165850: 0 < id < 0x41].
-        if action > 0 && (action as u32) < 0x41 {
+        // 0x168678 sends only when the entry's action id is non-zero [M the `iStack_d0 != 0`
+        // test before FUN_00165850]. SendGameMessage itself delivers every id: its `0 < id <
+        // 0x41` test only guards the FIRESECONDARY (0x1f) drop, ids outside the range branch
+        // straight to the listener loop [M disassembly 0x165884 `blez` / 0x165890 `beqz` → 0x1658b0]
+        // — the FRONTENDACTION ids (0x41..) reach the pause page's drain this way (0x241210).
+        // The 0x1f drop is `send_game_message_delivers` (the caller applies it).
+        if action != 0 {
             out.push(ActionMsg { action, device, value: cur });
         }
     };
@@ -311,6 +316,15 @@ pub fn evaluate_value(
     }
 }
 
+/// `FUN_00165850` 0x165850's one filter: with the gate word `DAT_00339f54 == 0`, id 0x1f
+/// (GAMEACTION_FIRESECONDARY) is dropped; every other id, in or out of `1..=0x40`, goes to the
+/// listeners [M decompile + disassembly 0x165884–0x1658b0]. What the gate word mirrors is not
+/// pinned (driving-input.md §11).
+pub fn send_game_message_delivers(id: u32, gate_word_nonzero: bool) -> bool {
+    let in_window = (id as i32) > 0 && (id as i32) < 0x41;
+    !(in_window && !gate_word_nonzero && id == 0x1f)
+}
+
 /// GAMEACTION ids from the .data table at 0x32c098 [M docs/systems/driving-input.md §7].
 pub mod action {
     pub const STEER: u8 = 1;
@@ -345,12 +359,14 @@ pub mod action {
     pub const CAMLOOKBACKRELEASE: u8 = 0x2a;
     pub const POVRELOAD: u8 = 0x3f;
     pub const RESUMEAUTODRIVE: u8 = 0x40;
-    /// The SendGameMessage bound [M 0x165850: `0 < id < 0x41`].
+    /// The last GAMEACTION id: SendGameMessage's `0 < id < 0x41` window, inside which 0x1f is
+    /// dropped while `DAT_00339f54 == 0` [M 0x165850]; ids past it are still delivered.
     pub const MAX: u32 = 0x40;
 }
 
 /// The PC keyboard+mouse → raw pad bytes mapping for the driving missions
-/// [S — the shipped bindings live in data\Control\Master.def/FrontEnd.def, not extractable here;
+/// [S — the port's own layout; the shipped routing (decoded, driving-input.md §13) is
+/// `driving_cfg::ShippedDrivingInput`;
 /// the design and its per-row evidence is docs/systems/driving-pc-input.md §3].
 ///
 /// Sign conventions come from PollDevice itself [M 0x169218 + the LY negation at 0x169288]:
@@ -921,15 +937,22 @@ mod tests {
         let mut out = Vec::new();
         evaluate_value(&mut vb, 0.9, 0.0, true, false, 0, &delays, false, 7, &mut out);
         assert_eq!(out, vec![ActionMsg { action: action::STEERDOWN, device: 7, value: 0.9 }]);
-        // SendGameMessage drops ids outside 1..0x40 [M 0x165850]; 0x40 itself passes.
+        // Only action 0 is never sent [M 0x168678 `iStack_d0 != 0`]; 0x41 (FRONTENDACTION_UP)
+        // and 0x75 (the unknown-name id) are delivered [M 0x165850 disassembly 0x165884/0x165890].
         let mut vb = ValueBindings {
             kind: Kind::DButton,
-            bindings: vec![msg(0), msg(0x41), msg(action::RESUMEAUTODRIVE)],
+            bindings: vec![msg(0), msg(0x41), msg(action::RESUMEAUTODRIVE), msg(0x75)],
             repeat: RepeatState::default(),
         };
         let mut out = Vec::new();
         evaluate_value(&mut vb, 1.0, 0.0, true, false, 0, &delays, false, 0, &mut out);
-        assert_eq!(out, vec![ActionMsg { action: action::RESUMEAUTODRIVE, device: 0, value: 1.0 }]);
+        let ids: Vec<u8> = out.iter().map(|m| m.action).collect();
+        assert_eq!(ids, vec![0x41, action::RESUMEAUTODRIVE, 0x75]);
+        // The one SendGameMessage drop: 0x1f while the gate word is 0.
+        assert!(!send_game_message_delivers(action::FIRESECONDARY as u32, false));
+        assert!(send_game_message_delivers(action::FIRESECONDARY as u32, true));
+        assert!(send_game_message_delivers(action::FIRESECONDARYRELEASE as u32, false));
+        assert!(send_game_message_delivers(0x47, false));
     }
     #[test]
     fn keyboard_mouse_maps_onto_the_pad_conventions() {

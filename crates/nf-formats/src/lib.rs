@@ -8,6 +8,7 @@ pub mod carmesh;
 pub mod carmodel;
 pub mod character;
 pub mod collision;
+pub mod controldef;
 pub mod crp;
 pub mod crp_mesh;
 pub mod geoprim;
