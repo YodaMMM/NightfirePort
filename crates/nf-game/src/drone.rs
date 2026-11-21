@@ -14382,8 +14382,8 @@ impl Data<'_> {
             let world = nf_formats::anim::world_pose(&nf_formats::anim::local_pose(seq, skel, sk, f as u32), sk);
             Some(sk.extra.iter().filter_map(|&(bone, part)| Some((part?, *world.get(bone as usize)?))).collect())
         };
-        // A sequence without a channel for every bone (cut-scene 0x06000997 on 0x0500002E: its sequence is not this
-        // archive's full set) gives no parts.
+        // A skin with no part bones gives no parts (the 07000005 ledge cut-scene actors, e.g. 0x0500002E
+        // on 0x06000997, whose sequence 0x040007f9 fits: the miss is the empty part list, not the channels).
         let out = pose().unwrap_or_default();
         if out.is_empty() && std::env::var_os("NF_PARTS_DEBUG").is_some() {
             let sk = self.skins.get(&skin).map(|s| s.skeleton);
