@@ -7361,6 +7361,12 @@ pub struct Scene {
     /// carmesh/geoprim UVs, docs/systems/driving-handedness.md): driving scenes set this and the
     /// projection mirrors screen x. No pipeline culls faces, so the winding flip costs nothing.
     pub mirror_x: bool,
+    /// The driving view's particle groups this frame (tyre smoke/spray from nf_game::driving::effects),
+    /// set by the driving loop; `particle_draws` returns them when there is no on-foot sim.
+    pub drive_particles: Vec<(Option<usize>, bool, Vec<Vertex>)>,
+    /// The driving HUD overlay this frame (set by the driving loop; `overlay_for` uses it when
+    /// there is no on-foot sim).
+    pub drive_hud: crate::gpu::HudFrame,
     /// The HUD's textures by hash (docs/systems/hud.md), from any map of the archive, and its tables from ACTION.ELF.
     pub hud_textures: Vec<(u32, TextureImage)>,
     /// break-shards draw: a kind-2 breakable's face draw word (its batch texture) → the index into
@@ -8316,7 +8322,7 @@ impl Scene {
     /// (`ParticleSprite::additive`). The game draws every emitter object in its own call; one
     /// group per (texture, blend) draws the same pixels.
     pub fn particle_draws(&self, right: [f32; 3], up: [f32; 3]) -> Vec<(Option<usize>, bool, Vec<Vertex>)> {
-        let Some(sim) = self.sim.as_ref() else { return Vec::new() };
+        let Some(sim) = self.sim.as_ref() else { return self.drive_particles.clone() };
         let mut groups: Vec<(Option<usize>, bool, Vec<Vertex>)> = Vec::new();
         for s in sim.drones.fx.particle_sprites() {
             let tex = self.particle_tex.get(&s.texture).copied();
@@ -11127,7 +11133,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             let has = |t: u32| hud_textures.iter().any(|(h, _)| *h == t);
             s.drones.keypad_page_drawn = hud.is_some() && has(crate::fe_pages::ATLAS_BUTTONS) && has(crate::fe_pages::KEYPAD_GLYPHS_TEX);
         }
-        Scene { shard_tex, particle_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, mirror_x: false, bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
+        Scene { shard_tex, particle_tex, cels: room_cels, cel_graph, streams: None, music_files: None, music_tables: None, sound_bank: None, sound_spares: Vec::new(), snow_texture, vertices, indices, materials, textures, hud_textures, woman: None, hud, script_billboards, view_models, mp_bodies, bond_body, mp_body_weapons, mp_char_bodies, mp_anim_sets, fog, mirror_x: false, drive_particles: Vec::new(), drive_hud: Default::default(), bounds, start, stats, characters, char_vertex_start, char_verts, sequences, attachments, sim, colliders, models_0x800, npc_pool, ladders_drawn, grapple_hooks_drawn, misc_drawn, lock_matrices, door_dims, sl_dims, dynobj_matrices, rotor_placements, rbody_placements, mine_placements, gunimp_placements, script_tweak_alpha,
             door_scene_hidden,
             script_scene_hidden,
             sl_lod,
@@ -11180,6 +11186,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             mp_anim_sets: None,
             fog: None,
             mirror_x: false,
+            drive_particles: Vec::new(),
+            drive_hud: Default::default(),
             bounds,
             start,
             stats,

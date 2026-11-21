@@ -41,7 +41,7 @@ fn rider(seat: u32, health: f32) -> AiRider {
 }
 
 fn db(els: Vec<AiElement>, slots: [i32; 3]) -> ElementDb {
-    ElementDb::new(&MapAi { elements: els, commands: Vec::new() }, slots, 0, 1.0, 0)
+    ElementDb::new(&MapAi { elements: els, commands: Vec::new(), ..Default::default() }, slots, 0, 1.0, 0)
 }
 
 const FWD: [f32; 3] = [0.0, 0.0, 1.0];
@@ -252,7 +252,7 @@ fn henchmen_need_a_known_class_and_the_character_system() {
 fn health_scales_at_load_and_the_near_flag() {
     let mut v = vehicle([0.0, 0.0, 119.0], 0);
     v.riders = vec![rider(3, 50.0)];
-    let d = ElementDb::new(&MapAi { elements: vec![v.clone()], commands: vec![] }, [32, 6, 16], 1, 1.5, 0);
+    let d = ElementDb::new(&MapAi { elements: vec![v.clone()], commands: vec![], ..Default::default() }, [32, 6, 16], 1, 1.5, 0);
     assert_eq!(d.elements[0].rec.health, 150.0);
     assert_eq!(d.elements[0].rec.riders[0].health, 75.0);
     let mut d = db(vec![v], [32, 6, 16]);

@@ -380,10 +380,14 @@ still integrates with its own Euler form; it does not use `Body::integrate`.
 | `FUN_002cc590` / `FUN_002cc510` | y / x rotation matrices | inlined in the two blocks | ported |
 | `FUN_002104a8` | input slew | `approach` | ported (the pad layer itself is not) |
 | `FUN_00210938` | inverse inertia | `inv_inertia` | ported |
-| `FUN_001c9778` | model half extents | none | the disc test uses the decoded LOD-0 box instead [S] |
+| `FUN_001c9778` | model half extents | `carmesh::header_half_extents` | ported: the car's `Base` record +0x10/+0x20 (§10) |
 | `FUN_00190e08` / sheets 0x331a60 | boundary sheets | `bounds::ZoneQuad`, called from the pass | ported (bounds.rs) |
 | `FUN_00195a30` | health ratio (> 0 = alive) | `SubCraft::alive` | flag only |
-| `FUN_001fc2f0` | car↔world collision | none | not ported for any vehicle; vanquishsub has no NO_WORLD_COLLISIONS line, so the game's sub does collide with the level |
+| `FUN_001fc2f0` | car↔world collision (pass B) | `sub_collide::collide_world`, `SubCraft::step_world` | ported for the player's SUB_PHYSICS vehicle (§10) |
+| `FUN_001fb318` | contact response | `sub_collide::respond` | ported for a SUB_PHYSICS vehicle and a world contact |
+| `FUN_001fc198` | contact damage | `sub_collide::world_damage` | the amount; the damage call `FUN_00189598` is not ported |
+| `FUN_002166f8` (+`FUN_00232638`/`FUN_00214c08`/`FUN_00213d68`/`FUN_00231af0`) | segment vs the triangles | `sub_collide::WorldMesh::segment` | ported (§10); the 2-D wall path `FUN_0021a248` is not |
+| `FUN_0015c738` | `EStartMission` start velocity | `SubCraft::start_mission` | ported |
 
 **Unproven or not done.** The model box the game reads for the inertia (the disc test's LOD-0
 box stands in). Which option the profile flag is. The start speed (`EStartMission` argument ×
@@ -392,3 +396,126 @@ the MIS13A/B/C player drives: the view picks `ultralight` for 13A/B and the patr
 and the player vehicle choice (`DAT_0033196c`, the profile's car name) is not traced. Inside
 one port tick the order is controller then integration; the game integrates at the top of the
 next frame, which gives the same sequence of values.
+## 10. The hull on the ground and the player's recovery (branch s/drive-reset)
+
+Pass C, `FUN_001f9500`, runs between the wall sweep and the integration [M FUN_001ff3d8]. Each
+hull point queries the ground plane under it (`FUN_001f6ae0`); a depth `w = (v0 − p)·n > 0`
+counts, the count lands in instance+0x6c [M 0x1f9804], and the body moves out along the deepest
+point's plane normal by that depth [M 0x1f983c-0x1f9894]. Upright (`up.y > 0.8`) only points
+8..11 are tested, tilted points 4..count [M 0x1f9670]. The points come from the car model's hull
+list, which the port does not read: `Car::hull_points` uses the 8 box corners when tilted and the
+4 bottom corners raised to the spring limit when upright [S]. The contact response
+(`FUN_001f91e8`, VU0 microcode) is not lifted; the port applies an inelastic impulse at the
+deepest point [S]. Without this pass a car on its roof had nothing under it and fell through the
+track (MIS01: y −425 after 1200 ticks).
+
+The recovery (`crates/nf-game/src/driving/reset.rs`):
+
+| piece | game | port | status |
+|---|---|---|---|
+| tip counter | `FUN_00188200` 0x188480: player (+0x2c8 == 0), `up·(0,1,0) < 0.3` and +0x6c != 0 → actor+0x3e8 += 1 (cap 30); else 0 | `reset::check`, `ResetState::tip_ticks` | [M] |
+| heading memory | same branch, when the counter drops: actor+0x3f0 += (fwd − it)·0.1 | `ResetState::heading` | [M]; its spawn value [S] |
+| fire | 0x188bb0: +0x3e8 == 30 → vtable +0x158 (`FUN_00187b00`, arg 0) | `check` returns `Respawn` | [M] |
+| righting | `FUN_00187b00`: state reset `FUN_00187350`; direction = toward the objective marker (`FUN_00207748(mgr, 0)`) else +0x3f0; matrix `FUN_00210540`; x/z kept; y = ground (`FUN_002151b8`, 0 if none) + TYRE_RADIUS + SPRING_REST_LENGTH + half height (model+0x4c4); `FUN_001f7880` zeroes the velocities | `reset::righting`, `Respawn::apply`, `Car::place` | [M]; the +0x2e4 path branch and the matrix row order [S] |
+| script placement | `EResetPlayerCarPos` 0x156460 → `FUN_001fee68` then vtable +0x160 `FUN_00187eb8`: per-wheel ground, spring memory 0.15·LIMIT, y = mean wheel height + the three offsets; velocity = unit dir × factor (momentum write 0x1565f0) | `reset::place_at` | [M]; no-plane wheels and the hidden normalise [S] |
+| `EResetPlayerCar` (kind 98) | `FUN_00156390`: player vtable +0x158 with 0, the same righting | (not wired in `script.rs`) | [M] |
+
+Not in the engine path [M-negative]: a fade, damage, a mission fail, a respawn at a road node or
+checkpoint, and a height or bounding-box kill test (a grep of the 0x18xxxx-0x20xxxx functions for
+`+0x14` compares against constants found only orientation tests; a narrow search). The water and fall recoveries are the
+tracks' scripts: MIS01 holds nine `EResetPlayerCarPos` trigger zones (radius 18-110, y −2.6 to
+−16.2, around (−1150, −1540)), MIS3 four, MIS4 two; `EPlayerLose` zones sit
+below the cliffs on MIS4 (y −158, −205) and RACE (y −265) [D]. The script machine already fires
+them (`script::Output::ResetPlayerCar` / `Lost`); the caller applies the placement with
+`reset::place_at` and the trigger's position and `+0x30` direction.
+
+The view calls, after `Car::step` on the land tracks: `reset::check(&car, ground.tris(), &mut
+state, marker)` and applies the result; and on `Output::ResetPlayerCar { trigger, speed_factor }`
+`reset::place_at(&car, &ground, ground.tris(), t.pos, t.dir, speed_factor).apply(&mut car)`.
+**Unproven or not done.** The 2-D wall path of the query and pass C (§10). Inside one port tick
+the order is controller, world collision, integration; the game runs the collision and the
+integration at the top of the next frame, which gives the same sequence of values.
+
+## 10. The world collision of a SUB_PHYSICS vehicle (pass B, `FUN_001fc2f0`)
+
+Port: `crates/nf-game/src/driving/sub_collide.rs`, `SubCraft::step_world`; tests
+`crates/nf-game/tests/drive_sub_collide.rs` (unit) and `drive_sub_physics_disc.rs` (NF_ISO).
+
+**Who runs it** [M]. Pass B runs for a body whose `inst+0x7c` bit 0 is set; the body constructor
+sets it for kinds 1 and 2 (the player is kind 1) [`FUN_001f6e98` :249-254]. The rest of
+`inst+0x7c` is the radius `|half extents|` [:176-188]. Kinds other than 1 skip frames by speed
+(`DAT_00339f54 & {3, 1, 0}` for |v|² < 4, < 225, else). `NO_WORLD_COLLISIONS` (+0xc4) is read in
+the physics only by pass C (`FUN_001f9500` :85): the ultralights, which set it, still run pass B.
+
+**The points.** Eight hull corners, the body rows × `(±(hx + 0.18), ±hy, ±hz)` (the flush
+`FUN_001f8cf0` writes them to class+0x280+sel·0x80, in the order (−,−,−) (+,−,−) (+,−,+) (−,−,+)
+(−,+,+) (+,+,+) (+,+,−) (−,+,−)), the nose point `row2·(hz + 0.05)` and the side points
+`±row0·hx`. `(hx, hy, hz)` is half the model header box (`FUN_001c9778`: `*(model+0xc)` +0x10 /
++0x20; `FUN_001c7940` sets `model+0xc` from the first `in#0` item's `as` set, whose first word is
+the tag `Base` [D]): vanquishsub (0.919, 0.578, 2.317), ultralight (5.344, 1.190, 2.998),
+ultralightbig (10.688, 2.379, 5.995) [D]. The same box feeds the inertia (`FUN_00210938`). The
+decoded LOD-0 geometry box differs (vanquishsub x 1.388 against 0.919).
+
+**The query** (`FUN_002127f0` → `FUN_002166f8`). Each point is a segment from the body position to
+`pos + offset + vel·dt`, the velocity re-read per point. The pass sets the class mask 0x20 around
+the queries (`DAT_0033a540+0x2c`). A SUB_PHYSICS body's gather flags are 0xc (a land car's 4);
+bit 8 adds the triangle test over the triangles gathered near the body (`FUN_00211ed0` →
+`FUN_00217588` mode 1 → `FUN_00216ec0`, no class filter in the gather). Per group
+(`FUN_00214c08`) the segment is taken into its own frame (`FUN_00231d68`: y = norm(start − end),
+origin = start) and `FUN_00213d68` keeps, among the triangles the line passes through (both
+windings), the one whose plane crossing is nearest the start with distance > −1; the class mask
+rejects. `FUN_00231af0` then intersects the segment with that plane and answers only for
+0 ≤ t ≤ 1, so a surface up to 1 m behind the start hides one ahead. The normal is
+`norm((v1 − v0) × (v0 − v2))`, turned to y ≥ 0, its y set to 0.9999 (0x3f7ff972) when ≥ 0.9999,
+then turned toward the segment start. The surface and class bytes come with it. Bit 4 adds a
+2-D wall test over walls built from the same gathered triangles (`FUN_00219a50`, `FUN_0021a248` /
+`FUN_00219328`, horizontal normals); `FUN_00216d30` keeps whichever answer is nearer the start.
+The wall path is not ported. Neither is the dynamic-object list (`FUN_00218440` /
+`FUN_002187f0`, kind 1) nor the object loop (`FUN_00218668` / `FUN_001fade8`).
+
+**Per hit** [M :284-512]. Surface 0x0e: mission event 0x15 (`FUN_00208540`), no response. The
+player's front corners (2-5) and nose point: |v| > 7.5 stops the check; otherwise a normal with
+`n·nose ≤ 0` sets +0x29e (`FUN_001931b8`; the pass cleared it first), which the SUB_PHYSICS
+pass reads next tick (the stick's angular impulse, §8 step 11). Depth = |end − hit| (the y lane
+kept for SUB_PHYSICS); the side points use weight 0.25 and a quarter of the depth.
+
+**The response** `FUN_001fb318(depth, weight, inst, info, n, hit, 1, surface)`. With r = hit − pos,
+u = ω × r + v, vn = (u·n)·weight: vn > 0 → no response (strength 0). Otherwise
+`den = ((W(r × n)) × r)·n + sqrt(max(r.x² + r.z² − |r.x n.x + r.z n.z|, 0)) / hx`,
+`j = −(s·min(|vn|, 25) + 1)·(vn − 10·depth) / den` (0 when den = 0; s = `DAT_00339150` =
+COEFF_RESTITUTION / MICRO_THRESHOLD = 0.0004, computed at 0x1f6a68 and in `FUN_001fd338`; the
+.data initial is 0), `Δv = clamp(j, ±10)·n − clamp_each(0.0045·u, ±0.125)`; p += m·Δv;
+τ = r × m·Δv with its local z lane × 0.15 (SUB_PHYSICS; the land branch differs and is not
+ported); L += τ; v = p/m; ω = W·L. Strength (info+0x44) = min(|j|·0.5 / 10, 1). The constants are
+`BUILDING_*` and `PF_SCALE` (0x339134-0x339158, equal to the shipped Rigid tun).
+
+**Damage** (`FUN_001fc198`, points 0-8). Strength > 0.2 → `2·strength·5·6` hit points to
+vtbl+0x1c (`FUN_00189598`, not ported); a player whose vtbl+0x60 (`FUN_0018ad28`) answers non-zero
+takes none; while +0x374 is non-zero the amount also adds to +0x370 (an IS_POLICE alarm sum,
+`FUN_00187608`).
+
+**Start speed** (`FUN_0015c738`). The handler writes `norm(dir)·arg·inst+0x4c` into the momentum
+(+0x40); +0x4c is the mass, so the start velocity is `norm(dir)·arg` m/s, `arg` the action's
+f32 word (MIS13A 35, MIS13B 2, MIS4 24, the others 0) [M 0x15c93c `lwc1`; D].
+
+**The player vehicle.** "Spawn player car" (`FUN_00176658` :207-231) takes its name from
+`FUN_002051f8`: mission+0x1b44, which `FUN_00204d18` copies from the `MSet` payload's first
+string (swapping only `db5` / `z8` for an unlocked car), or `jungle_truck` when the low-memory
+byte 0x1009a1 has bit 0. The car constructor's own override `DAT_0033196c` is never written in
+DRIVING.ELF [M: no store, no pointer to it]. On the disc [D]: MIS01 helicopter, MIS11
+vanquishsub, MIS13A jungle_truck, MIS13B ultralight, MIS13C fodbase, MIS3 supersnow, MIS4
+vanquishalps, RACE cobra_player. Only MIS11 and MIS13B spawn the player in a SUB_PHYSICS
+vehicle; jungle_truck and fodbase are land-pass vehicles. Whether a script later puts the player
+in the archive's ultralight (MIS13A) or ultralightbig (MIS13C) is not traced.
+
+**The force-frame flag** of §8 step 2 (`DAT_003339bc[cam·0x1c + 7]`): DAT_003339bc is the camera
+table `FUN_001a49e0` builds from camera.ini, indexed by the active camera (+0x120), and byte +7
+is that camera's `interiorView` key [M FUN_001a49e0 :271-272, string 0x37da60].
+The default cameras of the sub (`vanquishsubHeliCam0`) and the ultralights (`UltralightAutoDriveCam`) carry no `interiorView` line, so the flag is 0 there, the port's default; camera.ini sets it only on `VanquishDashboardCam0` and `BumperCam` [D MIS11 / MIS13B camera.ini]. Whether the bumper camera can be selected in a sub mission is not traced.
+
+**Not ported, or not proven.** The 2-D wall path, the object lists, pass C (`FUN_001f9500`, a
+per-probe depth push-out over the class+0x180 points, skipped for NO_WORLD_COLLISIONS bodies and
+when the mission name holds `uw_`), the damage call itself, the land-car branch of the response.
+The port tests every triangle the segment's xz box meets instead of the game's per-vehicle cache
+(radius 1.1·(r + min(1, |Δpos|)) around the moved centre) and does not apply `FUN_00214c08`'s
+group-sphere prefilter; both matter only for a surface the cache or the sphere leaves out.

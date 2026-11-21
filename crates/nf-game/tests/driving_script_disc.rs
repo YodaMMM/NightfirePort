@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use nf_formats::crp::Crp;
 use nf_formats::iso9660::IsoImage;
-use nf_formats::trackstart::{map_script, track_spawn, MapScript, TAG_EL};
+use nf_formats::trackstart::{map_script, prop_scripts, track_spawn, MapScript, PropScript, TAG_EL};
+use nf_game::driving::script_effects::{decode, Effect, Ref};
 use nf_game::driving::script::{action_info, CarFacts, DriveScript, DriveState, ElementFacts, Facts, Output, ACTIONS, PORTED};
 
 const TRACKS: [&str; 8] = ["MIS01", "MIS11", "MIS13A", "MIS13B", "MIS13C", "MIS3", "MIS4", "RACE"];
@@ -59,8 +60,9 @@ fn all_lists(crp: &Crp) -> Vec<(u16, Vec<u32>)> {
 }
 
 /// Distinct action ids per track [D], pinned.
+/// Distinct action ids per track (the `Map` lists and the prop keyframe lists) [D], pinned.
 const IDS_PER_TRACK: [(&str, usize); 8] =
-    [("MIS01", 88), ("MIS11", 68), ("MIS13A", 56), ("MIS13B", 50), ("MIS13C", 26), ("MIS3", 62), ("MIS4", 49), ("RACE", 28)];
+    [("MIS01", 95), ("MIS11", 77), ("MIS13A", 70), ("MIS13B", 63), ("MIS13C", 34), ("MIS3", 75), ("MIS4", 58), ("RACE", 34)];
 
 #[test]
 fn every_action_id_on_the_eight_tracks_has_its_class_and_handler() {
@@ -86,6 +88,16 @@ fn every_action_id_on_the_eight_tracks_has_its_class_and_handler() {
                 uses.entry(id).or_default()[2] += 1;
             }
         }
+        // The prop articles' keyframe lists count as "other" too.
+        for p in prop_scripts(&crp).unwrap() {
+            for t in &p.tracks {
+                for (_, l) in &t.events {
+                    for a in l {
+                        uses.entry(a.id).or_default()[2] += 1;
+                    }
+                }
+            }
+        }
         for (key, n) in owned {
             let e = uses.entry(key >> 1).or_default();
             e[(key & 1) as usize] += n;
@@ -105,6 +117,7 @@ fn every_action_id_on_the_eight_tracks_has_its_class_and_handler() {
         }
         per_track.push((*viv, uses.len()));
     }
+    eprintln!("{per_track:?}");
     // The table holds exactly the ids the disc uses [D].
     assert_eq!(union.len(), ACTIONS.len());
     assert!(ACTIONS.iter().all(|a| union.contains(&a.id)));
@@ -116,6 +129,21 @@ fn into(m: &MapScript, t: usize, f: &mut Facts) {
     let tr = &m.triggers[t];
     f.player_pos = [tr.pos[0], tr.pos[1] + 0.5, tr.pos[2]];
     f.player_vel = [tr.dir[0] * 20.0, tr.dir[1] * 20.0, tr.dir[2] * 20.0];
+}
+
+/// A prop article's keyframe script by name.
+fn prop(dec: &[u8], name: &str) -> PropScript {
+    prop_scripts(&Crp::parse(dec).unwrap()).unwrap().into_iter().find(|p| p.name == name).unwrap()
+}
+
+/// The vehicle name of the `AIEl` element at byte offset `off` (0x100-byte elements, the name at
+/// `+0x54`) [D].
+fn aiel_vehicle(dec: &[u8], off: usize) -> String {
+    let crp = Crp::parse(dec).unwrap();
+    let map = crp.pool().unwrap().into_iter().find(|r| r.tag == nf_formats::crp::tag::MAP).unwrap();
+    let r = crp.record_window(&map).unwrap().into_iter().find(|r| r.tag == 0x4149_456c).unwrap();
+    let p = &crp.payload(&r).unwrap()[off + 0x54..off + 0x74];
+    String::from_utf8_lossy(&p[..p.iter().position(|&b| b == 0).unwrap()]).into_owned()
 }
 
 fn element(m: &MapScript, path: &str) -> u32 {
@@ -178,7 +206,7 @@ fn every_track_fails_by_its_own_rules() {
             // player's finish T214 and loses [D RACE T229 flags 0x40b].
             "RACE" => {
                 let t = &m.triggers[229];
-                f.cars.push(CarFacts { kind: 2, pos: [t.pos[0], t.pos[1] + 0.5, t.pos[2]], vel: [0.0; 3], radius: 2.5 });
+                f.cars.push(CarFacts { kind: 2, pos: [t.pos[0], t.pos[1] + 0.5, t.pos[2]], vel: [0.0; 3], radius: 2.5, bbox: None });
                 "rival at the finish"
             }
             // The end zone T65 calls stage 39, where R11 loses while counter 0x2d < 3 [D].
@@ -242,43 +270,62 @@ fn tracks_win_by_their_own_rules() {
                 }
                 "end zone, six targets down"
             }
-            // T65 calls stage 39; R10 wins with counter 0x2d at 3. The three counts are the
-            // EIncMagicCounter of R168/R170/R171/R172 (stages 32..35); the run counts them
-            // directly, the way into those stages is not exercised.
+            // The three upload points T51 / T52 / T54 (spheres, fired every frame while inside)
+            // give special weapon 0x14 and call stages 32 / 34 / 35; firing it there sets counter
+            // 0x22 (FUN_0020de20 case 0x14), so that stage's rule (R168 / R171 / R172: counter
+            // 0x22 > 0) shows the instance, counts 0x2d and disables its trigger. Then the end
+            // zone T65 calls stage 39, where R10 wins with counter 0x2d at 3 [D, M 0x20de20].
             "MIS11" => {
-                for _ in 0..3 {
-                    s.count(0x2d);
+                for t in [51, 52, 54] {
+                    into(&m, t, &mut f);
+                    steps += run(&mut s, &mut f, 1);
+                    assert_eq!(s.special_weapon, Some(0x14), "{viv} T{t}");
+                    let before = s.counters[0x2d];
+                    s.player_fired(0x14);
+                    steps += run(&mut s, &mut f, 1);
+                    assert_eq!(s.counters[0x2d], before + 1, "{viv} T{t}");
                 }
                 into(&m, 65, &mut f);
-                "end zone with the three counts"
+                "three uploads, end zone"
             }
-            // T562 changes to stage 1; R1 there waits for programmer event 0 (set by game code;
-            // the setter is not traced), then timer 5 = 3 s and stage 2; R37 wins below 0.95 s [D].
+            // T562 changes to stage 1; R1 there waits for programmer event 0, which the player's
+            // EMP sets on hitting a car named "paris_bombvan" (FUN_0018ac28); then timer 5 = 3 s
+            // and stage 2; R37 wins below 0.95 s [D, M 0x18ac28].
             "MIS01" => {
                 into(&m, 562, &mut f);
                 steps += run(&mut s, &mut f, 2);
                 assert_eq!(s.stage, 1, "{viv}");
                 f.player_pos = [1e4, 0.0, 1e4];
-                s.set_event(0);
-                "stage 1, programmer event 0"
+                let van = aiel_vehicle(dec, 0x100);
+                assert_eq!(van, "paris_bombvan");
+                s.emp_hit(&van, true);
+                "stage 1, the bomb van EMP'd"
             }
             // R16 (default list) at counter 0xb == 3 starts timer 0 (6 s); R37 changes to stage 8
-            // below 4 s; R15 wins below 1 s [D]. No list of the track counts 0xb; the run counts
-            // it directly (its source is not found).
+            // below 4 s; R15 wins below 1 s. Counter 0xb is counted by the JA_SAL prop's
+            // animation an6 (track aq9 keyframe 0: EIncMagicCounter 0xb), run by the animation
+            // player FUN_001a35f0; three of its four instances playing it reach 3 [D, M 0x1a35f0].
             "MIS13A" => {
+                let p = prop(dec, "JA_SAL");
                 for _ in 0..3 {
-                    s.count(0xb);
+                    for l in p.anim_events(6) {
+                        s.run_actions(l);
+                    }
+                    steps += run(&mut s, &mut f, 1);
                 }
-                "counter 0xb at 3"
+                assert_eq!(s.counters[0xb], 3, "{viv}");
+                "three JA_SAL props played an6"
             }
-            // Its win rules need timer 6, which only R9 (stage 3) starts, and no list changes to or
-            // calls stage 3; R7 (timer 0) has its active bit clear [D]. Not reachable here.
+            // The subMissiles prop's animation an3 (track aq4 keyframe 3: EHideInstance +
+            // ECallStage 3) runs stage 3: R9 starts timer 6 (4 s), and R24 (default list) wins
+            // below 1 s [D, M 0x1a35f0].
             "MIS13C" => {
-                let calls3 = m.triggers.iter().flat_map(|t| &t.actions).chain(m.rules.iter().flat_map(|r| &r.actions))
-                    .any(|a| (a.id == 0x28 || a.id == 0x29) && a.word(1) == 3);
-                assert!(!calls3);
-                got.push((*viv, s.state, s.outcome));
-                continue;
+                let p = prop(dec, "subMissiles");
+                assert!(p.anim_events(3).iter().any(|l| l.iter().any(|a| a.id == 0x28 && a.word(1) == 3)));
+                for l in p.anim_events(3) {
+                    s.run_actions(l);
+                }
+                "subMissiles played an3"
             }
             _ => unreachable!(),
         };
@@ -286,9 +333,123 @@ fn tracks_win_by_their_own_rules() {
         eprintln!("{viv}: {how}: {:?} outcome {} after {steps} steps", s.state, s.outcome);
         got.push((*viv, s.state, s.outcome));
     }
-    let want: Vec<_> = TRACKS
-        .iter()
-        .map(|&v| if v == "MIS13C" { (v, DriveState::Playing, 3) } else { (v, DriveState::Won, 0) })
-        .collect();
+    let want: Vec<_> = TRACKS.iter().map(|&v| (v, DriveState::Won, 0)).collect();
     assert_eq!(got, want);
+}
+
+#[test]
+fn prop_keyframe_lists_hold_the_counts_and_the_stage_call_the_wins_wait_for() {
+    // MIS13A: JA_SAL's animation an6 plays tracks aq9 / aq10 / aq11; aq9 (7 keyframes) runs
+    // EIncMagicCounter(0xb) on keyframe 0 and EHideInstance on keyframe 6. MIS13C: subMissiles'
+    // an3 plays aq4 / aq5 / aq6; aq4 keyframe 3 runs EHideInstance + ECallStage(3) [D].
+    let Some(tracks) = tracks() else { return };
+    let get = |v: &str| &tracks.iter().find(|(t, _)| *t == v).unwrap().1;
+    let ids = |l: &[nf_formats::trackstart::TriggerAction]| l.iter().map(|a| (a.id, a.word(1))).collect::<Vec<_>>();
+    let sal = prop(get("MIS13A"), "JA_SAL");
+    assert_eq!(sal.anims.iter().find(|a| a.index == 6).unwrap().tracks, vec![Some(9), Some(10), Some(11), None]);
+    let aq9 = sal.tracks.iter().find(|t| t.index == 9).unwrap();
+    assert_eq!(aq9.keys, 7);
+    assert_eq!(aq9.events.iter().map(|(k, l)| (*k, ids(l))).collect::<Vec<_>>(), vec![(0, vec![(0xb9, 0xb)]), (6, vec![(0xb, 0)])]);
+    let sub = prop(get("MIS13C"), "subMissiles");
+    assert_eq!(sub.anims.iter().find(|a| a.index == 3).unwrap().tracks, vec![Some(4), Some(5), Some(6), None]);
+    let aq4 = sub.tracks.iter().find(|t| t.index == 4).unwrap();
+    assert_eq!(aq4.events.iter().map(|(k, l)| (*k, ids(l))).collect::<Vec<_>>(), vec![(3, vec![(0xb, 3), (0x28, 3)])]);
+    // No Map list of either track counts 0xb or calls stage 3 (the reason the props are needed).
+    for (v, hit) in [("MIS13A", (0xb9u32, 0xbu32)), ("MIS13C", (0x28, 3))] {
+        let m = map_script(&Crp::parse(get(v)).unwrap()).unwrap();
+        let all = m.triggers.iter().flat_map(|t| &t.actions).chain(m.rules.iter().flat_map(|r| &r.actions));
+        assert!(!all.into_iter().any(|a| (a.id, a.word(1)) == hit || (hit.0 == 0x28 && a.id == 0x29 && a.word(1) == 3)), "{v}");
+    }
+}
+
+#[test]
+fn every_effect_decodes_with_references_of_the_right_kind() {
+    // Every unported action of the eight tracks' Map lists decodes; the reference fields name
+    // the record kinds the handlers expect [D]: elements {AIEl}, commands {AICo}, splines {AISp},
+    // instances {in  0000}, camera animations {Cams}, sounds and channels CHAR:: strings.
+    let Some(tracks) = tracks() else { return };
+    // An empty path = a word naming an `sr` record the file lacks (e.g. MIS01 0x9ff / 0xa00,
+    // MIS11 0x26e, absent from their Map windows [D]).
+    let missing = std::cell::RefCell::new(BTreeSet::new());
+    let kind = |r: &Option<Ref>, want: &[&str]| {
+        r.as_ref().map_or(true, |r| {
+            if r.path.is_empty() {
+                missing.borrow_mut().insert(r.word);
+                return true;
+            }
+            want.iter().any(|w| r.path.contains(w))
+        })
+    };
+    let mut n = 0usize;
+    let mut other: BTreeSet<u32> = BTreeSet::new();
+    for (viv, dec) in &tracks {
+        let m = map_script(&Crp::parse(dec).unwrap()).unwrap();
+        let lists = m.triggers.iter().map(|t| (Some(t.index), &t.actions)).chain(m.rules.iter().map(|r| (None, &r.actions)));
+        for (trig, l) in lists {
+            for a in l {
+                if PORTED.contains(&a.id) {
+                    continue;
+                }
+                n += 1;
+                let e = decode(a, trig, &m);
+                let ok = match &e {
+                    Effect::AiCommand { command, target, element, .. } => {
+                        kind(command, &["{AICo}"]) && kind(target, &["{AIEl}"]) && kind(element, &["{AIEl}"])
+                    }
+                    Effect::AiActivate { element, other } => kind(element, &["{AIEl}"]) && kind(other, &["{AIEl}"]),
+                    Effect::AiDeactivate { element }
+                    | Effect::AiFire { element, .. }
+                    | Effect::AiAccuracy { element, .. }
+                    | Effect::AiKill { element, .. }
+                    | Effect::AiVehicleParams { element, .. }
+                    | Effect::AiWakeRange { element, .. }
+                    | Effect::TargetBeacon { element, .. }
+                    | Effect::AiAvoidZone { element }
+                    | Effect::CarCameraAnim { element, .. } => kind(element, &["{AIEl}"]),
+                    Effect::CameraLockOn { element, .. } => kind(element, &["{AIEl}"]),
+                    Effect::CameraAnim { cams, .. } => kind(cams, &["{Cams}"]),
+                    Effect::CameraSpline { spline, .. } | Effect::AiNextSpline { spline, .. } | Effect::ControlToSpline { spline, .. } => {
+                        kind(spline, &["{AISp}"])
+                    }
+                    Effect::Stream { channel, stream, .. } => kind(channel, &["CHAR::"]) && kind(stream, &["CHAR::"]),
+                    Effect::Sound { bank, name } => kind(bank, &["CHAR::"]) && kind(name, &["CHAR::"]),
+                    Effect::SoundAt { at, bank, name, .. } => {
+                        (a.word(1) == 0 || at.is_some()) && kind(bank, &["CHAR::"]) && kind(name, &["CHAR::"])
+                    }
+                    Effect::StopSoundAt { at } => at.is_some(),
+                    Effect::AudioMix { channel, .. } | Effect::RevertAudioMix { channel, .. } | Effect::StingerChannel { channel } => {
+                        kind(channel, &["CHAR::"])
+                    }
+                    Effect::Movie { file, subtitles } => kind(file, &["CHAR::"]) && kind(subtitles, &["CHAR::"]),
+                    Effect::InstanceVisible { instance, .. }
+                    | Effect::CollisionGeometry { instance, .. }
+                    | Effect::PathSound { instance, .. }
+                    | Effect::SpawnSentry { instance, .. } => kind(instance, &["{in  0000}"]),
+                    Effect::SystemAnim { instance, placement, .. } | Effect::WakeSmackable { instance, placement, .. } => {
+                        kind(instance, &["{in  0000}"]) && kind(placement, &["{ps  0000}"])
+                    }
+                    Effect::PlayEffect { effect, instance, .. } | Effect::SuppressEffect { effect, instance, .. } => {
+                        kind(effect, &["{ef  "]) && kind(instance, &["{in  0000}"])
+                    }
+                    Effect::Explosion { at, trigger, instance, .. } => {
+                        kind(instance, &["{in  0000}"])
+                            && kind(at, &["{Trgr}", "TRIGGER0=INSTANCE_ELEMENT::"])
+                            && at.as_ref().map_or(true, |r| r.path.contains("{Trgr}") == trigger.is_some())
+                    }
+                    Effect::SpawnTraffic { at, .. } => at.is_some(),
+                    Effect::Other { id, .. } => {
+                        other.insert(*id);
+                        true
+                    }
+                    _ => true,
+                };
+                assert!(ok, "{viv}: {:#x} {e:?}", a.id);
+            }
+        }
+    }
+    eprintln!("{n} effect actions; kept as Other: {:x?}; missing sr: {:x?}", other, missing.borrow());
+    // Ten distinct reference words over the eight tracks name `sr` records their files lack [D].
+    assert_eq!(missing.borrow().len(), 10);
+    // The ids left as `Other` are HUD, power-up, path-throttle and player-car tuning actions.
+    assert!(other.iter().all(|id| ![0x3f, 0x14, 0x41, 0x42, 0x1c, 0x78, 0x17, 0x18, 0x23, 0x4e].contains(id)));
 }

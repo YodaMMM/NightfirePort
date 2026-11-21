@@ -142,7 +142,7 @@ fn pickup_census_every_level_creates_and_offers_its_pickups() {
             let mut take = sim.drones.inventory.take(&sim.weapons, &p, loaded, &mut armour, 1);
             for _ in 0..2 { if take.is_none() { take = sim.drones.inventory.take(&sim.weapons, &p, loaded, &mut armour, 1); } }
             if take.is_none() && (p.kind == 0 || p.kind == 1) {
-                let id = nf_game::pickup::Inventory::upgrade_ammo_id(p.weapon, 0, 1) as usize;
+                let id = nf_game::pickup::Inventory::upgrade_ammo_id(p.weapon, &[0; 9], 1) as usize;
                 let at = sim.weapons.ammo_type(id);
                 eprintln!("[census-debug] {level_name} #{k} id {:#x} kind {} upgrade→{id:#x} ammo_type {at} carried {:?} cap {:?} clip {:?} owned {:?} rounds {}", p.weapon, p.kind,
                     sim.drones.inventory.carried.get(at), sim.weapons.ammo_cap.get(at), sim.drones.inventory.clip.get(id), sim.drones.inventory.owned.get(id), p.rounds);
@@ -155,7 +155,7 @@ fn pickup_census_every_level_creates_and_offers_its_pickups() {
                 3 => armour >= 50.0,
                 0 | 1 => !loaded || take.is_none() && {
                     let id = nf_game::pickup::Inventory::upgrade_ammo_id(
-                        nf_game::pickup::Inventory::upgrade_weapon(p.weapon, 0, 1), 0, 1) as usize;
+                        nf_game::pickup::Inventory::upgrade_weapon(p.weapon, &[0; 9], 1), &[0; 9], 1) as usize;
                     let at = sim.weapons.ammo_type(id);
                     sim.drones.inventory.carried.get(at).copied().unwrap_or(0) >= sim.weapons.ammo_cap.get(at).copied().unwrap_or(0)
                 },

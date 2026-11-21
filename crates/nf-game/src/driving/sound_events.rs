@@ -39,7 +39,7 @@
 
 use super::audio::{voice_gate, Listener, Mixer, OneShot, VoiceOut};
 
-type V3 = [f32; 3];
+pub type V3 = [f32; 3];
 fn sub(a: V3, b: V3) -> V3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
 fn dot(a: V3, b: V3) -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }
 fn cross(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]] }
@@ -329,8 +329,29 @@ pub struct ContactVehicle {
     pub landing: f32,
 }
 
-/// The shared impact state: the cooldown slots `DAT_00355cd8[...]` (game-clock values) and the
-/// metal-gate alternation counter `DAT_00355d0c`.
+/// The game clock `FUN_00261038` [M]: a counter the EE timer-1 interrupt `FUN_00260f70` raises by
+/// one per tick. `FUN_00173c60` ("Init Timer") arms it with `FUN_00260d38(rate)`, rate = the
+/// video mode's entry of the table at 0x3c1a38 [D: 60, 60, 50, 60] picked by the boot option
+/// (`ntsc` / none → 1, `pal` → 2, `pal60` → 3; `FUN_00174bf0`, `FUN_00173c60`). So on an NTSC
+/// boot the clock counts 60 per second, independent of the frame rate: the impact cooldown (5)
+/// is 1/12 s and the explosion cooldown (30) half a second.
+pub const GAME_CLOCK_HZ: i32 = 60;
+
+/// The video-mode rate table at 0x3c1a38 [D] that `FUN_002d6b90` reads.
+pub const CLOCK_RATES: [i32; 4] = [60, 60, 50, 60];
+
+/// `FUN_00260d38` [M]: the timer-1 setup for `hz` ticks a second (0 → 100). Returns (mode, target,
+/// achieved rate): below 196 Hz the bus clock / 256 (576000), below 3150 Hz bus / 16, else the bus
+/// clock; target = (hz / 2 + base) / hz as u16; rate = base / target.
+pub fn clock_timer(hz: i32) -> (u32, u16, u32) {
+    let hz = if hz == 0 { 100 } else { hz };
+    let (mode, base) = if hz < 0xc4e { if hz < 0xc4 { (2, 0x8ca00) } else { (1, 0x8ca000) } } else { (0, 0x8ca0000) };
+    let target = ((hz / 2 + base) / hz) as u16;
+    (mode, target, base as u32 / target as u32)
+}
+
+/// The shared impact state: the cooldown slots `DAT_00355cd8[...]` (game-clock values, see
+/// [`GAME_CLOCK_HZ`]) and the metal-gate alternation counter `DAT_00355d0c`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImpactState { pub cooldown: [i32; 16], pub gate: u32 }
 
@@ -546,7 +567,8 @@ pub const DRY_FIRE: OneShot = OneShot { slot: 4, sfx: "SFX_DryFire", group: "Wea
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VehicleClass { Default = 0, Tank = 1, Heli = 2, Boat = 4, Sled = 5, Ultralight = 6, Suv = 7 }
 
-/// The ctor voices of the vehicle classes whose per-frame update is not ported [M ctor strings]:
+/// The ctor voices of the vehicle classes (their per-frame steps: `vehicle_sounds.rs` and
+/// `class_sounds.rs`) [M ctor strings]:
 /// (ctor, class, keys). `FUN_002f0f10` tank, `FUN_002f1428` helicopter, `FUN_002e7020` boat,
 /// `FUN_002ed7c0` snowmobile, `FUN_002e35b8` ultralight, `FUN_002e4980` turret.
 pub const CLASS_VOICES: [(u32, &str, &[&str]); 6] = [
@@ -564,6 +586,16 @@ mod tests {
 
     fn car(class: i32) -> ContactVehicle {
         ContactVehicle { class, smackable: false, speed: 10.0, wheels: [1; 4], prev_wheels: [1; 4], vel: [0.0; 3], landing: 0.0 }
+    }
+
+    #[test]
+    fn game_clock_is_sixty_a_second_on_ntsc() {
+        // 576000 / 9600 = 60 interrupts a second
+        assert_eq!(clock_timer(CLOCK_RATES[1]), (2, 9600, 60));
+        assert_eq!(clock_timer(CLOCK_RATES[2]), (2, 11520, 50));
+        assert_eq!(clock_timer(0), (2, 5760, 100));
+        assert_eq!(clock_timer(1000).0, 1);
+        assert_eq!(GAME_CLOCK_HZ, clock_timer(CLOCK_RATES[1]).2 as i32);
     }
 
     #[test]

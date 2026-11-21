@@ -19,8 +19,10 @@ Evidence tags: [M] DRIVING.ELF decompile (function + address), [D] disc data.
    `DAT_0032e6fc`) an `EStartMission` (vtable 0x3703c0, typeinfo name "13EStartMission" 0x3728e8)
    holding the trigger and argument word `+4` (`FUN_0015c718`).
 4. The handler `FUN_0015c738` 0x15c738: position = trigger `+0x00..+0x0b`, direction = trigger
-   `+0x30..+0x3b`; `FUN_001fee68(0x339190, pos, dir)`; car velocity = normalised direction ×
-   argument × car `+0x4c`; `FUN_00167d80()+4 = 1`.
+   `+0x30..+0x3b`; `FUN_001fee68(0x339190, pos, dir)`; the sim instance's momentum (+0x40) =
+   normalised direction × argument × instance `+0x4c` (the mass, `FUN_001f6e98` :124), so the
+   start velocity is normalised direction × argument m/s (the argument is read as f32,
+   `lwc1 $f12, 4($s0)` at 0x15c93c); `FUN_00167d80()+4 = 1`.
 5. `FUN_001fee68` 0x1fee68: y = ground height under (x, y, z) + 1.0 (`FUN_002151b8`; when it finds
    nothing, 0 + 1.0); x and z stay; the matrix comes from the direction (`FUN_00210540`: row 2 = the
    normalised direction, the other rows from world up; row 3 = (0, 0, 0, 1)).
@@ -86,4 +88,13 @@ car as well. MIS13C's trigger 0 (the previous stand-in) lies 43 units from the s
   whether `Vol_foothillE`'s collision is live at that moment (the gather skips items whose `+0x1c`
   pointer is 0), the event dispatch order, and what `EControlToSpline` does with the car. Only a
   live read of the car position in the first frames of MIS13B can settle this.
+- `ground_height` tests every collision triangle instead of the grid cells `FUN_00217588`
+  gathers, and ignores the instance flag bit 0 that makes the query measure upward.
+- MIS13B's marker sits at y −16.9 while the ground found under it is 169 units lower (−185.8):
+  the code puts the car on that ground; whether the ultralight then behaves differently is not traced.
+  The trigger beside it (78, radius 2.5, 1.4 u from the marker) and the path it hands the car
+  (`path_BondMaster01`, first key 1.2 u from the marker) are both at the marker's height, so a
+  car on the found ground would never start the opening (driving-intros.md section 4).
 - The meaning of the argument beyond "× car `+0x4c` = start speed" (the `+0x4c` field is not named).
+- The player vehicle placed here is the `MSet` name (`trackstart::mission_vehicle`;
+  docs/systems/drive-physics.md §10).

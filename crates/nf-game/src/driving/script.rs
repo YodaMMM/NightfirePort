@@ -36,6 +36,9 @@
 
 use std::collections::HashMap;
 
+use crate::driving::script_effects;
+
+pub use crate::driving::script_effects::{Effect, Ref};
 use nf_formats::trackstart::{
     MapScript, Trigger, TriggerAction, TRIGGER_BY_KIND2, TRIGGER_BY_OTHER, TRIGGER_BY_PLAYER, TRIGGER_ENABLED, TRIGGER_NEEDS_LIVE, TRIGGER_OBJECT_CLASS,
     TRIGGER_ONCE, TRIGGER_ONE_WAY, TRIGGER_SUPPRESSED,
@@ -63,19 +66,27 @@ pub struct ActionInfo {
     pub handler: u32,
 }
 
-/// Every action id the eight tracks use [D: every `el` list of each track's `Map` window: the
-/// trigger and rule lists plus lists other records (the AI elements) point at], with its
-/// class and functions [M: `DAT_0036fda0[id]` → the constructor's vtable → `+4` typeinfo, `+0xc`
+/// Every action id the eight tracks use [D: every `el` list of each track's `Map` window (the
+/// trigger and rule lists plus lists other records, the AI elements, point at) and of its prop
+/// articles (the keyframe lists, `nf_formats::trackstart::prop_scripts`)], with its class and
+/// functions [M: `DAT_0036fda0[id]` → the constructor's vtable → `+4` typeinfo, `+0xc`
 /// handler].
 pub const ACTIONS: &[ActionInfo] = &[
     ActionInfo { id: 0x9, name: "EPlayEffect", creator: 0x154308, handler: 0x153f80 },
+    ActionInfo { id: 0xa, name: "EFireWeapon", creator: 0x14ed50, handler: 0x14ca60 },
+    ActionInfo { id: 0xb, name: "EHideInstance", creator: 0x14f1c0, handler: 0x14f168 },
+    ActionInfo { id: 0xc, name: "EShowInstance", creator: 0x159ae0, handler: 0x159a88 },
     ActionInfo { id: 0x13, name: "EEndMission", creator: 0x14c328, handler: 0x14c260 },
     ActionInfo { id: 0x14, name: "EStreamEvent", creator: 0x15d248, handler: 0x15d000 },
     ActionInfo { id: 0x16, name: "EStartMission", creator: 0x15c920, handler: 0x15c738 },
     ActionInfo { id: 0x17, name: "EHideInstanceStatic", creator: 0x14f2c8, handler: 0x14f218 },
     ActionInfo { id: 0x18, name: "EShowInstanceStatic", creator: 0x159be8, handler: 0x159b38 },
     ActionInfo { id: 0x19, name: "EPowerUp", creator: 0x1555d0, handler: 0x1554c0 },
+    ActionInfo { id: 0x1a, name: "ESpawnSimplePhysics", creator: 0x15bb58, handler: 0x15bae0 },
+    ActionInfo { id: 0x1b, name: "ESpawnSmackable", creator: 0x15bfb0, handler: 0x15bbf8 },
     ActionInfo { id: 0x1c, name: "ESpawnTraffic", creator: 0x15c3f0, handler: 0x15c080 },
+    ActionInfo { id: 0x20, name: "EKillObject", creator: 0x150a98, handler: 0x1509c8 },
+    ActionInfo { id: 0x21, name: "ESpawnExplosion", creator: 0x15ae90, handler: 0x15a098 },
     ActionInfo { id: 0x23, name: "EWakeupSmackable", creator: 0x15e4b0, handler: 0x15de48 },
     ActionInfo { id: 0x24, name: "EPlaySystemAnim", creator: 0x154bd0, handler: 0x154ad8 },
     ActionInfo { id: 0x28, name: "ECallStage", creator: 0x148db8, handler: 0x148d50 },
@@ -108,10 +119,14 @@ pub const ACTIONS: &[ActionInfo] = &[
     ActionInfo { id: 0x70, name: "ESetSimRate", creator: 0x158d90, handler: 0x158d28 },
     ActionInfo { id: 0x74, name: "EPathSetDesiredThrottleStatic", creator: 0x152d28, handler: 0x152cb0 },
     ActionInfo { id: 0x78, name: "EChangeMaxTraffic", creator: 0x1497e8, handler: 0x1497b8 },
+    ActionInfo { id: 0x79, name: "EKickObject", creator: 0x1506d8, handler: 0x150390 },
     ActionInfo { id: 0x7d, name: "ETwoWheelsOff", creator: 0x15dbf0, handler: 0x15db78 },
+    ActionInfo { id: 0x80, name: "EStartEffect", creator: 0x15c650, handler: 0x15c520 },
+    ActionInfo { id: 0x81, name: "EStopEffect", creator: 0x15ccb0, handler: 0x15cb80 },
     ActionInfo { id: 0x82, name: "ESetCollisionGeometry", creator: 0x157c70, handler: 0x157be0 },
     ActionInfo { id: 0x83, name: "EAddScoreAction", creator: 0x147c88, handler: 0x147b80 },
     ActionInfo { id: 0x86, name: "EPlaySound", creator: 0x1546d0, handler: 0x154658 },
+    ActionInfo { id: 0x8a, name: "EPowerUpShield", creator: 0x155be0, handler: 0x155b20 },
     ActionInfo { id: 0x8c, name: "EResetPlayerCarPos", creator: 0x156638, handler: 0x156460 },
     ActionInfo { id: 0x90, name: "EAIElementFireOff", creator: 0x146ad0, handler: 0x1469f8 },
     ActionInfo { id: 0x91, name: "EAIElementFireOn", creator: 0x146c28, handler: 0x146b48 },
@@ -128,6 +143,8 @@ pub const ACTIONS: &[ActionInfo] = &[
     ActionInfo { id: 0xab, name: "EFireTriggerSpeedCondition", creator: 0x14c9c0, handler: 0x14c8c8 },
     ActionInfo { id: 0xad, name: "ESuppressEffect", creator: 0x15d450, handler: 0x15d320 },
     ActionInfo { id: 0xb4, name: "EDropMine", creator: 0x14baa0, handler: 0x14b9c8 },
+    ActionInfo { id: 0xb5, name: "ESentryMuzzleFlash", creator: 0x1570a0, handler: 0x156fb0 },
+    ActionInfo { id: 0xb8, name: "E007Logo", creator: 0x145f98, handler: 0x145f00 },
     ActionInfo { id: 0xb9, name: "EIncMagicCounter", creator: 0x14fcb8, handler: 0x14fc50 },
     ActionInfo { id: 0xbc, name: "ESetVisualDamage", creator: 0x1597b0, handler: 0x159660 },
     ActionInfo { id: 0xbe, name: "ESetJumpGravity", creator: 0x158098, handler: 0x158050 },
@@ -185,6 +202,7 @@ pub const ACTIONS: &[ActionInfo] = &[
     ActionInfo { id: 0x111, name: "EReleaseStream", creator: 0x156170, handler: 0x1560d8 },
     ActionInfo { id: 0x113, name: "EAwardHitToPlayer", creator: 0x1485a8, handler: 0x148540 },
     ActionInfo { id: 0x114, name: "EAwardKillToPlayer", creator: 0x148678, handler: 0x148600 },
+    ActionInfo { id: 0x116, name: "EBashCarAlongObjectAxis", creator: 0x1489f0, handler: 0x1486d8 },
     ActionInfo { id: 0x117, name: "ESetReflectiveObject", creator: 0x158b08, handler: 0x1589f0 },
     ActionInfo { id: 0x119, name: "ESetRecordedGameTime", creator: 0x1589a8, handler: 0x158938 },
 ];
@@ -235,6 +253,35 @@ pub struct CarFacts {
     pub pos: [f32; 3],
     pub vel: [f32; 3],
     pub radius: f32,
+    /// The car's box (`None`: [`CarBox::from_radius`]).
+    pub bbox: Option<CarBox>,
+}
+
+/// A car's oriented box as `FUN_0022eb28` builds it for a box trigger: the first three rows of
+/// the car body's matrix (`*(car + 0x5c)` `+0x00..+0x2c`) as the axes and the half extents at
+/// `body + 0x4c0..0x4c8` (each at least 0.001; `car + 0x7c` is their length); the centre is the
+/// car position `+0x10` [M 0x22eb28 -> `FUN_001f5cf0(obb, body, car + 0x10, body + 0x4c0)`;
+/// 0x1f6e98 writes the extents and the radius]. That the rows are the car's side / up /
+/// forward axes in world space follows `FUN_00210540` (row 2 = the direction, row 1 from up)
+/// [M 0x1fee68].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CarBox {
+    pub axes: [[f32; 3]; 3],
+    pub half: [f32; 3],
+}
+
+impl CarBox {
+    /// An upright box turned `yaw` (radians about +y, 0 = facing +z) with these half extents.
+    pub fn upright(yaw: f32, half: [f32; 3]) -> CarBox {
+        let (s, c) = yaw.sin_cos();
+        CarBox { axes: [[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]], half }
+    }
+    /// The port's stand-in when the caller gives no box: axis-aligned, half extents r / sqrt(3)
+    /// each (their length is the radius, as in the game; the shape is not the game's).
+    pub fn from_radius(r: f32) -> CarBox {
+        let h = r / 3f32.sqrt();
+        CarBox { axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], half: [h, h, h] }
+    }
 }
 
 /// What the rules and the trigger walk read each frame.
@@ -248,6 +295,9 @@ pub struct Facts {
     pub player_vel: [f32; 3],
     /// The player car `+0x7c` bounding radius (|half extents|, [M 0x1f6e98]).
     pub player_radius: f32,
+    /// The player car's oriented box for box triggers ([`CarBox`]); `None` = the port's stand-in
+    /// [`CarBox::from_radius`].
+    pub player_box: Option<CarBox>,
     /// The AI elements, keyed by the selector word the rules carry (an `sr` reference whose
     /// path names the element, e.g. `CARP::<<Map>>::{AIEl}::2304`; [`MapScript::ref_path`]).
     pub elements: HashMap<u32, ElementFacts>,
@@ -296,8 +346,12 @@ pub enum Output {
     ObjectiveHud { mode: u32, id: u32 },
     /// `EPlayerSetImmunity` [M 0x1550d8: player vtable `+0x26c`].
     Immunity(bool),
-    /// An event whose effect is not part of the mission rules (or not ported).
-    Effect { id: u32, trigger: Option<usize> },
+    /// An event whose effect is not part of the mission rules, decoded for the system that owns
+    /// it (camera, audio, movie, AI, traffic, props, ...; [`Effect`]); `trigger` = the trigger
+    /// whose list queued it (`DAT_0032e738`), `None` for rules and prop keyframes. `id` and
+    /// `action` keep the raw event and its argument block: the scripted control/camera layer
+    /// (`driving::intro`) runs these.
+    Effect { effect: Effect, trigger: Option<usize>, id: u32, action: TriggerAction },
 }
 
 /// One objective (`FUN_00208f50`, 0x14 bytes): id, two words, points, state [M].
@@ -556,6 +610,11 @@ pub struct DriveScript {
     /// `DAT_00339f44 = 2` from `EEndMission` [M 0x14c260].
     pub end_requested: bool,
     pub rng: DriveRng,
+    /// The weapon `ESetSpecialWeapon` last gave the player (its word 1) [M 0x158df0].
+    pub special_weapon: Option<i32>,
+    /// `mgr+0x3c0`, the EMP-hit count `FUN_00206900` raises (capped by `mgr+0x3bc`, whose writer
+    /// is not traced; the port leaves it uncapped) [M 0x206900].
+    pub emp_hits: i32,
     /// The timer clock `DAT_00339f54` (ticks).
     pub now: i32,
     queue: Vec<Event>,
@@ -629,6 +688,8 @@ impl DriveScript {
             started: false,
             end_requested: false,
             rng: DriveRng::seeded(0),
+            special_weapon: None,
+            emp_hits: 0,
             now: 0,
             queue: Vec::new(),
             output: Vec::new(),
@@ -822,7 +883,8 @@ impl DriveScript {
     /// takes the player as slot 0 and the triggers in index order (the order among several hits
     /// in one frame is not traced).
     fn walk_cars(&mut self, facts: &Facts) {
-        let player = CarFacts { kind: 1, pos: facts.player_pos, vel: facts.player_vel, radius: facts.player_radius };
+        let player =
+            CarFacts { kind: 1, pos: facts.player_pos, vel: facts.player_vel, radius: facts.player_radius, bbox: facts.player_box };
         for (slot, car) in std::iter::once(player).chain(facts.cars.iter().copied()).enumerate() {
             let bit = match car.kind {
                 1 => TRIGGER_BY_PLAYER,
@@ -840,7 +902,8 @@ impl DriveScript {
                 if f & bit == 0 {
                     continue;
                 }
-                if car_hits(&self.map.triggers[i], f, car.pos, car.radius, car.vel) {
+                let bbox = car.bbox.unwrap_or_else(|| CarBox::from_radius(car.radius));
+                if car_hits(&self.map.triggers[i], f, car.pos, car.radius, car.vel, &bbox) {
                     self.fire(i, 0, slot as i32);
                 }
             }
@@ -848,8 +911,10 @@ impl DriveScript {
     }
 
     /// Runs an action list outside a trigger (no current trigger), as `FUN_002095f8` does for a
-    /// rule. For the lists other records own (the AI elements' lists); when the game runs those
-    /// is not traced here.
+    /// rule and the animation player `FUN_001a35f0` does for a prop keyframe (context = the prop
+    /// part, no trigger) [M]. For the prop keyframe lists (`nf_formats::trackstart::prop_scripts`:
+    /// MIS13A `JA_SAL` counts 0xb, MIS13C `subMissiles` calls stage 3) and the lists the AI
+    /// elements own (when the game runs those is not traced). Queued: they run in the next drain.
     pub fn run_actions(&mut self, actions: &[TriggerAction]) {
         for a in actions {
             self.create(a.clone(), None, 0, 0);
@@ -1084,7 +1149,12 @@ impl DriveScript {
             0x10c => self.output.push(Output::Immunity(a.word(1) != 0)),
             // Handled at construction or nothing more to do.
             0x29 | 0x30 | 0x31 => {}
-            id => self.output.push(Output::Effect { id, trigger: ev.trigger }),
+            // ESetSpecialWeapon 0x158df0: reported, and remembered for `player_fired`.
+            0xc0 => {
+                self.special_weapon = Some(a.word(1) as i32);
+                self.output.push(Output::Effect { effect: script_effects::decode(a, ev.trigger, &self.map), trigger: ev.trigger, id: 0xc0, action: ev.action.clone() });
+            }
+            id => self.output.push(Output::Effect { effect: script_effects::decode(a, ev.trigger, &self.map), trigger: ev.trigger, id, action: ev.action.clone() }),
         }
     }
 
@@ -1107,6 +1177,41 @@ impl DriveScript {
             1 => self.events[0xe] = true,
             2 => self.events[0xf] = true,
             3 => self.events[0x10] = true,
+            _ => {}
+        }
+    }
+
+    /// `FUN_0018ac28`, the `PBondCar` / `PTank` virtual (vtable slot at 0x37a144 / 0x37ac4c) the
+    /// player's EMP calls on a car it hits (`FUN_00182978` weapon 0xe, `FUN_0020d788`) [M]: the
+    /// first time a car is hit (`car + 0x380` still 0) it plays "SFX_EMPdetonate", counts an EMP
+    /// hit (`FUN_00206900`) and, when the car's name (vtable `+0x84`) starts with the 13
+    /// characters "paris_bombvan", sets programmer event 0. `first` = that car had not been
+    /// EMP'd yet; `vehicle` = its name. MIS01's bomb van elements use the vehicle
+    /// "paris_bombvan" [D `AIEl` +0x54 of elements 0x100, 0xa00, 0xc00, 0x1400, 0x1600].
+    pub fn emp_hit(&mut self, vehicle: &str, first: bool) {
+        if !first {
+            return;
+        }
+        self.emp_hits += 1;
+        if vehicle.as_bytes().get(..13) == Some(b"paris_bombvan".as_slice()) {
+            self.set_event(0);
+        }
+    }
+
+    /// The mission counters a player weapon use changes (`FUN_0020de20(weapons, slot)`, after
+    /// its ammo / reload / lock checks pass, which stay the caller's) [M 0x20de20 switch]:
+    /// slot 0xc ("SFX_uploadcode") counts 0x1f, slot 0xf ("SFX_downloadcode",
+    /// `FUN_0020d980`) counts 0x20, slot 0x14 sets counter 0x22 to 1 (`FUN_00206ad0(mgr, 0x22,
+    /// 1)`). MIS11's upload points hand out slot 0x14 (`ESetSpecialWeapon`) and their stage
+    /// rules wait for counter 0x22 > 0 [D R168 / R171 / R172].
+    pub fn player_fired(&mut self, slot: i32) {
+        match slot {
+            0xc => self.count(0x1f),
+            0xf => self.count(0x20),
+            0x14 => {
+                self.counters[0x22] = 0;
+                self.count(0x22);
+            }
             _ => {}
         }
     }
@@ -1135,10 +1240,46 @@ pub fn bearing_inside(a: f32, lo: f32, hi: f32) -> bool {
     d2 < 180.0
 }
 
-/// `FUN_0022eb28` for a car at `p` (radius `r`, velocity `v`) [M], with one approximation: the
-/// game tests a box trigger (shape 1) against the car's own oriented box (`FUN_001f5eb0`); the
-/// port tests the car's bounding sphere against the trigger box.
-pub fn car_hits(t: &Trigger, flags: u16, p: [f32; 3], r: f32, v: [f32; 3]) -> bool {
+/// The trigger's box as `FUN_0022eb28` builds it for shape 1 [M 0x22eb28]: axes `+0x20` (side),
+/// up = (0, 1, 0), or with flag 0x1000 `cross(+0x30, +0x20)` (`FUN_0025a8e8`), and `+0x30`
+/// (forward), none normalised; half extents width / 2, height / 2, length / 2; centre = base
+/// point + up × height / 2.
+pub fn trigger_box(t: &Trigger, flags: u16) -> ([f32; 3], [[f32; 3]; 3], [f32; 3]) {
+    let (d, a) = (t.dir, t.axis);
+    let up = if flags & 0x1000 == 0 {
+        [0.0, 1.0, 0.0]
+    } else {
+        [d[1] * a[2] - d[2] * a[1], d[2] * a[0] - d[0] * a[2], d[0] * a[1] - d[1] * a[0]]
+    };
+    let h = t.height * 0.5;
+    let c = [t.pos[0] + h * up[0], t.pos[1] + h * up[1], t.pos[2] + h * up[2]];
+    (c, [t.axis, up, t.dir], [t.width * 0.5, h, t.length * 0.5])
+}
+
+/// `FUN_001f5eb0`: two oriented boxes overlap unless one of the six face axes separates them
+/// (`|dot(cA - cB, aA_i)| - hA_i - sum_j |dot(aA_i, aB_j * hB_j)| > 0`); the edge-cross axes are
+/// not tested. Axes are used as stored (`FUN_001f5cf0` scales the rows by the half extents
+/// without normalising) [M 0x1f5eb0 / 0x1f5cf0].
+pub fn boxes_overlap(ca: [f32; 3], aa: &[[f32; 3]; 3], ha: [f32; 3], cb: [f32; 3], ab: &[[f32; 3]; 3], hb: [f32; 3]) -> bool {
+    let dot = |x: [f32; 3], y: [f32; 3]| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+    let sep = |c1: [f32; 3], a1: &[[f32; 3]; 3], h1: [f32; 3], c2: [f32; 3], a2: &[[f32; 3]; 3], h2: [f32; 3]| {
+        let d = [c1[0] - c2[0], c1[1] - c2[1], c1[2] - c2[2]];
+        // The game walks the axes 0, 2, 1 (iVar4 0/1/2 -> row 0/2/1); the order changes nothing.
+        [0usize, 2, 1].iter().any(|&i| {
+            let mut s = dot(d, a1[i]).abs() - h1[i];
+            for j in 0..3 {
+                s -= dot(a1[i], [a2[j][0] * h2[j], a2[j][1] * h2[j], a2[j][2] * h2[j]]).abs();
+            }
+            s > 0.0
+        })
+    };
+    !sep(ca, aa, ha, cb, ab, hb) && !sep(cb, ab, hb, ca, aa, ha)
+}
+
+/// `FUN_0022eb28` for a car at `p` (radius `r`, velocity `v`, box `b`) [M]: the reach test, the
+/// one-way test, then the shape: sphere, vertical cylinder, or the car's box against the
+/// trigger's box ([`trigger_box`], [`boxes_overlap`]).
+pub fn car_hits(t: &Trigger, flags: u16, p: [f32; 3], r: f32, v: [f32; 3], b: &CarBox) -> bool {
     let reach = r + t.radius;
     let (dx, dy, dz) = (p[0] - t.pos[0], p[1] - t.pos[1], p[2] - t.pos[2]);
     let one_way_ok = || flags & TRIGGER_ONE_WAY == 0 || t.dir[0] * v[0] + t.dir[1] * v[1] + t.dir[2] * v[2] >= 0.0;
@@ -1151,25 +1292,8 @@ pub fn car_hits(t: &Trigger, flags: u16, p: [f32; 3], r: f32, v: [f32; 3]) -> bo
     match t.shape {
         3 => !(p[1] + r < t.pos[1]) && p[1] - r < t.pos[1] + t.height,
         1 => {
-            // Box axes: `axis` (+0x20, half width), up (0,1,0) (flag 0x1000 builds it from the
-            // two axes instead; not ported), `dir` (+0x30, half length); centre = pos + up * h/2.
-            let up = [0.0f32, 1.0, 0.0];
-            let c = [t.pos[0], t.pos[1] + t.height * 0.5, t.pos[2]];
-            let d = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
-            let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-            let mut dist2 = 0.0;
-            for (ax, half) in [(t.axis, t.width * 0.5), (up, t.height * 0.5), (t.dir, t.length * 0.5)] {
-                let n = dot(ax, ax).sqrt();
-                if n <= 0.0 {
-                    continue;
-                }
-                let s = dot(d, ax) / n;
-                let e = s.abs() - half;
-                if e > 0.0 {
-                    dist2 += e * e;
-                }
-            }
-            dist2 < r * r
+            let (c, axes, half) = trigger_box(t, flags);
+            boxes_overlap(c, &axes, half, p, &b.axes, b.half)
         }
         _ => false, // FUN_002a8148(0x39af58): unknown shape, no fire [M]
     }
@@ -1277,10 +1401,10 @@ mod tests {
         s.step(&at([0.0; 3]));
         assert_eq!(s.state, DriveState::Playing, "the player is kind 1: bit 2, not bit 3");
         let mut f = at([100.0, 0.0, 0.0]);
-        f.cars.push(CarFacts { kind: 3, pos: [0.0; 3], vel: [0.0; 3], radius: 2.0 });
+        f.cars.push(CarFacts { kind: 3, pos: [0.0; 3], vel: [0.0; 3], radius: 2.0, bbox: None });
         s.step(&f);
         assert_eq!(s.state, DriveState::Playing, "kind 3 picks bit 6");
-        f.cars.push(CarFacts { kind: 2, pos: [1.0, 0.0, 0.0], vel: [0.0; 3], radius: 2.0 });
+        f.cars.push(CarFacts { kind: 2, pos: [1.0, 0.0, 0.0], vel: [0.0; 3], radius: 2.0, bbox: None });
         s.step(&f);
         assert_eq!((s.state, s.outcome), (DriveState::Lost, 1));
     }
@@ -1460,6 +1584,83 @@ mod tests {
         s.step(&at([0.0; 3]));
         assert_eq!(s.objectives.len(), 7);
         assert_eq!(s.objectives.iter().map(|o| o.state).collect::<Vec<_>>(), vec![1, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn box_trigger_tests_the_car_box_not_its_sphere() {
+        // A 2 x 2 x 2 box trigger at the origin (reach radius 10 so the plan-view pre-test
+        // passes). The car (half extents 1, 0.5, 3: radius 3.2) stands 3 to the side.
+        let mut t = trig(0, [0.0, -1.0, 0.0], 10.0, 1, 0x7, vec![]);
+        (t.width, t.height, t.length) = (2.0, 2.0, 2.0);
+        let half = [1.0, 0.5, 3.0];
+        let r = (1.0f32 + 0.25 + 9.0).sqrt();
+        let p = [3.0, 0.0, 0.0];
+        // Facing +z its side reaches x = 2: no overlap (the sphere of radius 3.2 would reach in).
+        assert!(!car_hits(&t, t.flags, p, r, [0.0; 3], &CarBox::upright(0.0, half)));
+        // Turned to face +x its nose reaches x = 0: overlap.
+        assert!(car_hits(&t, t.flags, p, r, [0.0; 3], &CarBox::upright(std::f32::consts::FRAC_PI_2, half)));
+        // FUN_001f5eb0 tests both boxes' face axes (iVar7 = 0, 1 swaps them): a cube turned 45
+        // degrees at (d, 0, d) is not separated by the upright cube's axes for d <= 2.414, but
+        // its own diagonal axis separates them for d > 1.707.
+        let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        let rot = [[s, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, s]];
+        assert!(!boxes_overlap([0.0; 3], &id, [1.0; 3], [2.0, 0.0, 2.0], &rot, [1.0; 3]));
+        assert!(boxes_overlap([0.0; 3], &id, [1.0; 3], [1.6, 0.0, 1.6], &rot, [1.0; 3]));
+    }
+
+    #[test]
+    fn box_flag_0x1000_takes_up_from_the_cross_product() {
+        // FUN_0025a8e8(dir, axis): (d.y a.z - d.z a.y, d.z a.x - d.x a.z, d.x a.y - d.y a.x)
+        // [M 0x25a8e8]; dir (0, 0, 1) x axis (0, 1, 0) = (-1, 0, 0). Centre = pos + up * h / 2.
+        let mut t = trig(0, [5.0, 0.0, 0.0], 1.0, 1, 0x1007, vec![]);
+        t.axis = [0.0, 1.0, 0.0];
+        t.dir = [0.0, 0.0, 1.0];
+        t.height = 4.0;
+        let (c, axes, half) = trigger_box(&t, t.flags);
+        assert_eq!((c, axes[1], half), ([3.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [5.0, 2.0, 5.0]));
+        let (c, axes, _) = trigger_box(&t, 0x7);
+        assert_eq!((c, axes[1]), ([5.0, 2.0, 0.0], [0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn emp_on_the_bomb_van_sets_event_0_once_and_weapon_0x14_sets_counter_0x22() {
+        let mut s = DriveScript::new(MapScript::default());
+        s.emp_hit("paris_bombvan", false);
+        assert!(!s.events[0], "a car already EMP'd: FUN_0018ac28 does nothing");
+        s.emp_hit("paris_taxi", true);
+        assert!(!s.events[0]);
+        assert_eq!(s.emp_hits, 1);
+        s.emp_hit("paris_bombvan", true);
+        assert!(s.events[0]);
+        s.counters[0x22] = 5;
+        s.player_fired(0x14);
+        assert_eq!(s.counters[0x22], 1, "FUN_00206ad0(mgr, 0x22, 1): set to 0, then counted");
+        s.player_fired(0xc);
+        s.player_fired(0xf);
+        assert_eq!((s.counters[0x1f], s.counters[0x20]), (1, 1));
+    }
+
+    #[test]
+    fn unported_actions_come_out_as_typed_effects_with_the_firing_trigger() {
+        let mut map = MapScript::default();
+        map.triggers.push(trig(0, [0.0; 3], 5.0, 2, 0x7, vec![act(0x78, &[3]), act(0xfb, &[0x3c, 0x12c, 1]), act(0xc0, &[0x14, 0, 0])]));
+        let mut s = DriveScript::new(map);
+        s.step(&at([0.0; 3]));
+        let got: Vec<(Effect, Option<usize>)> = s
+            .take_output()
+            .into_iter()
+            .filter_map(|o| match o { Output::Effect { effect, trigger, .. } => Some((effect, trigger)), _ => None })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (Effect::MaxTraffic { max: 3 }, Some(0)),
+                (Effect::CameraShake { time: 0x3c, power: 0x12c, affect_all: true }, Some(0)),
+                (Effect::SpecialWeapon { weapon: 0x14, trigger: None, arg3: 0.0 }, Some(0)),
+            ]
+        );
+        assert_eq!(s.special_weapon, Some(0x14));
     }
 
     #[test]

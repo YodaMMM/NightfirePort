@@ -68,6 +68,27 @@ pub mod tag {
     pub const SECT: u32 = 0x5365_6374;
     /// `ns  ` — instance-indexed sub-resources [M 0x1a9600].
     pub const NS: u32 = 0x736e_2020;
+    /// `Envi`: the ambience regions, a child of the `Map ` pool record [M 0x22faf8:315].
+    pub const ENVI: u32 = 0x456e_7669;
+}
+
+/// One ambience region of the track's `Envi` table (0x1c bytes each; the count is the record's
+/// +8, the base its data address) [M `FUN_0022faf8` :315-321 stores them at track +0x2c / +0x30;
+/// `FUN_00230bb8` indexes them by the car's map cell (+0x2c u16, out of range → 0); the audio
+/// listener `FUN_00147e30` reads +4 (the environment request `FUN_002f7d18(+4, 0, 0)`), +8 (the
+/// ambience stream name; a region with an empty name is skipped), +0x14 / +0x18 (the height
+/// band)].
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnvRegion {
+    /// +0 (not read by the code traced).
+    pub word0: u32,
+    /// +4 the environment request id.
+    pub env: i32,
+    /// +8 the ambience stream name (NUL-terminated, at most 12 bytes).
+    pub name: String,
+    /// +0x14 the band top, +0x18 its depth.
+    pub top: f32,
+    pub depth: f32,
 }
 
 /// One 16-byte record, parsed little-endian (the fields are `lw`-loaded; only the tag is
@@ -238,6 +259,33 @@ impl<'a> Crp<'a> {
             if r.tag == tag { return Ok(Some(r)); }
         }
         Ok(None)
+    }
+
+    /// The `Envi` ambience regions: the `Map ` pool record's window, searched for `Envi`
+    /// (`FUN_002d5a10(map, 'Envi')`) [M 0x22faf8:108, :315]. `Ok(None)` when either is absent.
+    pub fn env_regions(&self) -> Result<Option<Vec<EnvRegion>>> {
+        let Some(map) = self.pool_find(tag::MAP)? else { return Ok(None) };
+        let (start, end) = map.window(self.data)?;
+        let Some(envi) = self.window_records(start, end)?.into_iter().find(|r| r.tag == tag::ENVI) else { return Ok(None) };
+        let base = envi.data_addr(self.data)?;
+        let n = envi.count.max(0) as usize;
+        let end = base + n * 0x1c;
+        if end > self.data.len() {
+            return invalid(format!("Envi table [{base:#x}..{end:#x}) past the end ({})", self.data.len()));
+        }
+        let le = |o: usize| u32::from_le_bytes([self.data[o], self.data[o + 1], self.data[o + 2], self.data[o + 3]]);
+        Ok(Some((0..n).map(|i| {
+            let o = base + i * 0x1c;
+            let raw = &self.data[o + 8..o + 0x14];
+            let name = raw.split(|&b| b == 0).next().unwrap_or(&[]);
+            EnvRegion {
+                word0: le(o),
+                env: le(o + 4) as i32,
+                name: String::from_utf8_lossy(name).into_owned(),
+                top: f32::from_bits(le(o + 0x14)),
+                depth: f32::from_bits(le(o + 0x18)),
+            }
+        }).collect()))
     }
 
     /// A record's payload: `size = flags >> 8` bytes at the resolved address [M 0x1a9600].
