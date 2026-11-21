@@ -384,6 +384,10 @@ pub struct DrivingState {
     pub intro: Option<(nf_game::driving::intro::IntroState, nf_formats::drivepath::MapPaths)>,
     /// The enemy vehicles; `None` when the track has no `AIEl` vehicles.
     pub hostiles: Option<DriveHostiles>,
+    /// The mission object's difficulty, mission+0x3b8 = the PTP word 0x100984 after DRIVING
+    /// main's remap (0 / 1 / 2 for picks 1 / 2 / 3-4) [M 0x204de8:67-69, 0x174bf0:70-81]; every
+    /// DRIVING reader during the drive takes this form (`nf_game::ptp::driving_difficulty`).
+    pub difficulty: u32,
 }
 
 const IDENT_MAT: Mat4 = [
@@ -962,7 +966,7 @@ impl DrivingState {
             died: None,
             collided: false,
             progress: self.progress,
-            difficulty: 1,
+            difficulty: self.difficulty,
         };
         if self.mission.script.is_some() {
             let h = self.car.params.half_extents;
@@ -982,7 +986,8 @@ impl DrivingState {
                 // The player body's oriented box: its rotation rows and the model-box half extents
                 // [M 0x22eb28 -> FUN_001f5cf0].
                 player_box: Some(nf_game::driving::script::CarBox { axes: self.car.rot, half: h }),
-                difficulty: 1,
+                // `SRuleDifficulty` reads mission+0x3b8 [M 0x20aac0].
+                difficulty: self.difficulty as i32,
                 ..Default::default()
             };
             let _ = snap;
@@ -1373,12 +1378,38 @@ fn load_car_into_scene(
     Some(slot)
 }
 
-/// Load a driving track `.crp` + `.ssh` + player/AI car models + mission rules from `/DRIVING/<viv>.VIV`.
+/// The MSet f32 triple at `base` / +4 / +8 picked by mission+0x3b8 = 1 / 2, `base` for any other
+/// value: `FUN_00208468` (speed, base 0x2b8) and `FUN_002084a8` (health, base 0x2c4) [M]. A
+/// missing, non-finite or non-positive word reads 1.0.
+pub fn mset_factor(mset: Option<&[u8]>, base: usize, difficulty: u32) -> f32 {
+    let off = base + match difficulty { 1 => 4, 2 => 8, _ => 0 };
+    mset.and_then(|m| m.get(off..off + 4))
+        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .filter(|f| f.is_finite() && *f > 0.0)
+        .unwrap_or(1.0)
+}
+
+/// Load a driving track `.crp` + `.ssh` + player/AI car models + mission rules from `/DRIVING/<viv>.VIV`
+/// at the boot default difficulty (GameState+0x28 = 2 [M 0x1c7e78:25] → mission+0x3b8 = 1), the
+/// value the view ran before the pick was plumbed. Tests and the headless `--shot` path use it.
 pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, DrivingState)> {
+    load_driving_scene_at(iso_path, viv_name, 2)
+}
+
+/// `load_driving_scene` with the player's difficulty: `game_difficulty` is the game's
+/// GameState+0x28 pick (1..4, the port's `selected_difficulty`). The handover writes it to the
+/// PTP word 0x100984 [M Boot_GetPTPData 0x1c8198:13-21; the Paris mini-mission's forced 1 is not
+/// reachable from the port's menus], DRIVING main remaps it to 0..2 in place [M 0x174bf0:70-81]
+/// and the mission object keeps that at +0x3b8 [M 0x204de8:67-69].
+pub fn load_driving_scene_at(iso_path: &str, viv_name: &str, game_difficulty: u32) -> Result<(Scene, DrivingState)> {
     let viv_upper = viv_name
         .trim_end_matches(".VIV")
         .trim_end_matches(".viv")
         .to_ascii_uppercase();
+    let track_key = nf_game::ptp::key_for_viv(&viv_upper).unwrap_or(nf_game::ptp::DEFAULT_KEY);
+    let base_map = (1..=8u32).map(|i| 0x0900_0000 | i).find(|&l| driving_viv_for_level(l) == Some(viv_upper.as_str())).unwrap_or(0);
+    let ptp_word = nf_game::ptp::ptp_difficulty_word(base_map, false, game_difficulty);
+    let difficulty = nf_game::ptp::driving_difficulty(ptp_word);
     let iso = IsoImage::open(iso_path)?;
     let entry = iso
         .find(&format!("/DRIVING/{viv_upper}.VIV"))
@@ -1777,12 +1808,17 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         .or_else(|| crp.pool_find(0x5275_6c65).ok().flatten())
         .and_then(|r| crp.payload(&r).ok())
         .unwrap_or(&[]);
+    // The MSet record sits in the `Map` article's window (`FUN_0022faf8` resolves it there
+    // [M 0x22faf8:108-129]); neither top-level finder reaches it on the shipped tracks [D], so the
+    // script's copy is the source (the mission already reads it: `Mission::from_map_script`).
+    let script_mset = nf_formats::trackstart::map_script(&crp).ok().and_then(|ms| ms.mset);
     let mset_bytes = crp
         .find(0x4d53_6574)
         .ok()
         .flatten()
         .or_else(|| crp.pool_find(0x4d53_6574).ok().flatten())
-        .and_then(|r| crp.payload(&r).ok());
+        .and_then(|r| crp.payload(&r).ok())
+        .or(script_mset.as_deref());
     // The track's mission script runs the game's own rules (triggers, events, rules, timers,
     // win/lose: nf_game::driving::script, docs/systems/driving-missions.md); the rule-bytes model
     // stays the fallback when the script does not read.
@@ -1802,12 +1838,44 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     };
     let mut hostile_pools: Vec<HostilePool> = Vec::new();
     let hostile_world = (|| {
-        let ai = nf_formats::driveai::MapAi::from_crp(&crp).ok()?;
+        let mut ai = nf_formats::driveai::MapAi::from_crp(&crp).ok()?;
         if !ai.elements.iter().any(|e| e.kind == nf_formats::driveai::TYPE_VEHICLE) { return None; }
-        let atrs: Vec<(String, String)> = read_entry(&|n| n.contains("\\pvehicle\\") && n.ends_with(".atr"))
+        let atr_pair = |(n, b): (String, Vec<u8>)| (n.rsplit('\\').next().unwrap_or("").trim_end_matches(".atr").to_string(), String::from_utf8_lossy(&b).into_owned());
+        let mut atrs: Vec<(String, String)> = read_entry(&|n| n.contains("\\pvehicle\\") && n.ends_with(".atr"))
             .into_iter()
-            .map(|(n, b)| (n.rsplit('\\').next().unwrap_or("").trim_end_matches(".atr").to_string(), String::from_utf8_lossy(&b).into_owned()))
+            .map(atr_pair)
             .collect();
+        // The snow2a_mis4 `paris_hench` → `junglesnow` swap [M 0x12b8b0:96-125], gated on the
+        // remapped PTP word 0x100984 == 2 (the same value mission+0x3b8 copies). The rendername is
+        // the attribute's RENDER_FILENAME [M FUN_001967a8]; an attribute without one falls back
+        // to `<name>.crp` here [S: the game's fallback branch is not traced].
+        let swapped = {
+            let render_of = |name: &str| atrs.iter().find(|(a, _)| a.eq_ignore_ascii_case(name))
+                .and_then(|(a, x)| nf_game::driving::hostiles::VehicleAttrs::parse(a, x).render_file)
+                .unwrap_or_else(|| format!("{name}.crp"));
+            nf_game::driving::hostiles::snow_hench_swap(&mut ai, track_key, difficulty, render_of)
+        };
+        // MIS4.VIV carries no junglesnow attribute or model; MISC.VIV carries both [D], so a
+        // swapped mission reads them from there [S: the game's archive search order is not traced].
+        let misc = (swapped > 0).then(|| iso.find("/DRIVING/MISC.VIV").and_then(|m| Some((disc::read_bigf(&iso, m).ok()?, m.lba as u64 * 2048)))).flatten();
+        if let Some((g, base)) = misc.as_ref() {
+            let want = nf_game::driving::hostiles::HENCH_SWAP_VEHICLE;
+            if !atrs.iter().any(|(a, _)| a.eq_ignore_ascii_case(want)) {
+                let file = format!("data\\sim\\attrib\\pvehicle\\{want}.atr");
+                if let Some(b) = g.entries.iter().find(|e| e.name.eq_ignore_ascii_case(&file))
+                    .and_then(|e| maybe_decompress(&iso.read_bytes(base + e.offset as u64, e.size as u64).ok()?).ok())
+                {
+                    atrs.push(atr_pair((file.to_ascii_lowercase(), b)));
+                }
+            }
+        }
+        let find_model = |stem: &str| -> Option<(u64, (u32, u32), Option<(u32, u32)>)> {
+            if let Some((c, s)) = find_car_entry(stem) { return Some((viv_base, c, s)); }
+            let (g, base) = misc.as_ref()?;
+            let crp_e = g.entries.iter().find(|x| x.name.eq_ignore_ascii_case(&format!("data\\car\\model\\{stem}.crp")))?;
+            let ssh_e = g.entries.iter().find(|x| x.name.eq_ignore_ascii_case(&format!("data\\car\\model\\{stem}.ssh")));
+            Some((*base, (crp_e.offset, crp_e.size), ssh_e.map(|s| (s.offset, s.size))))
+        };
         let set: Vec<nf_game::driving::hostiles::VehicleAttrs> = ai.vehicle_set().iter()
             .filter_map(|n| atrs.iter().find(|(a, _)| a.eq_ignore_ascii_case(n)).map(|(a, x)| nf_game::driving::hostiles::VehicleAttrs::parse(a, x)))
             .collect();
@@ -1815,19 +1883,14 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             .into_iter().next().map(|(_, b)| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let wattr = nf_game::driving::hostile::WorldAttr::parse(&world_atr);
         // The difficulty health factor (`FUN_002084a8`: MSet f32 +0x2c4 / +0x2c8 / +0x2cc for
-        // difficulty 0 / 1 / 2) [M per hostile.rs]; the view runs difficulty 1 (as its HUD does).
-        let difficulty = 1u32;
-        let health_factor = mset_bytes
-            .and_then(|m| m.get(0x2c4 + 4 * difficulty as usize..0x2c8 + 4 * difficulty as usize))
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-            .filter(|f| f.is_finite() && *f > 0.0)
-            .unwrap_or(1.0);
+        // mission+0x3b8 = 0 / 1 / 2, +0x2c4 otherwise) [M 0x2084a8].
+        let health_factor = mset_factor(mset_bytes, 0x2c4, difficulty);
         // Each model gets as many slots as elements name it, capped by the slot budget it draws
         // from (vehicles or helicopters).
         let slots = wattr.slots();
         for need in nf_game::driving::hostiles::models_needed(&ai, &set) {
             if hostile_pools.iter().any(|p| p.model.eq_ignore_ascii_case(&need.model)) { continue; }
-            let Some((c, s)) = find_car_entry(&need.model.to_ascii_lowercase()) else { continue };
+            let Some((base, c, s)) = find_model(&need.model.to_ascii_lowercase()) else { continue };
             let users: Vec<&nf_formats::driveai::AiElement> = ai.elements.iter()
                 .filter(|e| e.kind == nf_formats::driveai::TYPE_VEHICLE)
                 .filter(|e| set.iter().find(|a| a.name.eq_ignore_ascii_case(&e.name)).map(|a| a.model()).unwrap_or_else(|| e.name.clone()).eq_ignore_ascii_case(&need.model))
@@ -1837,7 +1900,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             let n = users.len().clamp(1, cap.min(8));
             let mut pool = HostilePool { model: need.model.clone(), slots: Vec::new(), centre: [0.0; 3] };
             for _ in 0..n {
-                let Some(slot) = load_car_into_scene(&iso, viv_base, &need.model, c, s, &mut vertices, &mut char_verts, &mut indices, &mut materials, &mut textures, &mut attachments, car_light_ref, None) else { break };
+                let Some(slot) = load_car_into_scene(&iso, base, &need.model, c, s, &mut vertices, &mut char_verts, &mut indices, &mut materials, &mut textures, &mut attachments, car_light_ref, None) else { break };
                 pool.slots.push(slot);
             }
             if let Some(&s0) = pool.slots.first() {
@@ -1849,7 +1912,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             }
         }
         let net = RoadNet::parse_crp(&crp).ok();
-        Some(nf_game::driving::hostiles::HostileWorld::new(&ai, set, &wattr, difficulty, health_factor, 1.0, net.as_ref()))
+        Some(nf_game::driving::hostiles::HostileWorld::new(&ai, set, &wattr, difficulty, health_factor, mset_factor(mset_bytes, 0x2b8, difficulty), net.as_ref()))
     })();
 
     // Extract `Map` `Trgr` checkpoint triggers and emit subtle translucent ground beacon rings
@@ -2156,7 +2219,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             sheets.push((*idx as u32, hash));
         }
         let set = mset_bytes.map(nf_game::driving::damage::HealthSet::parse).unwrap_or_default();
-        let health = nf_game::driving::damage::PlayerHealth::start(&set, &nf_game::driving::damage::StartInputs { difficulty: 1, ..Default::default() });
+        let health = nf_game::driving::damage::PlayerHealth::start(&set, &nf_game::driving::damage::StartInputs { difficulty: difficulty as i32, ..Default::default() });
         let font = nf_formats::sfn::Font::parse(&read_any(&["data", "loading", "loading.sfn"].join("\\"))?).ok()?;
         let loc = nf_formats::loc::Loc::parse(&read_any("IDL_ENG.loc")?).ok()?;
         Some(DriveHud { layout, draw: nf_game::driving_hud_draw::DriveHudDraw::new(), sheets, health, last_tick: 0, font, loc })
@@ -2192,6 +2255,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     });
     let state = DrivingState {
         hostiles,
+        difficulty,
         fx,
         reset,
         hud,
@@ -2317,6 +2381,7 @@ mod tests {
             sub: None,
             intro: None,
             hostiles: None,
+            difficulty: 1,
         };
         state.step(1.0, 0.0, 0.0, false);
         assert_eq!(state.progress, 1);

@@ -206,8 +206,8 @@ pub struct ModelNeed {
 
 /// Every vehicle model the track's elements can spawn, in first-seen order (`MapAi::vehicle_set`
 /// → each name's `RENDER_FILENAME`) [M 0x12b8b0 reads the rendername of each element's +0x54
-/// attribute at load; D the names]. The snow2a_mis4 `paris_hench` → `junglesnow` swap
-/// (0x12b8b0:85-107, gated on the PTP word 0x100984) is the caller's.
+/// attribute at load; D the names]. Run [`snow_hench_swap`] first: the snow2a_mis4
+/// `paris_hench` → `junglesnow` swap changes the set (0x12b8b0:96-125).
 pub fn models_needed(map: &MapAi, set: &[VehicleAttrs]) -> Vec<ModelNeed> {
     map.vehicle_set()
         .into_iter()
@@ -216,6 +216,38 @@ pub fn models_needed(map: &MapAi, set: &[VehicleAttrs]) -> Vec<ModelNeed> {
             None => ModelNeed { model: v.clone(), vehicle: v, missing_atr: true },
         })
         .collect()
+}
+
+/// The track whose henchman cars `FUN_0012b8b0` swaps [D DRIVING.ELF 0x36aea8].
+pub const HENCH_SWAP_TRACK: &str = "snow2a_mis4";
+/// The rendername prefix the swap matches, 11 bytes [D 0x36b0c0; M 0x12b8b0:103 strncmp 0xb].
+pub const HENCH_SWAP_RENDER: &str = "paris_hench";
+/// The vehicle attribute the swapped records name [D 0x36b0d0].
+pub const HENCH_SWAP_VEHICLE: &str = "junglesnow";
+
+/// `FUN_0012b8b0`'s load-time swap [M DRIVING 0x12b8b0:96-125]: when the track key
+/// (`DAT_0033aac8`+0xc) is exactly `snow2a_mis4` and the PTP word 0x100984 reads 2 (DRIVING
+/// main has already remapped it, so 2 = the hardest band: raw 3 or 4, see
+/// `ptp::driving_difficulty`), every vehicle record (+0x44 == 1) whose pvehicle attribute's
+/// rendername starts with `paris_hench` gets its +0x54 name overwritten with `junglesnow` and
+/// its rider count +0x7c zeroed. The game swaps before the health scale loop, so the riders it
+/// drops are never scaled. `render_of(name)` is the rendername `FUN_001967a8` hands back for an
+/// attribute name (the `RENDER_FILENAME` value; the caller's fallback for an attribute with no
+/// such key is [S]). Returns the number of records swapped.
+pub fn snow_hench_swap(map: &mut MapAi, track_key: &str, ptp_word: u32, render_of: impl Fn(&str) -> String) -> usize {
+    // strcmp is exact (case-sensitive) [M 0x12b8b0:96 FUN_002a9508 == 0].
+    if track_key != HENCH_SWAP_TRACK || ptp_word != 2 {
+        return 0;
+    }
+    let mut n = 0;
+    for e in map.elements.iter_mut().filter(|e| e.kind == TYPE_VEHICLE) {
+        if render_of(&e.name).as_bytes().starts_with(HENCH_SWAP_RENDER.as_bytes()) {
+            e.name = HENCH_SWAP_VEHICLE.to_string();
+            e.riders.clear();
+            n += 1;
+        }
+    }
+    n
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1491,5 +1523,65 @@ fn step_riders(v: &mut LiveVehicle, cx: &mut Cx) {
         if let Fire::Shot(anim) = fire {
             cx.out.events.push(HostileEvent::RiderShot { element, rider: r.index, anim, from: mount });
         }
+    }
+}
+
+#[cfg(test)]
+mod swap_tests {
+    use super::*;
+    use nf_formats::driveai::AiElement;
+
+    fn vehicle(name: &str, riders: i32) -> AiElement {
+        let mut b = vec![0u8; 0x100];
+        b[0x44..0x48].copy_from_slice(&TYPE_VEHICLE.to_le_bytes());
+        b[0x54..0x54 + name.len()].copy_from_slice(name.as_bytes());
+        b[0x7c..0x80].copy_from_slice(&riders.to_le_bytes());
+        for k in 0..riders as usize { b[0x80 + k * 0x20..0x84 + k * 0x20].copy_from_slice(&3u32.to_le_bytes()); }
+        AiElement::parse(&b).unwrap()
+    }
+
+    fn map() -> MapAi {
+        let mut hench = vehicle("", 0);
+        hench.kind = TYPE_HENCHMAN;
+        MapAi { elements: vec![vehicle("paris_hench", 2), vehicle("alpine_police", 1), hench], ..Default::default() }
+    }
+
+    // The MIS4 attribute renders [D MIS4.VIV pvehicle\paris_hench.atr RENDER_FILENAME.s=paris_hench.crp].
+    fn render(name: &str) -> String { format!("{name}.crp") }
+
+    #[test]
+    fn swap_only_on_snow2a_mis4_at_word_2() {
+        // [M DRIVING 0x12b8b0:96-125]
+        for (key, word, want) in [
+            ("snow2a_mis4", 2, 1),
+            ("snow2a_mis4", 1, 0),
+            ("snow2a_mis4", 0, 0),
+            ("snow2a_mis4", 3, 0), // a raw 3 never reaches the reader: DRIVING main remaps it to 2 first
+            ("snow2a_race", 2, 0),
+            ("snow1a_mis3", 2, 0),
+            ("SNOW2A_MIS4", 2, 0),
+        ] {
+            let mut m = map();
+            assert_eq!(snow_hench_swap(&mut m, key, word, render), want, "{key} {word}");
+            let e = &m.elements[0];
+            if want == 1 {
+                assert_eq!(e.name, "junglesnow");
+                assert!(e.riders.is_empty(), "+0x7c zeroed");
+            } else {
+                assert_eq!(e.name, "paris_hench");
+                assert_eq!(e.riders.len(), 2);
+            }
+            assert_eq!(m.elements[1].name, "alpine_police");
+            assert_eq!(m.elements[1].riders.len(), 1);
+        }
+    }
+
+    #[test]
+    fn swap_matches_the_rendername_prefix_not_the_attribute_name() {
+        let mut m = MapAi { elements: vec![vehicle("henchcar", 0), vehicle("paris_hench", 0)], ..Default::default() };
+        let n = snow_hench_swap(&mut m, HENCH_SWAP_TRACK, 2, |n| if n == "henchcar" { "paris_henchbigbox.crp".into() } else { "other.crp".into() });
+        assert_eq!(n, 1);
+        assert_eq!(m.elements[0].name, "junglesnow");
+        assert_eq!(m.elements[1].name, "paris_hench");
     }
 }
