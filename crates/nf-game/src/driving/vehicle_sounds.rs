@@ -18,11 +18,16 @@
 //!   `puVar12 + 0x2a` store, 8-byte stride). The car step `FUN_0018cef8` zeroes +0x2ec; the wheel
 //!   pass (`FUN_0018c1b0`, `FUN_0018e548`) raises it to max(+0x2ec, compression × 5.0
 //!   (0x396330)) for each wheel whose vtable +0x214 query returns 0; `FUN_0018cef8` then clamps it to
-//!   1 when it is above 0.01.
+//!   1 when it is above 0.01. The query is `FUN_001931f8` (vtable 0x379ef0 / 0x37a9f8 +0x214):
+//!   `car[+0x210 + 4*wheel] != 0`, the wheel's compression the pass stored at the end of that
+//!   wheel's previous step (0x18c1b0 :644, 0x18e548 :363). So only wheels that had no compression
+//!   last pass (were in the air) count: the strength is how hard the landing wheels hit.
 //! - Horn request: the traffic driver's avoidance `FUN_001377c8` writes 1 into its own car's sound
 //!   +0x154 when `FUN_00135530` reports another body in its way (grid cells within 3/2/3, the other
 //!   body's +0x6d < 4 and +0x6e != 3) whose controller (vtable +0x5c) +0x70 is not 4; the sound base
-//!   step `FUN_002e1768` passes it to the horn (`FUN_002dea48`) and clears it.
+//!   step `FUN_002e1768` passes it to the horn (`FUN_002dea48`) and clears it. The blocker test
+//!   `FUN_00135530(range, driver, target, other)` (disassembly 0x135630-0x135740): see
+//!   [`horn_blocker`]; range = max(other +0x5c -> +0x4c8, +0x4c0) (fields not named).
 //! - Fire `FUN_0014ca60`: weapon = `FUN_0020e678` (the weapon whose barrel list holds the action),
 //!   key `SFX_<stem>Fire` from slot 4 (`PTR_DAT_003562b0`), then the jump table 0x36f5a0 [D]:
 //!   see [`fire_sound`].
@@ -34,12 +39,10 @@
 //!   beeps `SFX_Htargetlock` (slot 0, `Tracking System`, 2-D) once its +0x71c time is passed, then
 //!   +0x71c += (int)(distance × fps × 0.0001).
 //!
-//! Not ported (stated plainly): the boat (`FUN_002e74d8`, `FUN_002e7d60`, `FUN_002e76f8`,
-//! `FUN_002e73b8`) and snowmobile (`FUN_002feaa0`, `FUN_002fed98`, `FUN_002ee768`, `FUN_002ede60`)
-//! sub-steps (about 10 KB of code), the turret `FUN_002e4980` the tank calls, the tank's engine
-//! object update (vtable +0xc of +0x22c); what the vtable +0x214 wheel query means; who the
-//! `FUN_00135530` blocker test accepts; whether a projectile fired by an AI element with +0x138
-//! bit 1 clear has a group name (the code reads a stack buffer that this path never writes).
+//! The boat, snowmobile, turret and tank steps are in `class_sounds.rs`. Not settled (stated
+//! plainly): whether a projectile fired by an AI element with +0x138 bit 1 clear has a group name
+//! (the code reads a stack buffer that this path never writes); what the other body's +0x4c0 /
+//! +0x4c8 and the controller kind 4 are.
 
 use super::audio::{voice_gate, Listener, Mixer};
 use super::sound_events::{Listener3d, V3};
@@ -177,13 +180,14 @@ pub fn audio_listener(view: Option<(Basis, V3)>, car: (Basis, V3)) -> (Listener3
     (Listener3d::new(b.pos, b.right, b.up, b.fwd, vel), car.0.pos)
 }
 
-/// The landing strength the bridge hands the sound (+0x150) [M `FUN_0018cef8` / `FUN_0018c1b0`]:
-/// max over the wheels whose +0x214 query returned 0 of compression × 5, then min(·, 1) when above
-/// 0.01 (left as is otherwise).
-pub fn landing_strength(compression: [f32; 4], counted: [bool; 4]) -> f32 {
+/// The landing strength the bridge hands the sound (+0x150) [M `FUN_0018cef8` / `FUN_0018c1b0` /
+/// `FUN_001931f8`]: max over the wheels whose previous-pass compression (car +0x210[i]) is 0 of
+/// this pass's compression × 5, then min(·, 1) when above 0.01 (left as is otherwise).
+pub fn landing_strength(compression: [f32; 4], prev_compression: [f32; 4]) -> f32 {
     let mut s = 0.0f32;
     for i in 0..4 {
-        if counted[i] {
+        // FUN_001931f8: the query is `prev != 0.0`; the wheel counts when it returns 0
+        if prev_compression[i] == 0.0 {
             let v = compression[i] * f32::from_bits(0x40a00000);
             if v > s { s = v; }
         }
@@ -194,6 +198,30 @@ pub fn landing_strength(compression: [f32; 4], counted: [bool; 4]) -> f32 {
 /// `FUN_001377c8` [M]: the horn request a traffic driver raises for a blocker in its way — any
 /// controller kind but 4.
 pub fn horn_request(blocker_kind: i32) -> bool { blocker_kind != 4 }
+
+/// `FUN_001377c8` [M 0x1377c8 grid loop]: the other body is looked at when its grid cell (+0x5c ->
+/// +0x4f0 / +0x4f4 / +0x4f8) is within 3 / 2 / 3 of the driver's, its +0x6d < 4 and +0x6e != 3,
+/// and it is not the driver's own body.
+pub fn horn_candidate(own_cell: [i32; 3], other_cell: [i32; 3], other_6d: i8, other_6e: i8, same_body: bool) -> bool {
+    let d = |k: usize| (own_cell[k] - other_cell[k]).abs();
+    !same_body && other_6d < 4 && other_6e != 3 && d(0) < 4 && d(1) < 3 && d(2) < 4
+}
+
+fn sub3(a: V3, b: V3) -> V3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
+fn len3(a: V3) -> f32 { (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt() }
+
+/// `FUN_00135530` [M, disassembly 0x135630-0x135740]: is `other` in the way of a car at `own`
+/// heading for `target`? Only when the two directions from the car are within 0.9 (dot of the
+/// unit vectors, about 26 degrees): then yes if `other` is closer than `range` to the target,
+/// else yes if `other` is nearer the car than the target is (`c.olt.s |own-other|, |own-target|`).
+pub fn horn_blocker(own: V3, target: V3, other: V3, range: f32) -> bool {
+    let a = sub3(target, own);
+    let b = sub3(other, own);
+    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (len3(a) * len3(b));
+    if dot < f32::from_bits(0x3f66_6666) { return false; }
+    if len3(sub3(other, target)) < range { return true; }
+    len3(sub3(own, other)) < len3(sub3(own, target))
+}
 
 // ---------------------------------------------------------------------------------------------
 // Weapons
@@ -419,11 +447,40 @@ mod tests {
 
     #[test]
     fn landing_strength_is_the_largest_counted_compression_times_five() {
-        assert_eq!(landing_strength([0.1, 0.05, 0.3, 0.0], [true, true, false, true]), 0.5);
-        assert_eq!(landing_strength([0.5, 0.0, 0.0, 0.0], [true; 4]), 1.0);
-        assert_eq!(landing_strength([0.001, 0.0, 0.0, 0.0], [true; 4]), 0.001f32 * 5.0);
-        assert_eq!(landing_strength([0.9; 4], [false; 4]), 0.0);
+        // only wheels that had no compression last pass count (they are the ones landing)
+        assert_eq!(landing_strength([0.1, 0.05, 0.3, 0.0], [0.0, 0.0, 0.2, 0.0]), 0.5);
+        assert_eq!(landing_strength([0.5, 0.0, 0.0, 0.0], [0.0; 4]), 1.0);
+        assert_eq!(landing_strength([0.001, 0.0, 0.0, 0.0], [0.0; 4]), 0.001f32 * 5.0);
+        // all four were already down: no landing
+        assert_eq!(landing_strength([0.9; 4], [0.1; 4]), 0.0);
         assert!(horn_request(1) && !horn_request(4));
+    }
+
+    #[test]
+    fn horn_blocker_cone_range_and_nearer() {
+        let own = [0.0, 0.0, 0.0];
+        let target = [0.0, 0.0, 20.0];
+        // straight ahead, 5 from the target, range 10: in the way
+        assert!(horn_blocker(own, target, [0.0, 0.0, 15.0], 10.0));
+        // ahead but past the target and beyond the range: not nearer than the target
+        assert!(!horn_blocker(own, target, [0.0, 0.0, 40.0], 10.0));
+        // ahead, between, out of range (range 1): nearer than the target
+        assert!(horn_blocker(own, target, [0.0, 0.0, 10.0], 1.0));
+        // past the target but within range: in the way
+        assert!(horn_blocker(own, target, [0.0, 0.0, 25.0], 10.0));
+        // off to the side (dot = cos 45 < 0.9)
+        assert!(!horn_blocker(own, target, [10.0, 0.0, 10.0], 100.0));
+        // just inside the cone: dot 0.95
+        let z = 10.0f32;
+        let x = z * (1.0f32 - 0.95 * 0.95).sqrt() / 0.95;
+        assert!(horn_blocker(own, target, [x, 0.0, z], 1.0));
+        assert!(horn_candidate([5, 1, 5], [8, 3, 2], 3, 0, false));
+        assert!(!horn_candidate([5, 1, 5], [9, 1, 5], 3, 0, false));
+        assert!(!horn_candidate([5, 1, 5], [5, 4, 5], 3, 0, false));
+        assert!(!horn_candidate([5, 1, 5], [5, 1, 1], 3, 0, false));
+        assert!(!horn_candidate([5, 1, 5], [5, 1, 5], 4, 0, false));
+        assert!(!horn_candidate([5, 1, 5], [5, 1, 5], 3, 3, false));
+        assert!(!horn_candidate([5, 1, 5], [5, 1, 5], 3, 0, true));
     }
 
     #[test]

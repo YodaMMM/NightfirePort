@@ -58,6 +58,8 @@ pub mod sound_events;
 pub mod stream_events;
 // Tank / heli / ultralight voices, weapon fire / flight / explosion sounds, the audio listener.
 pub mod vehicle_sounds;
+// Boat / snowmobile / turret / tank per-frame sound steps.
+pub mod class_sounds;
 
 // The car physics lives in `physics.rs` (a single `driving.rs` beside this `driving/`
 // directory would collide, rustc E0761). The re-export keeps every public path the tests and

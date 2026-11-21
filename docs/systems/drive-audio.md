@@ -138,10 +138,50 @@ Effective volume = own × parent chain; a running fade adds its step per read an
   `SFX_EMPdetonate`, lock warning `SFX_Htargetlock`, explosions `FUN_0015a098` (four keys round
   robin with a 30-unit cooldown each, plus `SFX_DistExp`; ranges ×5 on jungleb).
 
+## Boat, snowmobile, turret, tank [M] (`class_sounds.rs`, disc test `drive_class_sounds_disc`)
+
+- Boat `FUN_002e7358`: base step, then `SFX_load` (pitch speed/20, × 0.85 with the brake; volume
+  own × group × (rpm + wobble)/3300 × a 10-step ramp up while gas or brake is down, down after
+  release), the steer-sound servo one-shots (`SFX_servon2/1` on GAMEACTION_SOUND_STEER* 0xc..0xf,
+  `SFX_servoff2/1` on the releases 0x10/0x11), `SFX_jetcav1` while moving with the brake down
+  (pitch (rpm + wobble) × 0.0005556 + 0.2), `SFX_rudcav1` while moving and steering or on any
+  vertical steer, both fading 0.06 a step after release; the rudder's silent end plays
+  `SFX_rudcav3/2` (slot 9, `One Shots`). Creaks: `ESetCreakLevel` (action 0xff) sets level / interval;
+  every interval ± N(0,1)·10 % steps a 2-D `SFX_creak<level>` (slot 0, `Ambience`). On MIS11 the
+  script uses levels 0..3 with interval 240 [D]; every boat key resolves there [D].
+- Snowmobile `FUN_002edd88`: the `SFX_windy` wind (slot 4, `Player Wind`) drifts level 0.4..1 and
+  pitch 1..2.8 at rates redrawn from the driving generator, × min((speed − 5)/5, 1) × the forward
+  speed; the road / carve pair (`OffRoad` × speed/20, no listener gain, silent unless the listener
+  distance is below 2): front `SFX_roadcarve` on paved / `SFX_carve` on 3, 8, 9; rear
+  `SFX_roadRN` / `SFX_snowRN` from the rear-right wheel and last frame's front-left one (the
+  game's offsets +0xe0 / +0xe4). Landing thumps `SFX_heavy1` / `SFX_med2` / `SFX_tiressnow` by the
+  front compression against 2.5 / 1.67 / 1.25 × the rest length. Engine: rpm 0.9/0.1 smoothing,
+  pitch (rpm + 2000)/7500, idle × (1 − min(rpm/1000, 1)), cruise × the rest; `SFX_rev2` / `SFX_rev1`
+  on take-off with the throttle open, silencing idle and cruise until it ends; `SFX_freewheel`
+  when the rear loads again under throttle. Every snowmobile key resolves on MIS3 [D].
+- Turret `FUN_002e4980` (from the base step when a vehicle has one, and from the tank): per axis
+  the loop `SFX_TurretLR` / `SFX_TurretUD` while moving, the `...Stop` sample on stopping
+  (`Weapons Init` × 0.5); the servo `SFX_Kachung` + `SFX_servo` on start, `SFX_servodown` on stop
+  (slot 4). The LR / UD keys are in slot 0 on MIS13A/B/C; `SFX_servo`, `SFX_servodown` and
+  `SFX_Kachung` are in no slot-4 bank on any track [D], so those are silent in the game too.
+- Tank `FUN_002f1000`: base step, then the same engine object as the player car (max 4500, no 500
+  rpm floor), treads, turret. `SFX_TankTread` is in no bank; the engine layer keys only on MIS01,
+  MIS4, RACE [D].
+- Landing strength: the wheel query `FUN_001931f8` is car +0x210[wheel] != 0, last pass's
+  compression, so only wheels that were in the air count.
+- Horn blocker `FUN_00135530`: within 0.9 (dot) of the heading to the driver's target, and either
+  within the range of the target or nearer the car than the target.
+- Game clock `FUN_00261038`: timer-1 interrupts at the video mode's rate, 60 a second on an NTSC
+  boot (`FUN_00260d38`, table 0x3c1a38 [D] 60/60/50/60): impact cooldown 5 = 1/12 s, explosion 30 =
+  0.5 s.
+- Ambience level: the disassembly confirms (y + top + depth) × 0.1 inside the band (all float adds).
+  Every `Envi` region has top -1000, depth 10, except `nearvilla` (top 0) on MIS4 / RACE [D]; every
+  road node is above -1000, so the level is 1 everywhere except `nearvilla`'s 0..1 ramp over
+  y -10..0. Every region's ambience stream is in the track's `.spe` archive [D].
+
 ## Not traced / not ported
 
-The boat and snowmobile sub-steps (`FUN_002e74d8` / `FUN_002e7d60` / `FUN_002e76f8` /
-`FUN_002e73b8`; `FUN_002feaa0` / `FUN_002fed98` / `FUN_002ee768` / `FUN_002ede60`), the turret, the tank's engine object, the
-wheel query behind the landing strength, the blocker test behind the horn, the unit of the game
-clock used by cooldowns and the prebuffer purge, what a channel's +0x48 does, and the writers of
-`DAT_00355e6c` / `DAT_003c82c8` / `DAT_00355e88`. The viewer does not play any of this yet.
+The sled's +0x50 vector (from `FUN_001bcca0(1.0, view set +4)`), the writers of the turret
+inputs (+0xb8 / +0xbc) and the meaning of the bridge's +0xb0, the voice "finished" test (taken as
+the sample ended), what a channel's +0x48 does, and the writers of `DAT_00355e6c` / `DAT_003c82c8` /
+`DAT_00355e88`. The viewer does not play any of this yet.
