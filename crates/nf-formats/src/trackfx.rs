@@ -179,6 +179,11 @@ pub struct PlacedEffect {
     /// The item origin and its word 15 (the static glare's LOD radius, `FUN_001ad128`).
     pub item_origin: [f32; 3],
     pub item_word15: u32,
+    /// Scene objects: bit 7 of the sub-item's byte `+0x0c` (`FUN_001a1f58`'s mode: the entry is
+    /// kept only with flag 0x200, and its `+0x15` becomes the sub-item index) [M].
+    pub sub_bit7: bool,
+    /// Scene objects: the sub-item index the entry came from.
+    pub sub_index: usize,
 }
 
 impl PlacedEffect {
@@ -188,7 +193,14 @@ impl PlacedEffect {
     pub fn static_active(&self) -> bool { !self.scene_object && (self.e.flags & eflag::AT_LOAD != 0 || self.e.kind == kind::GLARE) }
     /// The `GIOT::` name without the namespace.
     pub fn giotto_name(&self) -> Option<&str> { self.name.as_deref().and_then(|s| s.strip_prefix("GIOT::")) }
+    /// Scene objects: whether `FUN_001a1f58` copies the entry into the object's effect block
+    /// ([`scene_entry_kept`]).
+    pub fn scene_kept(&self) -> bool { scene_entry_kept(self.sub_bit7, self.e.flags) }
 }
+
+/// `FUN_001a1bc8(mode, flags)` [M]: a scene object keeps an entry when `flags & 0x109e != 0`
+/// and, for a sub-item whose byte `+0x0c` has bit 7, only when `flags & 0x200` too.
+pub fn scene_entry_kept(sub_bit7: bool, flags: u32) -> bool { flags & 0x109e != 0 && (!sub_bit7 || flags & 0x200 != 0) }
 
 fn rotate(p: &Placement, v: [f32; 3]) -> [f32; 3] {
     let a = &p.axes;
@@ -302,21 +314,21 @@ pub fn placed_effects(crp: &Crp<'_>) -> Result<Vec<PlacedEffect>> {
         let Some(a) = arts.get(&p.article) else { continue };
         let scene_object = p.flags & 0x10 != 0;
         // (sub-item, part) pairs this item's effects come from.
-        let mut parts: Vec<(Option<SubItem>, u16)> = Vec::new();
+        let mut parts: Vec<(Option<SubItem>, u16, bool, usize)> = Vec::new();
         match scene_parts.get(&p.index).filter(|_| scene_object) {
             Some(&sp) if sp != 0xff => {
                 let list = a.inr.get(&(sp as u16)).or_else(|| a.inr.get(&0));
-                for sub in list.into_iter().flatten() {
+                for (k, sub) in list.into_iter().flatten().enumerate() {
                     let si = SubItem::parse(sub);
                     if let Some(part) = si.part {
-                        parts.push((Some(si), part));
+                        parts.push((Some(si), part, sub[0x0c] & 0x80 != 0, k));
                     }
                 }
             }
-            _ => parts.push((None, p.part)),
+            _ => parts.push((None, p.part, false, 0)),
         }
         let mut n = 0;
-        for (sub, part) in parts {
+        for (sub, part, sub_bit7, sub_index) in parts {
             let Some(Some(idx)) = a.asp.get(&part) else { continue };
             let list = a.ef.get(idx).ok_or_else(|| FormatError::Invalid(format!("{}: part {part} names ef#{idx}, which is missing", p.article)))?;
             for e in list {
@@ -343,6 +355,8 @@ pub fn placed_effects(crp: &Crp<'_>) -> Result<Vec<PlacedEffect>> {
                     world_dir: rotate(p, ldir),
                     item_origin: p.origin,
                     item_word15: words.get(p.index).copied().unwrap_or(0),
+                    sub_bit7,
+                    sub_index,
                 });
                 n += 1;
             }
@@ -420,6 +434,126 @@ impl GiottoEmitter {
     }
 }
 
+/// One `gg` key: an animated glare [M `FUN_00234818` gg branch, `FUN_00233df8`, `FUN_00235ea0`,
+/// `FUN_00235d50`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GiottoGlareKey {
+    /// +0x00: offset added to the instance position (not rotated).
+    pub offset: [f32; 3],
+    /// +0x0c: the key's frame (an int).
+    pub frame: i32,
+    /// +0x30: glare type (`Render\Glare` id), taken from the earlier key of the pair.
+    pub gtype: u32,
+    /// +0x34: size, interpolated between the pair and made positive.
+    pub size: f32,
+    /// +0x38: non-zero = three glares a frame, each moved by a random (-1..1) per axis.
+    pub jitter: u32,
+}
+
+impl GiottoGlareKey {
+    pub fn parse(raw: &[u8]) -> Option<GiottoGlareKey> {
+        (raw.len() >= 0x3c).then(|| GiottoGlareKey {
+            offset: [f(raw, 0), f(raw, 4), f(raw, 8)],
+            frame: u(raw, 0x0c) as i32,
+            gtype: u(raw, 0x30),
+            size: f(raw, 0x34),
+            jitter: u(raw, 0x38),
+        })
+    }
+}
+
+/// One `gd` key (the element's first key; `FUN_00233f18`): a debris burst run once
+/// [M `FUN_00235810`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GiottoBurst {
+    /// +0x10: a quaternion (kind 0 only: composed with the instance orientation, it turns the
+    /// launch axis).
+    pub quat: [f32; 4],
+    /// +0x30: the burst size: count = 2 x size (at most 7 when size <= 15), and it scales the
+    /// three speeds below.
+    pub size: f32,
+    /// +0x34 / +0x38 / +0x3c: upward speed, vertical spread, horizontal spread (each x size).
+    pub up: f32,
+    pub up_spread: f32,
+    pub side_spread: f32,
+    /// +0x40: colour, ARGB.
+    pub argb: u32,
+    /// +0x44: the debris kind: 0 = one piece of debris type 4 launched along the turned axis;
+    /// 2 = types 0, 1, 2 in turn; 3 = types 5, 6 in turn; 1 and 4..19 = the table at 0x39c980.
+    pub kind: u32,
+    /// +0x4c / +0x50 / +0x54: position spread on x / z / y, turned by the instance orientation.
+    pub spread: [f32; 3],
+    /// +0x58: the debris piece size (kinds other than 0).
+    pub piece_size: f32,
+    /// +0x5c: the spawn is skipped when this is 0 (kinds other than 0).
+    pub gate: u32,
+}
+
+impl GiottoBurst {
+    pub fn parse(raw: &[u8]) -> Option<GiottoBurst> {
+        (raw.len() >= 0x60).then(|| GiottoBurst {
+            quat: [f(raw, 0x10), f(raw, 0x14), f(raw, 0x18), f(raw, 0x1c)],
+            size: f(raw, 0x30),
+            up: f(raw, 0x34),
+            up_spread: f(raw, 0x38),
+            side_spread: f(raw, 0x3c),
+            argb: u(raw, 0x40),
+            kind: u(raw, 0x44),
+            spread: [f(raw, 0x4c), f(raw, 0x50), f(raw, 0x54)],
+            piece_size: f(raw, 0x58),
+            gate: u(raw, 0x5c),
+        })
+    }
+}
+
+/// One `gs` key (the element's first key): a sound started on the instance's first run
+/// [M `FUN_00234818` gs branch, `FUN_002363b0`]. The voice joins the mix group `Giotto`
+/// (0x39ca00); a name equal to `(null)` makes no voice.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GiottoSound {
+    /// +0x30: volume in percent (voice +0x6c = v x 0.01).
+    pub volume: i32,
+    /// +0x38: the bank slot (`PTR_DAT_003562a0[slot]`).
+    pub bank: u32,
+    /// +0x3c: the sound name (up to +0x5c).
+    pub name: String,
+    /// +0x5c: voice +0x70 = v x 0.01 (its reader is not traced; the pitch by position).
+    pub w5c: i32,
+    /// +0x60 / +0x64: voice +0x5c and +0x60 (+0x64 = the square of +0x60): the near and far
+    /// distances by position (their reader is not traced).
+    pub near: i32,
+    pub far: i32,
+}
+
+impl GiottoSound {
+    pub fn parse(raw: &[u8]) -> Option<GiottoSound> {
+        if raw.len() < 0x68 {
+            return None;
+        }
+        Some(GiottoSound {
+            volume: u(raw, 0x30) as i32,
+            bank: u(raw, 0x38),
+            name: cstr(&raw[0x3c..0x5c]),
+            w5c: u(raw, 0x5c) as i32,
+            near: u(raw, 0x60) as i32,
+            far: u(raw, 0x64) as i32,
+        })
+    }
+    /// `FUN_002a9508(name, "(null)") != 0` [M]: only then is a voice made.
+    pub fn makes_voice(&self) -> bool { self.name != "(null)" }
+}
+
+/// One element of a Giotto effect, in the order `FUN_00234818` runs them.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GiottoElement {
+    /// Index into [`GiottoEffect::emitters`].
+    Emitter(usize),
+    /// A `gg` element: its keys in order.
+    Glare(Vec<GiottoGlareKey>),
+    Burst(GiottoBurst),
+    Sound(GiottoSound),
+}
+
 /// A Giotto effect as the track effects use it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GiottoEffect {
@@ -431,25 +565,39 @@ pub struct GiottoEffect {
     pub life: u32,
     /// The `gp` elements (first key of each).
     pub emitters: Vec<GiottoEmitter>,
-    /// The other elements: (kind, name, key count). Not ported.
+    /// Every element with a key, in element order (the `gp` ones point into `emitters`).
+    pub elements: Vec<GiottoElement>,
+    /// Elements of other kinds, or without a key: (kind, name, key count).
     pub others: Vec<(String, String, usize)>,
 }
 
 pub fn giotto_effect(gal: &Gal, name: &str) -> Option<GiottoEffect> {
     let a = giotto_anim(gal, name)?;
     let mut emitters = Vec::new();
+    let mut elements = Vec::new();
     let mut others = Vec::new();
     for el in &a.elements {
         let keys = el.keysets.iter().find(|(id, _)| *id == GIOTTO_KEYSET).map(|(_, k)| k.as_slice()).unwrap_or(&[]);
-        if el.kind == EL_GP {
-            if let Some(k) = keys.first().and_then(|k| GiottoEmitter::from_key(&el.name, &k.raw)) {
-                emitters.push(k);
+        let first = keys.first().map(|k| k.raw.as_slice());
+        let got = match el.kind {
+            EL_GP => first.and_then(|k| GiottoEmitter::from_key(&el.name, k)).map(|g| {
+                emitters.push(g);
+                GiottoElement::Emitter(emitters.len() - 1)
+            }),
+            EL_GG => {
+                let k: Vec<GiottoGlareKey> = keys.iter().filter_map(|k| GiottoGlareKey::parse(&k.raw)).collect();
+                (!k.is_empty()).then_some(GiottoElement::Glare(k))
             }
-        } else {
-            others.push((el.kind_str(), el.name.clone(), keys.len()));
+            EL_GD => first.and_then(GiottoBurst::parse).map(GiottoElement::Burst),
+            EL_GS => first.and_then(GiottoSound::parse).map(GiottoElement::Sound),
+            _ => None,
+        };
+        match got {
+            Some(e) => elements.push(e),
+            None => others.push((el.kind_str(), el.name.clone(), keys.len())),
         }
     }
-    Some(GiottoEffect { name: a.name.clone(), flags: a.flags, nump: a.nump, life: a.life, emitters, others })
+    Some(GiottoEffect { name: a.name.clone(), flags: a.flags, nump: a.nump, life: a.life, emitters, elements, others })
 }
 
 /// What `FUN_001da6c8` takes from a `decal.dat` record besides its UV rows [M]: `+0x44` (w1) is
@@ -545,6 +693,44 @@ mod tests {
         assert_eq!(g.quat, [0.0, 0.0, 0.0, 1.0]);
         assert!(g.links_previous);
         assert_eq!((g.start_frame, g.start_override), (0, 10));
+    }
+
+    fn words(n: usize, w: &[(usize, u32)]) -> Vec<u8> {
+        let mut b = vec![0u8; n];
+        for &(o, v) in w {
+            b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn gg_gd_gs_key_fields() {
+        // gall1 Wd_Sprk 'glare' key 1 [D]: frame 5, type 0, size 0.5, no jitter.
+        let k = GiottoGlareKey::parse(&words(0x40, &[(0x0c, 5), (0x30, 0), (0x34, 0x3f00_0000), (0x3c, 0x3e37_ced9)])).unwrap();
+        assert_eq!((k.frame, k.gtype, k.size, k.jitter), (5, 0, 0.5, 0));
+        assert!(GiottoGlareKey::parse(&[0u8; 0x38]).is_none());
+        // gall1 Wd_Glass 'Glass M' [D].
+        let b = GiottoBurst::parse(&words(0x60, &[(0x1c, 0x3f80_0000), (0x30, 0x4140_0000), (0x34, 0x3c03_126f), (0x38, 0x3ca3_d70a), (0x3c, 0x3c83_126f), (0x40, 0x25ff_ffff), (0x44, 4), (0x48, 0x1c), (0x58, 0x3ba0_902e), (0x5c, 100)])).unwrap();
+        assert_eq!((b.size, b.kind, b.argb, b.gate), (12.0, 4, 0x25ff_ffff, 100));
+        assert_eq!(b.quat, [0.0, 0.0, 0.0, 1.0]);
+        assert!((b.up - 0.008).abs() < 1e-7 && (b.up_spread - 0.02).abs() < 1e-7 && (b.side_spread - 0.016).abs() < 1e-7);
+        // gall1 Wd_Glass 'sound' [D].
+        let mut raw = words(0x70, &[(0x30, 100), (0x34, 1), (0x38, 2), (0x5c, 100), (0x60, 10), (0x64, 100)]);
+        raw[0x3c..0x3c + 17].copy_from_slice(b"SFX_GlassShatter3");
+        let g = GiottoSound::parse(&raw).unwrap();
+        assert_eq!((g.volume, g.bank, g.name.as_str(), g.w5c, g.near, g.far), (100, 2, "SFX_GlassShatter3", 100, 10, 100));
+        assert!(g.makes_voice());
+        raw[0x3c..0x3c + 7].copy_from_slice(b"(null)\0");
+        assert!(!GiottoSound::parse(&raw).unwrap().makes_voice());
+    }
+
+    #[test]
+    fn scene_filter_follows_fun_001a1bc8() {
+        assert!(!scene_entry_kept(false, 0), "flags 0: dropped");
+        assert!(scene_entry_kept(false, 0x14) && scene_entry_kept(false, 0x0402_200a) && scene_entry_kept(false, 0x1000));
+        assert!(!scene_entry_kept(false, 0x200 | 0x01), "0x200 alone is not in 0x109e");
+        assert!(!scene_entry_kept(true, 0x14));
+        assert!(scene_entry_kept(true, 0x214));
     }
 
     #[test]
