@@ -238,6 +238,17 @@ pub struct DamageLog {
     /// Inside a return-fire resupply pass (`resupply`'s nav walks run the leg walks, whose
     /// return-fire gate would call `resupply` again — the recursion overflowed the stack).
     pub resupplying: bool,
+    /// OPT-IN (`no_lane_fetch`, set by the 07000014 00 Agent walk's escape-touch legs): the
+    /// fights' own dry/low fetches stay OFF — a dry gun bails the fight and the leg walks on
+    /// instead of the lane resupply's walk_nav_to fetches. The v6 run's measured death (the
+    /// round-8 ledger): the fights' LOW gate fetched the nearest live pickup from the lane's
+    /// end — the Kiko-corridor armour (−41.29,1.53,36.48), in the lane's 0.5 floor band at the
+    /// corridor's walk y 1.13 — and the fetch's nav route swung SOUTH through the pocket
+    /// convergence zone into the live-wire hurt volume (the WORLD's −30.51 at z ~28 finished
+    /// the walk, death t28518). A player whose gun runs dry past the pocket walks to the
+    /// touch; the wake legs' node-7 scoop re-arms AFTER the touch. Off = master behaviour (the
+    /// fetch) everywhere else — no other walk sets it.
+    pub no_lane_fetch: bool,
     /// OPT-IN lane tactics for a long open-floor crossing (the 07000013 lobby probe): the wide
     /// shooters window (48 u / 7.5 u instead of 20 u / 6.0 u), the damage-weighted target pick,
     /// and the floor-drop resupply passes around a fight. Off = the plain return fire every
@@ -297,6 +308,20 @@ pub struct DamageLog {
     /// stand's cooldown silenced the response outright. Off = master behaviour (nearest visible
     /// first, cooldown bails) everywhere else.
     pub hurting_first: bool,
+    /// OPT-IN (`switch_on_first_blood`, set by the 07000014 00 Agent walk, retune-nb-14-5): inside
+    /// a stand, the FIRST tick a NEW shooter's 240-frame damage rises above 0.0 while the current
+    /// target has dealt 0.0, the fight switches to that shooter immediately — the same law as the
+    /// `hurting_first` retarget (visible, off-cooldown, worst damage first, the trackers reset)
+    /// but without its two blind spots: the 30-tick cadence and the >3.0 margin. Measured door
+    /// face [L the 2026-11-19 re-measure, retune-nb-14-5]: the return-fire pick opened on #32
+    /// (his shot a miss, d 7.8) while the 0x14 heavy #33 (d 10.1, hp 10) burst from across the
+    /// opened doorway; #33's first volley landed 2.50 at t25006 — inside the #32 stand, past no
+    /// 30-tick re-read (the stand ended t25029, one tick before the next one) and under the
+    /// 3.0 margin — and the fight on #33 then started at t25030: Bond's 55 damage landed by
+    /// t25036 but #33's second volley 15.00 landed the SAME tick and Bond died at 17.5 health
+    /// with both shooters dead. A player turns to whoever just drew blood. Off = master
+    /// behaviour (the stand keeps its target) everywhere else — no other walk sets it.
+    pub switch_on_first_blood: bool,
     /// OPT-IN (`shooters_window`, the 07000005 00 Agent walk): the shooters list's (horizontal,
     /// vertical) reach in u, replacing the plain (20.0, 6.0) / lane (48.0, 7.5) windows. The 05
     /// castle-approach spine is fired on from 16.6 u BELOW (the gallery riflemen #8/#9 stand at y
@@ -998,7 +1023,7 @@ impl Walker {
         let lane = !self.dmg.descent_stationary_fights
             && (self.dmg.lane_fights || UNSEEN_FIGHTS.with(|c| c.get()));
         if !armed(self) {
-            if lane && !self.dmg.resupplying {
+            if lane && !self.dmg.resupplying && !self.dmg.no_lane_fetch {
                 self.dmg.resupplying = true;
                 self.resupply(label);
                 self.dmg.resupplying = false;
@@ -1011,7 +1036,7 @@ impl Walker {
             // walking the nav legs under crossfire — the spawn-lobby chew on the skipped-fight
             // run): the dry stand's own resupply-after covers the empty gun.
             let low = { let sim = self.scene.sim.as_ref().unwrap(); sim.gun.clip + sim.gun.spare < 10 };
-            if low && !self.dmg.resupplying {
+            if low && !self.dmg.resupplying && !self.dmg.no_lane_fetch {
                 self.dmg.resupplying = true;
                 self.resupply(label);
                 self.dmg.resupplying = false;
@@ -1117,6 +1142,42 @@ impl Walker {
             if let Some(th) = self.dmg.abort_on_wound {
                 let h = self.scene.sim.as_ref().unwrap().drones.health.health;
                 if h <= 0.0 || h < bond0 - th { return false; }
+            }
+            // switch_on_first_blood (OPT-IN, the 07000014 00 Agent walk): the first-blood arm of
+            // the retarget law — every tick, not every 30th, and any real damage (the retarget's
+            // >3.0 margin reads a 2.50 volley as a graze). Switches only while the current target
+            // has drawn NO blood over the 240-frame window: a stand whose target IS hurting Bond
+            // keeps him (the retarget's own law answers that case).
+            if self.dmg.switch_on_first_blood {
+                let sim = self.scene.sim.as_ref().unwrap();
+                let now = sim.drones.frame;
+                let dmg_of = |i: usize| -> f32 {
+                    sim.drones.player_hits.iter().rev()
+                        .take_while(|h| now.saturating_sub(h.0) <= 240)
+                        .filter(|h| h.1 == i)
+                        .map(|h| h.2).sum::<f32>()
+                };
+                if dmg_of(di) <= 0.0 {
+                    let better = self.dmg.shooters(sim).into_iter()
+                        .filter(|&i| i != di)
+                        .filter(|&i| DamageLog::visible(sim, i))
+                        .filter(|&i| !self.dmg.cooldown.iter().any(|&(ci, until)| ci == i && self.total_ticks < until))
+                        .max_by(|&a, &b| dmg_of(a).total_cmp(&dmg_of(b))
+                            .then(b.cmp(&a)));
+                    if let Some(i) = better {
+                        let nd = dmg_of(i);
+                        if nd > 0.0 {
+                            if trace {
+                                eprintln!("[rf-trace] fight#{di} t{t}: first-blood switch to #{i} (dmg {nd:.1} vs 0.0)");
+                            }
+                            di = i;
+                            hp0 = sim.drones.list[di].health;
+                            last_hit = t;
+                            aim = None;
+                            unseen = 0;
+                        }
+                    }
+                }
             }
             if self.dmg.switch_dry {
                 let clip_dry = { let s = self.scene.sim.as_ref().unwrap(); s.gun.clip == 0 && s.gun.spare == 0 };

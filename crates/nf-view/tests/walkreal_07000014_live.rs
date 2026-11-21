@@ -889,6 +889,20 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
             }
             eprintln!("[014] the low floor west reached {:?}", w.scene.sim.as_ref().unwrap().bond.pos);
         }
+        // retune-nb-14-7 round 7, lever 3 (the round-4 census's untried loop-mouth armour — the
+        // ledger's "(32.26,0.87,31.14) d 7.2 from the loop mouth, the only one west of the 0x85
+        // door"): the walk arrives at the door face with health 1.9 and armour 0.0, and the
+        // whole back half of the bill is 0x14 BULLETS (the 12.5 rifle trios, the pocket #20's
+        // 1.93) that the armour pool absorbs FIRST — bullet pain (type 0) is the ONLY pain type
+        // whose armour fraction lets armour absorb [M Player_HandlePain 0x1902c8:84-104; apply():
+        // absorbed = (d·frac).min(armour)]; the trace's one health-drain explosion is #33's
+        // weapon-0x0 grenade −15.57 [L the NF_DMG_TRACE runs]. The armour sits ~2 u south of
+        // this measured low-floor spot — a real-input detour, the take on contact, no teleport.
+        // d3 real-damage only: the sisters and the tops-up walks keep the shipped route
+        // byte-identical.
+        if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+            w.walk_to(Wp::new(32.26, 0.9, 31.14).r(0.9), "the loop-mouth armour fetch");
+        }
         the_machine_room_to_the_corridor(&mut w);
         w.walk_to(Wp::new(30.09, 0.65, 38.73).r(1.2), "the corridor north to the leg-2 spot");
         {
@@ -970,6 +984,36 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     // candidate fires no fight and burns no tick (read-only), so the stream stays byte-identical
     // until the first real fight. Other difficulties keep the shipped single call byte-exact.
     if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        // retune-nb-14-4 (v16, the fights' FEET TIED across the south loop): the master merges
+        // (22d5836b7 the Exchange weapons, e4fb1c512 the weapon-loop substate stop) re-rolled
+        // this stream and the loop's junction fights now backpedal Bond onto the level's hover
+        // cells — the baseline run on this tree wedged node 5's leg at the 6000-tick cap with
+        // bond (32.47,0.66,24.51) grounded=false and every attacker ALREADY dead (25 hits for
+        // 72.5, 19 return-fire fights, the nearest shooters #1/#2/#9/#11 all hp 0, "drones
+        // nearby: none") [L 2026-11-19, this tree's real-input baseline]. The v15 lesson named
+        // the same shape; the field doc carries the law: "d1, whose stands never move Bond,
+        // lands the slab every run — the displacement, not the collision, is what puts Bond in
+        // the pocket" (descent_stationary_fights, level-14-landing-hover lever 2; the wedge
+        // evidence s/real-health-14-00agent-5 [L]). The flag ties the fights' stand feet (no
+        // back_off shove, no creep, no lane-resupply fetches — a dry gun walks on, the next
+        // node's own scoop re-arms) while the pick and aim laws stay the d3 set (the gun-ray
+        // gate, the damage-weighted rank, the head-hunt). The level-13 stretch ships the same
+        // scoped idiom (walkreal_07000013_live's north-west stretch, restored after the drain).
+        // Scoped to the south loop only: restored before the north leg, so the door and Kiko
+        // fights keep the shipped back_off machinery. d3 only — the sisters never set it.
+        w.dmg.descent_stationary_fights = true;
+        pickup_census(&w, "the south loop start");
+        // retune-nb-14-4 (the round-4 measurement record, see also the (e) block below): the
+        // machine-room armour at (32.26, 0.87, 31.14) — d 7.2 from this spot, the only kind-3
+        // pickup WEST of the 0x85 door — is UNCLOSEABLE from the loop's lanes: v18's fixed
+        // north approach latched the walker onto the mezzanine door (32.0, 2.1, 35.8) (y 2.1 —
+        // the room's ground entry is the south door the route crosses), and v19's junction
+        // approach wedged 2.83 short on the shelf rim (grounded=false, the v11 shape). The
+        // armour pool is exactly what the door chain needs: v16/v17 reached the door's west
+        // face with 17.5 health and clip 10 + spare 89 (ammo NOT binding), and the door squad
+        // finished those walks [L 2026-11-19]. The reachables: the Kiko-corridor armour
+        // (−41.29, 1.53, 36.48) — live at the door-face census, d 19.1, ~3.4 u from the east
+        // lane's end — and nothing else west of the door.
         let loop_pts = {
             let sim = w.scene.sim.as_ref().unwrap();
             nav_route(sim, w.cur_pos(), [-48.7, 0.9, 33.2])
@@ -1049,6 +1093,13 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
                             let _ = w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3), &format!("back to node {k}"));
                         }
                     }
+                    // (e) RETIRED (v19's measurement, kept as the ledger): the machine-room
+                    // armour fetch keyed past the south door — the SHELF RIM blocks the
+                    // junction approach too: the walk wedged 2.83 short (bond (30.72, 0.66,
+                    // 28.76) grounded=false, the same hover-pocket shape as v11's 2.05-short
+                    // north-west attempt), the take never fired, and the 6000-tick burn's
+                    // stream shift died at the ascent base (t21534, 42 fights) [L 2026-11-19].
+                    // The pickup is unclosable from the loop's lanes from BOTH axes.
                 }
                 w.walk_to(Wp::new(-48.7, 0.9, 33.2).r(1.3), "the south loop to the west corridor end");
             }
@@ -1056,6 +1107,53 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
                 w.follow_nav_route([-48.7, 0.9, 33.2], "the south loop to the west corridor");
             }
         }
+        // retune-nb-14-8 lever 1 (the round-7 ignore message's next lever, the round-4 census's
+        // SERVER-ROOM armour (−27.29,0.87,30.96)): the [srv-probe] nav dump [L 2026-11-20] found
+        // a per-path route from THIS spot to the armour (11 nodes, the z 27.3-27.8 east lane)
+        // whose middle node (−33.13,27.33) sits d 0.53 from the escape touch #456 (−33.1,26.8) —
+        // the cut-scene trigger the ledger orders the fetch to MIND. The legs below bypass it
+        // north ((−33.1, 28.6), d_touch 1.8), take the armour on contact (the lever-3 loop-mouth
+        // fetch's own take law: walk_to r(0.9), no teleport), and walk back to the corridor end
+        // so the shipped north leg proceeds unchanged; descent_stationary_fights is still tied
+        // here, so the fights' stands cannot shove Bond off the bypass line. try_walk_to on the
+        // unknown-floor legs (panic-safe: a blocked spot costs a cap, not the run); the take leg
+        // is the real walk_to. +50 here banks the door-face-stands + loop + pocket bullet bill
+        // the v4 math measured (≈100 total, the loop-mouth 50 covers half) [M Player_HandlePain
+        // 0x1902c8:84-104 — bullet pain (type 0) absorbs into armour first].
+        {
+            w.try_walk_to(Wp::new(-45.92, 0.4, 27.33).r(1.0), "the server-room fetch: down to the z-27.3 lane");
+            w.try_walk_to(Wp::new(-43.22, 0.4, 27.77).r(1.0), "the server-room fetch: the z-27.7 lane east");
+            w.try_walk_to(Wp::new(-39.55, 0.4, 27.77).r(1.0), "the server-room fetch: past #19's post lane");
+            w.try_walk_to(Wp::new(-36.33, 0.4, 27.33).r(1.0), "the server-room fetch: the corridor mouth (d_touch 3.3)");
+            w.try_walk_to(Wp::new(-33.1, 0.9, 28.6).r(0.6), "the server-room fetch: the escape-touch bypass north (d_touch 1.8)");
+            w.try_walk_to(Wp::new(-29.92, 0.4, 29.39).r(1.0), "the server-room fetch: the room's east floor");
+            w.try_walk_to(Wp::new(-29.93, 0.4, 31.61).r(1.0), "the server-room fetch: the room's north floor");
+            // The v1 run wedged the direct east cut (bond (−29.12,30.95) → target (−27.29,30.96),
+            // segment_to_target 0.35, the 6000-tick cap): the pocket is entered from the nav
+            // route's own north node (−28.00,1.20,33.21) — the route the game's web builds for
+            // this exact destination (the [srv-probe] dump's last two nodes) — then straight
+            // south. The (−30.6,29.9) door stays shut (ch_open 0, pos01 0.00 — the v10 ledger's
+            // door), so no west-line approach exists [L both runs 2026-11-20].
+            w.try_walk_to(Wp::new(-29.24, 0.9, 33.20).r(1.0), "the server-room fetch: the pocket's west node");
+            w.try_walk_to(Wp::new(-28.00, 1.2, 33.21).r(0.8), "the server-room fetch: the pocket's north node");
+            w.walk_to(Wp::new(-27.29, 0.9, 30.96).r(0.9), "the server-room armour take");
+            {
+                let sim = w.scene.sim.as_ref().unwrap();
+                assert!(!sim.drones.channels.on(0x4a) && !sim.drones.channels.on(0x0c),
+                    "the server-room fetch must NOT fire the escape touch #456 early (the ledger's cut-scene warning) [D placement 456]");
+                eprintln!("[014] server-room armour fetched: armour {:.1} health {:.1} at {:?}",
+                    sim.drones.health.armour, sim.drones.health.health, sim.bond.pos);
+            }
+            w.try_walk_to(Wp::new(-28.00, 1.2, 33.21).r(0.8), "the server-room fetch: back to the pocket's north node");
+            w.try_walk_to(Wp::new(-29.93, 0.4, 31.61).r(1.0), "the server-room fetch: back south");
+            w.try_walk_to(Wp::new(-29.93, 0.4, 29.39).r(1.0), "the server-room fetch: back west");
+            w.try_walk_to(Wp::new(-33.1, 0.9, 28.6).r(0.6), "the server-room fetch: the bypass back");
+            w.try_walk_to(Wp::new(-36.33, 0.4, 27.33).r(1.0), "the server-room fetch: the corridor mouth back");
+            w.try_walk_to(Wp::new(-39.55, 0.4, 27.77).r(1.0), "the server-room fetch: the z-27.7 lane back");
+            w.try_walk_to(Wp::new(-45.92, 0.4, 27.33).r(1.0), "the server-room fetch: up to the corridor end");
+            w.walk_to(Wp::new(-48.7, 0.9, 33.2).r(1.3), "back to the west corridor end");
+        }
+        w.dmg.descent_stationary_fights = false;
     } else {
         w.follow_nav_route([-48.7, 0.9, 33.2], "the south loop to the west corridor");
     }
@@ -1157,6 +1255,35 @@ fn walk_the_west_route_to_the_switch_band(mut w: &mut Walker) {
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.drones.channels.on(0x8c), "AND #391 [0x87, 0x88] raises 0x8C [D]");
+    }
+    // retune-nb-14-4 (v17, the ignore message's lever 2 — ARM THE GUN IN THE HALL'S QUIET
+    // STRETCHES): the v16 run crossed the south loop (the fights' feet tied) but reached the
+    // door's west face with 17.5 health and a DRY gun — the west-face scan killed #32 and the
+    // door squad finished the walk 7 ticks later [L 2026-11-19]. The hall legs (the fusebox
+    // lanes, the clear_hostiles passes) are the walk's quiet stretch and their fights leave
+    // drops where Bond walks; the loop's own dry-gun scoop law (clip+spare < 10, 4.0 u, the
+    // peace gate, try_walk_to — the shipped block in the south loop) applied HERE so the gun
+    // carries rounds into the door scans. Read-only when the gate or the peace check fails.
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        pickup_census(&w, "the hall's north-west (after box #385)");
+        let dry = { let sim = w.scene.sim.as_ref().unwrap(); sim.gun.clip + sim.gun.spare < 10 };
+        let peace = { let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            !sim.drones.list.iter().any(|d| d.present && d.enabled && !d.corpse
+                && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 12.0) };
+        if dry && peace {
+            for j in 0..5 {
+                let bp = w.scene.sim.as_ref().unwrap().bond.pos;
+                let t = w.scene.sim.as_ref().unwrap().drones.pickups.iter().filter(|p| !p.gone && !p.hidden)
+                    .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                    .filter(|q| walker::dxz(*q, bp) < 4.0 && (q[1] - bp[1]).abs() < 1.5)
+                    .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)));
+                let Some(t) = t else { break };
+                w.try_walk_to(Wp::new(t[0], t[1], t[2]).r(0.4),
+                    &format!("the hall's dry-gun scoop {j}"));
+            }
+            pickup_census(&w, "the hall's north-west after the scoop");
+        }
     }
 
     // Leg 3c: the E-use switch oDroneTrigger1b (out 0xA0, mask 4 [D placement 399; M
@@ -1272,54 +1399,62 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// 05-07 sisters' law: at 1.3 accuracy every stood tick is a tick of bursts); the d3-only
 /// deaths get their own d3-gated blocks. Real input only; no health, ammo or channel writes.
 ///
-/// IGNORED with the retune-nb-14-3 measured runs (each lever its own real run, all d3-gated,
-/// all real input): the round-3 levers that stand — (a) the LOOP'S DRY-GUN SCOOP (the d1 wake
-/// legs' law, keyed on clip+spare < 10, 4.0 u, panic-safe try_walk_to, the peace gate: no live
-/// team-1 guard within 12 u): the v13 run measured the #14/#15 window (the v10 ledger's 22.5)
-/// → ZERO — the loop's own fights killed them before their bursts once the gun was fed; (b) the
-/// loop walked NODE-BY-NODE (follow_nav_route's own route read + the same r(1.3) legs) with
-/// visibility-keyed route_scan stops. MEASURED NO-OPS (kept, they cost zero when the rays die):
-/// the descent corridor foot scan (ALL candidates gunfalse from the foot — the same junction
-/// geometry as the leg-2-spot dead end), the door-crossing scan (#14/#15 gunfalse from the
-/// past-door node — their approach is blind-sided, not pre-answerable by a stop), the ascent-top
-/// scan (#18/#19 gunfalse from (−30.34, 22.93) — the rays cross the (−29.9, 23.7) door plane).
-/// MEASURED LIVE: the ascent-base scan reads #16 eyetrue+guntrue d 4.2 AND #17 guntrue d 7.3
-/// from the x −30 lane at z 9-11 (the ignore message's own lever-1 spot — the rays ARE clear)
-/// but the fight ran DRY (clip 6+0 — the scoops' yield) and lost (killed false, health 10).
+/// THE ROUND-4 LEDGER (retune-nb-14-4, each lever its own real run, all d3-gated, all real
+/// input, [L] = this sandbox's NF_DMG_TRACE/NF_PICKUP_CENSUS runs 2026-11-19): the master merges
+/// (22d5836b7 the Exchange weapons, e4fb1c512 the weapon-loop substate stop) RE-ROLLED this
+/// stream — the shipped round-3 code (the v13 scoop + the node-by-node loop) no longer crosses
+/// the junction: the BASELINE on this tree wedged loop node 5 at the 6000-tick cap, bond
+/// (32.47,0.66,24.51) grounded=false on the level's hover cells with every attacker ALREADY
+/// dead (25 hits for 72.5, 19 return-fire fights, "drones nearby: none") — the v15 wedge shape
+/// became the baseline.
 ///
-/// THE v13 RUN (the deepest this walk has gone: the doorway CROSSED, death in the Kiko
-/// corridor): 50.0 health at the door's west face (v10: 12.5), the walk's own fights killed
-/// #34 (t24822) and #32 (t24989), death t25995 at (−48.78, 1.06, 42.58), 26 hits for 100.0,
-/// 28 fights [L 2026-11-19]: #33 45.4/5 — he CONVERGED THROUGH THE OPENED DOORWAY to d 0.9
-/// and his 35.44 grenade blast (t24931) landed while the fights ran dry (his fight read
-/// killed false on the empty clip); then the Kiko squad #28/#20 (d 9.6-9.9) finished the 7.1
-/// remainder while the shipped Kiko stands/hold landed ZERO at that range (the clip-3
-/// windows, "drone 20 still alive after 300 ticks (health 10)").
+/// WHAT STANDS (v16, the fights' FEET TIED across the south loop): descent_stationary_fights
+/// set inside the d3 loop gate and restored before the north leg (the level-13 stretch idiom,
+/// walkreal_07000013_live's north-west stretch) — the fights still answer every shooter with
+/// the d3 pick/aim laws, the stand's feet never move Bond (no back_off shove, no creep, no
+/// lane-resupply fetches: "the displacement, not the collision, is what puts Bond in the
+/// pocket" — the field doc's own law, level-14-landing-hover lever 2). MEASURED: the wedge is
+/// GONE, the loop CROSSES, and the death moved to the door's west face — t25036 at
+/// (−60.22,0.73,37.94), health 17.5 there (the loop costs 60.0 → 17.5: the junction squad's
+/// own rounds), 34 hits for 100.0, 28 fights: the west-face scan killed #32 (t25029, 17.5 →
+/// 15.0) and the door squad finished the walk 7 ticks later. The stationary law's tax is
+/// ~−10 health vs the baseline's node-5 state (a STILL target under DroneFiring_TargetMoving
+/// accuracy eats more first rounds) — traded for the whole second half of the walk.
 ///
-/// THE v12 LESSON (the no-scoop variant, its own run): the loop crossed CLEAN (zero hits
-/// t12500→t24326 — no wedge, no ascent tax, the node-64 resupply never triggered because no
-/// dry fight ever fired) but the walk reached the door face DRY (clip 0+0 — "the switch
-/// band's guards: cycling to a gun (0)") and died during walk 2 to #33/#34's doorway bursts
-/// (#34 full-health at (−51.8, 41.0), 27.5). THE v14 LESSON: the scoop walks run the walk's
-/// own fight machinery — a dry gun mid-scoop fires the fights' resupply and the walk was
-/// dragged into #1's convergence zone (45.0/10, death t9879) — hence the peace gate. THE v15
-/// LESSON: the re-rolled stream wedged node 5 (the fights' backpedal onto the level's hover
-/// cells, grounded=false, the 6000-tick cap).
+/// MEASURED NO-OP (v17, the round-3 ignore message's lever 2, the hall scoop): the loop's
+/// dry-gun scoop law applied to the hall legs — the hall's north-west reads ZERO live pickups
+/// (the clear_hostiles loot passes already took them) and the dry gate never fires there
+/// because the fusebox cuts leave the LASER 0x4e in hand (clip 499 counts as clip); at the
+/// switch band switch_to_gun arms the 0x14 at clip 10 + spare 89 — the door face is reached
+/// with AMMO TO SPARE. AMMO IS NOT THE BINDING CONSTRAINT on this tree — the health pool is.
 ///
-/// NEXT LEVERS (in order): (1) ARM THE ASCENT-BASE FIGHT — the scan's rays are measured clear
-/// (#16/#17) but the gun must carry 10+ rounds into the x −30 lane; the trio's drops lie ON
-/// the nodes the fights kill them (x 27-28, z 25-12) and the peace gate blocks scooping while
-/// they converge — a SECOND scoop pass keyed on the ascent-base approach (after the node-44
-/// door, the lanes quiet), or the scoops' threshold raised only on the quiet west nodes;
-/// (2) #33's doorway convergence — his fight must WIN, which is an AMMO question again (the
-/// fights killed #34/#32 in v13 — the gun had rounds by then via the fights' own resupply —
-/// but his first fight fired dry): the west-face beat needs the gun armed BEFORE walk 1, e.g.
-/// a scoop pass at the switch band (the hall legs' quiet stretch); (3) the Kiko machinery's
-/// zero-land windows at d 6.5-11 — the shipped 300-tick stands and the 90-tick hold fights
-/// land nothing at that range (the "rounds die on the corridor corners" shape the 07000013
-/// chain measured) — the squad must be pulled closer or the stands moved south first.
+/// MEASURED DEAD (v18/v19, the task's armour/health-pickup scan, on the census's [L] data):
+/// the NF_PICKUP_CENSUS dumps (read-only, env-gated, byte-identical runs) show exactly FOUR
+/// kind-3 armours on the level's south half: (32.26,0.87,31.14) d 7.2 from the loop mouth (the
+/// only one west of the 0x85 door), (42.48,0.09,8.28) 32 u east off route, (−41.29,1.53,36.48)
+/// in the Kiko corridor (LIVE at the door-face census, d 19.1, ~3.4 u east of the east lane's
+/// end (−44.5,34.0)), (−27.29,0.87,30.96) in the server room; the display-rack arsenal east of
+/// the door (nine 0x1a ×20, two 0x15 ×100, y 1.7-2.34) sits BEYOND the escape touch. The
+/// machine-room armour is UNCLOSEABLE from the loop's lanes from BOTH axes: the north approach
+/// (v18, a fixed two-leg rim-line walk) latched the walker onto the mezzanine door (32.0,2.1,
+/// 35.8) — y 2.1, the room's ground entry is the SOUTH door (31.5,1.2,26.9) the route crosses —
+/// and the junction approach (v19, keyed past that crossing) wedged 2.83 short on the shelf
+/// rim (bond (30.72,0.66,28.76) grounded=false, the v11 2.05-short shape), the take never
+/// fired, and the 6000-tick burn's stream shift died EARLIER (the ascent base t21534, 42
+/// fights). Both fetches are REMOVED; the (e) block below records the wedge facts.
+///
+/// NEXT LEVERS (round 5, retune-nb-14-5, in order): (1) THE CORRIDOR-END HOLD vs #20 — the
+/// door-face law's second extension (the eye-true candidates + the Kiko picks' fast taps) moved
+/// the death t25939 → t26979 (−48.91,1.13,34.28, the round-1-era spot) [L 2026-11-19 run 6]:
+/// #20 (0x5000090, 0x14, hp 10, post (−51.0,1.0,32.6)) took ZERO rounds across FOUR fights
+/// (the fast taps at d 6.5, clips 21→0→17→19 burned) — his ray from the hold spot (−50.93,
+/// 39.16) dies on the corridor's own geometry (the rounds stop between z 39.2 and z 32.6) —
+/// then his point-blank 1.93 (d 2.7) finished the 1.9-health walk; the lever: a hold/stand
+/// spot whose ray to (−51.0, 32.6) clears (the corridor's west lane or the south leg's own
+/// lip), or the fights' creep law opens the line; (2) then the Kiko-corridor armour fetch
+/// (−41.29,1.53,36.48) — +50 armour banks the pool for Rook's-wake legs.
 #[test]
-#[ignore = "nb-scan-all round 3 (retune-nb-14-3): the deepest run v13 CROSSED the doorway and died in the Kiko corridor, t25995 at (−48.78,1.06,42.58), 26 hits for 100.0, 28 fights — 50.0 health at the door face (v10: 12.5) [L 2026-11-19]; the bill: #33 45.4/5 (he converged through the opened doorway to d 0.9, the 35.44 blast landed while his fight ran dry; the fights killed #34/#32) + the Kiko squad #28/#20 7.06 at d 9.6-9.9 (the shipped stands/hold landed ZERO at that range, clip-3 windows); the levers that stand: the loop's dry-gun scoop (clip+spare < 10, 4.0 u, the peace gate — the v13 run measured the #14/#15 window 22.5 → ZERO) + the node-by-node loop with route_scan stops (the ascent-base scan MEASURED #16 eyetrue+guntrue d 4.2 / #17 guntrue d 7.3 from the x −30 lane — the fight ran dry and lost; the foot/door-crossing/ascent-top scans measured NO-OP — the rays die); MEASURED DEAD ENDS: the no-scoop variant (v12 — the loop crossed clean but the door face was reached DRY, clip 0+0, death during walk 2 to #33/#34's doorway bursts), the un-gated scoop (v14 — a dry gun mid-scoop fired the fights' resupply and dragged Bond into #1's convergence zone, 45.0/10), the re-rolled stream wedge (v15 — node 5, the fights' backpedal onto the hover cells); NEXT: arm the ascent-base fight (10+ rounds into the x −30 lane — a second scoop pass keyed on the ascent-base approach), win #33's doorway fight (ammo before walk 1 — a scoop pass at the switch band), pull the Kiko squad inside the fights' landing band — see the doc comment"]
+#[ignore = "nb-scan-all round 12 (retune-nb-14-12): re-measured on this tree (master ccd79b5be + s/retune-nb-14-11 merged) 2026-11-21 [L NF_DMG_TRACE runs v0-v2]. THE V0 BASELINE REPRODUCED THE ROUND-11 DEATH TICK-EXACTLY (t37477, the node-22 world blast −14.20 at the radius edge into 14.2 health, 49 hits for 100.0, 38 return-fire fights) — the stream carried over the merge clean. LEVER 1 (the post-crossing scan form, the round-11 ignore message's next lever) MEASURED BOTH WAYS on its own real runs. v1 (the node-21 scan moved to node 24, the shipped pass-break law intact): the scan's fights ALL broke at +0 — the 240-frame window still held #51's t36915 volley when the scan ran, so other_blood was true while the not-yet-shooting post #40 had dealt 0.0 — four zero-tick attempts, the scan is a NO-OP on this stream, and the FUSE WAS DEFEATED: the crossing (no fights inside the kind-27 zone) cleared r 4.0 well before the fuse tick, NO world hit anywhere near the zone, the walk reached the wake touch at 35.2 health and died at t38906 (t37477 -> t38906, +1429, the deepest walk of rounds 4-12). The NEW endgame [L the v1 ledger]: the escorts' first volleys landed while the leg fights answered each after — #50 −7.0, #46 −7.0 (d 1.4 point blank), #53 −3.5, #58 −7.0 (never killed, d 16.5 from the north corridor) — and #39's −3.5 at the crossing stayed unanswered (he lived at hp 10); Rook (#27, skin 0x5000066, weapon 0x6e, hp 22 FULL) fired his FIRST 0x6e volley −10.70 at d 9.8 during the close-on chase (he was never a shooter before it, so the leg gate never fought him) into the 10.7-health Bond — the death, and the shoot(rook_i) stage never started. The pool is 0.7 SHORT at Rook's volley. v2 (the same scan with the pass-break HELD for the scan fights via an opt-in flag — measured and REVERTED, the shared files back to master): the fights RAN and were DOUBLE-DAMAGING — the in-hand GL (2.5 contact) at d 14-17.4 vs the hp-20 post #40 burned 300 ticks for −3 hp (killed false), the hp-10 #42 fight ran the gun DRY (clip 8 -> 0 spare 0), and the shoot_bounded slide dragged Bond 3.9 u east-south of the node-24 park into a SECOND kind-27 trap — explosion (−4.4,1.7,−25.3) r 4.0 nominal 50.0 owner −1, route nodes 25/26 sit INSIDE its radius (d 1.94 / 2.30), its fuse fired at t37634 with Bond at (−5.8,−25.8) d 1.6: −45.70, death (t38906 -> t37634). The scan STAYS at node 24 on the v1 law (the no-op candidates dump; the flag code is gone). ROUND-13 LEVERS, in order: (1) the Rook-chase endgame — the pool needs +10.7 at Rook's first volley; the measured banking candidates: (a) #51's −7.0 pre-emption at node 23 — NOW MEASURED DEAD on its own real run (v3, this round: an 8.0 u radius-gated scan admitted #51 alone (d 3.2, eyetrue guntrue) and the fight killed him BEFORE his two-volley −7.0 as designed, but the re-roll drew a WORSE chain — #55 (0x500008c 0x1a, silent and quietly killed at t37285 on the v1 stream) stood at his (8.7,−23.9) post firing EIGHT unanswered −3.50 volleys (t37352-37542, the leg fights never landed on him at d 14.9) and the death came at t37542 (t38906 → t37542); REMOVED, the tree reverted to the v1 state), (b) the crossbow switch (0x11 c2 dmg 60.0 — one bolt kills Rook's hp 22) — the round-9 design question 'a switch that does not stand Bond' re-tested at the ROOM position: the v1 stream's touch window was quiet 833 ticks around the stands, but the bolts must not be spent on the escorts (the switch must live inside the Rook kill attempts, not before the chase), (c) #58's unanswered −7.0 (the chase's fights never reached him). (2) the second kind-27 trap's trigger — a live check for the main agent (gdbwatch the script that writes the (−4.4,−25.3) blast; v1's fast crossing never triggered it while inside, v2's linger did at t37634): answer the trigger (a fuse off the same door? a proximity volume?) and ONE-SHOT vs CYCLICAL. (3) the round-9 levers 2/3 (the door-face bank drain, the lane-crossing wedge walk_nav_to) stand untried, lower priority. The shipped node-0 scan stays in (stream-neutral); the node-24 no-op scan stays (the pass-break holds it on this stream — a future upstream re-roll could wake it: if it ever FIGHTS, the v2 double-damage is the measured expectation). The pass-break stays (measured +950 ticks, +24.7 health at node 1); the NF_SRV_PROBE and NF_DELTA_PROBE hooks stay env-gated read-only. Whole-binary evidence on the final tree: walkreal_07000014_live 9 passed / 0 failed / 1 ignored (177.51 s), interactables_07000014_live 10 passed / 0 failed (15.95 s) — the sisters and the other walks stay byte-identical."]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
@@ -1343,6 +1478,18 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     // lane's lenient leg) - a shared-stream roll the 00 Agent walk measured [L idles of 60-200
     // ticks at t35800-38200: this one keeps 29.1 health into the wake legs]. 00 Agent only.
     if difficulty >= 3 && !w.tops_up() { w.pause_at = Some((37000, 120)); }
+    // retune-nb-14-5 (the ignore message's lever 1, the door face at 17.5): the re-measure on
+    // this tree [L 2026-11-19] put the death back at t25036 (−60.22,0.73,37.94), 17.5 health,
+    // 34 hits for 100.0, 28 fights — the SAME door-face shape the round-4 ledger recorded (the
+    // SniperAim ENTER merge did not re-roll this stream): the return-fire pick opened on #32
+    // (his shot a miss) while the 0x14 heavy #33 burst from d 10.1 across the opened doorway;
+    // #33's first volley (2.50) landed inside the #32 stand and his second (15.00) landed the
+    // same tick the fight on him finally killed him — Bond died with BOTH shooters dead, one
+    // tick into the race. The fights' switch_on_first_blood law turns the stand to whoever just
+    // drew blood, so #33 eats Bond's rounds from his FIRST volley (~t25006, 24 ticks before the
+    // second) instead of from t25030. d3 real-damage only — the sisters and the tops-up walks
+    // keep the shipped stand law byte-identical.
+    if difficulty >= 3 && !w.tops_up() { w.dmg.switch_on_first_blood = true; }
     if difficulty >= 2 {
         // The Agent grind: the first sister run died at tick 4297 with drone #6 (skin
         // 0x5000093, 28 health, d 1.4) dealing 95.5 in 32 hits while the plain fights gave
@@ -1375,6 +1522,87 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         w.dmg.back_off = Some(4.0);
         w.dmg.finish_fights = true;
     }
+    // retune-nb-14-8 lever 1 probe (the round-7 ignore message's next lever: the SERVER-ROOM
+    // armour (−27.29,0.87,30.96), the census's 4th, untried): a READ-ONLY, env-gated nav dump
+    // (NF_SRV_PROBE) — the pass-point question ("fetch it on the west corridor BEFORE the door
+    // face if a pass point reads clear ... or find a mid-route pass point on the server-room
+    // west corridor [D nav]") answered from the sim's own nav web + the live pickup records
+    // BEFORE any walk leg is spent on it. Byte-identical when unset; `NF_SRV_PROBE=quick`
+    // exits after the dump (probe-only mode, never a real run).
+    if std::env::var_os("NF_SRV_PROBE").is_some() && difficulty >= 3 && !w.tops_up() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[srv-probe] start health {:.1} armour {:.1}", sim.drones.health.health, sim.drones.health.armour);
+        let armour = [-27.29f32, 0.87, 30.96];
+        let touch = [-33.1f32, 0.9, 26.8];
+        for p in &sim.drones.pickups {
+            if p.gone || p.hidden { continue; }
+            let pos = [p.m[3][0], p.m[3][1], p.m[3][2]];
+            if p.kind == 3 || walker::dxz(pos, armour) < 3.0 {
+                eprintln!("[srv-probe] pickup kind {} weapon {:#x} rounds {} at ({:.2},{:.2},{:.2}) d_armour {:.2}",
+                    p.kind, p.weapon, p.rounds, pos[0], pos[1], pos[2], walker::dxz(pos, armour));
+            }
+        }
+        for (label, from) in [
+            ("west-corridor end", [-48.7f32, 0.9, 33.2]),
+            ("mid west corridor", [-56.0, 0.9, 28.0]),
+            ("ascent top", [-30.34, 0.9, 22.93]),
+            ("escape touch", [-33.1, 0.9, 26.8]),
+            ("descent leg-2 spot", [30.09, 0.65, 38.73]),
+        ] {
+            for (how, r) in [
+                ("per-path", walker::nav_route(sim, from, armour)),
+            ] {
+                match r {
+                    Some(pts) => {
+                        eprintln!("[srv-probe] nav {how} {label} -> armour: {} nodes", pts.len());
+                        for q in &pts {
+                            eprintln!("  ({:.2},{:.2},{:.2}) d_touch {:.2}", q[0], q[1], q[2], walker::dxz(*q, touch));
+                        }
+                    }
+                    None => eprintln!("[srv-probe] nav {how} {label} -> armour: NO ROUTE"),
+                }
+            }
+        }
+        // retune-nb-14-9 lever-1 probe (the round-8 ignore message's lever 1: the Kiko-corridor
+        // armour ledge (−41.29,1.53,36.48) approach from the east lane's end (−44.5,0.9,34.0)):
+        // the route topology answered from the sim's own STATIC nav web before any walk leg is
+        // spent on it — (a) lane's end → armour (the take leg), (b) armour → the escape touch
+        // (the post-take continuation), (c) lane's end → touch (the shipped shape, for
+        // comparison). The south swing the v5/v6 deaths rode was the fights' RESUPPLY wander's
+        // route to this armour from west of the lane; from the lane's end the web may stay north.
+        let kiko_armour = [-41.29f32, 1.53, 36.48];
+        for (label, from, dest) in [
+            ("lane-end->kiko-armour", [-44.5f32, 0.9, 34.0], kiko_armour),
+            ("kiko-armour->touch", kiko_armour, [-33.1f32, 0.9, 26.8]),
+            ("lane-end->touch", [-44.5f32, 0.9, 34.0], [-33.1, 0.9, 26.8]),
+        ] {
+            match walker::nav_route(sim, from, dest) {
+                Some(pts) => {
+                    eprintln!("[srv-probe] nav {label} -> ({:.2},{:.2},{:.2}): {} nodes",
+                        dest[0], dest[1], dest[2], pts.len());
+                    for q in &pts {
+                        eprintln!("  ({:.2},{:.2},{:.2})", q[0], q[1], q[2]);
+                    }
+                }
+                None => eprintln!("[srv-probe] nav {label} -> ({:.2},{:.2},{:.2}): NO ROUTE",
+                    dest[0], dest[1], dest[2]),
+            }
+        }
+        for d in &sim.drones.list {
+            if d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 {
+                let dd = walker::dxz(d.pos, armour);
+                if dd < 25.0 {
+                    eprintln!("[srv-probe] guard skin {:#x} weapon {:#x} hp {:.0} at ({:.2},{:.2},{:.2}) d_armour {:.1}",
+                        d.skin, d.weapon, d.health, d.pos[0], d.pos[1], d.pos[2], dd);
+                }
+            }
+        }
+        if std::env::var("NF_SRV_PROBE").as_deref() == Ok("quick") {
+            eprintln!("[srv-probe] quick mode: exiting before the walk");
+            std::process::exit(0);
+        }
+        eprintln!("[srv-probe] done (the walk continues unchanged)");
+    }
     walk_infiltration_to_handback(&mut w);
     walk_the_west_route_to_the_switch_band(&mut w);
     // The E press through the REAL Player_Activate use path (the walk's own input): aim at the
@@ -1382,6 +1610,7 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     // E — the green the_e_use_switch_fires_the_sabotage_cascade_and_opens_the_west_door's press
     // loop, reached on foot instead of teleported [M 0x1a5170:100-108, 0x1b2318:23-33].
     let t_centre = [-60.29973f32, 0.61489844, 38.371338]; // [D placement 399 centre]
+    pickup_census(&w, "the switch band");
     for _ in 0..60 {
         let sim = w.scene.sim.as_ref().unwrap();
         let head = sim.bond.head();
@@ -1446,7 +1675,23 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     // own crossing (the unlock auto-open slid the leaves clear [M 0x1363c8:88-107]), then the
     // loop east (leg 2's route reversed); the SP #407 cut-scene (0x06000848, 950 ticks [D])
     // writes ch 0x4A.
+    pickup_census(&w, "the door's west face");
+    // retune-nb-14-5 (lever 1, the door face at 17.5, second arm): MUTE the return-fire gate for
+    // this leg (d3 real-damage only). The re-measure's death began as a fight that opened
+    // MID-LEG (t24922, the fight on #32) and parked Bond 1.6 u SOUTH of the corridor line
+    // (z 38.0) — from there #32 and #33 are near-collinear (0.74 u lateral), the tap gate
+    // alternately holds and stray-rounds, and the stand on #33 took ~2 dmg/tick while #33's
+    // second volley landed. From the leg's own target on the corridor line (−60.5, 39.57) the
+    // same two posts separate (1.09 u lateral) and both die inside two capped fights. A player
+    // sprints the last metres to his spot before answering. d1/d2 keep the shipped leg
+    // byte-identical (the flag flips only here).
+    let mute = difficulty >= 3 && !w.tops_up();
+    if mute { w.dmg.return_fire = false; }
     w.walk_to(Wp::new(-60.5, 0.05, 39.57).r(1.0), "the west corridor at the door's west face");
+    // The r(1.0) tolerance lets the shipped leg stop 0.96 u short of the line (the measured
+    // arrival (−60.25, 38.61)); the lines to #32/#33 separate only ON the corridor line — park
+    // the last metre exactly.
+    if mute { w.walk_to(Wp::new(-60.5, 0.05, 39.57).r(0.3), "the door-face line park (d3)"); w.dmg.return_fire = true; }
     // retune-nb-14-3: the door's west-face beat. The v12 run measured the door squad firing
     // during walks 1-2 (NOT only after the door-leg scan as in v9/v10): #33 (−50.7, 40.9, hp
     // 10) dealt 7.5 at the walk-1 end and #34 (−51.8, 41.0, hp 20 FULL — the stream re-roll
@@ -1456,11 +1701,10 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     // [M 0x1363c8:88-107]; the v9/v10 dumps measured #32/#33/#34 eyetrue+guntrue from the
     // east of walk-1's endpoint), so the route scan answers them here, before walk 2.
     if difficulty >= 3 && !w.tops_up() {
-        route_scan(&mut w, [-49.2, 1.0, 38.4], "the door's west-face scan");
-    }
+        route_scan_ranked(&mut w, [-49.2, 1.0, 38.4], "the door's west-face scan", true);    }
     w.walk_to(Wp::new(-56.6, 0.4, 39.56).r(1.0), "the corridor east to the door");
     if difficulty >= 3 && !w.tops_up() {
-        route_scan(&mut w, [-49.2, 1.0, 38.4], "the door-leg scan");
+        route_scan_ranked(&mut w, [-49.2, 1.0, 38.4], "the door-leg scan", true);
         // retune-nb-14-3: the SECOND BEAT (the ignore message's lever 2). The v9/v10 scan
         // killed #32 in its first fight and then broke: the fight's back_off backpedal parks
         // Bond at z ~38.88 — INSIDE the sealed jamb band z 38.6..38.9 [D probe] — where the
@@ -1471,39 +1715,131 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         // from, d 4.8-8.2) and scan again: the doorway gap stays covered while #33/#34 die
         // inside the capped fights, then walk 3 crosses.
         w.walk_to(Wp::new(-56.6, 0.4, 39.56).r(1.0), "re-park at the door's west face");
-        route_scan(&mut w, [-49.2, 1.0, 38.4], "the door-leg scan (second beat)");
+        route_scan_ranked(&mut w, [-49.2, 1.0, 38.4], "the door-leg scan (second beat)", true);
     }
     w.walk_to(Wp::new(-51.4, 0.4, 39.56).r(1.0), "through the opened doorway");
     w.walk_to(Wp::new(-49.2, 0.9, 38.4).r(1.0), "the Kiko corridor east");
-    // 00 Agent real health: the Kiko corridor squad (#20/#21/#29/#31, hp 10 each) converges on
-    // the escape-touch legs; answered from here, nearest first, while one stands EXPOSED (an
-    // unexposed 600-tick stand burned the window: t26813), 300 ticks each. Measured: death
-    // t26213 -> t27134 (escape-touch node 4).
-    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
-        for _ in 0..4 {
-            let pick = {
-                let sim = w.scene.sim.as_ref().unwrap();
-                let bp = sim.bond.pos;
-                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
-                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && walker::dxz(d.pos, bp) < 15.0 && (d.pos[1] - bp[1]).abs() < 2.0 })
-                    // retune-nb-14: the GUN-RAY gate (the delta approach scan's own law) — the v1
-                    // run's stand on #20 (eye-visible at d 6.6, muzzle blocked) landed ZERO
-                    // rounds in the 300-tick window while his GL rounds blasted the stand; the
-                    // scan comment's own measured shape ("#36 eye-visible gun-blocked at 5.6 u,
-                    // killed false, health 10 unchanged").
-                    .filter(|&di| walker::DamageLog::visible_gun_rays(sim, di))
-                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp)))
-            };
-            let Some(di) = pick else { break };
-            if !walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), di) { break; }
-            let _ = w.shoot_bounded(di, "the Kiko corridor's guards", 300);
-        }
-    }
+    // retune-nb-14-9 lever 2 (the round-8 ignore message's lever 2, the door-face armour DRAIN
+    // law, judged on this round's own v2 run [L 2026-11-20]): the Kiko corridor's fast taps are
+    // REMOVED. The v2 trace measured them ZERO-KILL and PURE DRAIN: four 300-tick stands at
+    // d 6.5 left #20 hp 10 UNCHANGED every time (the round-5 note's own zero-of-18-taps
+    // measurement, re-confirmed), "out of ammo at +164" — the 0x1 went 15+61 → 0+19 across the
+    // loop, the gun DRY west of the door that the round-8 ledger's lever-3 shape rides — and
+    // the stands themselves sat Bond in the squad's 0x14 GL line, which drained the 35-bank
+    // (the round-8 ledger's 2.5-by-the-corridor) to 0 by the lane. A player at the corridor end
+    // does NOT stand in a GL line he cannot answer — he walks on and lets the lane fight (the
+    // v2 trace's own #20 kill, t27930, killed true) and the pocket approach's fights answer the
+    // squad WITH the clips the taps used to burn. 00 Agent real health only — the d1/d2
+    // streams never ran this block.
     // 00 Agent: the squad (#20/#22/#23/#28/#29/#31/#61) converges on the escape-touch legs. A
     // player holds the corridor end first: 600 ticks answering the nearest visible guard in short
     // stands and stepping away from any live grenade (the 15 door[51] pattern). Measured: death
     // t27134 (node 4) -> t27517 at (-35.17, 26.39), 2 u from the touch (1200 ticks: t26998).
-    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+    // retune-nb-14-7: the round-6 ignore message's lever-1 PROBE PASS (read-only, env-gated
+    // NF_KIKO_PROBE, byte-identical when unset — this branch runs ONCE between two input ticks
+    // and writes nothing to the sim). At the Kiko-hold entry it measures, for a grid of
+    // candidate hold spots, whether the walk's own sight law (the bullet pass — this walk's
+    // GLASS_SIGHT is off, so `exposed_part_gun_rays` traces segment_bullet_scoped) clears to
+    // each alive corridor guard's hit boxes, and with how much world-stop margin, so the
+    // round-7 lever parks on a MEASURED spot instead of a guessed lane.
+    if std::env::var_os("NF_KIKO_PROBE").is_some() {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let data = nf_game::drone::Data {
+            tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+            world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+            skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+            hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+            surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+            ai_points: &sim.ai_points,
+        };
+        let bp = sim.bond.pos;
+        eprintln!("[probe] tick {} bond ({:.2},{:.2},{:.2}) yaw {:.2} health {:.1}", w.total_ticks,
+            bp[0], bp[1], bp[2], sim.bond.yaw, sim.drones.health.health);
+        let squad: Vec<(usize, [f32; 3], u32, f32, u32)> = (0..sim.drones.list.len()).filter(|&i| {
+            let d = &sim.drones.list[i];
+            d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 && dxz(d.pos, bp) < 25.0
+        }).map(|i| { let d = &sim.drones.list[i]; (i, d.pos, d.weapon, d.health, d.skin) }).collect();
+        for &(i, dp, wpn, hp, skin) in &squad {
+            eprintln!("[probe] guard #{i} skin {skin:#x} weapon {wpn:#x} hp {hp:.1} pos ({:.2},{:.2},{:.2}) d {:.2}",
+                dp[0], dp[1], dp[2], dxz(dp, bp));
+        }
+        // The blocker map: every alive guard's chest line from the hold-area spot, with the
+        // world stop's position — the round-5 shape (the rounds die between z 39.2 and 32.6)
+        // mapped onto the geometry.
+        for &(di, dp, _, _, _) in &squad {
+            let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+            let at = [dp[0], dp[1] + 1.2, dp[2]];
+            let stop = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, at);
+            match stop {
+                Some(t) => {
+                    let sx = eye[0] + t * (at[0] - eye[0]);
+                    let sy = eye[1] + t * (at[1] - eye[1]);
+                    let sz = eye[2] + t * (at[2] - eye[2]);
+                    eprintln!("[probe] line bond->#{di} chest stops t {t:.3} at ({sx:.2},{sy:.2},{sz:.2})");
+                }
+                None => eprintln!("[probe] line bond->#{di} chest CLEAR from the hold-area spot"),
+            }
+        }
+        // The candidate grid: the corridor's west lane, the south leg's own lip, the east lane
+        // above the pocket line, and the armour spot's east ground, both standing heights
+        // (the corridor's measured walk y ~1.13 and a crouched 0.13).
+        let eye_h = sim.bond.eye - sim.bond.crouch_drop;
+        for gy in [0.13f32, 1.13f32] {
+            for gx in -53i32..=-41 {
+                for gz in 30i32..=40 {
+                    let (ox, oy, oz) = (gx as f32, gy, gz as f32);
+                    let mut seen: Vec<String> = Vec::new();
+                    for &(di, dp, wpn, hp, _) in &squad {
+                        // face the guard (the walk's own yaw law: forward = (sin, cos)), so the
+                        // gun stand-ins sit where a real stand would carry them.
+                        let yaw = (dp[0] - ox).atan2(dp[2] - oz);
+                        let eye = [ox, oy + eye_h, oz];
+                        let (fy, cy) = (yaw.sin(), yaw.cos());
+                        let right = [cy, 0.0, -fy];
+                        let gun_spots = [eye,
+                            [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+                            [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]];
+                        let mut best: Option<f32> = None;
+                        for b in sim.drones.list[di].hit_boxes(&data) {
+                            let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+                            let mut worst: Option<f32> = None;
+                            for g in gun_spots {
+                                let ray = [c[0] - g[0], c[1] - g[1], c[2] - g[2]];
+                                match nf_game::damage::ray_box(g, ray, &b) {
+                                    Some(t_box) => {
+                                        let m = sim.world.segment_bullet_scoped(sim.world.find_cel(g), g, c)
+                                            .map_or(f32::INFINITY, |tw| tw - t_box);
+                                        if m <= 0.0 { worst = None; break; }
+                                        worst = Some(worst.map_or(m, |w: f32| w.min(m)));
+                                    }
+                                    None => { worst = None; break; }
+                                }
+                            }
+                            if let Some(m) = worst {
+                                if best.map_or(true, |bm: f32| m > bm) { best = Some(m); }
+                            }
+                        }
+                        if let Some(m) = best {
+                            seen.push(format!("#{di}(w {wpn:#x} hp {hp:.0} d {:.1}) margin {m:.2}", dxz(dp, [ox, oy, oz])));
+                        }
+                    }
+                    if !seen.is_empty() {
+                        eprintln!("[probe] spot ({ox:.0},{oy:.2},{oz:.0}): {}", seen.join(" | "));
+                    }
+                }
+            }
+        }
+        eprintln!("[probe] done (the walk continues unchanged)");
+    }
+    // retune-nb-14-7: the corridor-end hold stays for the non-dodge d3 stream. The round_dodge
+    // stream (the 00agent walk) skips it — the round-7 probe measured the corridor-end hold's
+    // exchange DEAD: the gate ray to #20 was NEVER the blocker (the NF_KIKO_PROBE pass at the
+    // hold entry, tick 26224, read #20's boxes exposed with infinite world-stop margin from the
+    // hold spot itself and ~30 grid spots — the round-5 "rounds die on the corridor's own
+    // geometry" shape is a real-round-flight death the sight gate cannot see), so 600 idle
+    // ticks there only spend the clock. The round_dodge stream holds the POCKET line instead
+    // (the block below).
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() && !w.round_dodge {
         kiko_hold(&mut w, 600, "the Kiko hold");
     }
     // With round_dodge on (the Kiko hold now ends at 52.5) the second hold costs more than it
@@ -1524,16 +1860,36 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     // east along the north side instead (the north lane measured 0 #20 hits on the landing-2
     // runs) and rejoins the nav route east of the pocket line.
     if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() && w.round_dodge {
-        // The corridor's north band east of the hold spot floats (the level's hover cells:
-        // grounded=false at (-48.12, 1.14, 38.02) on the first run) — the leg is lenient: the
-        // fights along it kill the pocket #20 from outside his 3.0 u auto-hit band (2.5 vs the
-        // shipped 20.0), a wedge gives the leg up and the nav route carries on with the pocket
-        // empty. (Two other lanes measured WORSE and are recorded so they stay closed: the
-        // two-leg route keeping d >= 4.5 from the pocket let the z 35 stand at x -49 be chewed
-        // by the south-side squad (#29/#62 0x5000093, d 5.8-7.7) — death t32831; the z 33.5
-        // endpoint walked INTO the south squad's line (#23 3 x 2.5 at d 3.6, #29's explosive
-        // -10.0 at d 2.6, #22's last -25.0 at d 3.5) — death t37624. The measured lane is this
-        // one.)
+        // retune-nb-14-7 round 7: the round-6 ignore message's lever 1 is MEASURED DEAD — the
+        // NF_KIKO_PROBE pass at the hold entry (tick 26224) read #20's hit boxes exposed with
+        // infinite world-stop margin from the hold spot itself and ~30 grid spots (the sight
+        // gate was NEVER the blocker), and the lever-1 pocket-line hold died the same way
+        // (t26386, #20's post shot −1.93 at d 3.1, his hp 10 FULL — the fights' rounds did not
+        // land from the lip either) [L both runs 2026-11-20]. The lever-2 Kiko-corridor armour
+        // fetch (−41.29,1.53,36.48) is MEASURED BLOCKED: the north band east of the corridor
+        // mouth wedges at (−46.82,1.06,42.38) (head_bump, segment_to_target 0.099, the
+        // 6000-tick cap) on BOTH this round's attempts [L]. So the round_dodge stream keeps the
+        // shipped lane crossing — the loop-mouth armour banked earlier (the lever-3 fetch at
+        // the descent foot) now covers its bullet bill: the pocket #20's 1.93-5.0 post shots
+        // and #30's 2.5s absorb into the armour instead of the health pool [M Player_HandlePain
+        // 0x1902c8:84-104 — bullet pain (type 0) absorbs into armour first].
+        // retune-nb-14-9 (the round-8 ignore message's lever 3, the dry-gun law, judged on the
+        // probe's own verdict [L 2026-11-20 NF_SRV_PROBE quick run] and on this round's own v1
+        // run [L]): lever 1 (the Kiko-corridor armour take from the lane's end) is MEASURED DEAD
+        // read-only — nav_route gives NO ROUTE from the lane's end (−44.5,0.9,34.0) to the
+        // armour (−41.29,1.53,36.48) AND none from the armour to the touch, so the take is a
+        // blind walk the ledger forbids. The lever-3 law takes its place, and the v1 run fixed
+        // its scope: the fights' LOW gate fires INSIDE the lane crossing leg itself (the
+        // walk_to's mid-leg return-fire gate — the v1 resupply fired at t27840 mid-leg and its
+        // nav walk went south through the pocket convergence zone into the kind-52 world
+        // explosion at (−40.6,0.0,24.2) r 8.0, death t28518, the same tick as the v6 ledger's
+        // shape) — so the no-fetch scope starts at the lane crossing, not after the aimed pass.
+        // With the gun DRY/LOW west of the door, the fetch's only live target IS the
+        // Kiko-corridor armour (in the lane's 0.5 floor band at the corridor's walk y 1.13). A
+        // player whose gun runs dry past the pocket walks on; the wake legs' node-7 scoop
+        // re-arms AFTER the touch. The flag clears after the touch cut-scene, so the wake legs
+        // keep the shipped stream (their fights still fetch under the old law).
+        w.dmg.no_lane_fetch = true;
         w.lenient = true;
         w.walk_to(Wp::new(-44.5, 0.9, 34.0).r(1.2), "the east lane above the pocket line");
         w.lenient = false;
@@ -1558,6 +1914,11 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         assert!(sim.drones.channels.on(0x0c), "the room touch #456 fired 0x0C on contact [D]");
     }
     assert!(ch4a, "the escape cut-scene must write ch 0x4A [D]");
+    // retune-nb-14-9: the touch is banked — the no-fetch law's scope ends here (the cut-scene
+    // holds the sim, no fights run inside it); the wake legs keep the shipped stream.
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() && w.round_dodge {
+        w.dmg.no_lane_fetch = false;
+    }
     // fix-objective-banner: the monitor completes the objective the tick after the channel.
     for _ in 0..2 { w.tick(nf_game::player::Input::default(), false); }
     assert_eq!(w.scene.sim.as_ref().unwrap().drones.mission.states[20][2], 4, "objective 3 completes [M 0x1827d8]");
@@ -1604,6 +1965,15 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
                 sim.gun.weapon, sim.gun.clip, sim.gun.spare,
                 sim.weapons.bullet_contact_damage(sim.gun.weapon as u16), owned);
         }
+        // retune-nb-14-9 v4 MEASURED NET-NEGATIVE (the round-9 ignore message's lever 1, the
+        // loadout law, judged on its own real run [L 2026-11-20]): the 0x11 (the CROSSBOW [M
+        // player.rs:2696], c2 dmg 60.0 in the loadout dump) switch never reached a fight — the
+        // 90-tick real-input switch stand itself re-rolled the deep stream (the wake-branch
+        // fights drew during the stand; the wake start health 41.7 vs the v3 stream's 57.7; the
+        // wake route recomputed, a node-0 resupply fetched Bond west into #30's line, death
+        // t36285 vs the v3 tree's t36527). The switch stand IS the change — removed; the loadout
+        // law needs a switch that does not stand Bond (a switch DURING a leg's own walk), next
+        // round's design question.
         let wake_pts = {
             let sim = w.scene.sim.as_ref().unwrap();
             nav_route(sim, w.cur_pos(), [20.3, 0.9, -23.5])
@@ -1613,6 +1983,50 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
                 for (k, p) in pts.iter().enumerate() {
                     let _ = w.walk_to(Wp::new(p[0], p[1], p[2]).r(1.3),
                         &format!("east to Rook's wake touch #476 node {k}"));
+                    // retune-nb-14-10 lever 1 (the round-9 ignore message's lever 1, the
+                    // wake-legs node-1 ambush law): after node 0's leg (the spot the landing-5
+                    // note itself names — '#43 answered before the round only from node 1'), the
+                    // delta approach's OWN scan shape (route_scan_ranked, up to 4 fights, each a
+                    // bounded 300-tick stand, the STRICT gun-ray gate, the road-blocker rank
+                    // anchored on the remaining route). The round-9 v3 ledger [L 2026-11-20]:
+                    // the walk died INSIDE node 1's leg at (−34.18,1.13,21.37) — #62 (skin
+                    // 0x5000090, 0x14, hp 10 FULL, post (−30.4,1.0,22.1), d 3.85 from the node-1
+                    // point) dealt 28.0 in 11 hits unanswered while the fight machinery
+                    // exchanged with #43/#31 — the shipped stream's fights only start AFTER the
+                    // hit, and node 1's leg opens inside #62's GL line with nobody answered
+                    // before the round. #62's post sits BETWEEN node 0 (−30.84,1.03,24.32, d
+                    // 2.26) and node 1 — the scan at node 0 answers him (and any gun-ray-clear
+                    // blocker) BEFORE node 1's leg, the same law that carries the legs from
+                    // node 21. Zero ticks when no gun-ray-clear candidate stands (the pick
+                    // breaks before any stand), so the sisters and the no-ambush streams stay
+                    // byte-identical; the candidate dump also answers the round-9 live-check
+                    // question (is #62 in gun-ray sight from node 0?) read-only [L this run].
+                    // retune-nb-14-11 (the round-12 lever 1's first step, READ-ONLY, env-gated
+                    // NF_DELTA_PROBE, byte-identical when unset — zero ticks, no draws): at
+                    // node 20's arrival (the PRE-door spot, (−19.88,−21.96), d 2.6 from the
+                    // trap centre but BEFORE the fuse starts) dump every live guard's eye/gun
+                    // visibility — the relocation question (can a scan fought HERE see #51/#41
+                    // through the closed door leaf?) answered from the sim before any walk leg
+                    // is spent. The pre-node-21 scans measured NET NEGATIVE on runs 4-11 (the
+                    // fights' noise re-rolls the later guards' convergence), so a relocation
+                    // only ships on a MEASURED sightline plus a fresh real-run verdict.
+                    if std::env::var_os("NF_DELTA_PROBE").is_some() && k == 20 {
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        let bp = sim.bond.pos;
+                        eprintln!("[delta-probe] node 20 arrival ({:.2},{:.2},{:.2}) health {:.1} clip {} spare {}",
+                            bp[0], bp[1], bp[2], sim.drones.health.health, sim.gun.clip, sim.gun.spare);
+                        for (i, d) in sim.drones.list.iter().enumerate() {
+                            if d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1 {
+                                let dd = walker::dxz(d.pos, bp);
+                                if dd < 25.0 && (d.pos[1] - bp[1]).abs() < 2.0 {
+                                    eprintln!("[delta-probe] cand #{i} skin {:#x} weapon {:#x} hp {:.1} at ({:.2},{:.2},{:.2}) d {:.1} eye{} gun{}",
+                                        d.skin, d.weapon, d.health, d.pos[0], d.pos[1], d.pos[2], dd,
+                                        walker::DamageLog::visible(sim, i), walker::DamageLog::visible_gun_rays(sim, i));
+                                }
+                            }
+                        }
+                    }
+                    if k == 0 { delta_approach_scan(&mut w, k); }
                     // Two stops, the measured killers' answer points: node 2 (#24's post is ON
                     // the route — the shipped first round -7.00 lands at d 1.0 (t40127) with the
                     // walk past node 4; answered from node 2 at 4.2 u BEFORE the round) and
@@ -1622,13 +2036,36 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
                     // untouched: the every-node scan variant measured the SAME -26.56 bill
                     // redistributed (#39, clean on the shipped stream, converged east off his
                     // post and killed the walk) — the fights' windows draw the convergence.
-                    // node 21 only: the delta approach's posts. The pre-node-21 scans measured
-                    // NET NEGATIVE (runs 4-11: the fights' noise re-rolls the later guards'
-                    // convergence — #39, clean on the shipped stream, converged east and killed
-                    // the walk; the node-2 scan's #36 fight lost to his cover and drew his
-                    // convergence kill; the scoop/switch pulled Bond 13 u off-route) — the
-                    // shipped stream's own fights carry the early legs and stay byte-exact.
-                    if k == 21 { delta_approach_scan(&mut w, k); }
+                    // retune-nb-14-12 (lever 1's post-crossing form, the round-11 ignore
+                    // message): the node-21 scan spot is the WORST on the route (0.57 u off the
+                    // trap centre) — the fights' ticks inside the kind-27 fuse zone (~507 ticks
+                    // from the node-21 door E-open) held Bond at node 22 (d 3.93, the radius
+                    // edge) for the #40 fight until the fuse fired [L this round's v0 baseline:
+                    // death t37477 tick-exact vs rounds 10-11, the blast −14.20 at 14.2 health].
+                    // MEASURED on its own real runs [L 2026-11-21]: v1 (the scan moved to node
+                    // 24, the shipped pass-break law intact) — the scan's fights ALL broke at
+                    // +0 (the 240-frame window still held #51's t36915 volley when the scan
+                    // ran, so other_blood was true while the not-yet-shooting post #40 had
+                    // dealt 0.0) — four zero-tick attempts, the scan is a no-op, and the
+                    // FUSE WAS DEFEATED: no world hit anywhere near the zone, the walk reached
+                    // the wake touch at 35.2 health and died at t38906 (t37477 → t38906,
+                    // +1429, the deepest walk of rounds 4-12) to Rook's first 0x6e volley
+                    // (−10.70 at d 9.8 into the 10.7-health chase endgame — the escorts'
+                    // first volleys, −24.5 total, landed while the leg fights answered each
+                    // after). v2 (the same scan with the pass-break HELD for the scan fights,
+                    // the opt-in flag measured and REVERTED) — the fights RAN and were
+                    // DOUBLE-DAMAGING: the in-hand GL (2.5 contact) at d 14-17.4 vs the hp-20
+                    // post #40 burned 300 ticks for −3 hp and the hp-10 #42 fight ran the gun
+                    // DRY, and the shoot_bounded slide dragged Bond 3.9 u east-south of the
+                    // park into a SECOND kind-27 trap — explosion (−4.4,1.7,−25.3) r 4.0
+                    // nominal 50.0 owner −1, route nodes 25/26 sit INSIDE its radius (d 1.94 /
+                    // 2.30) — whose fuse fired at t37634 with Bond at (−5.8,−25.8) d 1.6:
+                    // −45.70, death (t38906 → t37634). The scan STAYS at node 24 on the v1
+                    // law: on THIS stream it is a no-op (the pass-break holds it) whose
+                    // candidates dump is free read-only data; the d1 sister's k==21 scan below
+                    // stays byte-identical (her stream has no fuse-zone fights and no world
+                    // hit near the zone [L the round-11 v4 sister run]).
+                    if k == 24 { delta_approach_scan(&mut w, k); }
                     // real-health-00agent-14-landing-6: after node 7 Bond picks up the dropped
                     // guns of the guards the legs killed (live pickups within 8 u, same floor) —
                     // the wake fights empty the 0x1a otherwise (out of ammo on #37 at node 8 [L]).
@@ -1668,6 +2105,43 @@ fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
         // SAME shipped route node-by-node (one nav_route read from cur_pos, the same r(1.3)
         // legs [L the d3 branch's byte-exact note]) with the delta_approach_scan after node 21;
         // the d3 chain measured the every-node scans NET NEGATIVE, so node 21 only.
+        // retune-nb-14-6 (the merged master re-rolled the d1 stream; the re-measure on THIS tree
+        // [L 2026-11-20, NF_DMG_TRACE run] hit the SAME t36801 death, 41 hits for 100.0, 23
+        // fights — the ledger stands): the fights' answer laws, the round-5 door-face family.
+        // (a) shoot_blockers: the re-measure's fight#28 opened MID-LEG at (−7.9,−23.1) — 16 u
+        //     west of the post — and its stand read `blocked true` for the whole 300-tick cap
+        //     (aim Some, err 0.000 from t60, clip 15 spare 12 UNTOUCHED — zero taps) while #28
+        //     converged 16 u → 4 u dealing −2.80 a round: the line held a live hostile (the
+        //     converging #29 off his (8.7,−21.5) post; corpses and dead drones are skipped by
+        //     the blocker scan). A player whose line a guard walks into shoots THAT guard. d1
+        //     wake legs only — every other walk keeps the hold.
+        // (b) switch_on_first_blood: the round-5 00agent door-face law (the ignore message's
+        //     named candidate) — the fight turns to a NEW shooter's first blood without the
+        //     30-tick cadence and the 3.0 margin.
+        // (c) retune-nb-14-6 run 2 [L 2026-11-20]: run 1 (a+b) was BYTE-IDENTICAL — no
+        //     retarget fired (the blocker is not a live ENABLED hostile) and no first-blood
+        //     switch fired — and the death stayed t36801. The traced baseline [L
+        //     NF_DMG_TRACE/NF_RF_TRACE] names the decisive hole: after the failed #28 response
+        //     (the 300-tick blocked stand + the 27-round determined pass, ONE landing, dry at
+        //     t36205) the leg's return-fire gate could NOT open a fight for ~600 ticks — the
+        //     plain pick returned the cooled #28 first (his 240-frame damage crossed the 15.0
+        //     lethality override) and the response bailed on the cooldown check while #29 (off
+        //     cooldown, hp 10, d 1.6) chewed UNANSWERED — 35.0 of health gone between the
+        //     responses, the guards converged d 16 → 1.1-1.7, and the guard grenade's blast
+        //     (world kind-52 explosion at (13.3,0,−21.2)) finished Bond at 3.8 health (it dealt
+        //     BOTH guards 83 — their ledger hp −81/−73 is the blast, not Bond's rounds).
+        //     hurting_first is the pick-side law for exactly this shape (the 07000008 d3
+        //     death's item 1): a cooled guard no longer silences the response.
+        // (d) fire_through_disabled: the run-1 no-retarget means the first stand's blocker
+        //     fails `enabled` (or team) — a dormant (WAIT_SWITCH) guard parked on the line is
+        //     the ledger's own shape ("the not-yet-enabled guard standing on the line held
+        //     every tap, killed false x5"). The game's own collide drops Enable(0) objects
+        //     [M Collide_PickObj 0x1eae80] so a disabled drone never stops a round; the hold
+        //     must not either.
+        w.dmg.hurting_first = true;
+        w.dmg.fire_through_disabled = true;
+        w.dmg.shoot_blockers = true;
+        w.dmg.switch_on_first_blood = true;
         w.dmg.finish_fights = true;
         let wake_pts = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -2220,8 +2694,36 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 /// node-by-node (one nav_route read from cur_pos, the same r(1.3) legs [L the d3 branch's
 /// byte-exact note]) with the delta_approach_scan after node 21 (the d3 chain's own law) and
 /// the d3 chain's loot pass keyed on the dry gun (clip+spare < 10) instead of a fixed node.
+///
+/// UN-IGNORED AGAIN (retune-nb-14-6): green on the merged master (ccd79b5be + s/retune-nb-14-5)
+/// on 2026-11-20 — walked out in 40206 ticks, stuck 0, falls 0, the exit hold drained and
+/// 07000015 loaded warm, health 40.0 into the Rook kill [L the --nocapture run]. The merged
+/// master re-rolled the wake legs' stream back to the retune-nb-14-3-era death: the traced
+/// re-measure (NF_DMG_TRACE/NF_RF_TRACE, run 0) hit t36801 at (5.05,1.13,−23.31), 41 hits for
+/// 100.0, 23 fights — the SAME ledger the round-5 ignore message recorded. The measured death
+/// shape [L run 0 + run 1]: (a) the #28 response's stand sat `blocked true` its whole 300-tick
+/// cap 16 u west of the post (aim Some, err 0.000 from t60, clip 15 spare 12 untouched — zero
+/// taps — a live-present drone that fails `enabled` held the line: with fire_through_disabled
+/// the stand FIRED and killed #28 in 52 ticks [L the green run's fight#28 at t35382 killed
+/// true] — the game's own collide drops Enable(0) objects [M Collide_PickObj 0x1eae80] so the
+/// dormant guard never stopped a round and must not stop the hold); (b) the response's
+/// determined pass burned clip 15+spare 12 into the corridor geometry (ONE landing, #28
+/// 10 → 2.5, "out of ammo at +572", killed false); (c) THE DECISIVE HOLE: after the failed
+/// response (t36205) the leg's return-fire gate could NOT open a fight for ~600 ticks — the
+/// plain pick returned the cooled #28 first (his 240-frame damage crossed the 15.0 lethality
+/// override) and the response bailed on the cooldown check while #29 (off cooldown, hp 10,
+/// d 1.6) chewed UNANSWERED — 35.0 of health gone between the responses, the guards converged
+/// d 16 → 1.1-1.7, and a guard grenade's world blast (kind-52 explosion at (13.3,0,−21.2))
+/// finished Bond at 3.8 health — it dealt BOTH guards 83 (their ledger hp −81/−73 is that
+/// blast, not Bond's rounds: the fights never once landed on them after the determined pass's
+/// single round). hurting_first is the pick-side law for exactly this shape (the 07000008 d3
+/// death's item 1: a cooled guard no longer silences the response) — the green run's fight#29
+/// opened at node 30 (t35705, killed true) instead of the 600-tick silence. The walk's own
+/// flags sit in the d1 real-damage wake-legs branch only (hurting_first, fire_through_disabled,
+/// shoot_blockers, switch_on_first_blood — the last two measured NO-OPs alone on run 1's
+/// byte-identical death): the earlier legs, the d2 agent walk and the tops-up walks stay
+/// byte-identical.
 #[test]
-#[ignore = "retune-nb-14-3 measured on the batch suite 2026-11-19: Bond dies t36801 at (5.05,1.13,-23.31), drones #28/#29 (weapon 0x1a) at ~4 u land 65.2 of the 100 (41 hits, 23 return-fire fights); re-tune the approach to that pair and un-ignore"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
 }
@@ -2885,7 +3387,44 @@ fn delta_approach_scan(w: &mut Walker, node: usize) {
 /// an arbitrary remaining-route destination for the road-blocker rank: the nearest team-1 guard
 /// whose GUN rays are clear, 0x1a carriers first, then whoever stands on the route line to
 /// `dest`, then the weaker, then the nearer — up to four fights, each a bounded 300-tick stand.
+/// Read-only pickup census (NF_PICKUP_CENSUS, retune-nb-14-4): every live pickup within 45 u of
+/// Bond, its kind (pickup.rs kind:: — 0 WEAPON, 1 AMMO, 2 KEY, 3 ARMOUR, 4 LABEL, 5 MESSAGE,
+/// 6 BOND_BONUS [M Pickup_Handler 0x18e650]), weapon/rounds and distance. No tick, no draw —
+/// measurement only, the run stays byte-identical with and without the env var.
+fn pickup_census(w: &Walker, label: &str) {
+    if std::env::var_os("NF_PICKUP_CENSUS").is_none() { return; }
+    let sim = w.scene.sim.as_ref().unwrap();
+    let bp = sim.bond.pos;
+    let mut n = 0;
+    for p in &sim.drones.pickups {
+        if p.gone || p.hidden { continue; }
+        let pos = [p.m[3][0], p.m[3][1], p.m[3][2]];
+        let d = walker::dxz(pos, bp);
+        if d < 45.0 {
+            eprintln!("[census] {label}: kind {} weapon {:#x} rounds {} at ({:.2},{:.2},{:.2}) d {:.1} state {} from {:?}",
+                p.kind, p.weapon, p.rounds, pos[0], pos[1], pos[2], d, p.state, p.from);
+            n += 1;
+        }
+    }
+    eprintln!("[census] {label}: {n} live pickups within 45 u of ({:.2},{:.2},{:.2}) | bond health {:.1} armour {:.1} gun {:#x} clip {} spare {}",
+        bp[0], bp[1], bp[2],
+        sim.drones.health.health, sim.drones.health.armour, sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+}
+
 fn route_scan(w: &mut Walker, dest: V3, label: &str) {
+    route_scan_ranked(w, dest, label, false);
+}
+
+/// retune-nb-14-5 (the door-face scans only): `door_face_law` swaps the rank's road-blocker and
+/// health keys — the weaker post dies first — and fights with the 8-tick fast taps
+/// (`shoot_bounded_fast`). The door squad's weaker members ARE the killers: #33 (hp 10) and #34
+/// (hp 14) carry the 0x14 whose 00-Agent volleys read 15.00 [L the 2026-11-19 re-measure: two
+/// volleys, 2.50 then 15.00, 30 ticks apart, killed the 17.5 walk], while the hp-20 #32 never
+/// landed a round in any run; and the shipped 16-tick scan cadence measured 44 damage over 50
+/// ticks in the west-face fight — the kill landed in #33's volley window. Every other call site
+/// keeps the shipped rank and cadence (run 12's measured law: the hp-10-first order spent the
+/// clock on the silent strays).
+fn route_scan_ranked(w: &mut Walker, dest: V3, label: &str, door_face_law: bool) {
     let candidates = {
         let sim = w.scene.sim.as_ref().unwrap();
         let bp = sim.bond.pos;
@@ -2915,7 +3454,14 @@ fn route_scan(w: &mut Walker, dest: V3, label: &str) {
                 // muzzle line is blocked, and a fight on such a guard lands ZERO rounds while
                 // burning the 300-tick window (runs 5-7: #36 eye-visible gun-blocked at 5.6 u,
                 // killed false, health 10 unchanged, his convergence killed the walk after).
-                .filter(|&di| walker::DamageLog::visible_gun_rays(sim, di))
+                // retune-nb-14-5 (door_face_law): the EYE-true guards JOIN the candidates —
+                // the round-5 crossing death ate a point-blank 15.57 at d 2.5 from the near
+                // guard (−49.6, 40.9) whom this gate had dropped (his muzzle blocked from the
+                // west park, his eye and his BODY boxes on Bond through the open leaf span) [L
+                // 2026-11-19 run 5]. Bond's rounds follow the VIEW: an eye-true body box is a
+                // target the tight gate can land.
+                .filter(|&di| walker::DamageLog::visible_gun_rays(sim, di)
+                    || (door_face_law && walker::DamageLog::visible(sim, di)))
                 .min_by_key(|&di| {
                     let d = &sim.drones.list[di];
                     // 0x1a carriers first (the measured killers); then the ROAD-BLOCKER rank —
@@ -2931,8 +3477,8 @@ fn route_scan(w: &mut Walker, dest: V3, label: &str) {
                     let px = bp[0] + t * ax - d.pos[0];
                     let pz = bp[2] + t * az - d.pos[2];
                     (if d.weapon == 0x1a { 0u8 } else { 1u8 },
-                        (px * px + pz * pz).to_bits(),
-                        d.health.to_bits(),
+                        if door_face_law { d.health.to_bits() } else { (px * px + pz * pz).to_bits() },
+                        if door_face_law { (px * px + pz * pz).to_bits() } else { d.health.to_bits() },
                         walker::dxz(d.pos, bp).to_bits())
                 })
         };
@@ -2941,7 +3487,7 @@ fn route_scan(w: &mut Walker, dest: V3, label: &str) {
         // ZERO rounds — the gate sprays past the 0.3-wide torso box at that range — and the
         // guard converged into the 3.0 auto-hit band during the failed fight: -23.06). The
         // bounded tight gate killed every scan fight it won (run 4: #36 at 4.0, #43 at 16.8).
-        let killed = w.shoot_bounded(di, &label, 300);
+        let killed = if door_face_law { w.shoot_bounded_fast(di, &label, 300) } else { w.shoot_bounded(di, &label, 300) };
         eprintln!("[014] {label}: drone {di} fight over (killed {killed}, health {:.0})",
             w.scene.sim.as_ref().unwrap().drones.list[di].health);
     }
