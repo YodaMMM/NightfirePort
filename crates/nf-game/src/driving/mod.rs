@@ -43,6 +43,8 @@ pub mod script;
 // The script's effect events (camera, audio, movie, AI, traffic, props) with their parameters.
 pub mod script_effects;
 pub mod physics;
+// The player vehicle on a spline (FUN_00131620 + the path pass FUN_00192498): the MIS01 helicopter.
+pub mod path_drive;
 // Track scene objects: drawn/hidden, in the sim, knocked loose (trackobj.md).
 pub mod props;
 // The POV weapon mode (the MIS01 sniper phase): weapon table, loadout, gunner, mode flag.

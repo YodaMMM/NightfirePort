@@ -87,8 +87,9 @@ trigger/rule reference resolves; four `EPlaySystemAnim` strings are absent from 
    transition, video (no subtitle file), spline end, mode off and reset [D]; which route a
    normal run takes is not proven.
 5. **`ECustomTransition("paris")`** `FUN_0014b020` [M]: the player car swaps through its vtable
-   +0x294 / +0x8c (not decomposed — the swap target is the `.atr` secondary, the Vanquish
-   [S]); the MSet copy loses every POV weapon (enabled 0x17..0x1f cleared), then weapon 0
+   +0x294 (`FUN_001932d0`: car+0x450, the `.atr` `SECONDARY_TYPE`, the Vanquish) and +0x8c
+   (`FUN_00185e50`: the car rebuilt in place under that name) [M, drive-player-vehicles.md];
+   the MSet copy loses every POV weapon (enabled 0x17..0x1f cleared), then weapon 0
    ("Gun", stem `mntmach`) gets 500 rounds — or, when `DAT_0032e690` is set, the Missile count
    is zeroed — and `FUN_00205498` re-registers from the copy (inventory reset first).
    `DAT_0032e690` is set only on `paris_mis01` with PTP+0x618 == 1, +0x984 == 0, +0xa18 == 0
@@ -272,8 +273,10 @@ trigger 712 and pick other branches).
   port runs a list in its stored order [S]. The `el`/`sr` references → runtime pointers loader
   is not traced (the references resolve against the `Map ` window's instance records [D]).
 - Not ported elsewhere: the pursuer AI commands (`EAICommand` → `AICo`), the movie, the
-  vehicle swap itself, the zoom-fraction blend (+0x160), the scope object's own guards. The
-  port's driving view (`crates/nf-view/src/driving.rs`) still starts in the Vanquish.
+  rebuild of the car under the new name (`FUN_00185e50`; the choice itself is
+  `nf_formats::drive_vehicle`), the zoom-fraction blend (+0x160), the scope object's own
+  guards. The port's driving view (`crates/nf-view/src/driving.rs`) still starts in the
+  Vanquish.
 - Live checks that would settle the open parts: break on `FUN_0022c890` during the flight and
   list the triggers (expect §6's order; 712 tells whether stage 19's rules disabled it);
   read the helicopter body's +0x6d and +0x7c; break on `FUN_0020a940` returning 1 for rule 34
