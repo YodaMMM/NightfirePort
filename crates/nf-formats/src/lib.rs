@@ -17,6 +17,7 @@ pub mod geoprim;
 pub mod disc;
 pub mod drivefx;
 pub mod drive_script;
+pub mod driveai;
 pub mod drone;
 pub mod easnd;
 pub mod ee;
