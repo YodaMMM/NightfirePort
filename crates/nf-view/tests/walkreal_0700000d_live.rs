@@ -1243,6 +1243,30 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // low opening (the 300-600-tick fights landed nothing) — but from the bay-enter stand
     // (194, 10.6, −282) Bond is in the ROOM with it: a horizontal in-room ray at d ~17-21,
     // no wall between. Its ride hit (16) and its bay-phase fire both come off the table.
+    // stream-batch-1121 (Agent real damage): the annex floor's own body armour — the placed
+    // kind-3 pickup at (192.82, 10.79, -272.03), 8.5 u north of the annex landing [D the
+    // placed pickups, every 0xF0 placement]. The Agent walk passed it by and lost the yard
+    // landing burst with no armour (death t20311) [L the 2026-11-21 runs].
+    if real_damage && difficulty == 2 {
+        let a0 = w.scene.sim.as_ref().unwrap().drones.health.armour;
+        let t0 = w.total_ticks;
+        // The touch is the radius + 1.1 sphere [M Pickup_Update 0x18e148:203-214]: a 1.3 arrival
+        // takes it (a 0.2 arrival wedged 1.09 off the spot for the whole 6000-tick cap and still
+        // took it). The way out is south-west to the control corner: the direct lines back to
+        // the annex landing and to the bay enter wedge on the wall at z ~-275.5 (191.8, -275.2)
+        // [L the 2026-11-21 runs]; the bay enter is walked from the corner.
+        w.lenient = true;
+        let _ = w.try_walk_to(Wp::new(192.82, 10.79, -272.03).r(1.3), "the annex armour");
+        for _ in 0..20 {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+            w.total_ticks += 1;
+        }
+        let _ = w.try_walk_to(Wp::new(191.6, 10.6, -275.0).r(1.0), "the annex armour south side");
+        let _ = w.try_walk_to(Wp::new(189.5, 10.6, -285.5).r(1.2), "the control corner from the armour");
+        w.lenient = false;
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0d] the annex armour: {} ticks armour {a0:.1} -> {:.1} health {:.1} at {:?}", w.total_ticks - t0, sim.drones.health.armour, sim.drones.health.health, sim.bond.pos);
+    }
     let _ = w.try_walk_to(Wp::new(194.0, 10.6, -282.0).r(1.4), "bay enter");
     let bay18_killed = kill_guard_at_present(&mut w, [210.0, -288.8], [8.0, 5.0], "the bay guard #18 (from inside the bay)", 400);
     eprintln!("[0d] the in-bay #18 kill: landed {} pool {:.1}", bay18_killed, w.scene.sim.as_ref().unwrap().drones.health.health);
@@ -2389,7 +2413,9 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 /// on the two d2 snipers from the strip (the 0c yard-stand law — the zero-spread aimed act
 /// [M Bullet_init 0x12c5a0:139-170] reaches d 55+ with the still-gate tap law).
 #[test]
-#[ignore = "stream-batch-1121 (impacts heard + the stand-reload roll + the stand idles + the NinjaStand start): Bond dies t20311 at (137.99,4.64,-296.08), the yard landing after the gantry ride, to the yard pack's 0x12 chips (#3 6.6 u, #5 6.1 u, #6, #0) [L 2026-11-21 run]. Levers tried and dead: 12 single stops 1000-17000 x 60/200, 40 random 1-3-stop runs to t19000, the ride-window grids 17600-19300 x 5/15/30/60 (45 runs, best death t21002), 24 random 1-2-stop runs 12000-19400 [L the sweeps]; the Operative sister's 17200/15 ride re-time does not carry over. Next: the yard landing burst (the sweep's first-kill race); re-tune and un-ignore"]
+// Stream batch 1121: Bond died at the yard landing (t20311) with no armour. GREEN with the
+// annex floor's own body armour (192.82, 10.79, -272.03) taken after the annex drop [L the
+// 2026-11-21 run: armour 0 -> 50 at 54.8 health, seven yard kills, the walk completes].
 fn walk_arrival_to_the_c5_door_real_damage_agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true));
 }

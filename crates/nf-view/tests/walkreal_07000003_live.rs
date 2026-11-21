@@ -147,14 +147,29 @@ fn scoop_drops_03(w: &mut Walker, label: &str, r: f32) {
         let t = {
             let sim = w.scene.sim.as_ref().unwrap();
             let bp = sim.bond.pos;
+            // stream-batch-1121 (00 Agent): 1.2, not 1.5 — #8's 0x12 drop on the building's
+            // ledge (14.41, 8.09, -28.13) passed the 1.5 band from the lane floor; the scoop
+            // climbed Bond up there and every moat leg after it wedged on the one-way door
+            // (14.0, -30.3) [L the 2026-11-21 runs]. The ditch drops sit 1.1 below the lane.
+            let band = if sim.drones.difficulty >= 3 { 1.2 } else { 1.5 };
             sim.drones.pickups.iter().filter(|p| !p.gone)
-                .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.5)
+                .filter(|p| (p.m[3][1] - bp[1]).abs() < band)
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 .filter(|t| !skip.iter().any(|s| walker::dxz(*s, *t) < 0.6))
                 .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
                 .filter(|t| walker::dxz(*t, bp) < r)
         };
         let Some(t) = t else { break };
+        // stream-batch-1121 (00 Agent): only a drop with a straight walkable line. #11's drops
+        // east of the lane wall (14.3, 5.35, -28.7) are reached only round through the lane
+        // doors, and the way back is the one-way door (14.0, -30.3): five moat legs wedged on
+        // it for 3000-tick caps [L the 2026-11-21 runs].
+        let straight = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.difficulty < 3
+                || sim.nav.move_test(&sim.world, sim.bond.pos, t, false, false).0 == 1
+        };
+        if !straight { skip.push(t); continue; }
         w.lenient = true;
         w.walk_nav_to(t, &format!("{label} scoop"), 0.35);
         // The direct finisher only when the nav already brought Bond close: walk_to's own
@@ -805,6 +820,16 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
 
     // The route legs up to the servants' ground (the guard-enable plates 0x21/0x23/0x24/0x25 fire
     // under Bond's feet as he crosses them [D the TouchOnce census]).
+    // stream-batch-1121 (00 Agent): the spawn lawn's own body armour (kind 3, 50, at
+    // (-10.92, 5.34, -38.05) [D the placed pickups], 15 u south of the spawn) before the route.
+    // The walk reached the lane mouth with none and the mouth stands' 61.8 left 38.2 for the
+    // lane (death t10165-t14221 to #10) [L the 2026-11-21 runs].
+    if difficulty >= 3 {
+        w.walk_nav_to([-10.92, 5.34, -38.05], "the spawn lawn armour", 1.2);
+        w.wait(10);
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[03] the spawn lawn armour: armour {:.1} health {:.1} at t{}", sim.drones.health.armour, sim.drones.health.health, w.total_ticks);
+    }
     w.walk_nav_to([0.0f32, 5.9, -20.0], "courtyard east", 1.6);
     // Into the mid courtyard through the lane doors on their centre line (`cross_lane_doors`).
     lane_doors_south(&mut w, "the lane doors south", false);
@@ -1018,6 +1043,15 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
         ("the west lane", [1.0, 5.9, -33.0]),
         ("gate plate lawn", [11.0, 5.9, -35.0]),
     ] {
+        if difficulty >= 3 && name == "the lane south" {
+            // stream-batch-1121: the lane-north loot can end east at (19.8, -21.9); the lane
+            // south nav from there runs down x ~14 to the one-way door (14.0, -30.3) and the
+            // moat legs wedged on it for 3000-tick caps [L the 2026-11-21 runs]. Back on the
+            // lane node first: the leg walks down the lane (x ~10.4) as it was laid out.
+            w.lenient = true;
+            let _ = w.walk_to(Wp { at: [10.65, 5.81, -21.62], act: Act::None, arrive: 1.0 }, "back to the lane node");
+            w.lenient = false;
+        }
         if difficulty >= 3 {
             // Run 10: the plain clear_near's hip-cone taps take 3-5 rounds a d3 guard and the
             // moat-ditch machine gun #12 (skin 0x500003a, weapon 0xe, (4.2,-26.7)) survived
@@ -1312,6 +1346,16 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                         eprintln!("[03-ammo] after the #7 stand: gun {:#x} clip {} spare {} hp {:.1}",
                             sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
                     }
+                    // stream-batch-1121: the window sniper #6 (0x1e, (26.0, 9.8, 0.4), 8.5 u)
+                    // lands on the #7 stand and then on the saddle nav (34.6 + 48.0 + 17.4,
+                    // death t52885 at the saddle) [L the 2026-11-21 run]. Answer him from the
+                    // same spot, sniper first, before the saddle walk.
+                    {
+                        clear_exposed_nearest_03(&mut w, "the window sniper from the #7 spot (si-1)", 14.0, 2, 0, true);
+                        let sim = w.scene.sim.as_ref().unwrap();
+                        eprintln!("[03-ammo] after the #6 stand: gun {:#x} clip {} spare {} hp {:.1}",
+                            sim.gun.weapon, sim.gun.clip, sim.gun.spare, sim.drones.health.health);
+                    }
                 }
             }
             w.dmg.return_fire = true;
@@ -1413,7 +1457,13 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
                         // interleave's post-stand gap in run 39 instead let #4/#3 pour 41.2
                         // through the doorway while Bond levelled the aim). The loot + the
                         // scoop after the sweep re-arm from the trio's own drops.
-                        clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1)", 40.0, 4, 900, true);
+                        // stream-batch-1121: #4 and the captain #3 (0xe, 24 hp) stand behind #5
+                        // and the 4-pick sweep spent its last picks on 10-tick waits (each
+                        // empty pick waits 10); the loot walk then met them (100 -> 2.4, death
+                        // t9797) [L the 2026-11-21 runs]. 100 picks let the sweep's own
+                        // 900-tick wait budget bound it (40 died later at the through-gate).
+                        let trio_picks: usize = 100;
+                        clear_exposed_nearest_03(&mut w, "the 0x23 trio wake (si-1)", 40.0, trio_picks, 900, true);
                         w.lenient = true;
                         loot_the_drops_03(&mut w, "the 0x23 trio wake (si-1)");
                         scoop_drops_03(&mut w, "the 0x23 trio wake drops", 8.0);
@@ -2610,7 +2660,10 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 ///   E-presses, head_bump, STUCK) — a seat no earlier d3 run reached; the walk back out to
 ///   the mouth (the d2 stream's proven seat) precedes the nav [L run v2.2 -> v2.3 green].
 #[test]
-#[ignore = "stream-batch-1121 (impacts heard + the stand-reload roll + the stand idles + the NinjaStand start): Bond dies t10165 at (15.54,6.51,-19.66) at the lane mouth, drone #10 (0x12, 1.5 u) 40.0 in 8 hits after #11 36.0 in 3 [L 2026-11-21 run]; master completes at t153780 with 13.6. Levers tried and dead: 12 single stops 1000-9500 x 60/200 (best: 5000/60 lives to t112723 at 4 hp, the lane mouth took 96 by t9314), 18 stops 7000-8400 x 5/15/40, 34 random 1-3-stop runs 2000-9800 [L the sweeps]. Next: a lane-mouth stand that answers #10 before the crossing; re-tune and un-ignore"]
+// Stream batch 1121: Bond died at the lane mouth (t10165, 38.2 health after the mouth
+// stands). GREEN with the spawn lawn armour taken first, the window sniper #6 answered from
+// the #7 spot, the trio sweep's picks raised, the lane south leg walked from the lane node
+// and the 00 Agent scoops kept to straight, same-floor drops [L the 2026-11-21 run].
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
 }
