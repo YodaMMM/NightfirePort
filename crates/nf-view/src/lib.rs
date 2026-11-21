@@ -4188,7 +4188,9 @@ impl App {
         let game_complete = self.fe.as_ref().map_or(self.profile_session.saved_progress(), |fe| fe.saved_progress()).is_some_and(|p| p.game_complete);
         let job = async_load::Job::spawn(move || {
             if let Some(viv) = driving::driving_viv_for_level(next) {
-                driving::load_driving_scene(&iso, viv)
+                // The pick rides the DRIVING handover too (PTP+0x984 ← GameState+0x28
+                // [M Boot_GetPTPData 0x1c8198:13-21]).
+                driving::load_driving_scene_at(&iso, viv, difficulty)
                     .map(|(sc, drv)| (sc, Some(drv)))
                     .map_err(|e| e.to_string())
             } else if let Some(st) = mp_settings {
@@ -7642,7 +7644,12 @@ pub fn run() -> Result<()> {
     if let Some(viv) = u32::from_str_radix(level.trim_end_matches(".bin"), 16).ok().and_then(driving::driving_viv_for_level) {
         let out = args.iter().position(|a| a == "--shot").and_then(|i| args.get(i + 1))
             .context("a driving mission starts from the mission list; headless needs --shot <out.png>")?;
-        let (mut scene, mut drv) = driving::load_driving_scene(&iso, viv)?;
+        // `--difficulty N` (the GameState+0x28 pick, 1..4) as on foot; the boot default 2 otherwise.
+        let game_difficulty: u32 = match args.iter().position(|a| a == "--difficulty") {
+            Some(i) => args.get(i + 1).context("--difficulty needs N")?.parse()?,
+            None => 2,
+        };
+        let (mut scene, mut drv) = driving::load_driving_scene_at(&iso, viv, game_difficulty)?;
         let ticks: u32 = args.iter().position(|a| a == "--frame").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0) as u32;
         // Render aid: `--drive-throttle T` holds the throttle at T for the run (the hostiles a
         // mission releases on the road ahead need the car to move).

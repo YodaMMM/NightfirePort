@@ -118,6 +118,40 @@ pub fn key_for_index(index: u8) -> &'static str {
     }
 }
 
+/// The key whose archive suffix is `viv` (`MIS4` → `snow2a_mis4`) [D DRIVING_KEYS; M 0x175a28].
+pub fn key_for_viv(viv: &str) -> Option<&'static str> {
+    let viv = viv.trim_end_matches(".VIV").trim_end_matches(".viv");
+    DRIVING_KEYS.iter().copied().find(|k| key_archive_suffix(k).eq_ignore_ascii_case(viv))
+}
+
+/// The raw difficulty word ACTION hands DRIVING at PTP+0x984 (0x100984 in DRIVING's map):
+/// `DAT_0031ca14` = 1 when `Mission_BaseMapHCode()` is 0x9000001 and the mini-mission flag
+/// `DAT_002e1b10` is set (`Menu_RunMiniMission` 0x1ffb90:18 / `Menu_WillRunMiniMission`
+/// 0x202450:18 write it), else `GameState._40_4_` (GameState+0x28, the difficulty page's pick
+/// 1..4) [M Boot_GetPTPData 0x1c8198:13-21; `DAT_0031c1d4` = +0x144 is the same value].
+pub fn ptp_difficulty_word(base_map: u32, mini_mission: bool, game_state_40: u32) -> u32 {
+    if base_map == 0x0900_0001 && mini_mission { 1 } else { game_state_40 }
+}
+
+/// DRIVING main's in-place remap of the PTP word 0x100984 before the session runs: 1 → 0,
+/// 2 → 1, 3 / 4 → 2, anything else unchanged; the raw word is kept in 0x100624 and written back
+/// after the session [M DRIVING 0x174bf0:70-81, 304-306]. Every DRIVING reader during play sees
+/// the mapped value: the mission object copies it to +0x3b8 at construction [M 0x204de8:67-69],
+/// and +0x3b8 feeds the MSet speed / health factors [M 0x208468, 0x2084a8], `SRuleDifficulty`
+/// [M 0x20aac0], the AIEl difficulty filter [M 0x12cb08:113], the player's start health
+/// percents [M 0x206ec0:63-64], the AI aim wobble [M 0x14ca60:429-437], and the snow2a_mis4
+/// `paris_hench` swap reads the word itself after the remap [M 0x12b8b0:98].
+/// The only DRIVING writers of 0x100984 are 0x174bf0's map and restore [M: no other DRIVING
+/// function names 0x100984].
+pub fn driving_difficulty(word: u32) -> u32 {
+    match word as i32 {
+        1 => 0,
+        2 => 1,
+        3 | 4 => 2,
+        _ => word,
+    }
+}
+
 /// The archive suffix DRIVING opens: everything after the last `_` [M 0x175a28 `FUN_00175a28`].
 pub fn key_archive_suffix(key: &str) -> &str {
     match key.rfind('_') {
@@ -749,5 +783,33 @@ mod tests {
             assert_eq!(mission.status(), 6);
             assert_eq!(ret.next_key, DRIVING_KEYS[(i - 1) as usize]);
         }
+    }
+
+    #[test]
+    fn driving_difficulty_maps_the_word_like_driving_main() {
+        // [M DRIVING 0x174bf0:70-81]: 1 -> 0, 2 -> 1, 3 / 4 -> 2, else unchanged.
+        let got: Vec<u32> = (0..=6).map(driving_difficulty).collect();
+        assert_eq!(got, vec![0, 0, 1, 2, 2, 5, 6]);
+    }
+
+    #[test]
+    fn ptp_difficulty_word_is_the_pick_except_the_paris_mini_mission() {
+        // [M Boot_GetPTPData 0x1c8198:13-21].
+        for d in 1..=4 {
+            assert_eq!(ptp_difficulty_word(0x0900_0006, false, d), d);
+            assert_eq!(ptp_difficulty_word(0x0900_0006, true, d), d, "the flag only matters on 0x9000001");
+            assert_eq!(ptp_difficulty_word(0x0900_0001, false, d), d);
+            assert_eq!(ptp_difficulty_word(0x0900_0001, true, d), 1);
+        }
+    }
+
+    #[test]
+    fn key_for_viv_follows_the_archive_suffix() {
+        assert_eq!(key_for_viv("MIS4"), Some("snow2a_mis4"));
+        assert_eq!(key_for_viv("MIS3"), Some("snow1a_mis3"));
+        assert_eq!(key_for_viv("RACE"), Some("snow2a_race"));
+        assert_eq!(key_for_viv("MIS13C"), Some("junglec_mis13c"));
+        assert_eq!(key_for_viv("MIS01.VIV"), Some("paris_mis01"));
+        assert_eq!(key_for_viv("MISC"), None);
     }
 }
