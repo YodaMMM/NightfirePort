@@ -547,7 +547,19 @@ fn load_car_into_scene(
     let strips: Vec<nf_formats::crp_mesh::MeshStrip> = match nf_formats::carmesh::car_mesh(&crp_bytes) {
         Ok(car) => {
             let mut v = Vec::new();
-            for part in car.drawn(None).into_iter().filter(|part| !part.hidden()) {
+            // The list the game draws in normal play (driver kind 0 = the player's car, others 2+:
+            // both pick vd#1 outside the dashboard camera and AutoDrive) and each part at its
+            // run-time matrix at rest (nf_formats::carpose; docs/formats/car-model.md §11) [M].
+            // The wheels' spin/steer/spring pose is baked at rest here [S: per-tick part pose not drawn].
+            let state = nf_formats::carpose::DrawState { owner: nf_formats::carpose::DrawOwner::Vehicle { driver_kind: 0 }, interior_view: false, auto_drive: false };
+            let pose = nf_formats::carpose::CarPose::rest(&car);
+            for part in car.list_for(&state).into_iter().filter(|part| !part.hidden()) {
+                let m = match nf_formats::carpose::part_matrix(part, &pose) {
+                    nf_formats::carpose::PartMatrix::Drawn(m) => m,
+                    nf_formats::carpose::PartMatrix::NotDrawn => continue,
+                    nf_formats::carpose::PartMatrix::Unported(_) => nf_formats::carpose::own_matrix(part),
+                };
+                let place = |q: [f32; 3]| [0, 1, 2].map(|k| q[0] * m[0][k] + q[1] * m[1][k] + q[2] * m[2][k] + m[3][k]);
                 for st in &part.strips {
                     let rgba: Vec<[u8; 4]> = match (light, entry, st.lighting) {
                         (Some((env, _)), Some(e), Some(class)) if st.normals.len() == st.positions.len() => {
@@ -563,7 +575,7 @@ fn load_car_into_scene(
                     };
                     strip_rgba.push(rgba);
                     v.push(nf_formats::crp_mesh::MeshStrip {
-                        positions: st.positions.iter().map(|&q| part.apply(q)).collect(),
+                        positions: st.positions.iter().map(|&q| place(q)).collect(),
                         uvs: st.uvs.clone(),
                         colors: st.normals.iter().map(|n| [(n[0] * 127.0) as i8 as u8, (n[1] * 127.0) as i8 as u8, (n[2] * 127.0) as i8 as u8]).collect(),
                         texture: st.texture.clone(),
