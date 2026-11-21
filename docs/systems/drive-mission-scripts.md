@@ -1,6 +1,8 @@
 # The driving missions' script data — `Rule` / `MSet` / `Trgr` and the mission state machine
 
-Status: **first working port** (2026-10-16). The mission logic of
+Status: **first working port** (2026-10-16); the rules themselves are ported in
+[driving-missions.md](driving-missions.md) (2026-11-21), which supersedes §2's group reading
+(entry `+0x08` is a stage, `+0x0c` the rule's action list) and §5. The mission logic of
 the driving levels (MIS01.VIV … RACE.VIV) lives in the track `.crp` inside each mission archive:
 the `Map ` pool record's `Rule`/`MSet`/`Trgr` children. The headless state machine is
 `crates/nf-game/src/driving/mission.rs`; the container walk is `nf_formats::crp`. Evidence tags:
@@ -55,13 +57,17 @@ The type names are the GCC typeinfo strings at 0x397c28.. [D]; sizes + ctors fro
 | 4 | SRuleHealth | 0x28 | 4 | |
 | 5 | SRulePIP | 0x20 | 0 | |
 | 6 | SRuleProg | 0x18 | 41 | |
-| 7 | SRuleProperty | 0x28 | 0 | |
-| 8 | SRuleRange | 0x28 | 0 | |
-| 9 | SRuleSpeed | 0x24 | 28 | a mission-timer crossing, not a speed: timer / direction / threshold (`FUN_0020a858`, evaluator `FUN_0020a940`; driving-mis01-opening.md §8) |
-| 10 | SRuleTimer | 0x24 | 14 | |
-| 11 | SRuleDifficulty | 0x1c | 0 | |
+| 7 | SRuleRange | 0x28 | 0 | |
+| 8 | SRuleSpeed | 0x28 | 0 | |
+| 9 | SRuleTimer | 0x24 | 28 | a mission-timer crossing: timer / direction / threshold (`FUN_0020a858`, evaluator `FUN_0020a940`; driving-mis01-opening.md §8) |
+| 10 | SRuleProperty | 0x24 | 14 | |
+| 11 | SRuleCollision | 0x1c | 0 | |
 | 12 | SRulePlayerDir | 0x24 | 0 | |
-| 13 | SRuleCollision | 0x18 | 5 | |
+| 13 | SRuleDifficulty | 0x18 | 5 | |
+
+(Corrected 2026-11-21: types 7..13 were named in typeinfo-string order; the names above follow
+each switch arm's descriptor typeinfo [M]. The game's rule semantics, stages and action lists
+are in [driving-missions.md](driving-missions.md).)
 | 14 | SRuleProgCounter | 0x20 | 2 | |
 
 The type descriptors (obj+0x10) carry three function pointers each at +0xc/+0x14/+0x1c [D
