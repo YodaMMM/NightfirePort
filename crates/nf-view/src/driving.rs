@@ -188,7 +188,12 @@ impl DrivingState {
             steer: steer.clamp(-1.0, 1.0),
             handbrake,
         };
+        let y_before = self.car.pos[1];
         self.car.step(&input, &self.world, &self.rigid, DT);
+        // `Car::step` floors the height at 0 (its flat-ground model); on tracks that lie below 0
+        // (MIS13C's river at y ~-587) that snaps the car up out of the world, out of the ground
+        // follow's -12..+3 window. Keep the height the car had; the collision follow below sets it.
+        if y_before < 0.0 && self.car.pos[1] == 0.0 { self.car.pos[1] = y_before; }
 
         // The boundary sheets (DRIVING.ELF 0x331a60) are the SUB_PHYSICS pass (FUN_00190f88 via
         // FUN_00188200 0x188bf8), not the land car's: the vanquish's .atr sets no SUB_PHYSICS, so
