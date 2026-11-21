@@ -2186,6 +2186,13 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         if door_stall.is_err() {
             eprintln!("[01] the hall doorway walk stalled on the frozen leaf (state 0x8 pos01 0.80) — Bond holds the release band from here (the route node (5.9,14.1) is 1.9 u off)");
         }
+        // A player who spent the hall fight's rounds picks up the hall guards' dropped guns before
+        // the west corridor (Pickup_Create pushes a drop out of the wall it lands against, so the
+        // drops lie where the hall fight left them). Only when the pool is low.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if (sim.gun.clip + sim.gun.spare) < 15 { let _ = w.resupply("post-hall ammo"); }
+        }
         // gas-rng-draws: the door fight's survivors cower (COMBAT_NO_SIGHT 0x5c [M drone.rs])
         // 2-5 u north of the doorway — the d1 stream left #14 (5.9, 13.7) and #15 (2.9, 13.5),
         // both 12 hp — and a LIVE actor in the leaf's reach keeps the door's blocked scan
