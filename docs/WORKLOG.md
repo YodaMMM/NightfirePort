@@ -80,3 +80,21 @@ walkreal_07000001_live.rs resolved keeping master's walks-1121 un-ignored state 
 00-agent walk completes at 8.4 health, t63360 per the walks-1121 note) with the round-3 ledger
 kept verbatim as history. Next: read retune-nb-01-3.md, verify the walk's current state on real
 runs (walkreal_07000001_live + interactables_07000001_live), then levers if still red.
+
+## retune-nb-01-4 (2026-11-21, end of round)
+
+The 01 spawn-to-exit-with-the-contact 00 Agent real-damage walk is GREEN again, with both sisters
+green on the same tree. The merge of s/retune-nb-01-3 (not on master) grafted the round-3 lever
+machinery — measured on the PRE-1121 route — onto master's walks-1121 rework: the merged-tree
+whole run went 5/3 (d3 died at t4844 in the meet walk to #16 SMG at 2.3 u for 46.6, d2 wedged the
+plate nav at the 3000-tick cap, d1's escort resupply crawled 24 legs to (-31.0,5.3,15.5) away from
+the contact — his corpse, the escort-fail restart, the plate assert at t38326) [L the merged-tree
+run]. The walk body is master's walks-1121 one again (the round-3 ledger kept verbatim as history
+in the test doc; the walker.rs opt-in fields stay, default None, unused by the 01 walk now).
+Whole-binary runs on the final tree: walkreal_07000001_live 8 passed / 0 failed (183.5 s),
+interactables_07000001_live 10 passed / 0 failed (25.2 s), walkreal_07000002_live 5 passed /
+0 failed (117.7 s — the rule-7 spot check for the walker.rs merge delta; the delta is three
+opt-in fields, default None, byte-identical by construction). The fast suite cannot build on this
+10 GB sandbox (1159 nf-view + 227 other test binaries; the build passed 6 GB at the halfway mark
+and filled the disk — the same limitation round 3 reported); the required binaries were run whole
+by hand instead. Report: docs/reports/retune-nb-01-4.md.
