@@ -106,6 +106,9 @@ impl Machine {
     pub fn set_gpr(&mut self, i: usize, v: u32) { self.r[i] = v as u128; }
     /// General register (low 32 bits), e.g. v0 = 2.
     pub fn gpr(&self, i: usize) -> u32 { self.r[i] as u32 }
+    /// Adds a memory region at `va` holding `bytes` (data a function reads, e.g. a file the game
+    /// would have loaded on the heap). It must not overlap the image.
+    pub fn map(&mut self, va: u32, bytes: Vec<u8>) { self.regions.push((va, bytes)); }
     /// Writes bytes into the image.
     pub fn poke(&mut self, a: u32, bytes: &[u8]) -> Result<()> { self.write(a, bytes) }
 
@@ -234,6 +237,12 @@ impl Machine {
             0x06 | 0x07 => {
                 let v = self.r[rs] as u64 as i64;
                 if (v <= 0) == (op == 6) { return Ok(Some(pc.wrapping_add(4).wrapping_add(simm << 2))); }
+            }
+            // blezl / bgtzl: not taken skips the delay slot.
+            0x16 | 0x17 => {
+                let v = self.r[rs] as u64 as i64;
+                if (v <= 0) == (op == 0x16) { return Ok(Some(pc.wrapping_add(4).wrapping_add(simm << 2))); }
+                self.skip_next = true;
             }
             // beql / bnel: not taken skips the delay slot.
             0x14 | 0x15 => {

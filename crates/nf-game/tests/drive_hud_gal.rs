@@ -4,17 +4,21 @@
 
 use nf_formats::gal::{Gal, GB};
 use nf_formats::iso9660::IsoImage;
-use nf_game::driving_hud_draw::{DriveHudDraw, HudDraw, HudInput, HudLayout};
+use nf_formats::loc::Loc;
+use nf_formats::sfn::Font;
+use nf_game::driving_hud_draw::{text_glyphs, DriveHudDraw, HudDraw, HudInput, HudLayout, HudStrings, SCALE_1_1, SCALE_1_2, SCALE_1_4};
 
-fn hud_gal() -> Option<Vec<u8>> {
+fn entry(viv: &str, name: &str) -> Option<Vec<u8>> {
     let iso = IsoImage::open(std::env::var_os("NF_ISO")?).ok()?;
-    let e = iso.find("/DRIVING/MIS01.VIV")?;
+    let e = iso.find(viv)?;
     let g = nf_formats::disc::read_bigf(&iso, e).ok()?;
-    let x = g.entries.iter().find(|x| x.name.eq_ignore_ascii_case(r"data\gfx\data\hudNTSC.gal"))?;
+    let x = g.entries.iter().find(|x| x.name.eq_ignore_ascii_case(name))?;
     let raw = iso.read_bytes(e.lba as u64 * 2048 + x.offset as u64, x.size as u64).ok()?;
     if raw.iter().take(64).all(|&b| b == 0) { return None; }
-    Some(nf_formats::refpack::decompress(&raw).ok()?)
+    Some(if nf_formats::refpack::is_refpack(&raw) { nf_formats::refpack::decompress(&raw).ok()? } else { raw })
 }
+
+fn hud_gal() -> Option<Vec<u8>> { entry("/DRIVING/MIS01.VIV", r"data\gfx\data\hudNTSC.gal") }
 
 #[test]
 fn the_layout_lands_where_fun_0023ae30_moves_it() {
@@ -64,11 +68,50 @@ fn the_meter_bitmaps_and_the_mirrored_border() {
         assert_eq!(k.repeats(), [0; 4], "{n} repeats");
     }
     let l = HudLayout::from_gal(&g, false, 448.0).unwrap();
-    let i = HudInput { dt: 1.0 / 60.0, health: 100.0, health_max: 100.0, armour: 50.0, armour_max: 50.0, weapon: None,
-        timer: None, health_always: false, grunt_on_hit: false, suppressed: false };
-    let f = DriveHudDraw::new().frame(&l, &i);
+    let i = HudInput { dt: 1.0 / 60.0, ticks: 1, health: 100.0, health_max: 100.0, armour: 50.0, armour_max: 50.0, weapon: None,
+        timer: None, health_always: false, grunt_on_hit: false, suppressed: false, paused: false };
+    let font = Font::parse(&entry("/DRIVING/MIS01.VIV", r"data\loading\loading.sfn").unwrap()).unwrap();
+    let loc = Loc::parse(&entry("/DRIVING/MISC.VIV", r"data\gfx\locale\IDL_ENG.loc").unwrap()).unwrap();
+    let f = DriveHudDraw::new().frame(&l, &i, HudStrings { font: &font, loc: &loc });
     let quads: Vec<_> = f.draws.iter().filter_map(|d| match d { HudDraw::Sprite { element, x, y, .. } => Some((element.as_str(), *x, *y)), _ => None }).collect();
     assert_eq!(quads.len(), 7 + 7 + 8 + 4);
     assert_eq!(quads[0], ("iris1", 46.0, 351.0));
     assert_eq!(&quads[22..], &[("healthBorder", 68.0, 394.0), ("healthBorder", 25.0, 351.0), ("healthBorder", 25.0, 394.0), ("healthBorder", 68.0, 351.0)]);
+}
+
+/// Measured text on the disc font: widths and heights as DRIVING.ELF's `FUN_00237ca8` /
+/// `FUN_00237ce0` compute them (`Font::measure` matches the game code bit for bit on every string
+/// — crates/nf-formats/tests/sfn_loc_disc.rs runs the game's functions on the EE interpreter),
+/// pinned here for the HUD's own strings at the scales the passes set [M].
+#[test]
+fn hud_text_metrics_on_the_disc_font() {
+    let Some(fd) = entry("/DRIVING/MIS01.VIV", r"data\loading\loading.sfn") else { eprintln!("skip: NF_ISO / full image not available"); return };
+    let font = Font::parse(&fd).unwrap();
+    let loc = Loc::parse(&entry("/DRIVING/MISC.VIV", r"data\gfx\locale\IDL_ENG.loc").unwrap()).unwrap();
+    let m = |t: &[u8], s: f32| { let e = font.measure(t, [s, s]); (e.w.to_bits(), e.h.to_bits()) };
+    assert_eq!(m(b"00:00", SCALE_1_4), (0x428b_fffe, 0x4191_9999), "69.99998 × 18.2: the EE chop, not 70.0");
+    assert_eq!(m(b"0", 1.0), (0x4100_0000, 0x4150_0000), "8 × 13");
+    assert_eq!(loc.label(1611), b"Machine Gun");
+    assert_eq!(m(loc.label(1611), 1.0), (0x42d8_0000, 0x4160_0000), "108 × 14");
+    assert_eq!(m(loc.label(99999), SCALE_1_1), (0x4348_332d, 0x4176_6666), "OBJECTIVE COMPLETE 200.2 × 15.4");
+    assert_eq!(m(loc.label(99998), SCALE_1_1), (0x4310_1996, 0x4176_6666), "NEW OBJECTIVE 144.1 × 15.4");
+    assert_eq!(m(loc.label(519), SCALE_1_2), (0x431a_cccb, 0x4186_6666), "MISSION FAILED 154.8 × 16.8");
+    // Sister: plain round-to-nearest arithmetic gives exactly 70 for the clock face.
+    assert_ne!(f32::from_bits(0x428b_fffe), 70.0);
+
+    // The message line on the real font: centred at 320 by that width.
+    let g = Gal::parse(&hud_gal().unwrap()).unwrap();
+    let l = HudLayout::from_gal(&g, false, 448.0).unwrap();
+    let mut d = DriveHudDraw::new();
+    d.message_show(2.0, 519, loc.label(519).len(), false);
+    let i = HudInput { dt: 1.0 / 60.0, ticks: 1, health: 1.0, health_max: 1.0, armour: 0.0, armour_max: 1.0, weapon: None,
+        timer: None, health_always: false, grunt_on_hit: false, suppressed: true, paused: false };
+    let f = d.frame(&l, &i, HudStrings { font: &font, loc: &loc });
+    let w = f32::from_bits(0x431a_cccb);
+    let x = nf_formats::ps2float::add_noguard(320.0, -(w * 0.5), true);
+    assert!(f.draws.iter().any(|t| matches!(t, HudDraw::Text { text, x: tx, y, .. } if text == b"MISSION FAILED" && *tx == x && *y == 380.0)), "{:?}", f.draws);
+    let t = f.draws.iter().find(|t| matches!(t, HudDraw::Text { .. })).unwrap();
+    let (shadow, main) = text_glyphs(t, &font, false, 448.0);
+    assert_eq!((shadow.len(), main.len()), (14, 14), "one sprite per byte (the space too)");
+    assert_eq!(main[0].xy[1] - shadow[0].xy[1], -1);
 }
