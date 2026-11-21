@@ -2106,6 +2106,9 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // past the drone list — the volume law, no blast row) means he is standing IN the terminal's
     // hurt volume; the walk-out holds for 40 ticks against the dodge (run-bleed4-4/6).
     let mut zap_hold = 0u32;
+    // retune-nb-08-13 (d3): the crouch-window stance state — the burst-hold counter (press
+    // until the crouch flips, then decay; the band-stand branch waits for it to hit 0).
+    let mut burst_hold = 0u32;
     // nb-scan-all-08: the fight stands CROUCHED at the DEEPER anchor (112.5, −179.4) on the
     // nb-scan-all phase, both real-damage sisters. The 11-14 d3 lever's measured answer to the
     // doorway lane: the Hind's gun rounds come down through the west doorway (x 103 → 111, y 16
@@ -2448,12 +2451,12 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // The zap detector: the newest player_hit is a world hit (owner past the drone list)
         // whose frame is fresh — the volume law's −2.0 rows (run-bleed4-4: frames 20344-20441,
         // (113.0, 13.5, −180.6), no explosion lines).
-        {
-            let zap_now = sim.drones.player_hits.last().is_some_and(|h| {
-                h.1 >= sim.drones.list.len() && sim.drones.frame.saturating_sub(h.0) <= 3
-            });
-            if zap_now { zap_hold = 40; } else if zap_hold > 0 { zap_hold -= 1; }
-        }
+        // retune-nb-08-13: zap_now hoisted out of the block so the stance plan below can read
+        // it — the computation and the zap_hold update are unchanged (read-only for the plan).
+        let zap_now = sim.drones.player_hits.last().is_some_and(|h| {
+            h.1 >= sim.drones.list.len() && sim.drones.frame.saturating_sub(h.0) <= 3
+        });
+        if zap_now { zap_hold = 40; } else if zap_hold > 0 { zap_hold -= 1; }
         if dodge_now {
             if dodge_hold == 0 { dodge_sign = -dodge_sign; }
             dodge_hold = 24;
@@ -2811,6 +2814,39 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         if difficulty >= 3 && t < 200 && t % 10 == 0 {
             eprintln!("[08 gates] t{t} f{} l {l:.1} yaw_err {yaw_err:.3} pitch_err {pitch_err:.3} dh {dodge_hold} line_ok {line_ok} slit {slit_clear} eye_sees {eye_sees} lane {machine_lane_clear} cp ({:.2},{:.2},{:.2}) cam {} clip {} riding {}",
                 w.total_ticks, cp[0], cp[1], cp[2], sim.missile_cam.is_some(), sim.gun.clip, rocket.is_some());
+        }
+        // retune-nb-08-13 (d3): the CROUCH-WINDOW stance plan — the ledger's lever (2), judged
+        // on its own run. The two measured burst windows drained the whole 44.0 entry STANDING
+        // at the rim: the approach burst (rows at total-ticks 25702-25799 — five pre-loop during
+        // the pre-fight walk, four in-loop t11-t35) and the sustained burst (12 rows t434-t512)
+        // closed the walk at health 0.0 t512 [L the 2026-11-20 SE run re-measured byte-identical
+        // on this branch 2026-11-21]. The CROUCHED capsule sits on the zap-free trench floor
+        // (feet 13.0856 — the crouched plate walk never took one [L the round-6 walk logs]; the
+        // crouched-fight lever died zero-launches because the crouched eye 13.3 never launches
+        // [L the 2026-11-18 run]) — so a player under the volume's burst CROUCHES while the
+        // launcher's band (cp[1] <= 13.7, the d3 launch gate) is closed and STANDS when the
+        // machine comes low again. The band gate on the crouch keeps the first dive pass (the
+        // band live t0-t55, the launch t49 [L the same run's [08 gates] dump]) byte-exact — its
+        // four in-loop rows are the shipped standing cost, and the 60-tick substate lockout [M
+        // Player_ChangeSubState 0x190630:48 arms BL+0x960 = 60 on every substate change] forbids
+        // the t12-crouch → t72-stand shape anyway (the band closes t55). The stand press waits
+        // for the band's return (~700-tick circuit [L the flight logs]); the ride's substate
+        // changes (the launch t50, the ride end t188) re-arm the lockout and the first sustained
+        // row lands t434, ~246 ticks later. No press while the rocket rides or the missile cam
+        // is up (the cam zeroes the whole input [M scene.rs ride block; Player_Update 0x193600
+        // case 10]). A burst row during a live band does not arm the crouch — the zaps are only
+        // taken when the launcher's window is open. The sisters never read this block; their
+        // timelines stay byte-exact. D3-GATED.
+        if difficulty >= 3 && rocket.is_none() && sim.missile_cam.is_none() {
+            if zap_now && !sim.bond.crouched && burst_hold == 0 && cp[1] > 13.7 {
+                burst_hold = 160;
+            }
+            if burst_hold > 0 {
+                burst_hold -= 1;
+                if !sim.bond.crouched { input.crouch = true; }
+            } else if sim.bond.crouched && cp[1] <= 13.7 {
+                input.crouch = true;
+            }
         }
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 100 == 0 {
