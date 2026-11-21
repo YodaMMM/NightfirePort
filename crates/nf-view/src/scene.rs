@@ -11128,6 +11128,82 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             attach_plan: Default::default() }
     }
 
+    /// Minimal static-world `Scene` (used by the driving missions' `.crp` track renderer).
+    pub fn from_static_world(
+        vertices: Vec<Vertex>,
+        indices: Vec<u32>,
+        materials: Vec<Material>,
+        textures: Vec<TextureImage>,
+        bounds: ([f32; 3], [f32; 3]),
+        start: Option<([f32; 3], f32)>,
+        stats: String,
+    ) -> Scene {
+        let char_vertex_start = vertices.len();
+        Scene {
+            shard_tex: HashMap::new(),
+            particle_tex: HashMap::new(),
+            cels: Vec::new(),
+            cel_graph: CelGraph::default(),
+            streams: None,
+            music_files: None,
+            music_tables: None,
+            sound_bank: None,
+            sound_spares: Vec::new(),
+            snow_texture: None,
+            vertices,
+            indices,
+            materials,
+            textures,
+            hud_textures: Vec::new(),
+            woman: None,
+            hud: None,
+            script_billboards: std::collections::HashSet::new(),
+            view_models: HashMap::new(),
+            mp_bodies: Vec::new(),
+            bond_body: None,
+            mp_body_weapons: HashMap::new(),
+            mp_char_bodies: Vec::new(),
+            mp_anim_sets: None,
+            fog: None,
+            bounds,
+            start,
+            stats,
+            characters: Vec::new(),
+            char_vertex_start,
+            char_verts: Vec::new(),
+            sequences: HashMap::new(),
+            attachments: Vec::new(),
+            sim: None,
+            colliders: Vec::new(),
+            models_0x800: HashMap::new(),
+            npc_pool: Vec::new(),
+            ladders_drawn: 0,
+            grapple_hooks_drawn: 0,
+            misc_drawn: BTreeMap::new(),
+            lock_matrices: Vec::new(),
+            door_dims: Vec::new(),
+            sl_dims: Vec::new(),
+            dynobj_matrices: Vec::new(),
+            rotor_placements: Vec::new(),
+            rbody_placements: Vec::new(),
+            mine_placements: Vec::new(),
+            gunimp_placements: 0,
+            script_tweak_alpha: std::collections::HashSet::new(),
+            door_scene_hidden: std::collections::HashSet::new(),
+            script_scene_hidden: std::collections::HashSet::new(),
+            sl_lod: Vec::new(),
+            corona_pos: Vec::new(),
+            corona_slot0: 0,
+            corona_wobbles: Vec::new(),
+            sl_l2: Vec::new(),
+            destroy_centres: Vec::new(),
+            destroy_wrecks: Vec::new(),
+            scene_hidden_cels: Vec::new(),
+            tree_chars: Vec::new(),
+            attach_plan: Default::default(),
+        }
+    }
+
     /// Sequence index and frame a character shows after `ticks` 60 Hz updates: its start script (`choice = None`) or the
     /// `choice`-th sequence of its skeleton (modulo the list), looped over frames 1 … frames − 1.
     fn frame_of(&self, c: &Character, choice: Option<usize>, ticks: f32) -> Option<(usize, u32)> {
@@ -12059,7 +12135,9 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let p = drone_of(a.character as usize).and_then(|(s, di)| s.drones.pickups.iter().find(|p| p.from == Some(di) && !p.hidden && !p.gone));
                 return p.map_or(far, |p| p.m);
             }
-            let c = &self.characters[a.character as usize];
+            let Some(c) = self.characters.get(a.character as usize) else {
+                return a.local;
+            };
             // A hidden owner's attachments collapse at its placement point (frame-240: the palette path
             // no longer poses hidden characters; the collapsed mesh draws nothing wherever it sits, and
             // the CPU path collapses at the same point so the two stay vertex-equal).

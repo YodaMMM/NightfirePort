@@ -20,7 +20,7 @@
 /// entity hashtable, untraced — those records are unreachable here and the portals naming them are
 /// counted in `dropped_portals`). Records the port cannot resolve are the *sparse* remainder of the
 /// game's array; only the named ones exist as nodes.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CelGraph {
     pub cells: Vec<CelNode>,
     pub portals: Vec<PortalEdge>,

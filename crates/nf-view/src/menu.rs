@@ -6283,13 +6283,25 @@ impl FrontEnd {
                     if self.requested_level.is_some() { return false; }
                     self.mission = self.cursor.min(CAMPAIGN.len() - 1);
                     let level = CAMPAIGN[self.mission].3;   // +0x0c [M 0x20b8d8:21]
-                    // The port has no DRIVING.ELF: entering GameFlow state 9 left the flow stuck there
-                    // for good (no SP level could start — Paris Prelude, the
-                    // only row a fresh profile opens, is a driving mission). The row says so instead,
-                    // and `unlocked_row` lets the next on-foot row open through it [S port choice].
-                    if is_driving_level(level) {
-                        self.notice = Some(format!("{} is a driving mission.\nDriving isn't in the PC port yet -\nthe next mission is unlocked.",
+                    // The port has no DRIVING.ELF hand-over (GameFlow state 9 would hold for good): a
+                    // driving row requests its 0x09 code like an on-foot pick instead, and the host
+                    // loads the track (`driving::load_driving_scene`). `unlocked_row` still lets the
+                    // next on-foot row open through it [S port choice].
+                    // The driving port draws only part of the track yet: players keep the notice; the
+                    // drive itself is behind NF_DRIVING=1 until the road and sky draw.
+                    if is_driving_level(level) && !driving_enabled() {
+                        self.notice = Some(format!("{} is a driving mission.
+Driving isn't in the PC port yet -
+the next mission is unlocked.",
                             CAMPAIGN_NAMES.get(self.mission).copied().unwrap_or("This")));
+                        return true;
+                    }
+                    if is_driving_level(level) {
+                        self.flow.push_state(7, 84);
+                        self.requested_level = Some(level);
+                        self.menu_movie = false;
+                        self.back_stack.clear();
+                        self.remove_pair();
                         return true;
                     }
                     self.flow.reset_map_level_to_load(level, false, false);
@@ -12049,3 +12061,6 @@ pub(crate) fn draw_keypad_page(h: &mut Hud, kp: &nf_game::lock::Keypad, font: &n
         }
     }
 }
+
+/// The developer switch for the unfinished driving missions (`NF_DRIVING=1`).
+pub fn driving_enabled() -> bool { std::env::var("NF_DRIVING").is_ok_and(|v| v == "1") }
