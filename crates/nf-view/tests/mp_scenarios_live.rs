@@ -450,7 +450,7 @@ fn top_agent_online() {
     shoot_dead(&mut p, 0, 1, 2);
     ticks(&mut p, 2, &row(None, 2));
     assert!(p.m().game.state >= 1, "the elimination ends the round");
-    assert_eq!(p.m().game.slots[0].score, 0.0, "kills do not score in 0x10");
+    assert_eq!(p.m().game.slots[0].score, 1.0, "kills do not score in 0x10: the lives copy stays at the limit [M MP_Init 0x183438:60-61]");
     run_to_end(&mut p, 400);
     assert_eq!(p.m().game.end_status, MpEndStatus::Won("Alpha".into()));
     assert!(p.a.sim.as_ref().unwrap().mp_dead_ticks[1] > 300, "the out player never respawned");

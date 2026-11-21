@@ -424,6 +424,7 @@ pub struct MissileCam {
 /// were a `GetEnvironmentVariableW` round trip each, every tick).
 static ENV_MPBODY_DBG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static ENV_BOTLOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static ENV_MP_OBJLOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 fn env_flag(cell: &'static std::sync::OnceLock<bool>, name: &str) -> bool {
     *cell.get_or_init(|| std::env::var_os(name).is_some())
 }
@@ -2457,6 +2458,27 @@ impl Sim {
             // the shared bit-exact generator — the game's MP_Update draws the global RNG only on
             // the state-6 restart's site re-pick (MP_RestartScenario 0x183fc0)
             m.update(1.0 / 60.0, false, &mut self.drones.rng);
+            // Test aid (NF_MP_OBJLOG=1, mp-scenarios-full): one line each tick the match's
+            // scoring or objective words change (state, latches, team scores, per-slot
+            // kills/deaths/score/status, every scenario object, the roles); the two-window
+            // scenario check compares the host's and the joiner's lines. Log only.
+            if env_flag(&ENV_MP_OBJLOG, "NF_MP_OBJLOG") {
+                let used = (m.settings.human_count + m.settings.bot_count) as usize;
+                let o = &m.objects_rt;
+                let line = format!("st {} up {} frag {} teams {:?} slots {:?} flags {:?} up {:?} site {:?} ge {:?} tgt {:?} bp {:?} ass {:?}/{:?}",
+                    m.game.state, m.game.time_up as u8, m.game.frag_latched as u8, m.game.team_scores,
+                    m.game.slots.iter().take(used).map(|s| (s.kills, s.deaths, s.score, s.status_bits)).collect::<Vec<_>>(),
+                    o.flags.iter().flatten().map(|f| (f.state, f.carrier)).collect::<Vec<_>>(),
+                    o.uplinks.iter().map(|u| (u.state, u.controller)).collect::<Vec<_>>(),
+                    o.site.as_ref().map(|x| (x.state, x.sub, x.last_hitter)),
+                    o.ge.iter().flatten().map(|g| (g.state, g.carrier)).collect::<Vec<_>>(), o.ge_target,
+                    o.blueprint.as_ref().map(|b| (b.state, b.carrier)), m.assassin, m.assassin_target);
+                thread_local! { static LAST: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) }; }
+                LAST.with(|l| if *l.borrow() != line {
+                    eprintln!("[mp-obj] f{} clock {:.2} {line}", self.drones.frame, m.game.clock);
+                    *l.borrow_mut() = line;
+                });
+            }
             for id in m.objects_rt.sounds.drain(..) {
                 nf_game::mp::mp_sound_play(&mut self.drones.audio, id);
             }

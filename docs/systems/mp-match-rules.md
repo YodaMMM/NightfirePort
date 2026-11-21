@@ -31,7 +31,7 @@ where it matters (`MPGame._412_4_` = hex `+0x19A`).
 ## Kill scoring — `MP_PlayerKilled` 0x188f70
 
 - deaths (slot+0x08) += 1 in every scenario [M 0x188f70:92-94]. Scenario 0x10 (Top Agent): the
-  slot score (the lives copy, +0x18) −= 1.0, and `frag_limit <= deaths` = the player is out [M
+  slot score (the lives copy, +0x18, seeded with the lives limit by `MP_Init` [M 0x183438:60-61]) −= 1.0, and `frag_limit <= deaths` = the player is out [M
   0x188f70:96-100].
 - Self-kill: streak = 0, kills −= 1, last-killer = 0xffff [M 0x188f70:151-155]. Another player:
   last-killer = attacker slot [M :164]; kills/streak += 1 only when FFA or different teams [M
@@ -271,6 +271,12 @@ so in every scenario the bots played deathmatch. Now (crates/nf-game/src/mp/bots
   snapshot derives the bits from the carriers instead).
 - Test aids: NF_NET_SCENARIO=<hex>, NF_NET_TEAMS="t0,t1,…" (flag host); NF_BOTLOG also prints the
   scenario objects/scores and each bot's slot-1 goal once a second.
+- Two-window scenario aids (mp-scenarios-full): NF_MP_OBJLOG=1 prints one `[mp-obj]` line each tick
+  the match state, latches, scores or any scenario object changes, and the board each window opens
+  (`[mp-debrief]`); NF_NET_AUTOOBJ="a-b" steers the local player at the scenario objective;
+  NF_MP_PLACE_OBJ="<slot>:<obj>:dx,dz" places a body beside a scenario object at the start.
+- The bot records' names: the boot writes "Bot 1".."Bot 4" into records 4..7 [M bootup 0x1c7e78:50-61];
+  a bot winner's result line reads it [M 0x212198:227-228]. The port names bot i "Bot i+1".
 
 ## Deviations (model gaps, marked, not silent rewrites)
 
