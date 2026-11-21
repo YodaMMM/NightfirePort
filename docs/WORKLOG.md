@@ -250,3 +250,10 @@ west-high rays stop t0.748, 0.052 short). Whole binary 6 passed / 1 failed, 176.
 final-tree run]. The refreshed ledger + the next levers (the launch starvation; the trench-pinned
 standing dodge; the reply-cadence live check) are in the ignore message. Report:
 docs/reports/retune-nb-08-13.md.
+
+## retune-nb-08-14
+2026-11-21. Round 14 of the 08 whole-mission 00 Agent real-damage walk
+(walk_the_whole_mission_on_real_input_real_damage_00agent). Branch s/retune-nb-08-14 off
+origin/master (b69bacbc9) with s/retune-nb-08-13 merged in (clean). Work in progress: reading
+the 08-13 report and the walk's ignore message to pick the next untried lever. Fresh sandbox:
+repo, game files and toolchain all re-setup this session.
