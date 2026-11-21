@@ -124,6 +124,9 @@ pub struct MixGroup {
     pub fading: bool,
     /// +0x20 the mix `.ini`'s trailing int (meaning not traced)
     pub param: i32,
+    /// +0x10 the ini volume (`FUN_002f3058` writes it with +4/+8/+0xc); the ctor `FUN_002f2d08`
+    /// leaves -1.0. `ESetAudioMix` scales it and `FUN_002f3450` (`EResetAudioMix`) fades back to it.
+    pub base: f32,
 }
 
 /// The mix-group registry (`FUN_002f46e8`'s map) — get-or-create by name like `FUN_002f2d50`.
@@ -131,13 +134,15 @@ pub struct MixGroup {
 pub struct Mixer { pub groups: Vec<MixGroup> }
 
 impl Mixer {
-    pub fn find(&self, name: &str) -> Option<usize> { self.groups.iter().position(|g| g.name == name) }
+    /// The group map's lookup (`FUN_002f3888` → `FUN_002f37e0`) compares with the
+    /// case-insensitive `FUN_002a9198` [M], so the script's `music` is the `Music` group.
+    pub fn find(&self, name: &str) -> Option<usize> { self.groups.iter().position(|g| g.name.eq_ignore_ascii_case(name)) }
 
     /// `FUN_002f2d50` [M]: the existing group, else a new one with the `FUN_002f2d08` ctor fields
     /// (volume 0, target 0, step 0, not fading, no parent).
     pub fn get_or_create(&mut self, name: &str) -> usize {
         if let Some(i) = self.find(name) { return i; }
-        self.groups.push(MixGroup { name: name.into(), parent: None, volume: 0.0, prev: 0.0, target: 0.0, step: 0.0, fading: false, param: 0 });
+        self.groups.push(MixGroup { name: name.into(), parent: None, volume: 0.0, prev: 0.0, target: 0.0, step: 0.0, fading: false, param: 0, base: -1.0 });
         self.groups.len() - 1
     }
 
@@ -160,6 +165,7 @@ impl Mixer {
             g.volume = l.volume;
             g.prev = l.volume;
             g.param = l.param;
+            g.base = l.volume;
         }
         for n in ["1:Effects", "1:Music", "0:Fader2", "0:Fader1", "0:Fader0"] { m.get_or_create(n); }
         for n in ["0:Fader2", "0:Fader1", "0:Fader0", "Speech"] { m.set(n, 1.0); }
@@ -198,6 +204,39 @@ impl Mixer {
     }
 
     pub fn volume_of(&mut self, name: &str) -> f32 { self.find(name).map_or(0.0, |i| self.volume(i)) }
+
+    /// `FUN_002f33a0(target, group, steps)` [M]: the target clamped to 0..1, +8 = +4, a fade of
+    /// (target - volume) / max(steps, 1) per volume read.
+    pub fn fade_to(&mut self, idx: usize, target: f32, steps: i32) {
+        let t = if target < 0.0 { 0.0 } else if target > 1.0 { 1.0 } else { target };
+        let g = &mut self.groups[idx];
+        g.fading = true;
+        g.prev = g.volume;
+        g.target = t;
+        g.step = (t - g.volume) / steps.max(1) as f32;
+    }
+
+    /// `FUN_002f3410(group, steps)` [M]: fade back to +8 (the volume before the last setter),
+    /// leaving +8 as it is.
+    pub fn revert(&mut self, idx: usize, steps: i32) {
+        let g = &mut self.groups[idx];
+        g.fading = true;
+        g.target = g.prev;
+        g.step = (g.prev - g.volume) / steps.max(1) as f32;
+    }
+
+    /// `FUN_002f3450(steps)` [M]: every registered group fades to its +0x10 ini volume (a group
+    /// the ini lacks has -1 there, which `fade_to` clamps to 0).
+    pub fn reset_all(&mut self, steps: i32) {
+        for i in 0..self.groups.len() {
+            let b = self.groups[i].base;
+            self.fade_to(i, b, steps);
+        }
+    }
+
+    /// A plain store into +4 that keeps the old one in +8 (the pattern `FUN_002f9180` and
+    /// `FUN_002f8e00` use on `0:Fader2` / `0:Fader0`).
+    pub fn store(&mut self, name: &str, v: f32) { self.set(name, v) }
 }
 
 // ---------------------------------------------------------------------------------------------
