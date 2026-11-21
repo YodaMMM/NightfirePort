@@ -84,14 +84,15 @@ class-0x22 sphere is picked the same way) is never read — shooting the mount d
 
 ## What is NOT ported (documented gaps)
 
-- Drone/guard bullets: the game's contacts come from EVERY class-5 bullet (guards shooting the
-  lights break them too); the port's feed is the player's bullets (`player_bullets` →
-  `sl_shots`). The guards' own flight path (`Drones::bullets`) is not wired in.
+- Drone/guard bullets: PORTED (s/g033-searchlights). Every drone round's flight segment of the
+  tick (to its stop point) joins `sl_round_shots` with the record's contact damage and reaches the
+  next tick's walk (the drone pass runs after the control walk). Unproven: the slow-tick point
+  pick for guard rounds (always the segment pick here) and the exact contact tick.
 - Grenades/throwables as class-5 flyers: the port models them in `crate::grenade`, outside
   `bullet_paths`; their forced-0 damage would not break anything anyway.
 - `Control_NextLOD`'s damaged model (visual, needs the glist+0x40 model swap in the renderer).
-- The kill-path tail (the game still runs the walk after the channel kill — searchlight.md port
-  mismatch 7) and the relight-tick part updates (mismatch 4) are pre-existing, unchanged here.
+- The kill-path tail (mismatch 7) and the relight tick (mismatch 4): fixed in
+  s/g033-searchlights (docs/fields/searchlight.md).
 
 ## Tests
 
