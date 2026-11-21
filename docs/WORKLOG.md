@@ -71,3 +71,12 @@ moved t80171 -> t78420 -> t33826 -> t7568 and the refreshed ledger + next levers
 message. d2 green; d1 red on the merged tree by the contact-protection race (tick-identical to the
 merged base — every lever is d3-gated; the lever to extend it to the sisters is named). Report:
 docs/reports/retune-nb-01-3.md.
+
+## retune-nb-01-4 (2026-11-21)
+
+Round 4 on the 01 spawn-to-exit-with-the-contact 00 Agent real-damage walk. Branched from
+origin/master (14126d9e5), merged origin/s/retune-nb-01-3 (2cdd30e3f) — one conflict in
+walkreal_07000001_live.rs resolved keeping master's walks-1121 un-ignored state (master's 01
+00-agent walk completes at 8.4 health, t63360 per the walks-1121 note) with the round-3 ledger
+kept verbatim as history. Next: read retune-nb-01-3.md, verify the walk's current state on real
+runs (walkreal_07000001_live + interactables_07000001_live), then levers if still red.
