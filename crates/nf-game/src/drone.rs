@@ -2772,14 +2772,33 @@ impl Drone {
         self.call_anim(d, anim, 0, 0);
     }
 
-    /// `SetStandIdleAnim(force)`: in Idle one of 0x24..0x26 (Rand 3) held 5 + Rand 5 seconds; elsewhere 0x24.
+    /// `DroneAnim_SetStandIdleAnim` 0x13ca68 (`force` = the game's respect argument 0). With the
+    /// argument set and the hold clock `+0x59c` (`stand_until`) running it returns at once
+    /// [M :19-21]; Idle (4) picks `0x24 + Rand(3)` and PartyGirl (0x2f) with property 0x47
+    /// `0x24 + Rand(4)`, each held `(5 + Rand(5)) * FRAME_RATE_INT` [M :31-42]; every other state
+    /// takes 0x24 with no hold [M :27-28]. Model `+0xD8 == 0x10` always asks 0x26 [M :46-48]; a
+    /// state outside 0x24..0x27 or one the set cannot play is 0x24 [M :49-68]; the clock is stamped
+    /// `now + hold` [M :71]. Deviation kept: the game always calls `CallAnim` [M :70] (which zeroes or
+    /// replaces a pending call); the port keeps its older call guard — `request_anim` for the no-hold
+    /// states, no call while one is pending in the random arms — because the always-call form moved
+    /// the real-damage walks on 0700001b and 07000006 (not yet re-tuned).
     fn set_stand_idle(&mut self, d: &Data, rng: &mut Rng, frame: u32, force: bool) {
-        if self.state != state::IDLE { self.request_anim(d, anim_state::STAND_IDLE); return; }
         if !force && frame < self.stand_until { return; }
-        let mut anim = anim_state::STAND_IDLE + rng.rand(3) as u16;
-        if !self.can_do(d, anim) { anim = anim_state::STAND_IDLE }
-        self.stand_until = frame + (5 + rng.rand(5)) * 60;
-        if self.anim.call.is_none() && self.anim.state != anim { self.call_anim(d, anim, 0, 0) }
+        let n = match self.state {
+            state::IDLE => 3,
+            state::PARTY_GIRL if self.prop(d, 0x47) => 4,
+            _ => 0,
+        };
+        let (mut anim, mut hold) = (anim_state::STAND_IDLE, 0);
+        if n != 0 {
+            anim = anim_state::STAND_IDLE + rng.rand(n) as u16;
+            hold = (5 + rng.rand(5)) * 60;
+        }
+        if self.kind == 0x10 { anim = 0x26 }
+        if anim != anim_state::STAND_IDLE && !self.can_do(d, anim) { anim = anim_state::STAND_IDLE }
+        if n == 0 { self.request_anim(d, anim) }
+        else if self.anim.call.is_none() && self.anim.state != anim { self.call_anim(d, anim, 0, 0) }
+        self.stand_until = frame + hold;
     }
 
     /// `DroneAnim_SetWalkIdleAnim` (0x13cc70): in Patrol (SM id + 1) % 3 + 0x37, or 0x37 when the set lacks it.
@@ -2829,7 +2848,7 @@ impl Drone {
         let alerted = self.prop(d, 0x25) && self.alert >= 0.66;
         match code {
             crate::nav::follow::MOVING => { let a = if alerted { anim_state::ALERT_WALK } else { self.walk_anim(d) }; self.request_anim(d, a) }
-            crate::nav::follow::NO_PATH => self.request_anim(d, anim_state::STAND_IDLE),
+            crate::nav::follow::NO_PATH => self.set_stand_idle(d, _rng, frame, false), // route done → SetStandIdleAnim(1) [M 0x1514d8:12-13]
             _ => { let a = if self.alert >= 0.66 { anim_state::ALERT_IDLE } else { self.walk_anim(d) }; self.request_anim(d, a) }
         }
         self.desired_yaw = atan2_approx(target[0] - self.pos[0], target[2] - self.pos[2]);
@@ -8362,7 +8381,7 @@ impl Drone {
                 self.health = 10.0;
                 self.vision_on = true;
                 self.watching = true;
-                self.request_anim(d, anim_state::STAND_IDLE);
+                self.set_stand_idle(d, rng, frame, true); // SetStandIdleAnim(0) [M 0x16dee0:20]
                 if self.prop(d, 0x46) { self.set_idle_timeout(rng, frame, 45, 5) }
                 true
             }
@@ -8371,6 +8390,7 @@ impl Drone {
                 // channel IS 10 [D placement #186 p3 = 10], so the per-tick cached
                 // wait_channel_on (Drones::tick) is that channel's live value.
                 if self.wait_channel_on { self.set_state(crate::kiko::DELETE_ME); }
+                else { self.set_stand_idle(d, rng, frame, false); } // channel off → SetStandIdleAnim(1) [M 0x16dee0:28-33, :47-48]
                 true
             }
             (SPACE_DRAKE, msg::IDLE_TIMEOUT) => {
@@ -8385,7 +8405,7 @@ impl Drone {
             }
             (SPACE_DRAKE, msg::ANIM_DONE) => {
                 // [M 0x16dee0 case 5 → LAB_0016dfc0]: SetStandIdleAnim(0).
-                self.request_anim(d, anim_state::STAND_IDLE);
+                self.set_stand_idle(d, rng, frame, true);
                 true
             }
             (SPACE_DRAKE, msg::BULLET) => {
@@ -9498,7 +9518,7 @@ impl Drone {
             (CASTLE_CHAT_GUARD1, msg::ENTER) => {
                 self.vision_on = true;
                 if self.alert >= 0.66 { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); }
-                else { self.set_stand_idle(d, rng, frame, false); }
+                else { self.set_stand_idle(d, rng, frame, true); } // SetStandIdleAnim(0) [M 0x1612e0:28]
                 true
             }
             // EXIT [M case 2]: a chat guard whose start script never played (+0x554 still set — the
@@ -9529,7 +9549,7 @@ impl Drone {
             // 0x1612e0:57-65 + 0x13ab58:99]) [M].
             (CASTLE_CHAT_GUARD1, msg::ANIM_DONE) => {
                 if self.alert >= 0.66 { self.call_anim(d, anim_state::ALERT_IDLE, 4, 0); }
-                else { self.set_stand_idle(d, rng, frame, false); }
+                else { self.set_stand_idle(d, rng, frame, true); } // SetStandIdleAnim(0) [M 0x1612e0:63]
                 true
             }
             // The alert group [M cases 0x11/0x12/0x14/0x15/0x16/0x1e → DroneVision_EnemyAlerts]: a
@@ -9766,8 +9786,9 @@ impl Drone {
                     if self.prop(d, 0x52) { self.fail_reason = Some(crate::ally::mission_fail_reason(0xb)); }
                     self.set_state(CIVILIAN_SCARED);
                 } else {
-                    // [M 0x160140:41-46] the game returns here: SetStandIdleAnim(1) then BondTalk.
-                    self.set_stand_idle(d, rng, frame, true);
+                    // [M 0x160140:41-46] the game returns here: SetStandIdleAnim(1) then BondTalk —
+                    // the respect argument 1 keeps the 5..9 s hold (port force = false).
+                    self.set_stand_idle(d, rng, frame, false);
                     self.bond_talk(d, rng, frame);
                 }
                 true
