@@ -456,15 +456,15 @@ fn mezz_far_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
 /// makes. `difficulty` = the menu pick the chain runs at (the front-end's launch path [M
 /// C_SBNFDFCTY 0x216ca8:15]; 3 = the pre-sister byte-identical 00 Agent).
 fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
-    // warm-chain-margin-4: the tower2 OPT-IN flags are PROCESS-GLOBAL atomics and the tests of
-    // this binary share one process (--test-threads=1, the suite's shape) — the d3 walk's stores
-    // would leak into whichever test runs next (the run-8 ledger caught the agent sister running
-    // the d3 pre-clear). Every walk resets them first: the sisters stay byte-identical no matter
-    // the run order, and the d3 block below sets its own.
-    tower2::PRE_CLEAR_SOUTH_CORRIDOR.store(false, std::sync::atomic::Ordering::Relaxed);
-    tower2::PRE_CLEAR_NORTH_LOBBY.store(false, std::sync::atomic::Ordering::Relaxed);
-    tower2::REANCHOR_NORTH_LOBBY.store(false, std::sync::atomic::Ordering::Relaxed);
-    tower2::FLANK_LOBBY_EAST.store(false, std::sync::atomic::Ordering::Relaxed);
+    // walk-13-flaky: the tower2 OPT-IN flags are PER-THREAD cells. They were process-wide
+    // atomics, and libtest runs this binary's four walks side by side, so the d3 walk's stores
+    // reached the sisters mid-walk (the d2 walk took the d3 route and died at tick 4583 in the
+    // whole-binary run, passing alone). Every walk still resets them first: libtest may reuse a
+    // thread after a panicked walk, and the d3 block below sets its own.
+    tower2::PRE_CLEAR_SOUTH_CORRIDOR.with(|c| c.set(false));
+    tower2::PRE_CLEAR_NORTH_LOBBY.with(|c| c.set(false));
+    tower2::REANCHOR_NORTH_LOBBY.with(|c| c.set(false));
+    tower2::FLANK_LOBBY_EAST.with(|c| c.set(false));
     // ---- 07000012 walked (the shared route) ----
     // Agent difficulty (3): the keypad locks' param-6 tag auto-unlocks them at create on
     // Operative [M 0x1ae1f8 tail], and the route's burn leg pins the Agent+ behaviour
@@ -523,8 +523,8 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             w.dmg.switch_dry = true;
             w.dmg.escalating_cooldowns = true;
             w.resupply_home = true;
-            tower2::REANCHOR_NORTH_LOBBY.store(true, std::sync::atomic::Ordering::Relaxed);
-            tower2::PRE_CLEAR_NORTH_LOBBY.store(true, std::sync::atomic::Ordering::Relaxed);
+            tower2::REANCHOR_NORTH_LOBBY.with(|c| c.set(true));
+            tower2::PRE_CLEAR_NORTH_LOBBY.with(|c| c.set(true));
             // warm-chain-margin-5: the lobby-east posts' flank (the margin-4 report's first
             // lever). The melt ledger killed every in-place answer from the lane (−59.5 in 64
             // ticks from x −9.1, the exposure flickering [L this tree's NF_DMG_TRACE run]) and
@@ -535,7 +535,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // walk's own flags. Rejected levers not repeated: no pre-clear hook, no
             // bridge_and_retry, no in-place creep/longer stands (each measured dead, the
             // margin-4 report).
-            tower2::FLANK_LOBBY_EAST.store(true, std::sync::atomic::Ordering::Relaxed);
+            tower2::FLANK_LOBBY_EAST.with(|c| c.set(true));
             // warm-chain-margin-4: the lobby-east posts (#6 rifle 0x18 + #7 0x19, hp 30/12, at
             // (3-5,15-18)) open fire the moment the lane's west half is crossed — the d3 melt
             // ledger: −59.5 in 64 ticks from x −9.1, the fights' own exposure flickering and
@@ -567,7 +567,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // frame). The opt-in tower2 flag stands at the "the south corridor east" leg end and
             // kills him through the ordinary fight machinery before his sight opens. OFF for every
             // other caller (the 07000012 and campaign walks set nothing).
-            tower2::PRE_CLEAR_SOUTH_CORRIDOR.store(true, std::sync::atomic::Ordering::Relaxed);
+            tower2::PRE_CLEAR_SOUTH_CORRIDOR.with(|c| c.set(true));
             // warm-chain-margin-3: the margin-1 north-lobby pre-clear (the flag-gated tower2
             // lever) is NOT ported — master's own evidence is that the d3 chain crosses 12 with
             // this exact kit (its recorded death is on 13, tick 2448 [L the sight batch's
@@ -1671,4 +1671,21 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_agent() {
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_operative() {
     let iso = iso();
     walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 1));
+}
+
+/// walk-13-flaky: the d3 walk's route flags must not reach the sister walks that libtest runs
+/// beside it in this process. Fails on the old process-wide atomics (a store on one thread read
+/// back on another); passes on the per-thread cells.
+#[test]
+fn tower2_route_flags_stay_on_their_own_thread() {
+    std::thread::spawn(|| {
+        tower2::PRE_CLEAR_SOUTH_CORRIDOR.with(|c| c.set(true));
+        tower2::PRE_CLEAR_NORTH_LOBBY.with(|c| c.set(true));
+        tower2::REANCHOR_NORTH_LOBBY.with(|c| c.set(true));
+        tower2::FLANK_LOBBY_EAST.with(|c| c.set(true));
+    }).join().unwrap();
+    assert!(!tower2::PRE_CLEAR_SOUTH_CORRIDOR.with(|c| c.get()), "PRE_CLEAR_SOUTH_CORRIDOR leaked across threads");
+    assert!(!tower2::PRE_CLEAR_NORTH_LOBBY.with(|c| c.get()), "PRE_CLEAR_NORTH_LOBBY leaked across threads");
+    assert!(!tower2::REANCHOR_NORTH_LOBBY.with(|c| c.get()), "REANCHOR_NORTH_LOBBY leaked across threads");
+    assert!(!tower2::FLANK_LOBBY_EAST.with(|c| c.get()), "FLANK_LOBBY_EAST leaked across threads");
 }
