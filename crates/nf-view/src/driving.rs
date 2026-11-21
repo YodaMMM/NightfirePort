@@ -269,6 +269,9 @@ pub struct DrivingState {
     /// -> righted where it lies [M 0x188200]) and the triangles it reads.
     pub reset: Option<(nf_game::driving::reset::ResetState, Vec<CollisionTri>)>,
     pub hud: Option<DriveHud>,
+    /// The scripted control and camera layer (nf_game::driving::intro, docs/systems/driving-intros.md):
+    /// the race countdown hold, scripted splines, letterbox. Fed by the mission script's events.
+    pub intro: Option<(nf_game::driving::intro::IntroState, nf_formats::drivepath::MapPaths)>,
 }
 
 const IDENT_MAT: Mat4 = [
@@ -306,12 +309,22 @@ impl DrivingState {
                 self.cam_view = Some(c.update(hp, arm, &pose, false, &mut ray));
             }
         }
-        let input = CarInput {
+        let mut input = CarInput {
             throttle: throttle.clamp(0.0, 1.0),
             brake: brake.clamp(0.0, 1.0),
             steer: steer.clamp(-1.0, 1.0),
             handbrake,
         };
+        // While the script owns the car (countdown hold, a spline, a forced stop, the POV mode),
+        // the player's pedals and wheel do nothing [M the driver owner / EForceCarStop, intro.rs].
+        if let Some((i, _)) = &self.intro {
+            if !i.player_drives() {
+                // A forced stop parks the car: the handbrake park, not the brake pedal (a held brake
+                // turns into reverse after 30 ticks in the land step) [S: what vtable +0x274(3) does
+                // inside the vehicle is not traced].
+                input = CarInput { throttle: 0.0, brake: 0.0, steer: 0.0, handbrake: i.stop.is_some() };
+            }
+        }
         if let Some(r) = self.car_rig.as_mut() { r.tick(&self.car, input.steer); }
         if let Some(g) = &self.land {
             // The land pass owns the height, pitch and roll (its wheels stand on the triangles).
@@ -379,6 +392,19 @@ impl DrivingState {
             let first = f.v.len() as u32;
             f.v.extend_from_slice(&[v([a[0], a[1]], [uv[0], uv[1]]), v([b[0], a[1]], [uv[2], uv[1]]), v([b[0], b[1]], [uv[2], uv[3]]), v([a[0], a[1]], [uv[0], uv[1]]), v([b[0], b[1]], [uv[2], uv[3]]), v([a[0], b[1]], [uv[0], uv[3]])]);
             f.runs.push((ti + 1, 0, first, 6));
+        }
+        // The letterbox bars: y 0 and y 448 - h, the HUD width, colour 0x7f000000 [M 0x245190].
+        if let Some(bh) = self.intro.as_ref().and_then(|(i, _)| i.letterbox.bar_height(false)) {
+            if bh > 0.0 {
+                let c = [0.0, 0.0, 0.0, 1.0];
+                for (y0, y1) in [(0.0, bh), (448.0 - bh, 448.0)] {
+                    let (a, b) = ([-1.0, 1.0 - y0 / 224.0], [1.0, 1.0 - y1 / 224.0]);
+                    let v = |p: [f32; 2]| crate::gpu::HudVertex { p, uv: [0.0, 0.0], c };
+                    let first = f.v.len() as u32;
+                    f.v.extend_from_slice(&[v([a[0], a[1]]), v([b[0], a[1]]), v([b[0], b[1]]), v([a[0], a[1]]), v([b[0], b[1]]), v([a[0], b[1]])]);
+                    f.runs.push((0, 0, first, 6));
+                }
+            }
         }
         f
     }
@@ -556,6 +582,23 @@ impl DrivingState {
             };
             let _ = snap;
             self.mission.step_facts(&facts);
+            if let (Some(sc), Some((i, paths))) = (self.mission.script.as_mut(), self.intro.as_mut()) {
+                for o in sc.take_output() {
+                    match o {
+                        nf_game::driving::script::Output::StartMission { .. } => i.start_mission(),
+                        nf_game::driving::script::Output::Effect { action, .. } => i.apply(&action, &sc.map, paths),
+                        _ => {}
+                    }
+                }
+                i.out.clear();
+                i.step();
+                // A scripted spline carries the car (the path player's row 3 into the car matrix [S]).
+                if let Some(q) = i.spline_position(paths) {
+                    let o = self.car.pos;
+                    self.car.vel = [(q[0] - o[0]) * 60.0, (q[1] - o[1]) * 60.0, (q[2] - o[2]) * 60.0];
+                    self.car.pos = q;
+                }
+            }
         } else {
             let _events = self.mission.step(DT, &snap);
         }
@@ -1489,6 +1532,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         fx,
         reset,
         hud,
+        intro: nf_formats::drivepath::map_paths(&crp).ok().map(|p| (nf_game::driving::intro::IntroState::new(60), p)),
         viv: viv_upper,
         car,
         world: FlatWorld::paved(),
@@ -1575,6 +1619,7 @@ mod tests {
             fx: None,
             reset: None,
             hud: None,
+            intro: None,
         };
         state.step(1.0, 0.0, 0.0, false);
         assert_eq!(state.progress, 1);
