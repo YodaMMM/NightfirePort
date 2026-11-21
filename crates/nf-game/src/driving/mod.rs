@@ -20,6 +20,8 @@ pub mod damage;
 pub mod effects;
 // The MIS01 sniper phase's flight path, triggers, timers, view limits and shot test.
 pub mod flight;
+// Scripted control and camera: splines, forced stops, camera anims, letterbox (driving-intros.md).
+pub mod intro;
 // G-057 suspension: the per-wheel spring–damper (sub_18FC00 + kind siblings).
 pub mod suspension;
 // 647 drive-mission-scripts: the mission state machine (objectives, fails, timers, the PTP end).
