@@ -30,6 +30,8 @@ pub mod intro;
 pub mod suspension;
 // Track placed effects: glare sprites and the particle effects started at load (trackfx).
 pub mod trackfx;
+// Event-started effects: smash/explosion Giotto runs (gg/gd/gs), debris, the decal ring.
+pub mod smashfx;
 // 647 drive-mission-scripts: the mission state machine (objectives, fails, timers, the PTP end).
 pub mod mission;
 // The game's mission rules: the trigger/action/event machine and the mission manager (FUN_00206b88).
