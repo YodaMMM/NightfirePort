@@ -18,6 +18,14 @@ Where its pieces live [D, `/DRIVING/MIS01.VIV` entry list]:
 - DRIVING.ELF `FUN_0020f2b8` 0x20f2b8 builds the driving engine's weapon table, which names
   "Sniper Rifle" [M]; so the sniper is a driving-engine weapon mode.
 
+The mission number [M]: `FUN_001266a8` 0x1266a8 string-compares the mission name mailbox
+0x1004F4 against six names (0x36a0f8..0x36a120) and returns 1..6 (0 for none); `FUN_00125bb8`
+0x125bb8 stores it in `DAT_003c8234`. Its only other readers, `FUN_001265c0` 0x1265c0 and
+`FUN_00126768` 0x126768, use it to index a per-mission table at 0x3277b0 (stride 0x70) of actor
+model names (pedestrians and drivers). No code branches on the mission number to run a sniper
+phase, so the phase is data-driven: the track's Map `AIEl` / script records are the next place
+to look.
+
 Not traced yet: the mission state machine that runs the sniper phase and hands over to the
 Vanquish drive, the aim/zoom input, and how the pursuers are scripted (the Map `AIEl` record is
 the candidate [driving-load-path.md]).
