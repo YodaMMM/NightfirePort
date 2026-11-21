@@ -697,6 +697,7 @@ mod android_impl {
                         jump: just & BTN_JUMP != 0,
                         crouch: just & BTN_CROUCH != 0,
                         crouch_hold: false,
+                        crouch_held: false,
                         aiming: b & BTN_AIM != 0,
                         weapon_cycle: weap_cycle,
                         gadget_cycle: 0,

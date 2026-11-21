@@ -192,8 +192,6 @@ pub enum BulletEvent {
 #[derive(Clone, Copy, Debug)]
 pub struct PlayerVolume { pub feet: V3, pub height: f32, pub radius: f32 }
 
-fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); if l > 0.0 { [v[0] / l, v[1] / l, v[2] / l] } else { v } }
-
 /// `Bullet_init` direction: normalise(normalise(dir) + spherical→cartesian(r, FRand 2π, FRand π)) with
 /// r = (FRand(2s) − s) · 0.0014, s = spread `+0x24` × (0 when `weapon_data+0x68 & 0x400000`, else `Drone+0xC0` = 1);
 /// the offset's components are added to x, z, y in that order.
@@ -227,8 +225,11 @@ pub fn cone(dir: V3, s: f32, rng: &mut crate::drone::Rng) -> V3 {
     let (sth, cth) = (crate::trig::sinf(th), crate::trig::cosf(th));
     let (sph, cph) = (crate::trig::sinf(ph), crate::trig::cosf(ph));
     let off = [nf_formats::ps2float::mul(nf_formats::ps2float::mul(r, sth), cph), nf_formats::ps2float::mul(r, sph), nf_formats::ps2float::mul(nf_formats::ps2float::mul(r, cth), cph)];
-    let d = norm(dir);
-    norm([d[0] + off[0], d[1] + off[2], d[2] + off[1]])
+    // G-046: both normalises are the game's `Vec_Normalise` 0x1e3000 (`trig::vec_normalise`: VU0
+    // squares, EE add.s sum, sqrt.s, div.s, chopped lane products) and the three adds are EE add.s
+    // [M 0x12c5a0:180-184]; the old IEEE `norm` differed in the last bits of most bullet directions.
+    let d = crate::trig::vec_normalise(dir);
+    crate::trig::vec_normalise([crate::trig::ee_add(d[0], off[0]), crate::trig::ee_add(d[1], off[2]), crate::trig::ee_add(d[2], off[1])])
 }
 
 /// First hit of the segment `a → b` with Bond's cylinder, as a fraction.
@@ -524,6 +525,38 @@ mod tests {
         let mut rng = crate::drone::Rng::new(1);
         let d = spread([0.0, 0.0, 1.0], 100.0, 0x4080d0, &mut rng);
         assert_eq!(d, [0.0, 0.0, 1.0]);
+    }
+
+    /// G-046: a bullet's travel direction is `Bullet_init` 0x12c5a0:180-184's two `Vec_Normalise`
+    /// 0x1e3000 calls, op for op [M disasm 0x1e3008-0x1e3058: vmul squares, add.s x+y then +z,
+    /// sqrt.s, div.s 1/len, vmulx lanes]. Written out here from the primitives; the old IEEE
+    /// `sqrt` + three divides gave other bits on most of these aims (a guard's aim at Bond, the
+    /// turret's barrel row), so every shot's direction moved in its last bits.
+    #[test]
+    fn the_bullet_direction_is_the_games_vec_normalise() {
+        use nf_formats::ps2float::{add_noguard, div, mul, sqrt};
+        let game_norm = |v: V3| {
+            let l = sqrt(add_noguard(add_noguard(mul(v[0], v[0]), mul(v[1], v[1]), true), mul(v[2], v[2]), true));
+            let i = div(1.0, l);
+            [mul(v[0], i), mul(v[1], i), mul(v[2], i)]
+        };
+        let ieee_norm = |v: V3| { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); [v[0] / l, v[1] / l, v[2] / l] };
+        let mut differs = 0;
+        for k in 0..64u32 {
+            // Guard-to-Bond style aims: metres apart, mostly level, a few steep.
+            let f = k as f32;
+            let dir = [3.7 + f * 0.913, -0.42 + (f * 0.37).fract() * 2.0, -11.3 + f * 0.61];
+            // Spread 0 (the turret laser 0x67's +0x24 [L]): the cone offset is zero, so the shot is
+            // normalise(normalise(dir)).
+            let mut rng = crate::drone::Rng::new(7);
+            let got = cone(dir, 0.0, &mut rng);
+            let want = game_norm(game_norm(dir));
+            assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits), "aim {dir:?}");
+            if ieee_norm(ieee_norm(dir)).map(f32::to_bits) != want.map(f32::to_bits) { differs += 1; }
+        }
+        assert!(differs > 0, "the inputs must include aims where the IEEE form gives other bits");
+        // A zero direction normalises to zero (the c.eq.s arm), not to itself.
+        assert_eq!(crate::trig::vec_normalise([0.0, 0.0, 0.0]), [0.0; 3]);
     }
 
     #[test]

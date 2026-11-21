@@ -3,6 +3,9 @@
 //! came through); the Drake fly-through drew the live party AND the script's guests; the mouths never
 //! moved (the face tracks were not played); no voice lines fired.
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_game::nis::Request;
 use nf_game::player::Input;
 
@@ -83,6 +86,11 @@ fn movement_input_leaves_the_kimiko_scene_playing_and_the_objective_held() {
     let Some(mut scene) = load("07000007.bin") else { return };
     {
         let sim = scene.sim.as_mut().unwrap();
+        // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+        // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+        // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+        // beats the pair's fail on a teleport.
+        reveal07::drakes_reveal(sim);
         sim.bond.pos = [94.2, 43.7, -45.9]; // TouchOnce #412's volume
         for _ in 0..90 { sim.step_bond(Input::default(), false, false, false); }
     }
@@ -105,6 +113,11 @@ fn the_kimiko_scene_fires_its_voice_lines() {
     let Some(mut scene) = load("07000007.bin") else { return };
     {
         let sim = scene.sim.as_mut().unwrap();
+        // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+        // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+        // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+        // beats the pair's fail on a teleport.
+        reveal07::drakes_reveal(sim);
         sim.bond.pos = [94.2, 43.7, -45.9];
         for _ in 0..90 { sim.step_bond(Input::default(), false, false, false); }
     }
@@ -157,6 +170,11 @@ fn the_kimiko_scene_characters_play_their_face_tracks() {
     let Some(mut scene) = load("07000007.bin") else { return };
     {
         let sim = scene.sim.as_mut().unwrap();
+        // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+        // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+        // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+        // beats the pair's fail on a teleport.
+        reveal07::drakes_reveal(sim);
         sim.bond.pos = [94.2, 43.7, -45.9];
         for _ in 0..400 { sim.step_bond(Input::default(), false, false, false); }
     }

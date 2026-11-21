@@ -312,8 +312,11 @@ pub fn apply_matrix_lvi(m: &[f32; 12], v: &mut [f32; 3]) {
     v[2] = add(add(mul(m[2], x), mul(m[6], y)), mul(m[10], z));
 }
 
-/// The full 0x0700001B slot-pass matrix [M 0x1e5ad0:182-196]: the camera rotation (`Mat_CopyRot` of the
-/// global at 0x2d6230), the slot's own Euler rotation, then the spin — `spin · slot · camera`.
+/// The full 0x0700001B slot-pass matrix [M 0x1e5ad0:182-196]: `Mat_CopyRot` of the global at 0x2d6230,
+/// the slot's own Euler rotation, then the spin — `spin · slot · base`. 0x2d6230 is
+/// `CONSTANT_MAT_IDENT` [symtab work/action-symtab.tsv: 0x2d6230 size 64], so in the game `base` is
+/// the identity: the glist path's sky matrix (and the 1b sun vector) never reads the camera. Only the
+/// flags-bit-0x8 path copies the viewer's rotation (`viewer+0x1a0` [M :200]).
 pub fn rotating_sky_matrix(cam_rot: &[f32; 12], slot_rotation: [f32; 3], spin: f32) -> [f32; 12] {
     let mut m = *cam_rot;
     let slot = rot_matrix(slot_rotation);
@@ -321,6 +324,32 @@ pub fn rotating_sky_matrix(cam_rot: &[f32; 12], slot_rotation: [f32; 3], spin: f
     let spin_m = rot_matrix([spin, 0.0, 0.0]);
     concat(&spin_m, &mut m);
     m
+}
+
+/// `CONSTANT_MAT_IDENT` (0x2d6230 [symtab]), the base `View_DrawSky` copies on the glist path.
+pub const MAT_IDENT: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+/// The `SunVector` (0x2d88a0 [symtab]) one 0x0700001B slot pass leaves [M 0x1e5ad0:186-196]:
+/// `Vec_Spherical_2_Cartesian(1000, 0x409f2c8e, 0xbf29c920)` rewritten from scratch, then
+/// `ApplyMatrixLVI(spin · slot · IDENT)`. `spin` is the pass's angle (`count × 0.00069444446`).
+/// The vector's only other readers are `Env_Create` 0x17b968 (the load-time value), `Env_Reset`
+/// 0x17c1b0 (zero) and `HUD_UpdateLensFlarePane` 0x19d770 (the lens flare and the "sees the sun"
+/// byte BLData+0x962) [M: the decompile's complete reference list for SunVector].
+pub fn rotating_sky_sun(slot_rotation: [f32; 3], spin: f32) -> [f32; 3] {
+    let (r, theta, phi) = ROTATING_SKY_SUN_ARGS;
+    let mut v = spherical_2_cartesian(r, theta, phi);
+    let m = rotating_sky_matrix(&MAT_IDENT, slot_rotation, spin);
+    apply_matrix_lvi(&m, &mut v);
+    v
+}
+
+/// What one frame's `View_DrawSky` pair did besides the drawn variants.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SkyFrame {
+    /// The thunder sounds that fired, in call order.
+    pub thunder: Vec<ThunderSound>,
+    /// The `SunVector` the frame's last 0x0700001B slot pass wrote (`None` = untouched this frame).
+    pub sun: Option<[f32; 3]>,
 }
 
 /// The sky state a frame tick advances: the lightning slots and the rotating-sky counter.
@@ -334,6 +363,11 @@ pub struct Sky {
     /// the normal +0x10/+0x18 pair [M :97-98] — nothing at all for a flash-only slot. The renderer's
     /// lightning swap reads it (`Renderer::sky_flash_mask`).
     pub flash_mask: u32,
+    /// `viewer+0x20` read clear on the last capture: every VisCelList cel carries the 0x10000000
+    /// no-sky bit (`celgraph::CEL_NO_SKY`), so `View_DrawSky` skipped its whole loop
+    /// [M 0x1e86e8:33-41, 0x1e5ad0:91]. Kept across frames the walk cannot run (the game leaves the
+    /// byte as it was when the viewer has no cel [M 0x1e86e8:11]). false = the sky draws and ticks.
+    pub no_sky_view: bool,
 }
 
 impl Sky {
@@ -361,36 +395,64 @@ impl Sky {
         (out, last_spin)
     }
 
-    /// The slots `View_AddSkyObj` 0x1e79a0 fills from the map's type-0x2A placements, in placement
-    /// order [M parsemap 0x1d04f0 case 0x2a → View_AddSkyObj(param 0 slot, glist, trans, rot, 0,
-    /// param 1 flash, param 2 interval, param 3 flash length, param 4 sky group)]. A flash
-    /// placement fills the slot's flash handle, `interval × FRAME_RATE` (truncated to short) and the
-    /// flash length; a normal one the normal handle; both write the group and clear the three
-    /// timers [M 0x1e79a0:17-36]. Slot indices ≥ 0x15 are dropped [M :17]. The glist/object
-    /// handles carry the placement index + 1 (any non-zero value — the timers only test for zero).
+    /// The slots `View_AddSkyObj` 0x1e79a0 fills at load, in placement order — the dynamic block walk
+    /// `parsemap_block_map_data_dynamic` 0x1d1b68 runs (`ResetMap_Load` 0x1d6360:146 passes the create
+    /// flag; placements with flags & 0xa000 or an unresolved object are skipped [M 0x1d1b68:91-97]; the
+    /// param area is zeroed first, so a missing parameter reads 0 [M :64]). Two creators call it:
+    /// - type 0x2A [M 0x1d04f0 case 0x2a]: `View_AddSkyObj(param 0 slot, glist, translation, rotation,
+    ///   obj 0, param 1 flash, param 2 interval, param 3 flash length, param 4 sky group)` (the 9th
+    ///   argument is a stack word the decompile drops);
+    /// - type 0xD4 `Cloud_Create` 0x18d620: `View_AddSkyObj(param 4 slot, glist 0, 0, 0, the cloud
+    ///   object, 0, 0, 0, 1)` [M 0x18d620:27 + the disassembly at 0x18d720-0x18d748: `lhu a0,0x3c(s2)`,
+    ///   a1-a3/t1-t3 = 0, t0 = the object, the stack word 1 = sky group 1].
+    /// A normal call writes BOTH normal handles (+0x10 glist, +0x18 object) and a flash call both flash
+    /// handles plus `interval × FRAME_RATE` (truncated to short) and the flash length; every call writes
+    /// the group, clears the three timers and copies (or zeroes) the translation and rotation
+    /// [M 0x1e79a0:17-60]. So a later placement on the same slot replaces the earlier one's handles —
+    /// on the disc 07000003/04/06/14 carry such pairs [D] and only the later one draws.
+    /// Slot indices >= 0x15 are dropped [M :17]. The handles carry the placement index + 1 (any non-zero
+    /// value — the timers only test for zero; `placement_of` maps them back). Every sky placement on
+    /// the disc resolves its object [D census], so the resolution skip is not modelled here.
     pub fn from_placements(placements: &[nf_formats::placement::Placement]) -> Sky {
         let mut sky = Sky::default();
         for (i, p) in placements.iter().enumerate() {
-            if p.flags & 0xff != 0x2a { continue; }
+            let kind = p.flags & 0xff;
+            if kind != 0x2a && kind != 0xd4 { continue; }
+            if p.flags & 0xa000 != 0 { continue; }
             let param = |k: u32| p.params.iter().find(|(j, _)| *j == k).map_or(0, |&(_, v)| v);
-            let slot = (param(0) & 0xffff) as usize;
+            let handle = i as u32 + 1;
+            // (slot, glist, object, flash flag, interval, flash length, group, translation/rotation)
+            let (slot, glist, obj, flash, interval, flash_len, group, tr) = if kind == 0x2a {
+                (param(0) & 0xffff, handle, 0, param(1) as u8 != 0, param(2) as u16, param(3) as u16, param(4) as u8,
+                 Some((p.translation, p.rotation)))
+            } else {
+                (param(4) & 0xffff, 0, handle, false, 0, 0, 1u8, None)
+            };
+            let slot = slot as usize;
             if slot >= MAX_SLOTS { continue; }
             let s = &mut sky.slots[slot];
-            let handle = i as u32 + 1;
-            if param(1) as u8 != 0 {
-                s.flash_glist = handle;
-                s.flash_len = param(3) as u16 as i16;
-                s.interval = mul(param(2) as u16 as f32, FRAME_RATE) as i16 as u16;
+            if flash {
+                s.flash_glist = glist;
+                s.flash_obj = obj;
+                s.flash_len = flash_len as i16;
+                s.interval = mul(interval as f32, FRAME_RATE) as i16 as u16;
             } else {
-                s.glist = handle;
+                s.glist = glist;
+                s.obj = obj;
             }
-            s.skyid = param(4) as u8;
+            s.skyid = group;
             s.flash = 0;
             s.dark = 0;
             s.thunder = 0;
+            let (t, r) = tr.unwrap_or(([0.0; 3], [0.0; 3]));
+            s.translation = t;
+            s.rotation = r;
         }
         sky
     }
+
+    /// The placement index a slot handle (`glist`/`obj`/`flash_glist`/`flash_obj`) stands for.
+    pub fn placement_of(handle: u32) -> Option<usize> { handle.checked_sub(1).map(|h| h as usize) }
 
     /// One frame of `Game_Draw` 0x1e6f50's two sky calls — `View_DrawSky(viewer, 1)` before the
     /// world list, `View_DrawSky(viewer, 0)` after `psiPostSolid` — returning the thunder sounds
@@ -399,13 +461,42 @@ impl Sky {
     /// Also records the frame's drawn variants in `flash_mask`: a paused frame skips the timers and
     /// draws every slot's normal pair (the :99 gate leaves `iVar11`/`iVar10` at +0x10/+0x18).
     pub fn frame_thunder(&mut self, level: u32, paused: bool, rng: &mut Rng) -> Vec<ThunderSound> {
-        if paused { self.flash_mask = 0; return Vec::new(); }
-        let mut out = Vec::new();
+        self.frame(level, paused, true, rng).thunder
+    }
+
+    /// `frame_thunder` with the viewer's sky gate: `View_DrawSky` runs its whole slot loop only while
+    /// `viewer+0x20` is set [M 0x1e5ad0:91], and `Vision_Portal_Recurse` 0x1e86e8:33-41 sets it each
+    /// capture to "some VisCelList cel lacks flags bit 0x10000000" — the bit `parseentity_fixup_entity`
+    /// 0x1d00c0 gives the room cels whose parameter 3 is non-zero (0x1804c023 / 0x1804c047). With the
+    /// gate clear nothing in the loop runs: no timers, no thunder, no `SuperHappyLightningFlag` clear
+    /// (the clear sits inside the gate), no 0x0700001B count, no sun rewrite, and no slot draws at all.
+    /// `Game_Draw` 0x1e6f50 also tests it before each call [M :87, :113].
+    /// Returns the thunder and the sun vector the 1b block wrote. The 1b block sits outside the :99
+    /// pause gate, so a paused frame still rewrites the sun from the unchanged count [M :186-196].
+    pub fn frame(&mut self, level: u32, paused: bool, sees_sky: bool, rng: &mut Rng) -> SkyFrame {
+        let mut out = SkyFrame::default();
+        self.flash_mask = 0;
+        if !sees_sky { return out; }
         let mut mask = 0u32;
         for group in [1u8, 0] {
-            for (i, t) in self.tick_group_slots(group, level, paused, rng) {
-                if let Some(th) = t.thunder { out.push(th); }
+            self.globals.begin_draw_call();
+            for i in 0..MAX_SLOTS {
+                let slot = &mut self.slots[i];
+                if slot.skyid != group || (slot.glist == 0 && slot.obj == 0 && slot.flash_glist == 0 && slot.flash_obj == 0) {
+                    continue;
+                }
+                let t = if paused { SlotTick::default() } else { tick_slot(slot, &mut self.globals, rng) };
+                if let Some(th) = t.thunder { out.thunder.push(th); }
                 if t.drew_flash { mask |= 1 << i; }
+                // The rotation block runs on the drawn variant's glist path [M :161-198]: the flash
+                // glist on a flash tick, else the normal glist; skipped on the flags-0x8 path.
+                let drawn_glist = if t.drew_flash { slot.flash_glist } else { slot.glist };
+                if drawn_glist != 0 && slot.flags & 0x8 == 0 {
+                    let rot = slot.rotation;
+                    if let Some(spin) = self.rotating.slot_pass(level, paused) {
+                        out.sun = Some(rotating_sky_sun(rot, spin));
+                    }
+                }
             }
         }
         self.flash_mask = mask;

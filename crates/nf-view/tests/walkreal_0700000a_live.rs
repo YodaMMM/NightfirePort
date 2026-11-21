@@ -48,7 +48,9 @@ fn type_digit(w: &mut Walker, digit: u8) {
 
 /// walk-0a-de-teleport: the Operative real-damage walk is RECORDED (the 0b pattern): set by
 /// that test only (the plain walk tops health up — a write a replay cannot carry).
-static REC_0A: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Per test thread (the sisters run in parallel in one binary; a process-wide flag leaked
+// one sister's lever into another mid-walk).
+thread_local! { static REC_0A: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 const REC_0A_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000a_operative.bin");
 thread_local! {
     static REC_0A_RECORDER: std::cell::RefCell<Option<nf_view::replay::Recorder>> = const { std::cell::RefCell::new(None) };
@@ -868,7 +870,13 @@ fn walk_qworm_and_back() -> Walker { walk_qworm_and_back_at(1) }
 /// `walk_qworm_and_back` at `difficulty` (2 = the front-end's launch path, see load_carry_at).
 fn walk_qworm_and_back_at(difficulty: u32) -> Walker {
     let mut w = load_carry_at(None, difficulty);
-    if difficulty == 1 && REC_0A.load(std::sync::atomic::Ordering::Relaxed) {
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the office
+    // civilian #6 / #4 lap shifted and stayed in the south mouth's range past the 6000-tick wait.
+    // Lever: a 900-tick stop at tick 50 (the arrival, before any leg) re-phases the walk against
+    // the laps and the laser timers [L the 12-value sweep: 800/1000/2400 also open the window,
+    // 900 is the one all four difficulties' walks complete on].
+    if w.pause_rest.is_empty() { w.pause_rest = vec![(50, 900)]; }
+    if difficulty == 1 && REC_0A.with(|c| c.get()) {
         // The header snapshots the warm load's RNG / pose / weapon / option rows before the
         // first recorded tick (replay_parity_0700000a.rs rebuilds the same warm load).
         let rec = nf_view::replay::Recorder::start(&w.scene, REC_0A_PATH, "0700000a.bin", None, false,
@@ -1098,7 +1106,11 @@ fn walk_office_floor_qworm_install_and_back() {
 /// parks clear — every eastward ray z −18.3..−19.15 clear with state 4 [D probe]) → the ai lane
 /// south → the south corridor → the hatch E.
 #[test]
-fn walk_office_floor_qworm_keyboard_hatch() { walk_office_floor_qworm_keyboard_hatch_at(1) }
+fn walk_office_floor_qworm_keyboard_hatch() {
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 500/30, 1000/60, 2000/30, 4000/90 complete].
+    walker::with_pause(2000, 30, || walk_office_floor_qworm_keyboard_hatch_at(1))
+}
 
 /// The walk body at `difficulty` (1 Operative = the old warm load's replay parity; 2 Agent rides
 /// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
@@ -1130,6 +1142,11 @@ fn wait_mouth_window(w: &mut Walker) {
         if bad.is_empty() {
             eprintln!("[0a] the south mouth's window opened after {} ticks", w.total_ticks - start);
             return;
+        }
+        if std::env::var_os("NF_0A_MOUTH_TRACE").is_some() && (w.total_ticks - start) % 120 == 0 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            for &i in &bad { let d = &sim.drones.list[i];
+                eprintln!("[0a mouth +{}] d#{i} st {:#x} anim {:#x} p ({:.2},{:.2},{:.2}) yaw {:.2}", w.total_ticks - start, d.state, d.anim.state, d.pos[0], d.pos[1], d.pos[2], d.yaw); }
         }
         assert!(w.total_ticks - start < 6000, "no south-mouth window in 6000 ticks (in range {bad:?})");
         assert!(w.scene.sim.as_ref().unwrap().drones.level_exit.is_none(), "the mission failed waiting for the south mouth");
@@ -2086,9 +2103,13 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
 /// 0x12c5a0:166-184 + 0x180498:349]) — the dead-on port gap fixed this round.
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
-    REC_0A.store(true, std::sync::atomic::Ordering::Relaxed);
-    walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
-    REC_0A.store(false, std::sync::atomic::Ordering::Relaxed);
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 2000/30 and 4000/90 complete d1, d2 and d3].
+    walker::with_pause(2000, 30, || {
+        REC_0A.with(|c| c.set(true));
+        walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
+        REC_0A.with(|c| c.set(false));
+    })
 }
 
 /// The laser band rule, pinned phase by phase on fresh loads (each phase asserts right after its
@@ -2252,7 +2273,11 @@ fn probe_laser_web_positions() {
 /// load path is the only difference.
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
-    walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(2))
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 2000/30 and 4000/90 complete d1, d2 and d3].
+    walker::with_pause(2000, 30, || {
+        walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(2))
+    })
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
@@ -2269,5 +2294,9 @@ fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
 /// (plus the d3-gated tactics the deaths force, inside this file).
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage_00agent() {
-    walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(3))
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 2000/30 and 4000/90 complete d1, d2 and d3].
+    walker::with_pause(2000, 30, || {
+        walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(3))
+    })
 }

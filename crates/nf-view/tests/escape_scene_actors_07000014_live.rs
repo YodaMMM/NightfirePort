@@ -50,7 +50,11 @@ fn start_the_scene(iso: &str) -> nf_view::scene::Scene {
     let mut scene = nf_view::load(iso, "07000014.bin", false).expect("07000014.bin loads");
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.drones.channels.set(0x8c, 1, sim.drones.frame);
+        // The sabotage's two outputs (AND #391 [0x87, 0x88] -> ch 0x8C [D]): a poked ch 0x8C alone is
+        // recomputed off by the AND on the first tick, before the Touch #456 write that lands one
+        // tick after the contact [L g031_object_order_live].
+        sim.drones.channels.set(0x87, 1, sim.drones.frame);
+        sim.drones.channels.set(0x88, 1, sim.drones.frame);
         sim.bond.pos = [-33.5, 0.9, 26.5];
         let mut fired = false;
         for _ in 0..600u32 {

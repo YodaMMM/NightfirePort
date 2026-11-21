@@ -260,7 +260,7 @@ fn four_human_session_digest_is_pinned() {
     // [M Player_Update 0x193600:296-299 copies the scaled +0x10 quad to +0x20; Player_Move
     // 0x191dd0:166-170], so the scripted crouch ticks (t % 47) move slower. Restoring the old
     // unscaled read-back alone on the batch head gives back the old 0xca2f_e7f4_f872_763f.
-    const PINNED_FINAL: u64 = 0xfa4f_3eb1_fbf6_ddda; // was 0xaebc_4cc2_1a19_ca59; // re-pinned by mp-match-end (see PINNED_TICK0)
+    const PINNED_FINAL: u64 = 0xfa76_4d5a_b3a1_5c35; // re-pinned for stream batch 1121b on master (the joined bullet-direction, MP-scenario and auto-aim ports over master's death drops); was 0xfa4f_3eb1_fbf6_ddda; earlier 0xaebc_4cc2_1a19_ca59; // re-pinned by mp-match-end (see PINNED_TICK0)
     const HUMANS: usize = 4;
     let (_s, mut peers, mut simmed) = bring_up(&path, PORT_4, HUMANS, &[0, 2]);
     let mut ms: u64 = 0;

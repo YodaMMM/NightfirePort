@@ -338,14 +338,14 @@ fn the_0c_sniper_takes_damage_when_shot() {
         // `pitch + ty` — so the turn stick feeds (err + tx) and the look stick feeds (perr − ty).
         // The aim-mode window (±0.296/±0.4) carries the correction into the free-aim cursor and
         // only the overflow moves the body ([M Player_Aiming 0x1a1d28]).
-        let (tx0, ty0) = (0.76966 * sim.cross[0], 0.57724 * sim.cross[1]);
+        let (tx0, ty0) = (0.76966 * sim.cross[0] / sim.zoom, 0.57724 * sim.cross[1] / sim.zoom);
         let input = nf_game::player::Input { turn: (err + tx0).clamp(-0.05, 0.05), look: (perr - ty0).clamp(-0.05, 0.05), aiming: true, ..Default::default() };
         // Fire when the SHOT RAY (the crosshair ray the fire path uses — forward + 0.76966·cx·right
         // + 0.57724·cy·up, the port's `aim` at scene.rs) sits on the live chest: the torso box is
         // ±0.25 y at ≥23 units ⇒ the window is ±0.011 rad.
         let (yaw, pit) = (sim.bond.yaw, sim.bond.pitch * std::f32::consts::FRAC_PI_2);
         let (sy, cy, sp, cp) = (yaw.sin(), yaw.cos(), pit.sin(), pit.cos());
-        let (tx, ty) = (0.76966 * sim.cross[0], 0.57724 * sim.cross[1]);
+        let (tx, ty) = (0.76966 * sim.cross[0] / sim.zoom, 0.57724 * sim.cross[1] / sim.zoom);
         let d = [cp * sy + tx * (-cy) + ty * (-sp * sy), sp + ty * cp, cp * cy + tx * sy + ty * (-sp * cy)];
         let dl = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];

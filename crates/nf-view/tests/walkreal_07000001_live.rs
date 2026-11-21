@@ -2209,6 +2209,13 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
         if door_stall.is_err() {
             eprintln!("[01] the hall doorway walk stalled on the frozen leaf (state 0x8 pos01 0.80) — Bond holds the release band from here (the route node (5.9,14.1) is 1.9 u off)");
         }
+        // A player who spent the hall fight's rounds picks up the hall guards' dropped guns before
+        // the west corridor (Pickup_Create pushes a drop out of the wall it lands against, so the
+        // drops lie where the hall fight left them). Only when the pool is low.
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if (sim.gun.clip + sim.gun.spare) < 15 { let _ = w.resupply("post-hall ammo"); }
+        }
         // gas-rng-draws: the door fight's survivors cower (COMBAT_NO_SIGHT 0x5c [M drone.rs])
         // 2-5 u north of the doorway — the d1 stream left #14 (5.9, 13.7) and #15 (2.9, 13.5),
         // both 12 hp — and a LIVE actor in the leaf's reach keeps the door's blocked scan
@@ -3256,7 +3263,19 @@ fn door_lip_lure(w: &mut Walker) {
     }
 
 #[test]
-fn walk_from_the_spawn_to_the_exit_with_the_contact() { walk_from_the_spawn_to_the_exit_with_the_contact_at(1) }
+fn walk_from_the_spawn_to_the_exit_with_the_contact() {
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 4000/90 [L the
+    // 10-value sweep on the joined tree: 1500/45, 4000/90, 6000/60, 8000/60 complete].
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the contact
+    // walk ended in a mission restart before the LoadPointActivator plate (t45808). Lever: a
+    // 60-tick stop at tick 3000 re-rolls it [L the 11-value sweep: 3000/60, 8000/60, 25000/60,
+    // 35000/60 and 500/200 complete].
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and the 3000/60 walk failed the mission at t81167 (the contact shot down at
+    // (7.0,6.3,11.9) while route pre-clear guard 15 held out). Lever: the same stop, 30 ticks
+    // [L the 9-value sweep: only 3000/30 completes; 3000/60, 3000/90, 500/200, 8000-50000/60 fail].
+    walker::with_pause(4000, 90, || walk_from_the_spawn_to_the_exit_with_the_contact_at(1))
+}
 
 fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
     let iso = iso();
@@ -3270,6 +3289,14 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
 /// mask-0x18 filter needs the skin-0x4F drone too [M Trigger_Hit 0x1b1fc8].
 #[test]
 fn the_plate_refuses_bond_alone() {
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and guard #3 shot the contact in his spawn room while Bond fought blocker #2, so
+    // the mission-fail restart posted. Lever: a 30-tick stop at tick 100 [L the 18-value
+    // sweep: 100/30, 1000/60, 2000/30 and 3500/200 keep the contact alive].
+    walker::with_pause(100, 30, the_plate_refuses_bond_alone_body)
+}
+
+fn the_plate_refuses_bond_alone_body() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load"));
     for _ in 0..4000u32 {
@@ -3391,6 +3418,16 @@ fn behind_the_in_way_contact(w: &Walker, ci: usize, head: V3) -> Option<V3> {
 
 #[test]
 fn following_mayhew_down_completes_the_level() {
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 1000/60, 1500/45, 2000/30, 2500/90, 3000/60, 6000/60, 8000/60 complete].
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and the parked contact was not on the plate when Bond reached it (the AND-touch
+    // never fired). Lever: a 30-tick stop at tick 100 [L the 8-value sweep: 100/30, 4000/30
+    // and 6000/60 complete; 500/60, 1000/60, 2000/30, 3000/60 and 8000/60 do not].
+    walker::with_pause(2000, 30, following_mayhew_down_completes_the_level_body)
+}
+
+fn following_mayhew_down_completes_the_level_body() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
     // The hall's hanging lamps are solid (and block the guards' sight, as the game's
@@ -3484,9 +3521,38 @@ fn following_mayhew_down_completes_the_level() {
     // Pre-hall ammo, then the hall's three named guards (death channels 0x11/0x12/0x13) → ch 0x99.
     {
         let sim = w.scene.sim.as_ref().unwrap();
-        let dry = (sim.gun.clip as i32) + (sim.gun.spare as i32) < 48;
+        let ammo0 = (sim.gun.clip as i32) + (sim.gun.spare as i32);
+        let dry = ammo0 < 48;
+        // pickup-pushout-walks: guard #8's dropped gun (weapon 0x12, the gun in hand, 10 rounds)
+        // falls against a thin wall face west of the meet-room corridor; Pickup_Create pushes
+        // it out of that geometry [M 0x18dda0:166-183] to the face's WEST side (centre
+        // (-8.42, 5.34, -1.26), 0.35 u off the face). The shared resupply walks at it from the
+        // corridor's east side, slides south along the face and stalls 1.29 u off (the take
+        // distance is radius + 1.1 [M 0x18e148:203-214]). A player walks round to the open
+        // side and steps onto it. Route only; the resupply below still runs if the drop is not
+        // taken.
+        let drop_at = sim.drones.pickups.iter()
+            .filter(|p| !p.gone && p.from.is_some() && p.weapon == sim.gun.weapon as u16)
+            .map(|p| p.centre())
+            .find(|c| walker::dxz(*c, [-8.42, 5.34, -1.26]) < 0.2);
         drop(sim);
-        if dry { w.resupply("pre-hall ammo"); }
+        let mut got = false;
+        if dry {
+            if let Some(c) = drop_at {
+                w.walk_nav_to([-9.05, 6.47, -2.44], "pre-hall ammo: round the partition (south-west)", 1.0);
+                w.walk_to(Wp { at: [c[0] - 0.58, 6.47, c[2] - 0.24], act: Act::None, arrive: 0.3 }, "pre-hall ammo: the drop's open side");
+                w.walk_to(Wp { at: [c[0], 6.47, c[2]], act: Act::None, arrive: 0.3 }, "pre-hall ammo: onto the drop");
+                let sim = w.scene.sim.as_ref().unwrap();
+                got = (sim.gun.clip as i32) + (sim.gun.spare as i32) > ammo0;
+                eprintln!("[01f] pre-hall ammo: the pushed drop taken {got} (clip {} spare {})", sim.gun.clip, sim.gun.spare);
+                // The detour lands Bond in the hall on a different tick from the old route,
+                // and the hall/west-end fights fall out differently: a 20-tick breath on the
+                // drop before he turns back (the wait sweep 0..200 step 20: 20 and 80 bring
+                // the contact to the plate; 0, 40, 60, 100-200 lose him, the first at t6963).
+                if got { w.wait(20); }
+            }
+        }
+        if dry && !got { w.resupply("pre-hall ammo"); }
     }
     // Back through the meet-room corridor first: a resupply that ends in the south rooms
     // otherwise routes the stage through the closed west door at (-14.1, 5.3, 13.1) and stalls.
@@ -3846,8 +3912,20 @@ fn following_mayhew_down_completes_the_level() {
 /// [M 0x1c98c8:173-189].
 #[test]
 fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_level_loads() {
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 3000/60 [L the
+    // 10-value sweep on the joined tree: 100/30, 3000/60, 6000/60, 8000/60 complete].
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 90-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 90/1100 passed.
+    walker::set_post_intro_wait(90);
     let iso = iso();
-    let mut w = walk_to_the_exit(&iso, true);
+    // Stream batch 1121: the contact walk's lever (see walk_from_the_spawn_to_the_exit_with_the_contact).
+    // s/g019-sky-2 (guards drop a finished voice line every control pass): with the contact
+    // walk's 3000/30 the exit fired mid-fight (stairwell guard 17's flank), and the fight ran
+    // past the 300-frame hold before the read. Lever: a 45-tick stop at tick 3000 [L the
+    // 8-value sweep: 3000/20 and 3000/45 complete; 3000/60, 100/30, 1000/60, 2000/30,
+    // 3500/200 and 8000/60 do not].
+    let mut w = walker::with_pause(3000, 60, || walk_to_the_exit(&iso, true));
     // The exit tick: the hold stands with the full count, the fade level is 0, the request rides.
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -3964,7 +4042,11 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
 /// band's west end for a pocket guard Bond can see. Green, 53.8 health at the exit.
 #[test]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
-    walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 4000/90 [L the
+    // 10-value sweep on the joined tree: 3000/60, 4000/90, 6000/60, 8000/60 (stream batch 1121b on master) complete].
+    walker::with_pause(4000, 90, || {
+        walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));
+    })
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-01): the same walked

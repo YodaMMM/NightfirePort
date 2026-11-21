@@ -23,9 +23,11 @@ fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 /// (+0.0225/tick toward 0.45 [M `Player_PositionCamera` 0x18f5d8:71-79 — the port keys it on the
 /// `crouched` flag, `physics_tick`'s tail]).
 fn crouch(sim: &mut nf_view::scene::Sim) {
-    let input = Input { crouch: true, ..Default::default() };
-    for _ in 0..120 {
+    // ONE press (the Toggle edge), then no input: a press every tick re-toggles the stance
+    // each time the lockout reopens (13 ticks [M Player_SSCrouch 0x1924c0:45-55]).
+    for i in 0..120 {
         if sim.disabled { sim.drones.scripts.skip_request = true; }
+        let input = Input { crouch: !sim.bond.crouched && i < 60, ..Default::default() };
         sim.step_bond(input, false, false, false);
         if sim.bond.crouched && sim.bond.crouch_drop >= 0.44 { return; }
     }

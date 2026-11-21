@@ -31,6 +31,23 @@ thread_local! {
     static LAST_SUMMARY: std::cell::RefCell<Option<(u32, String)>> = const { std::cell::RefCell::new(None) };
 }
 
+thread_local! {
+    /// `set_post_intro_wait`: idle ticks the NEXT `wait_enabled` on this thread stands after Bond
+    /// is enabled (once; 0 = none). A player who waits a moment before moving off: the walks'
+    /// re-roll lever when a stream-moving change re-deals a scripted fight (no game state is
+    /// written, only the walk's own timing).
+    static POST_INTRO_WAIT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Arm `POST_INTRO_WAIT` for the next `wait_enabled` on this thread.
+#[allow(dead_code)]
+pub fn set_post_intro_wait(ticks: u32) { POST_INTRO_WAIT.with(|c| c.set(ticks)); }
+
+/// The armed post-intro wait, consumed.
+fn take_post_intro_wait() -> u32 {
+    POST_INTRO_WAIT.with(|c| c.replace(0))
+}
+
 /// Keep the walker's latest summary; under `NF_WALK_NO_TOPUP` print one every 3000 ticks.
 pub fn note_summary(tick: u32, s: String) {
     if tick % 3000 == 0 && std::env::var_os("NF_WALK_NO_TOPUP").is_some() { eprintln!("[real-damage] at tick {tick}: {s}"); }
@@ -1248,12 +1265,12 @@ impl Walker {
                         while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                         while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
                     let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
-                    let cx_want_raw = -yaw_err / 0.76966;
-                    let cy_want_raw = pitch_err / 0.57724;
+                    // s-auto-aim: the cursor that puts the shot on `at` (screen units, through the zoom).
+                    let [cx_want_raw, cy_want_raw] = sim.cursor_for(at).unwrap_or([-yaw_err / 0.76966, pitch_err / 0.57724]);
                     let cur = sim.cursor;
                     let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
                     let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
-                    let aoff = sim.drones.aim_offset;
+                    let aoff = sim.aim_offset_angles();
                     let eff = { let mut a = yaw_err - aoff[0];
                         while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                         while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };

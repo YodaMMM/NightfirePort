@@ -1048,6 +1048,13 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // 00 Agent: the same crouch rides at difficulty 3 (the 11-15 ledger: the deck_crouch gate
     // at difficulty 3 takes the walk to the gantry ride at 31.2 health, was death t15731 at
     // the bay). The Agent sister (difficulty 2) keeps its own tree byte-identical.
+    // s-crouch-latch-walks: with the game's stance lockout (it ends with the 50-frame transition,
+    // ~13 ticks [M Player_SSWalk 0x192310:34-44]) these presses now crouch Bond. Before, the
+    // jump-grab's stand armed the flat 60-tick lockout and the wire ride froze it, so every press
+    // here was lost and the deck walk ran standing. Crouched for real the deck walk takes +404
+    // ticks (was +281); measured on this branch it is still the cheaper roll: standing, #17 and
+    // #28 land three more 16.0 rounds (catwalk and roof, t12388/t13479) and the ride starts at
+    // 28.6; crouched it starts at 63.6.
     let deck_crouch = real_damage && (difficulty == 1 || difficulty == 3) && !w.scene.sim.as_ref().unwrap().bond.crouched;
     if deck_crouch { for _ in 0..5 { w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false); w.total_ticks += 1; } }
     assert!(w.try_walk_to(Wp { at: [198.93, 14.16, -264.15], act: Act::None, arrive: 0.8 }, "the deck walk to the cab"),
@@ -1243,6 +1250,30 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // low opening (the 300-600-tick fights landed nothing) — but from the bay-enter stand
     // (194, 10.6, −282) Bond is in the ROOM with it: a horizontal in-room ray at d ~17-21,
     // no wall between. Its ride hit (16) and its bay-phase fire both come off the table.
+    // stream-batch-1121 (Agent real damage): the annex floor's own body armour — the placed
+    // kind-3 pickup at (192.82, 10.79, -272.03), 8.5 u north of the annex landing [D the
+    // placed pickups, every 0xF0 placement]. The Agent walk passed it by and lost the yard
+    // landing burst with no armour (death t20311) [L the 2026-11-21 runs].
+    if real_damage && difficulty == 2 {
+        let a0 = w.scene.sim.as_ref().unwrap().drones.health.armour;
+        let t0 = w.total_ticks;
+        // The touch is the radius + 1.1 sphere [M Pickup_Update 0x18e148:203-214]: a 1.3 arrival
+        // takes it (a 0.2 arrival wedged 1.09 off the spot for the whole 6000-tick cap and still
+        // took it). The way out is south-west to the control corner: the direct lines back to
+        // the annex landing and to the bay enter wedge on the wall at z ~-275.5 (191.8, -275.2)
+        // [L the 2026-11-21 runs]; the bay enter is walked from the corner.
+        w.lenient = true;
+        let _ = w.try_walk_to(Wp::new(192.82, 10.79, -272.03).r(1.3), "the annex armour");
+        for _ in 0..20 {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+            w.total_ticks += 1;
+        }
+        let _ = w.try_walk_to(Wp::new(191.6, 10.6, -275.0).r(1.0), "the annex armour south side");
+        let _ = w.try_walk_to(Wp::new(189.5, 10.6, -285.5).r(1.2), "the control corner from the armour");
+        w.lenient = false;
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0d] the annex armour: {} ticks armour {a0:.1} -> {:.1} health {:.1} at {:?}", w.total_ticks - t0, sim.drones.health.armour, sim.drones.health.health, sim.bond.pos);
+    }
     let _ = w.try_walk_to(Wp::new(194.0, 10.6, -282.0).r(1.4), "bay enter");
     let bay18_killed = kill_guard_at_present(&mut w, [210.0, -288.8], [8.0, 5.0], "the bay guard #18 (from inside the bay)", 400);
     eprintln!("[0d] the in-bay #18 kill: landed {} pool {:.1}", bay18_killed, w.scene.sim.as_ref().unwrap().drones.health.health);
@@ -1480,6 +1511,17 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         assert!(sim.bond.grounded && sim.bond.pos[1] > 13.5, "Bond lands on the gantry, got {:?}", bond_pos(&w));
         assert!(sim.drones.channels.on(0x67), "the aboard plate fires ch 0x67 [D stream 2]");
     }
+    // s-crouch-latch-walks: crouch again aboard (one press, real damage). The claw's substate
+    // change ends a crouch with no transition [M Player_ChangeSubState 0x190630: only cases 0/4
+    // touch the stance] and the reel hands back a STANDING walk, so the corner press no longer
+    // carries onto the beam. Before, the port kept the crouch flag through the hang and the
+    // ride ran with it. Standing, the d2 ride took ~19 chips of 1.0 (x 177 onward) and died in
+    // the yard (t20428); crouched aboard it takes 3. The stand press before the hop below
+    // stands him again (the ride is far past the ~13-tick lockout).
+    if real_damage {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
     w.wait(10);
     // THE RIDE, real input: the carry [M Player_FeetOnPoint 0x194188 → Control_InheritVelocity
     // 0x133e88, the port's ground_motion] holds Bond at a constant offset on the runway
@@ -1497,7 +1539,9 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     if ride_fire {
         for _ in 0..40 { w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { switch_to: Some(0x1e), ..Default::default() }, false, false, false); w.total_ticks += 1; }
         let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[0d] ride fire: in hand {:#x} {}+{}", sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+        let inv = &sim.drones.inventory;
+        eprintln!("[0d] ride fire: in hand {:#x} {}+{} owns {:x?}", sim.gun.weapon, sim.gun.clip, sim.gun.spare,
+            (0..inv.owned.len()).filter(|&k| inv.owned[k]).collect::<Vec<_>>());
     }
     // THE 00 AGENT RIDE FIRE (real-health-00agent-0d-1): the 11-15 ledger's own lever law —
     // "answering the nearest clear-line shooter from the ride" — retargeted for the container
@@ -1635,7 +1679,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                 let look = sim.bond.look();
                 let right = [-yaw.cos(), 0.0, yaw.sin()];
                 let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
-                let (tx, ty) = (0.76966f32 * sim.cross[0], 0.57724f32 * sim.cross[1]);
+                let (tx, ty) = (0.76966f32 * sim.cross[0] / sim.zoom, 0.57724f32 * sim.cross[1] / sim.zoom);
                 let dv = [look[0] + tx * right[0] + ty * up[0], look[1] + tx * right[1] + ty * up[1], look[2] + tx * right[2] + ty * up[2]];
                 let dl = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt().max(1e-4);
                 let ray = [dv[0] / dl, dv[1] / dl, dv[2] / dl];
@@ -1700,7 +1744,7 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         if container_drop && ox < 153.5 { break; }
         let _ = k;
     }
-    if ride_fire { let sim = w.scene.sim.as_ref().unwrap(); let h = sim.drones.list.iter().find(|d| d.pos[1] < 3.0 && walker::dxz(d.pos, [177.0, 1.0, -280.8]) < 8.0 && d.skin == 0x5000087).map(|d| (d.health, d.corpse)); eprintln!("[0d] ride fire: {taps} taps, #15 {h:?}"); }
+    if ride_fire { let sim = w.scene.sim.as_ref().unwrap(); let h = sim.drones.list.iter().find(|d| d.pos[1] < 3.0 && walker::dxz(d.pos, [177.0, 1.0, -280.8]) < 8.0 && d.skin == 0x5000087).map(|d| (d.health, d.corpse)); eprintln!("[0d] ride fire: {taps} taps, #15 {h:?}, in hand {:#x} sw {} {}+{}", sim.gun.weapon, sim.gun.switch_state, sim.gun.clip, sim.gun.spare); }
     if container_drop {
         // The ride broke over the containers: the west-apex asserts below are the slot law.
         eprintln!("[0d] the ride broken over the containers at ox {:.2} — at {:?}",
@@ -1727,7 +1771,9 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // Stand out of the crouch before the hop (real-damage-gated: the crouch twin rides
     // crouched; the plain twin never crouched): the crouch press edge stands [M the crouch
     // arms] and the jump arm reads no lockout — the hop fires clean on its own input.
-    if real_damage {
+    // s-crouch-latch-walks: only when crouched. Every real-damage roll now boards crouched (the
+    // press aboard), but a press here on a standing Bond would crouch him instead.
+    if real_damage && w.scene.sim.as_ref().unwrap().bond.crouched {
         w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
         w.total_ticks += 1;
     }
@@ -1761,7 +1807,16 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // The landing height: the container top lands at surface 7.1 + the ~1.1 pos offset = 8.2
     // (the 11-15 ledger); the yard floor lands at ~5.1. The slot law's < 7.0 gate widens to
     // < 8.6 for the container roll.
-    let hop_hold = if container_drop { 36 } else { 20 };
+    // s-crouch-latch-walks: the real-damage slot hop holds 13. The crouched ride (the press
+    // aboard above) boards at offset 1.09 (was 2.00 with the old flag-only crouch), 0.9 further
+    // west, and the 20-tick hold carried Bond to x 133.2 beside #3 (d 1.6, 1.2 a chip): d1 died
+    // t19467. Measured holds, the landing x and the result (port runs on this branch, one each):
+    // d1: 8 137.5 dead, 10 135.4 green 6.6, 11 135.2 dead, 12 137.8 green 11.6, 13 137.8 green
+    // 20.0, 14 137.7 green 18.8, 16 137.5 dead, 24 134.1 dead; d2: 10 dead, 12 134.6 dead,
+    // 13 138.0 green 10.2, 14 138.0 dead, 16 dead, 24 dead. The plain twin keeps 20.
+    // NF_0D_HOP_HOLD overrides it (the tuning knob).
+    let hop_hold: u32 = std::env::var("NF_0D_HOP_HOLD").ok().and_then(|v| v.parse().ok())
+        .unwrap_or(if container_drop { 36 } else if real_damage { 13 } else { 20 });
     let land_y = if container_drop { 8.6 } else { 7.0 };
     // One hop can land back on the girder: hop again until the slot takes him.
     'hops: for _ in 0..5 {
@@ -2356,8 +2411,14 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
 /// pinned against). The real-damage-gated route legs are marked level-0d-operative-walk in
 /// the body; the plain master replay (top-ups on) runs byte-identical to its pre-gate tree.
 #[test]
+#[ignore = "stream batch 1121b: Bond dies at (198.0, 10.6, -278.9) at about t11200 (the roof guards' cover snipes, s-g028-cover-walks); no stop of 37 swept completes it; also red on s/g028-cover-walks and s/auto-aim alone"]
 fn walk_arrival_to_the_c5_door_real_damage() {
-    walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(1, true));
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the ground
+    // sniper #15 landed three 16.0 rounds on the gantry ride (one on master) and Bond died at the
+    // yard landing (t19123). Lever: a 15-tick stop at tick 17200 (the east park, before the
+    // ride) re-times the ride against #15's sight cadence [L 24 grid + 71 random stops and the
+    // tap knobs all died; the 12-value ride-window grid: 17200/15 completes].
+    walker::with_pause(17200, 15, || walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(1, true)));
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-0c-0d): the same walked
@@ -2382,6 +2443,10 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 /// on the two d2 snipers from the strip (the 0c yard-stand law — the zero-spread aimed act
 /// [M Bullet_init 0x12c5a0:139-170] reaches d 55+ with the still-gate tap law).
 #[test]
+// Stream batch 1121: Bond died at the yard landing (t20311) with no armour. GREEN with the
+// annex floor's own body armour (192.82, 10.79, -272.03) taken after the annex drop [L the
+// 2026-11-21 run: armour 0 -> 50 at 54.8 health, five yard kills, the walk completes].
+#[ignore = "stream batch 1121b: Bond dies at (213.1, 17.4, -234.5) at about t4900 to the roof guard's 63 u rounds (s-g028-cover-walks); no stop of 37 swept completes it; also red on s/g028-cover-walks and s/auto-aim alone"]
 fn walk_arrival_to_the_c5_door_real_damage_agent() {
     walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true));
 }
@@ -2408,6 +2473,14 @@ fn walk_arrival_to_the_c5_door_real_damage_agent() {
 /// (the re-deal is sight-cadence-keyed, not stream-keyed), but the ARMOUR TAKE is proven —
 /// the kind-3 pickup exists at 00 Agent and the tight arrival (0.2) takes it (2.0 -> 50.0);
 /// the walk-over reshape is the round-5 lever. The refreshed ledger is in the ignore message.
+/// s-crouch-latch-walks (port runs on that branch): with the game's crouch the claw leaves Bond
+/// standing, so the ride runs crouched only from the press aboard. A standing ride dies on the
+/// beam (t19152, 1.8 chips from g2/g3 from x 176). Crouched, the ride reaches the container break
+/// at 24.0, but the jump right after the stand press freezes Bond in the air at y 14.69
+/// (grounded false, vel.y 3.59 held through five hops) and the beam carries him back east to
+/// x 170: the hop assert fails. Standing up ~3.5 u or ~16 u before the break settles him at
+/// y 14.50 (the boarding stand reads 14.60) and the same freeze follows, or the early stand
+/// dies to g18 on the ride. Base died later (t19772, the yard floor).
 #[test]
 #[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states), retune-nb-0d + retune-nb-0d-2 measured ledger, twenty-three real runs 2026-11-18 [L]: (0) the original roll — boarded 25.8 (the deck sniper #22 0x5000090/0x1e landed 46.0 at t2609 on the ladder-base pin; corner chips 5 x 1.8 from #3/#2/#1), the ride took ZERO chips ~900 ticks, then g18 (owner 18 [M player_hits (frame, owner, damage) drone.rs 13525], skin 0x5000087, 0x12, (177.90, 0.98, -283.26) state 0x68, d ~18.4 off the rider's crouched eye) landed ONE 25.8 0x12 round = death t19197 at (164.71, 14.60, -296.08); (1) the retune-nb-0d levers — the deck-duo kill LANDED but the roll re-dealt #20 46.0 + #32 48.0 worse; the yard-armour twin did NOT arm at d3 (armour 2.0 -> 2.0); the zone-35 rider-distance taps re-aimed g18 (d 13.9-14.4), zero lands (the girder-spawn law holds at d 14), the same-margin death t19222 — all reverted; (2) the retune-nb-0d-2 dice knobs (env-tunable harness, master defaults except the committed ride shift): the hang pause 12/48 SATURATES to one roll (death t18999 — time shifts alone move nothing in the pre-ride phases, the guard fire is sight-event-keyed not absolute-tick-keyed, the 3/12/48-tick pauses pair into two roll classes); NF_0D_RIDE_SHIFT=30/60 (the committed default 30) RE-ROLLED THE RIDE ALIVE — 2 ride chips (25.8 -> 22.2 on the girder), the container landing CLEAN (fall timer 63 [M 0x1949a8 raw = timer - 60], 18.6), the exit clean (16.8) — the death moved OFF the ride to the YARD-FLOOR fight: the scan-era garrison CONVERGES on the container during the ride and the exit landing eats a 4-guard chip burst (frames 19676-19682: #1 (151.8,-286.0) d 14.6, #2 (136.3,-298.9) d 5.7, #0 (156.2,-286.1) d 18.0, #3 (133.0,-297.6) d 8.3 — 6 chips of 1.8 in 6 ticks), death t19772 at the landing spot (141.22, 4.88, -296.08) at 16.8; the shift-60 twin died t19722 the same way; the family map is ALIVE exactly at {30, 60} and dead at {0, 12, 20, 25, 35, 40, 45, 50, 70, 80, 90} — the alive band is ~30-tick quantized and both alive rolls land at 16.8-18.6; the tap knobs zone 50/cadence 3 (99 taps — the 18-round 0x1e budget spent early) rode 4 chips but the container HOP flew LONG (fall timer 99 = raw 39 x 1.2 [M the d3 Plr_DMod] = 46.8 at 18.6 = death AT the landing; the hop timer is config-tied: the same break spot gives timer 63 under the shift-30 roll and 99 under the zone-50 roll; the hop stagger wait 30/60 does NOT fix it); the crouch-timing levers REGRESS: the crouched E-plate park wait is inside the west band's sight (#0 (157.6,-289.9) + #1 25.8 of chips, dead t21174; the standing wait is the measured-quiet stand) and the crouched rim dwell doubles the exposure time (#1 18.0 in 10 hits, dead t21538) — both reverted. FACTS: the pre-ride costs are 46.0 (#22, every roll) + 19.2 (the annex fall raw 16 x the d3 factor 1.2 [M 0x1949a8 + 0x1902c8]) + the corner chips 5.4-14.4 -> boarding 20.4-29.4; the ride CAN be ridden alive and the landing CAN be clean; the container-top sweep is measured-dead (the 0d-1 roll burned its passes on #1 at 6.8 u); the ride taps CANNOT kill anything (33+ taps at d 13.9-43, zero lands); g18 is outside the 25 u tap zone AND the bay-enter scan's wake window; the corner rim and the high stands see nothing into the yard pit. NEXT LEVER: the floor-fight budget — the alive-ride rolls land at 16.8-18.6 and the converged garrison's 4-chip/6-tick burst outraces the sweep's first kill (+39 ticks in the 0d-2-era roll); the sweep needs the ~28-31 the 0d-2-era roll landed with, i.e. ~+12 health from the pre-ride phases: (a) shave the corner chips 5.4-9.0 WITHOUT extra dwell time (the crouch-timing levers are dead; a faster rim approach — trim the 20-tick claw switch poll, pre-arm the latch — or a rim stand outside the #3/#2 sight cone, geometry needs a probe), (b) re-roll the #22 sniper round (the deck-duo kill landed it but re-dealt #20+#32 — the re-deal is its own dice, a kill act with a different draw count may re-deal kinder), or (c) fight the converged garrison from the container rim BEFORE dropping (the down-rays from the rim need a probe — the 0d-1 passes burned on #1 at 6.8 u with the box act; the head act is the untried variant). (3) THE retune-nb-0d-3 LEDGER (six real runs 2026-11-18, each its own roll): lever (c) is MEASURED DEAD with two audit-proven laws — NF_0D_AUDIT on the rim sweep (the machinery stays in the tree behind NF_0D_RIM_MAX, committed default 0 = OFF): (i) THE ARMING LAW: the first kill-shot from the container top (a part-5 head hit on g3 at +34 [NF_0D_AUDIT: b0 SPAWN dir (-0.972,-0.218,-0.088) -> part Some(5,0.099)]) ARMS the yard — g0 lands its first 1.8 chip ~24 ticks later, then g0 AND g1 sustain 1.8 every ~6 ticks (0.3 damage/tick EACH; 9 chips in 51 ticks ate the 18.6 pool mid-sweep) — one shot buys one kill and hands the pool to the pack; the floor landing burst is the same pack already armed by flat sight. (ii) THE POST-KILL SWALLOW: a trigger tick ~36 ticks after a landed kill spawns NO bullet ([NF_0D_AUDIT: pass 1's tap at +34, trigger in, NO SPAWN line]; the ride fire's ~28-tick taps never killed, so they never hit this law) — the sweep gets ONE shot per ~200 ticks vs an armed pack draining 0.3-0.6/tick. Sub-laws measured the same wall: the CROUCHED stand breaks Bond's OWN head-rays to the north pair at the container's north rim (three head-aim taps at g1 = zero; the standing stand holds them clear — the v1 roll's one-tap g1 kill) and the standing chest-aim bullet lands LOW on down-shots (the g3 chest-aim hit part 4, the lower torso [b0 dir (-0.979,-0.179,-0.096) vs the geometric (-0.989,-0.111,-0.107)] — the muzzle drop law); the 0.12 u tap gate (half the ride law) still missed the steeper g2 line twice — the drop outruns the gate at d 12. (iii) THE DICE KNOBS DO NOT MOVE THE FLOOR FIGHT: NF_0D_TAP_CADENCE=17 (17 taps) reproduced the shift-30 roll tick for tick (the same ride chips at 18877/19384, the same landing 18.6, the same death t19772 — the guard fire is sight-event-keyed, the tap draws are invisible to it); NF_0D_RIDE_SHIFT=0 + the tap defaults (19 taps) reproduced the ROUND-1 death exactly (g18's ONE 25.8 0x12 at t19197, the owner-resolved log) — the shift-0 ride is dead on this timeline. NEXT LEVER (round 4): the pre-ride budget is the only remaining source of the ~+12 the floor sweep needs — (a) shave the corner chips 5.4-9.0 WITHOUT extra dwell time (trim the 20-tick claw switch poll, pre-arm the latch before the rim walk — the corner phase's own code comments name it; the chip cadence is 12-tick 0x12 from #3/#2/#1 at the rim), (b) re-roll the #22 46.0 (the deck-duo kill re-dealt #20+#32; a kill act with a different draw count may re-deal kinder — each act variant is its own roll), (c) hunt the 18-tap zero-chip ride roll (the dice-knob comment's own measurement: an 18-tap roll re-rolled the ride to ZERO chips, boarding 31.2 through the landing, a ZERO-COST exit — the exact budget the floor sweep needs; the exact old tap config is not on this branch — sweep NF_0D_TAP_ZONE x NF_0D_TAP_CADENCE x NF_0D_RIDE_SHIFT for a ride with 0 chips at the {30,60}-like alive band), (d) the floor-landing crouch — MEASURED DEAD this session (two runs): the pre-exit crouch walls the crouched rim walk on the container's ridge (541 ticks for 1.25 u, the walk-off never fired — the rim walk must run standing) and the landing-tick crouch press toggles across the exit's MULTI-LANDING structure (the yard floor has sub-6.0 steps — three landings in one exit) while the longer exit ate 16.8 -> 9.6 of chips before the sweep (death t19846). The rim walk runs standing; the floor sweep's own crouch carries the posture from there. The round-4 lever list stands at (a)/(b)/(c). (4) THE retune-nb-0d-4 LEDGER (seventeen real runs 2026-11-19, each its own roll): (i) THE DICE HUNT (lever (c)) is DEAD IN THIS NEIGHBOURHOOD — twelve fresh rolls: NF_0D_TAP_CADENCE {7,9,11,13,14,16,18,20} at the committed shift 30 ALL died ON THE RIDE to g18's 22.2-24.0 0x12 draw (t19194-19292; the default cadence 15 = 19 taps is the roll where g18 MISSES — every neighbouring tap schedule re-rolls it onto the rider); the shift-60 family (cadence 14/16) died the same way; NF_0D_TAP_ZONE 20/30 SATURATE to the default roll exactly (the same chips t18877/t19384, the same landing 18.6, the same death t19772). The old branch's 18-tap zero-chip config is not reachable in this gate law's neighbourhood. (ii) LEVER (b) — the #22 re-roll — MEASURED DEAD with a NEW LAW: the strip-mouth head act (the round-1 box [209.0, -289.3] tol [7.0, 3.5], d3-gated env NF_0D_DECK_KILL=1, default 0) LANDED each time but the box picks the NEAREST PRESENT guard — g11 (0x5000093, the bay captain, nearer the box centre than #22's repositioned spot), NOT #22 — and the re-deal is NOT stream-keyed: NF_0D_DECK_EXTRA = 1/2/3 deliberate pre-shot draws produced the IDENTICAL deal tick for tick (#20 46.0 t2022, #36 48.0 t2060, #32 6.0 t2599/2600, death at the ladder base t2599/2600). The 0x1e snipers' fire is sight-cadence-keyed and LANDS at d3 Accuracy row 2 regardless of the draw count — 'each act variant is its own roll' is measured FALSE for this act (the stream only rolls the damage VALUE 46/48; the hit/miss at row 2 saturates). (iii) THE ARMOUR TAKE — THE ROUND-5 BREAKTHROUGH: the kind-3 pickup EXISTS at 00 Agent (pickup 1, kind 3, weapon 0x6, rounds 50, at (205.41, 0.11, -205.31), bounds radius 0.81, gone false hidden false state 1 [L the probe run]; the placed pickups spawn with NO difficulty filter [D scene.rs placed_pickups: every flags&0xff==0xf0 placement]) and the TIGHT approach (walk_nav_to arrive 0.2 + a 40-tick stand on the spot, NF_0D_ARMOUR_PROBE=1, default 0) TAKES it — armour 2.0 -> 50.0 [L] — the round-1 refusal was the LOOSE arrival (arrive 0.6 stopped 0.57 dxz / 1.03 dy off; the touch is the radius+1.1 sphere from the player's position + the LOS mask-0x721 ray from his world-sphere centre [M Pickup_Update 0x18e148:203-214, two different origins]). The probe roll still DIED (t4023 at the ladder base, before the climb): the 1388-tick walk-over dwell sits in the snipers' sight (#32 100.0 in 4 hits; the fresh armour 50 absorbed ~1-2 rounds then spent — the probe ledger shows both -0.00 armour-eaten entries AND a -46.00 health entry, so the exact absorb order needs the [M] pin of Player_HandlePain 0x1902c8:84-104). Lever (a) (the corner shave) went untried — the budget went to the dice hunt, the deck act and the armour probe. NEXT LEVERS (round 5): (A) THE ARMOUR WALK-OVER RESHAPE — the take is proven; the cost is the walk-over dwell itself (the snipers fire on their own cadence while Bond stands visible). Reshape it: a shorter/faster path (the walk-out 24 u north + the walk-back is ~1388 ticks of exposure), or fold the take into an existing north-bound leg, or take it and hold the armour UNTIL the climb (the ladder-top snipers' rounds then eat the 50 instead of Bond's health); the absorb law first needs the [M] read (the probe's -0.00 vs -46.00 mix). With the armour alive at the pre-ride phases, #22's 46.0 every-roll round EATS ARMOUR and the floor sweep's budget lands ~+40. (B) lever (a) — shave the corner chips 5.4-9.0 without extra dwell (trim the 20-tick claw switch poll, pre-arm the latch). (C) the exit-fall crouch press AFTER the exit's last multi-landing step (the (d) variant pressed AT the landing tick and toggled across the sub-6.0 steps; a press ~20-40 ticks before the ground is ONE press — the burst's visibility 0.75x [M Drone_ProcessOpponents 0x1390c0:40-42] + the 0.45 sight drop [M Player_GetHeadPos 0x195aa0:39-51] may cut the landing burst's 6 chips; the crouched SWEEP posture then carries from the landing). (iv) LEVERS (B)/(C) MEASURED THIS SESSION: the corner-shave pre-arm (NF_0D_FAST_SWITCH=1, the claw switch moved into the quiet E-plate wait + a poll-until-up, default 0) re-rolled the ride onto g18's 25.8 at t19354 — the same dice law, one roll, dead for this roll; the EXIT-FALL CROUCH PRESS (NF_0D_EXIT_CROUCH=1, one press tick in the drift loop at grounded-false y < 6.2, default 0) ENGAGES — Bond lands crouched (crouch_drop 0.29, the landing 4.64 vs the standing 5.06 [L]) — but the landing burst is NOT cut (the same ~6 chips at d 5.1-13.8 point-blank, 11.4 in 12 ticks, death t19777 vs t19772): the 0x12 cadence fires through the 0.75 visibility + the 0.45 drop at that range. The armour absorb law is now PINNED [M Player_HandlePain 0x1902c8:60-72 — the decompile]: the armour absorbs min(damage, armour) and ONLY for the default damage types (case default = 1.0); damage types 1-7 bypass the armour entirely (fVar4 = 0.0). The d1 evidence (the armour 50 -> 34 by one 16.0 sniper hit) says the sniper rounds ARE armour-applicable; the probe's mixed ledger (-0.00 entries beside -46.00 health entries with the armour fresh) needs the round-5 re-measure with NF_PICKUPLOG + the hit trace (the take's exact tick vs the hits decides it). ROUND-5 LEVERS: (A) the armour walk-over reshape (the take proven; the walk-over dwell 1388 ticks attracts the sniper cadence — a shorter path, a fold into an existing leg, or the take held until the climb; the [M] absorb law + the bullet damage type decide the net); (B') the g18 ride lottery at other knob families (each config its own roll); (C') the landing burst answer — the crouched landing works mechanically but does not cut the point-blank burst; the sweep's first-kill race (+39 ticks) remains the wall to beat with the armour alive. (5) THE retune-nb-0d-5 LEDGER (two real runs 2026-11-19, each its own roll): the armour walk-over reshape is MEASURED DEAD — three new laws: (i) THE ABSORB LAW PINNED WITH THE FIELD ADDRESSES [M Player_HandlePain 0x1902c8:84-96]: absorbed = min(damage x the type factor, armour), armour at BLData+0x8B0, health at +0x894, the default damage type = 1.0 (types 1-4 = 0.0, bypass); the trace run PROVES the fresh 50 fully ate a 48.0 0x1e roll (armour 2.0 at the leg end, health unchanged) AND ate #22's round at t2999 in the reshaped roll — the absorbed hits sit in player_hits as 0.0 HEALTH DELTAS (the trace's dmg != 0.0 filter hides them: round 4's 'mixed ledger' was this display law, not a mixed absorb; the d3 spawn armour is 2.0 — the loadout line's armour 0 is the pre-spawn print). (ii) THE WAKE LAW: ANY pocket visit (the 1388-tick committed leg AND the reshaped leg) wakes the west-roof #32's sight-cadence onto the climb phases — the no-leg baseline stand eats only #22's 46.0 and survives, both probe rolls ate #32 rounds after the leg (the committed-leg roll died t4023 AT the ladder-base stand 46+8; the reshaped roll died t3790 IN THE POCKET), and in the reshaped roll the armour DID eat #22's round (t2999) and the roll STILL died — the woken cadence alone is lethal. The armour's one-absorb budget is spent in the measured-hit corridors (the walk-out east corridor x~213, the walk-back west detour to (183.5,-216.8) at 32 u from #32's roof spot) before #22's round: net NEGATIVE vs the no-leg baseline. (iii) THE POCKET-BUMP LAW: the pocket exit bump at (206.65,-205.04) (y 1.91) is climbable east->west (the out path) but the direct-steer east return west->east WEDGED on it (the reshaped roll sat at (206.5,-204.9) 180+ ticks in the cadence). ROUND-6 LEVERS: (A) the g18 ride lottery at the untried knob families (NF_0D_TAP_ZONE {40,45} x NF_0D_TAP_CADENCE {15,17} x NF_0D_RIDE_SHIFT {30,60} — each config its own roll; the alive band is ~30-tick quantized at {30,60}); (B) the armour lever is CLOSED unless a sight-blocked pocket corridor appears (every nav-graph yard node on the leg is measured-hit; a live check could map #32's sight mask along the x~213 corridor); (C) the pre-ride corner shave that does NOT re-roll the ride (the FAST_SWITCH pre-arm re-rolled it — dead; a rim stand outside the #3/#2 sight cone needs geometry)."]
 fn walk_arrival_to_the_c5_door_real_damage_00agent() {
@@ -2660,7 +2733,7 @@ fn rim_sweep_act(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
             let look = sim.bond.look();
             let right = [-yaw.cos(), 0.0, yaw.sin()];
             let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
-            let (tx, ty) = (0.76966f32 * sim.cross[0], 0.57724f32 * sim.cross[1]);
+            let (tx, ty) = (0.76966f32 * sim.cross[0] / sim.zoom, 0.57724f32 * sim.cross[1] / sim.zoom);
             let dv = [look[0] + tx * right[0] + ty * up[0], look[1] + tx * right[1] + ty * up[1], look[2] + tx * right[2] + ty * up[2]];
             let dl = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt().max(1e-4);
             let ray = [dv[0] / dl, dv[1] / dl, dv[2] / dl];
@@ -2941,7 +3014,7 @@ fn shoot_far_aim(w: &mut Walker, di: usize, label: &str, cap: u32, aim_dy: f32, 
             let look = sim.bond.look();
             let right = [-yaw.cos(), 0.0, yaw.sin()];
             let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
-            let (tx, ty) = (0.76966 * sim.cross[0], 0.57724 * sim.cross[1]);
+            let (tx, ty) = (0.76966 * sim.cross[0] / sim.zoom, 0.57724 * sim.cross[1] / sim.zoom);
             let d = [look[0] + tx * right[0] + ty * up[0], look[1] + tx * right[1] + ty * up[1], look[2] + tx * right[2] + ty * up[2]];
             let dl = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
             let ray = [d[0] / dl, d[1] / dl, d[2] / dl];

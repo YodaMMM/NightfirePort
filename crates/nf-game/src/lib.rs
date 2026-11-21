@@ -94,6 +94,7 @@ pub mod sound;
 pub mod spawners;
 pub mod space_missile;
 pub mod trig;
+pub mod autoaim;
 pub mod triggers;
 pub mod tuning;
 pub mod useobj;

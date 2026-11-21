@@ -117,9 +117,12 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, label:
             let dist = (dx * dx + dy * dy + dz * dz).sqrt();
             if dist > range { return false; }
             let desired = dx.atan2(dz);
-            let err = walker::wrap_pi(desired - sim.bond.yaw);
+            // Steer the effective shot direction (the eased auto-aim offset included, which
+            // `Player_GetAimingPoint` adds in the game's screen units [M; s-auto-aim]).
+            let off = sim.aim_offset_angles();
+            let err = walker::wrap_pi(desired - sim.bond.yaw - off[0]);
             let want_pitch = (dy / walker::dxz(bp, target).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
-            let perr = want_pitch - sim.bond.pitch;
+            let perr = want_pitch - sim.bond.pitch - off[1] / std::f32::consts::FRAC_PI_2;
             let on_target = err.abs() < 0.008 && perr.abs() < 0.012 && w.total_ticks - last_tap > 15;
             let input = if on_target {
                 nf_game::player::Input { aiming: true, ..Default::default() }

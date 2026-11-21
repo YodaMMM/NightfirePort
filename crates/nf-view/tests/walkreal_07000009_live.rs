@@ -273,122 +273,126 @@ fn elevator_sp_state(sim: &nf_view::scene::Sim) -> u16 {
 /// above prove the un-pressed arm (ch 0x7C/0x7D/0x61 off throughout).
 #[test]
 fn the_alarm_switch_fails_objective_1() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000009.bin", false).expect("load 07000009"));
-    w.top_up_health = true;
-    w.wait(10);
-    // An alarm switch: the 0x29 Switch objects on ch 124 (0x7C) [D placements #78/251/252/253/
-    // 262/263/264]. Take the first, WALK to it (level-09-alarm-switch-walk: the spawn -> the
-    // stair base -> across the lobby, the walked legs of walk_tower_a_start_to_finish), aim,
-    // and pulse E. No teleport.
-    let spot = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        for (i, s) in sim.drones.useobjs.switches.iter().enumerate() {
-            if s.ch == 124 { eprintln!("[09-alarm] switch[{i}] gate {} at {:?}", s.gate, s.pos); }
-        }
-        let s = sim.drones.useobjs.switches.iter().find(|s| s.ch == 124 && s.gate == 0)
-            .expect("an alarmswitchplayer on ch 124 with no gate [D]");
-        s.pos
-    };
-    assert!(cycle_to_lethal(&mut w), "the P2K (0x2, 7+41) is in Bond's 09 owned set — the K5 darts the load opens on damage nothing [M 0x13fff0:269-306]");
-    assert!(cycle_to_darts(&mut w), "the K5 darts cycle back — the stealth legs run silent (the P2K's shots noise-pull civilian guards into the alarm run [L the 2026-11-05 trace])");
-    walk_nav_clearing(&mut w, [19.79, -376.68, 30.37], "the stair base", 1.4);
-    walk_nav_clearing(&mut w, [-18.4, -368.8, 27.5], "up the stairs and across the lobby", 1.2);
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
-            "the walk to the switch must not raise the alarm (obj 1) before the press");
-    }
-    // The final leg walks the nav graph to the switch WITH the racer watch at each node — the
-    // fixed takedown chases a racer anywhere (a racer not chased WILL press; the old
-    // cross-floor skip left exactly that hole), and the node beats keep the walk itself the
-    // only mover between them. The dy assert below pins the arrival (a dxz-only "arrive" from
-    // a floor below once passed here — the chase's floor discipline is what changed).
-    let pts = {
-        let sim = w.scene.sim.as_ref().unwrap();
-        leg(sim, sim.bond.pos, spot)
-    };
-    for (k, p) in pts.iter().enumerate().skip(1) {
-        clear_live_guards_within(&mut w, &format!("the alarm switch pre {k}"), 25.0);
-        to_node(&mut w, *p, &format!("the alarm switch nav {k}"));
-        clear_live_guards_within(&mut w, &format!("the alarm switch nav {k}"), 25.0);
-    }
-    // The final approach, BEAT-SPLIT (spawn-pick-and-dart-stamps re-pin, by route): a
-    // dart-stamped sleeper wakes 7200 ticks after his dart [L docs/systems/tranq-dart.md — the
-    // K5's DroneFunc_RecoverTime 120 s], and a woken tower guard carries the alarm-run plumbing
-    // the dart's stamp block armed [M 0x1469b8:331-357 — the game's own wake behaviour, the same
-    // block the tase stamps]. The measured failure: the old single approach hop WEDGED ~3769
-    // ticks at the switch's ~1.08 u floor (its "arrival" was the level-exit latch passing the
-    // assert truthy) and the waker pressed inside that window. The hops accept the PRESS reach —
-    // dxz < 1.4, the arrival assert below — so the loop stops at the same spot the old run
-    // reached, minus the wedge that gifted the waker his window; each hop is preceded by a
-    // clearing beat.
-    let mut reached = false;
-    loop {
-        // The level has already ended (the walk's own asserts below read why): the hop loop
-        // stops instead of spinning on the exit latch.
-        if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
-        clear_live_guards_within(&mut w, "the alarm switch approach beat", 25.0);
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: 1000/60 only complete].
+    walker::with_pause(1000, 60, || {
+        let iso = iso();
+        let mut w = Walker::new(nf_view::load(&iso, "07000009.bin", false).expect("load 07000009"));
+        w.top_up_health = true;
+        w.wait(10);
+        // An alarm switch: the 0x29 Switch objects on ch 124 (0x7C) [D placements #78/251/252/253/
+        // 262/263/264]. Take the first, WALK to it (level-09-alarm-switch-walk: the spawn -> the
+        // stair base -> across the lobby, the walked legs of walk_tower_a_start_to_finish), aim,
+        // and pulse E. No teleport.
+        let spot = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            for (i, s) in sim.drones.useobjs.switches.iter().enumerate() {
+                if s.ch == 124 { eprintln!("[09-alarm] switch[{i}] gate {} at {:?}", s.gate, s.pos); }
+            }
+            let s = sim.drones.useobjs.switches.iter().find(|s| s.ch == 124 && s.gate == 0)
+                .expect("an alarmswitchplayer on ch 124 with no gate [D]");
+            s.pos
+        };
+        assert!(cycle_to_lethal(&mut w), "the P2K (0x2, 7+41) is in Bond's 09 owned set — the K5 darts the load opens on damage nothing [M 0x13fff0:269-306]");
+        assert!(cycle_to_darts(&mut w), "the K5 darts cycle back — the stealth legs run silent (the P2K's shots noise-pull civilian guards into the alarm run [L the 2026-11-05 trace])");
+        walk_nav_clearing(&mut w, [19.79, -376.68, 30.37], "the stair base", 1.4);
+        walk_nav_clearing(&mut w, [-18.4, -368.8, 27.5], "up the stairs and across the lobby", 1.2);
         {
+            let sim = w.scene.sim.as_ref().unwrap();
+            assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
+                "the walk to the switch must not raise the alarm (obj 1) before the press");
+        }
+        // The final leg walks the nav graph to the switch WITH the racer watch at each node — the
+        // fixed takedown chases a racer anywhere (a racer not chased WILL press; the old
+        // cross-floor skip left exactly that hole), and the node beats keep the walk itself the
+        // only mover between them. The dy assert below pins the arrival (a dxz-only "arrive" from
+        // a floor below once passed here — the chase's floor discipline is what changed).
+        let pts = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            leg(sim, sim.bond.pos, spot)
+        };
+        for (k, p) in pts.iter().enumerate().skip(1) {
+            clear_live_guards_within(&mut w, &format!("the alarm switch pre {k}"), 25.0);
+            to_node(&mut w, *p, &format!("the alarm switch nav {k}"));
+            clear_live_guards_within(&mut w, &format!("the alarm switch nav {k}"), 25.0);
+        }
+        // The final approach, BEAT-SPLIT (spawn-pick-and-dart-stamps re-pin, by route): a
+        // dart-stamped sleeper wakes 7200 ticks after his dart [L docs/systems/tranq-dart.md — the
+        // K5's DroneFunc_RecoverTime 120 s], and a woken tower guard carries the alarm-run plumbing
+        // the dart's stamp block armed [M 0x1469b8:331-357 — the game's own wake behaviour, the same
+        // block the tase stamps]. The measured failure: the old single approach hop WEDGED ~3769
+        // ticks at the switch's ~1.08 u floor (its "arrival" was the level-exit latch passing the
+        // assert truthy) and the waker pressed inside that window. The hops accept the PRESS reach —
+        // dxz < 1.4, the arrival assert below — so the loop stops at the same spot the old run
+        // reached, minus the wedge that gifted the waker his window; each hop is preceded by a
+        // clearing beat.
+        let mut reached = false;
+        loop {
+            // The level has already ended (the walk's own asserts below read why): the hop loop
+            // stops instead of spinning on the exit latch.
+            if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { break; }
+            clear_live_guards_within(&mut w, "the alarm switch approach beat", 25.0);
+            {
+                let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                if dxz(p, spot) < 1.4 && (p[1] - spot[1]).abs() < 2.0 { reached = true; break; }
+            }
             let p = w.scene.sim.as_ref().unwrap().bond.pos;
-            if dxz(p, spot) < 1.4 && (p[1] - spot[1]).abs() < 2.0 { reached = true; break; }
+            let (dx, dz) = (spot[0] - p[0], spot[2] - p[2]);
+            let l = (dx * dx + dz * dz).sqrt();
+            if l < 1.4 { reached = (p[1] - spot[1]).abs() < 2.0; break; }
+            let step = 1.5_f32.min(l - 1.0); // stop the hop 1.0 short: never wedge on the final 1.08 floor
+            let nx = p[0] + dx / l * step;
+            let nz = p[2] + dz / l * step;
+            if !w.try_walk_to(Wp::new(nx, spot[1], nz).r(0.8), "the alarm switch approach hop") { break; }
         }
-        let p = w.scene.sim.as_ref().unwrap().bond.pos;
-        let (dx, dz) = (spot[0] - p[0], spot[2] - p[2]);
-        let l = (dx * dx + dz * dz).sqrt();
-        if l < 1.4 { reached = (p[1] - spot[1]).abs() < 2.0; break; }
-        let step = 1.5_f32.min(l - 1.0); // stop the hop 1.0 short: never wedge on the final 1.08 floor
-        let nx = p[0] + dx / l * step;
-        let nz = p[2] + dz / l * step;
-        if !w.try_walk_to(Wp::new(nx, spot[1], nz).r(0.8), "the alarm switch approach hop") { break; }
-    }
-    assert!(reached,
-        "the walk must reach the ch-124 switch's press reach at {spot:?} — Walker movement only, no sim.bond.pos writes");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        let p = sim.bond.pos;
-        let d = dxz(p, spot);
-        eprintln!("[09-alarm] walked to ({:.2},{:.2},{:.2}); switch at {:?}; final dxz {d:.2}", p[0], p[1], p[2], spot);
-        assert!((p[1] - spot[1]).abs() < 2.0, "the walked position must be on the switch's floor (dy {:.2} — a dxz-only arrive lands underneath, 8 units down)", p[1] - spot[1]);
-        assert!(d < 1.4, "the walked position must be within the press reach of the switch (dxz {d:.2})");
-        assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
-            "the alarm is still off when Bond arrives — the E press below is the ch 0x7C writer");
-    }
-    let mut fired = false;
-    for k in 0..120 {
+        assert!(reached,
+            "the walk must reach the ch-124 switch's press reach at {spot:?} — Walker movement only, no sim.bond.pos writes");
         {
-            let sim = w.scene.sim.as_mut().unwrap();
-            let b = &mut sim.bond;
-            let dx = spot[0] - b.pos[0];
-            let dz = spot[2] - b.pos[2];
-            b.yaw = dx.atan2(dz);
-            b.pitch = 0.0;
-            sim.step_bond(nf_game::player::Input::default(), false, false, k % 6 == 0);
-            if sim.drones.channels.on(0x7c) { fired = true; break; }
+            let sim = w.scene.sim.as_ref().unwrap();
+            let p = sim.bond.pos;
+            let d = dxz(p, spot);
+            eprintln!("[09-alarm] walked to ({:.2},{:.2},{:.2}); switch at {:?}; final dxz {d:.2}", p[0], p[1], p[2], spot);
+            assert!((p[1] - spot[1]).abs() < 2.0, "the walked position must be on the switch's floor (dy {:.2} — a dxz-only arrive lands underneath, 8 units down)", p[1] - spot[1]);
+            assert!(d < 1.4, "the walked position must be within the press reach of the switch (dxz {d:.2})");
+            assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
+                "the alarm is still off when Bond arrives — the E press below is the ch 0x7C writer");
         }
-    }
-    assert!(fired, "the E pulses at the alarm switch must raise ch 0x7C [M Switch_Activate 0x1b02a8]");
-    w.wait(8);
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x61), "OR mux #278: ch 0x7C → the alarm ch 0x61 [D]");
-        assert!(sim.drones.channels.on(99), "the mission-fail channel ch 99 [M 0x1827d8:128-131]");
-        assert_eq!(sim.drones.mission.states[8][0], 5, "objective 1 FAILED (state 5) [M mission.rs states]");
-        assert_eq!(sim.drones.mission.states[8][1], 3, "objective 2 was never completed (announced, not 4)");
-        // level-exit-fade sister: the fail exit keeps ITS OWN path [M 0x182c60:30-33 — the ch 99 arm
-        // posts Music_Event(7,1) and InternalState 2, then case 2 → the mission-fail MENU (:77-81);
-        // the red fade + Bond's kill are the ch 0x62 DEATH arm (:35-42), not this one — daily audit
-        // 2026-10-19]; it never pushes the
-        // trigger exit's 300-tick black fade or requests a level load]: no hold, no exit, and the
-        // board's jump was on_fail/on_death (the fail pulse [M 0x182c60:31]), never an end marker.
-        assert!(sim.drones.exit_hold.is_none(), "the fail path runs no exit hold");
-        assert_eq!(sim.drones.level_exit, None, "the fail path loads no level");
-        let row = sim.drones.music.table.iter().find(|m| m.level == 0x0700_0009).expect("07000009's MapMusic row [D]");
-        assert!(sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::Jump { section, .. } if *section == row.on_fail || *section == row.on_death)),
-            "the fail rode its own marker, out: {:?}", sim.drones.music.out);
-        assert!(!sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::Jump { section, .. } if *section == row.end_calm || *section == row.end_combat)),
-            "the fail never jumped the exit end marker");
-    }
+        let mut fired = false;
+        for k in 0..120 {
+            {
+                let sim = w.scene.sim.as_mut().unwrap();
+                let b = &mut sim.bond;
+                let dx = spot[0] - b.pos[0];
+                let dz = spot[2] - b.pos[2];
+                b.yaw = dx.atan2(dz);
+                b.pitch = 0.0;
+                sim.step_bond(nf_game::player::Input::default(), false, false, k % 6 == 0);
+                if sim.drones.channels.on(0x7c) { fired = true; break; }
+            }
+        }
+        assert!(fired, "the E pulses at the alarm switch must raise ch 0x7C [M Switch_Activate 0x1b02a8]");
+        w.wait(8);
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            assert!(sim.drones.channels.on(0x61), "OR mux #278: ch 0x7C → the alarm ch 0x61 [D]");
+            assert!(sim.drones.channels.on(99), "the mission-fail channel ch 99 [M 0x1827d8:128-131]");
+            assert_eq!(sim.drones.mission.states[8][0], 5, "objective 1 FAILED (state 5) [M mission.rs states]");
+            assert_eq!(sim.drones.mission.states[8][1], 3, "objective 2 was never completed (announced, not 4)");
+            // level-exit-fade sister: the fail exit keeps ITS OWN path [M 0x182c60:30-33 — the ch 99 arm
+            // posts Music_Event(7,1) and InternalState 2, then case 2 → the mission-fail MENU (:77-81);
+            // the red fade + Bond's kill are the ch 0x62 DEATH arm (:35-42), not this one — daily audit
+            // 2026-10-19]; it never pushes the
+            // trigger exit's 300-tick black fade or requests a level load]: no hold, no exit, and the
+            // board's jump was on_fail/on_death (the fail pulse [M 0x182c60:31]), never an end marker.
+            assert!(sim.drones.exit_hold.is_none(), "the fail path runs no exit hold");
+            assert_eq!(sim.drones.level_exit, None, "the fail path loads no level");
+            let row = sim.drones.music.table.iter().find(|m| m.level == 0x0700_0009).expect("07000009's MapMusic row [D]");
+            assert!(sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::Jump { section, .. } if *section == row.on_fail || *section == row.on_death)),
+                "the fail rode its own marker, out: {:?}", sim.drones.music.out);
+            assert!(!sim.drones.music.out.iter().any(|c| matches!(c, nf_game::music::Cmd::Jump { section, .. } if *section == row.end_calm || *section == row.end_combat)),
+                "the fail never jumped the exit end marker");
+        }
+    })
 }
 
 // ---- the live-guard helpers ---------------------------------------------------------------------------------

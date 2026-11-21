@@ -136,12 +136,16 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
         assert!((sim.bond.pos[0] - 57.18).abs() < 2.0 && (sim.bond.pos[2] - 22.61).abs() < 2.0,
             "the truck route spawns at the 0x1D entry [D placement 496], got {:?}", sim.bond.pos);
     }
-    next.wait(2); // Mission_Init latches on the first tick (the port's init-per-tick latch)
+    // Mission_Init latches on the first tick (the port's init-per-tick latch); the arrival plate
+    // writes its channel on tick 2 (the tick after the contact [L g031_object_order_live: the 05
+    // reveal and 09 arrival plates]) and the monitor, which runs ahead of the object walk, reads
+    // it on tick 3.
+    next.wait(3);
     {
         let sim = next.scene.sim.as_ref().unwrap();
         // The truck-ride spawn (57.18, 39.73, 22.61) sits INSIDE the 0x51 arrival plate cluster
         // (#743-745/#497, (55.3-58.8, 39.2-39.9, 21.2-23.9) [D dump]) — the real game's arrival:
-        // the plate fires on the first tick, OR #498 raises ch 0x46, and the monitor completes the
+        // the plate fires on its first ticks, OR #498 raises ch 0x46, and the monitor completes the
         // carried "Breach the castle walls" record and reveals the part-1 record [M 0x1827d8
         // cases 1/3; the live ride-time snapshot sat at state 3 only because it was taken on 05
         // (L ee_snapshot), before any arrival plate could fire].
@@ -1364,7 +1368,7 @@ fn walk_the_cable_route_to_the_stairs_top(w: &mut Walker, difficulty: u32) {
                 // real-damage variant's opt-in only — the plain walked test and the sisters keep
                 // the proven master legs (each variant stores its own gate value first, so a
                 // death panic above cannot leak the lever into the next test).
-                if name == "the stairs 28" && REAL_DAMAGE_BACKOFF.load(std::sync::atomic::Ordering::Relaxed) {
+                if name == "the stairs 28" && REAL_DAMAGE_BACKOFF.with(|c| c.get()) {
                     let armed = w.switch_to_armed("the stair-top pre-emptive");
                     // Open the stand on a full clip: under the held-sight rule (the chat-gate
                     // look_for_opponent [M 0x177ed0:26-28]) the pair engages at 5-7 u and a stand
@@ -1829,16 +1833,27 @@ fn the_door_band_exit_chains_to_07000006_walked_at(difficulty: u32) {
 /// pre-emptive stands at the cable route's end (the d >= 3 sniper arms' shape), inside the
 /// 3.0 auto-hit band [M DroneWeap_DoBulletAccuracy 0x179740:113-115]. The plain (top-up)
 /// walked test keeps the master tactic.
-static REAL_DAMAGE_BACKOFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Per test thread (the sisters run in parallel in one binary; a process-wide flag leaked
+// one sister's lever into another mid-walk).
+thread_local! { static REAL_DAMAGE_BACKOFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 #[test]
 fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 100/30, 500/30, 1500/45, 2000/30, 2500/90, 4000/90, 6000/60, 8000/60 complete].
     // The explicit store at entry (not only the plain variant's set): a death PANIC above skips
     // this static's restore and would leak the lever into the sisters that run later in the same
     // binary — each variant pins its own gate value first.
-    REAL_DAMAGE_BACKOFF.store(true, std::sync::atomic::Ordering::Relaxed);
-    walker::with_real_damage(the_door_band_exit_chains_to_07000006_walked);
-    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
+    REAL_DAMAGE_BACKOFF.with(|c| c.set(true));
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the strip's
+    // walkway pair outlasted the answer stands and the walk wedged at "the south strip 38.5".
+    // Lever: a 200-tick stop at tick 9000 (the stairs, before the strip) re-rolls the pair's
+    // approach [L the 12-value sweep: 10 of 12 pass, 9000/60 and 9300/60 too].
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): with 9000/200 the
+    // walk fell off the south strip 38.5 again. Lever: a 60-tick stop at tick 3000 in its place
+    // [L the 7-value sweep: 500/60, 1000/60, 2000/60, 3000/60, 4000/30, 5000/60, 6000/30 all pass].
+    walker::with_real_damage(|| walker::with_pause(2000, 30, the_door_band_exit_chains_to_07000006_walked));
+    REAL_DAMAGE_BACKOFF.with(|c| c.set(false));
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty): the same walked
@@ -1856,7 +1871,7 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
     // gated d >= 3 in the body so this sister's RNG stays the proven one. The explicit store:
     // the plain variant's death panic skips its restore — without this the leaked lever would
     // run the pre-emptive stands here too.
-    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
+    REAL_DAMAGE_BACKOFF.with(|c| c.set(false));
     walker::with_real_damage(|| the_door_band_exit_chains_to_07000006_walked_at(2))
 }
 
@@ -1876,7 +1891,7 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
     // Bond's pain is unscaled, so every tick a fight stands is a tick of bursts — the head pick
     // halves the stand time. The explicit store: the plain variant's death panic skips its
     // restore — without this the leaked lever would run the pre-emptive stands here too.
-    REAL_DAMAGE_BACKOFF.store(false, std::sync::atomic::Ordering::Relaxed);
+    REAL_DAMAGE_BACKOFF.with(|c| c.set(false));
     walker::with_real_damage_head_hunting(|| the_door_band_exit_chains_to_07000006_walked_at(3))
 }
 
