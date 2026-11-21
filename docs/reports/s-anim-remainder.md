@@ -49,3 +49,10 @@ whole time. Model-0x10 drones now always ask stand idle 0x26.
 ## Tests
 New test `stand_idle_variants_live`: 2 tests, both fail on the old code, both pass now.
 
+Pass on the final code: stand_idle_variants_live 2/2; walkreal 07000005 (16, 1 ignored), 07000006 9/9,
+07000007 6/6, 07000011 4/4, 07000012 4/4, 0700001b 19/19; fix_party_mission 9 (6 ignored),
+party_start_rules 6, guests_hostile_07000007, near_armed_person_07, civilian_mission_wait 3,
+civilian_first_sighting_alert 4, drake_fight 3, drake_round_lifetime, fix_npcs 4, fix_actors 4,
+consider_alerted 4, patrol_walk_0c_0d 2; nf-game `--lib drone` 57.
+Unfinished: walkreal_07000001 `following_mayhew_down_completes_the_level` ran past the 10-minute
+cap twice. Its other 4 tests passed, and 3 are ignored on master.
