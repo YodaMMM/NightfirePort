@@ -21,7 +21,7 @@ pub fn samples(bytes: i32) -> u64 { (bytes.max(0) as u64) * 7 / 8 }
 fn align(p: i32) -> i32 { p & !0xff }
 
 #[derive(Clone, Debug)]
-struct Buf { file_pos: i32, size: i32, start: u64, silent: bool, marker_passed: Option<i32>, ring_off: i32 }
+struct Buf { file_pos: i32, size: i32, start: u64, silent: bool, marker_passed: Option<i32>, ring_off: i32, can_jump: Option<u64> }
 
 /// One music stream (`Streams[0]`).
 pub struct Player {
@@ -42,8 +42,26 @@ pub struct Player {
     pub now_playing: i32,
     /// The latched request (`UpdateHashCode`, `UpdateInstantPlus`), re-evaluated every frame.
     req: (i32, bool),
-    /// `HasJustJumped`: non-instant requests wait until the playhead passes this sample.
-    lockout: u64,
+    /// `HasJustJumped` (Streams+0x3EC): while set, non-instant requests wait ("Not till 1st Marker
+    /// passed", `SFXJumpToMusicMarkerUpdate` 0x75fc:29). `ES_JumpRequestComplete` 0x9cc8 copies
+    /// +0x3F0 into it, and every request that reaches the stream sets +0x3F0 (0x75fc:47-48 for a
+    /// deferred one, `SFXCheckStreamJumpInstant` 0x72d4:31 for an instant one), so each completed
+    /// jump sets it; `SFXInitialiseStreamUpdate` 0x92dc:46 zeroes the stream, so a fresh start does
+    /// not [M].
+    has_just_jumped: bool,
+    /// The jump-read and can-jump arming words (+0x3F8, +0x3F4) of `UpdateMusicMarkers` 0xb560:44-53:
+    /// a jump read sets +0x3F8; the next jump-eligible marker (type != 7) moves it to +0x3F4; the
+    /// eligible marker after that plants the can-jump test marker at its buffer's planned end and
+    /// clears +0x3F4. An instant read and the stream start set +0x3F4 directly (0x92dc:168,
+    /// `SFXUpdateStreams` 0xa1a0:176) [M].
+    cj_pending: bool,
+    cj_armed: bool,
+    /// An instant jump arms +0x3F4 only after its first buffer is planned (the plan runs inside
+    /// `SFXCheckStreamJumpInstant`, the arm when its read completes) [M 0x72d4:27, 0xa1a0:176].
+    cj_arm_after_plan: bool,
+    /// The stream's can-jump test marker (Streams+0x80, latched when its buffer is in the ring
+    /// [M 0xa1a0:153-158]); passing it clears `has_just_jumped` [M 0xa1a0:84-90].
+    cj_active: Option<u64>,
     /// A jump becomes `IOPNowPlaying` when the playhead passes its cut.
     complete: Option<(u64, i32)>,
     ending_soon: bool,
@@ -61,7 +79,8 @@ impl Player {
         let base_volume = smf.base_volume;
         let mut p = Player { smf, ssd, bufs: VecDeque::new(), dec: SsdDecoder::default(), file_pos: align(st.pos), marker: st.marker.max(0) as usize,
             ring_off: 0, next_start: 0, sent: 0, jump_to: -1, last_jump: section, now_playing: section, req: (-1, false),
-            lockout: samples(RING), complete: None, ending_soon: false, stop_at: None, stopped: false, base_volume };
+            has_just_jumped: false, cj_pending: false, cj_armed: true, cj_arm_after_plan: false, cj_active: None,
+            complete: None, ending_soon: false, stop_at: None, stopped: false, base_volume };
         p.update(0, out);
         p
     }
@@ -71,13 +90,25 @@ impl Player {
 
     /// `UpdateMusicMarkers`: plans the next buffer from the current file position.
     fn plan(&mut self) {
+        self.plan_markers();
+        if std::mem::take(&mut self.cj_arm_after_plan) { self.cj_armed = true; self.cj_pending = false; }
+    }
+
+    /// `HasJustJumped` (test hook): a non-instant request made now waits.
+    pub fn has_just_jumped(&self) -> bool { self.has_just_jumped }
+
+    fn plan_markers(&mut self) {
         let size = (RING - self.ring_off).min(RING);
         if self.ending_soon {
             // After an end marker the "reads" are 0x1800 bytes of silence.
             let size = size.min(0x1800);
-            self.push(Buf { file_pos: self.file_pos, size, start: self.next_start, silent: true, marker_passed: None, ring_off: self.ring_off });
+            self.push(Buf { file_pos: self.file_pos, size, start: self.next_start, silent: true, marker_passed: None, ring_off: self.ring_off, can_jump: None });
             return;
         }
+        // The can-jump marker sits at the buffer's planned (uncut) end: the playhead reaches that
+        // ring position at this time whether or not a later marker cuts the buffer [M 0xb560:45-47].
+        let cj_at = self.next_start + samples(size);
+        let mut can_jump = None;
         let m = &self.smf.markers;
         while self.marker < m.len() && m[self.marker].pos < self.file_pos { self.marker += 1; }
         let (mut bsize, mut next, mut passed) = (size, self.file_pos + size, None);
@@ -85,6 +116,10 @@ impl Player {
         while i < m.len() && m[i].pos < self.file_pos + size {
             let mk = m[i];
             let cut = (align(mk.pos) - self.file_pos).max(0);
+            if mk.mtype != 7 {
+                if self.cj_armed && self.cj_active.is_none() { can_jump = Some(cj_at); self.cj_armed = false; }
+                if self.cj_pending { self.cj_armed = true; self.cj_pending = false; }
+            }
             if mk.mtype == 9 || mk.mtype == 5 {
                 bsize = cut;
                 self.ending_soon = true;
@@ -103,23 +138,25 @@ impl Player {
                 self.jump_to = -1;
                 self.complete = Some((self.next_start + samples(cut), t));
                 self.marker = i;
-                return self.finish(bsize, next, passed);
+                // ">>>Read jump": the new section's reads arm the can-jump marker [M 0xb560:79].
+                self.cj_pending = true;
+                return self.finish(bsize, next, passed, can_jump);
             }
             if mk.mtype != 7 { passed = Some(cut); }
             if mk.mtype == 6 || mk.mtype == 7 {
                 bsize = cut;
                 next = align(mk.loop_start);
                 self.marker = mk.loop_marker.max(0) as usize;
-                return self.finish(bsize, next, passed);
+                return self.finish(bsize, next, passed, can_jump);
             }
             i += 1;
         }
         self.marker = i;
-        self.finish(bsize, next, passed)
+        self.finish(bsize, next, passed, can_jump)
     }
 
-    fn finish(&mut self, bsize: i32, next: i32, passed: Option<i32>) {
-        self.push(Buf { file_pos: self.file_pos, size: bsize, start: self.next_start, silent: false, marker_passed: passed, ring_off: self.ring_off });
+    fn finish(&mut self, bsize: i32, next: i32, passed: Option<i32>, can_jump: Option<u64>) {
+        self.push(Buf { file_pos: self.file_pos, size: bsize, start: self.next_start, silent: false, marker_passed: passed, ring_off: self.ring_off, can_jump });
         self.file_pos = next;
     }
 
@@ -132,13 +169,14 @@ impl Player {
     /// One IOP frame (`SFXUpdateStreams`): `played` = music samples the output has played.
     pub fn update(&mut self, played: u64, out: &mut Vec<Cmd>) {
         if self.stopped { return; }
-        if let Some((at, s)) = self.complete { if played >= at { self.now_playing = s; self.lockout = at + samples(RING); self.complete = None; } }
         if self.stop_at.is_some_and(|s| played >= s) { self.stopped = true; out.push(Cmd::MusicStop); return; }
         // The playing buffer p (front after dropping what has been played); Transfer = p + 1.
         while self.bufs.len() > 1 && self.bufs[1].start <= played { self.bufs.pop_front(); }
         // `SFXJumpToMusicMarkerUpdate`.
         let (req, inst) = self.req;
-        if req >= 0 && req != self.last_jump && req != self.now_playing && !(played < self.lockout && !inst) {
+        // `SFXUpdateStreams` 0xa1a0 runs this first, before the frame's markers: a request sees the
+        // previous frame's `HasJustJumped` and now-playing section [M 0xa1a0:17].
+        if req >= 0 && req != self.last_jump && req != self.now_playing && !(self.has_just_jumped && !inst) {
             self.jump_to = req;
             let target = self.smf.starts.get(req as usize).copied();
             if target.is_some_and(|t| t.instant) || inst {
@@ -157,6 +195,10 @@ impl Player {
                 self.bufs.truncate(k + 1);
                 let b = &mut self.bufs[k];
                 b.size = cut;
+                // ">>>Buffer overwrite jump": the cut buffer's can-jump marker is cleared and the
+                // new reads arm one [M 0xc2c8:24, 0xc2c8:40].
+                b.can_jump = None;
+                self.cj_pending = true;
                 let (start, ring_off) = (b.start, b.ring_off);
                 self.next_start = start + samples(cut);
                 self.ring_off = (ring_off + cut) % RING;
@@ -170,6 +212,12 @@ impl Player {
                 self.complete = Some((start + samples(cut), t));
             }
         }
+        // The frame's markers, in `SFXUpdateStreams` order: the can-jump test (clears `HasJustJumped`)
+        // before the jump-complete test (sets it) [M 0xa1a0:84-97]; then the playing buffer's
+        // can-jump marker latches when none is active [M 0xa1a0:153-158].
+        if self.cj_active.is_some_and(|at| played >= at) { self.has_just_jumped = false; self.cj_active = None; }
+        if let Some((at, s)) = self.complete { if played >= at { self.now_playing = s; self.has_just_jumped = true; self.complete = None; } }
+        if let Some(t) = self.bufs.front_mut().and_then(|b| b.can_jump.take()) { if self.cj_active.is_none() { self.cj_active = Some(t); } }
         // Read ahead: up to 7 buffers after the playing one (an end stops the reads after its silence).
         let mut guard = 0;
         while self.bufs.len() < 8 && guard < 64 && !(self.ending_soon && self.bufs.back().is_some_and(|b| b.silent)) { self.plan(); guard += 1; }
@@ -194,10 +242,13 @@ impl Player {
         self.ring_off = 0;
         self.ending_soon = false;
         self.stop_at = None;
-        // `ES_JumpRequestComplete` when the new data is in the ring: reported at once; non-instant requests wait a lap.
+        // `ES_JumpRequestComplete` when the new data is in the ring: reported at once [S: the game
+        // reports it when the SPU copy completes, a few frames]; it sets `HasJustJumped`, and the
+        // can-jump arm follows the target's first planned buffer [M 0xa1a0:176, 0xa1a0:233].
         self.now_playing = section;
         self.complete = None;
-        self.lockout = end + samples(RING);
+        self.has_just_jumped = true;
+        self.cj_arm_after_plan = true;
     }
 
     fn send_until(&mut self, upto: u64, out: &mut Vec<Cmd>) {

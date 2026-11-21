@@ -15,7 +15,7 @@ the driver's start path (`SFXSetup` budget / stealing / per-id limit, random / s
 `ES_CombineVolumes`, front + phase-inverted rear voices (the rear keyed 500 µs later, WORKLOG 0064), `SFXUpdate` (ends, sequences, loops via cue timers, kill pass,
 active list), `SFXRemove` / `SetPositionAndVelocity`; sources: the first-person gun's script sounds (op 1: shot, reload), Bond's footsteps by floor surface, bullet
 impacts by surface, guard body hits (0x413), guards' gunfire (`weapon_data+0x60`),
-animation-script sounds, pickups, script sounds (moving with their object). Music: docs/systems/music.md. Speech and streamed effects: docs/systems/speech.md. Not yet: casings, the 0x601 body-hit variant (`HITDATA+0x52` = 5), drone foley (`Drone_SfxInfo`, `NDrone2_PlaySFX`), the cel/room-driven `SFXSetEnvironment` value (G-016), precache, pause in cut-scenes, the per-weapon op-1 id remaps (other weapons). **Now ported (WORKLOG 0075–0076):** the ducker, fades, reverb/environment, the SPU ADSR release and 4-tap interpolation (0075), and bullet fly-bys (0076: `Bullet_DoTrails`'s `+0x6C & 0x40000` check, the closest-point-to-viewer test, the `Rand_Rand(5)` 1-in-5 roll, sound 0x1dc — confirmed against the decompile at `0x12d890`).
+animation-script sounds, pickups, script sounds (moving with their object). Music: docs/systems/music.md. Speech and streamed effects: docs/systems/speech.md. Listed as not yet at WORKLOG 0063, since ported (docs/GAPS.md G-032): casings, the 0x601 body-hit variant (`HITDATA+0x52` = 5), drone foley (`Drone_SfxInfo`, `NDrone2_PlaySFX`), the cel/room-driven `SFXSetEnvironment` value (G-016), precache, pause in cut-scenes, the per-weapon op-1 id remaps. **Now ported (WORKLOG 0075–0076):** the ducker, fades, reverb/environment, the SPU ADSR release and 4-tap interpolation (0075), and bullet fly-bys (0076: `Bullet_DoTrails`'s `+0x6C & 0x40000` check, the closest-point-to-viewer test, the `Rand_Rand(5)` 1-in-5 roll, sound 0x1dc — confirmed against the decompile at `0x12d890`).
 
 ---
 
@@ -810,6 +810,44 @@ KOFF = key-offs. If SFXMode != 0: DelayThread(500 us), then KON = rear voices (d
 SFXPause/UnPause (global) and NIS pause: per item, every live voice gets pitch 0 (pause) or its saved pitch back (unpause). Paused items are skipped by SFXUpdate (no 3D update, no end test, Counter frozen) [M]. (Steal victims are filtered by IsStreamed, not Paused.)
 
 Port: the pause is driven by the pause page, not by GameState+0x50 — GS_PauseGame 0x17d178 only sets GameState[0x50] + the MPGame pause words and calls no sound function, and no Sound_*/SFX* code reads +0x50; the actual sound pause is `MenuManager_Create` 0x21b908:121-124 (`pause_sound` set → `SFXPause` op 9 + `SFXPauseAllStreams` op 0x16) and `MenuManager_Delete` 0x21c2b0:11-22 (op 0xa + op 0x17) [M]. The port mirrors this: `Sound::set_paused` (nf-audio/sfx.rs) pitch-0+volume-0s every item live at the pause (the NIS-pause edge shape; the game's `psiSamplePause` 0xf46c saves/restores the pitch) and skips those items in `Driver::update` (the item's `Paused` word, +0x290); items started while paused are NOT paused — the menu's own sounds play under the pause [M §3.2 `StartedWhenPaused`]. The unpause emits nothing: the next full update's per-channel recompute restores pitch and volumes. The music queue's playhead freezes through `Output::set_paused` (op 0x16's stream hold, `GamePausedMe` — docs/systems/music.md §3.7) and resumes exactly. Host hook: `nf_view`'s `RedrawRequested` applies the hold while any menu page is up or the viewer pause holds the sim (the fail/results menu opens with `pause_sound` = 0 in the game — sound keeps playing [M Mission_Update 0x182c60:78-79]; the port's demo results hook rides the same gate, listed as remaining work). The EE keeps its batch flowing while paused in the game; the port's host stops ticking under a menu, so the pause edge is flushed to the output at once instead of waiting for the next batch.
+
+## 8b. Re-check against the decompile (2026-11-21, s/g032-sound)
+
+Re-read line by line against the port, no deviation found [M]:
+- Voice budget and stealing: `SFXSetup` 0x4220 (budget `15 − started/400`, the 3-D distance reject, the lowest-priority
+  steal including the caller, `max_reject`, the per-id oldest steal), `CountAllVoicesActive` 0x40ec,
+  `SFXGetImportance` 0x41e0, the sample choice (random / reversed sequence / shuffled / polyphonic) against
+  `nf_audio::sfx::Driver::setup`. Hardware voices: `psiRequestVoiceHandle` 0xe648 / `psiRequestVoiceHandle2` 0xe420
+  take the first free voice (not keyed on, not locked); there is no hardware-level stealing, a start with no free
+  voice fails, as in the port.
+- Distance attenuation and pan: `PS2_SFXCalculate3D` 0x1060c (inner/outer ramp in tenths, squared, the
+  Norm / −Norm / −Dir dot products for left, right and rear, rear = 75 %, mono averaging), `PS2_NormaliseVector`
+  0x10470, `PS2_DotProduct` 0x103bc, `PS2_SFXSetup3D` 0x10eb8 (tracking 3: half / half / 30 %), `ES_GetMyPos` 0x57e8,
+  `ES_GetDist` 0x5cb4, `ES_CombineVolumes` 0x1300 (the volume `SFXStart3D` 0x3aac forces to 100) against
+  `Driver::levels` / `combine` / `get_my_pos` / `dist`.
+- `SFXUpdate` 0x4ee4 / `SFXUpdateEnding` 0x4e20 / `SetCueTimer` 0x3984 (started ×9/10, NIS fade-kill −5, sequence
+  cues, polyphonic channels, loop re-setup with the `< 2` updates rerun) against `Driver::update` / `ending`.
+- EE: `Sound_UpdateSounds` 0x1dda70 (the position is sent every frame for a live 3-D node, the +0x4F byte is only
+  cleared, disassembly 0x1ddbac-0x1ddc08), `Sound_ReqestPlaySfx` 0x1dcc68 (the 1.1 × outer start cull on non-looped
+  `+0x15` ids, single player), `Sound_Play3D` 0x1dd548 (a0 id, a1 pos, f12 volume, f13 outer, f14 inner, t0 custom),
+  `HandleMapSoundAllocation` 0x1dd118 against `nf_game::sound::{Sounds, MapSounds}`.
+- Occlusion: the game has none. No SFX.IRX or ACTION.ELF sound function reads geometry; a voice's level is distance,
+  pan, the room environment (`SFXSetEnvironment`), underwater, the ducker and the fades only [M].
+- Map ambients on every level (`Level::parse` over all 07* archives, 2026-11-21) [D]: 12 levels carry live records
+  (02, 03, 04, 06, 09, 0b, 0c, 0d, 14, 15, 16, 1b); most ids carry the 0x40000000 bit, so the EE's full-id tests
+  (`< 0x60D`) treat them as non-looped and never cull them, exactly as the port's `entry(n.id)` does; every ambient id
+  has hearing weight 0 in `SFXOutputData` (0x2c94a0), so none alerts guards (`Sound_Alertness` 0x1ddc48).
+
+Small differences left as they are (no audible effect found):
+- A start the EE culls (`Sound_ReqestPlaySfx` returns early) is reaped the next frame in the game (no TTL entry, so
+  `SFXIsSFXPlaying` is false); the port waits out the 5-frame start grace first. Only `Sound_IsFinnished` timing differs.
+- The cull compares against the node's outer radius (+0x44, the caller's when custom); the port uses the table's.
+  Every custom-radius caller is a map ambient, and none of those is culled (looped or high-bit id) [D].
+- A precache countdown that runs out deletes the item in the game whatever it holds; the port deletes it only when it
+  holds key-ons (an item whose sample start failed and is kept is the difference; not seen).
+
+Music cue transitions: the `HasJustJumped` lockout now follows the game's CanJump marker (docs/systems/music.md
+"Port status").
 
 ## 9. Ambiguities / open points
 * World units of positions are not visible in the IOP: distances use /100 and /1000 integer scaling. Check the EE-side conversion (SLUS) before mapping the radii to engine units [S].

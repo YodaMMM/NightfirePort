@@ -13,10 +13,19 @@ at the last eligible marker of the first buffer after Transfer, instant jumps 0x
 section, the music volume (square law, base volume, master 70), the EE event board and hysteresis, the 07000005
 updater, round-robin combat / stealth picks, events from the attack gate (`MusicVars` 2 / 2 s / 35, per-frame reset),
 the alarm channels (0xA4 → 3 for 58 frames; 0x37 / 0x61 → 1 for 598), Bond's death, cut-scene camera start / end.
-*Simplified* [S]: `HasJustJumped` lockout = one ring lap after the cut (the game arms a CanJump test marker); the
-instant jump is reported at once (the game reports it when the SPU copy completes, a few frames); reads complete in
-the frame they are planned. Not yet: events 3 / 4 / 7 / 8 / 0xD (level exit, room triggers, objectives, creep / wire —
-those systems are not ported), the per-room `cel+0xA1` events, MusicTrigger objects (event 2 = 2), the ducker, fades.
+`HasJustJumped` (2026-11-21, s/g032-sound): the port now follows the game's CanJump marker (§3.5 "Lockout")
+instead of a fixed one-lap lockout: clear at the music start (the stream is zeroed, `SFXInitialiseStreamUpdate`
+0x92dc:46), set by every completed jump, cleared when the playhead passes the end of the buffer holding the
+target's second jump-eligible marker (deferred jump) [M `UpdateMusicMarkers` 0xb560:44-53, `SFXUpdateStreams`
+0xa1a0:84-97, 153-158, `ES_CheckFileBuffersForJumpMarkers` 0xc2c8:24-40]. Requests are evaluated before the
+frame's markers, as `SFXUpdateStreams` does [M 0xa1a0:17]. Tests: `crates/nf-audio/tests/music_live.rs`
+(`a_deferred_request_at_the_music_start_is_taken_at_once`,
+`a_deferred_request_after_a_jump_waits_for_the_new_sections_second_marker`).
+*Simplified* [S]: the instant jump is reported at once (the game reports it when the SPU copy completes, a few
+frames); reads complete in the frame they are planned; the CanJump marker is latched when its buffer becomes the
+playing one (the game latches it when the next buffer's copy starts, which is the same buffer in the port's model).
+The event sources listed as missing here earlier are ported; the remaining unported music sites are in
+docs/systems/sound-coverage.md "Re-audit (2026-11-07)" (vehicle and turret combat music only).
 
 ---
 
@@ -363,6 +372,14 @@ SFXCheckStreamJumpInstant(s, inst):
   - While set, non-instant requests are ignored; instant ones still pass.
   - It is cleared when the playhead passes the stream CanJumpMarker. That marker is armed at the end of the read buffer containing the 2nd eligible marker after a deferred jump's target, or the 1st (normally the target's own start marker) after an instant jump or SFXStartMusic.
   - In practice: about one ring lap after the jump point (instant jump), or about the first bar plus up to one lap (deferred).
+  - Instant jump, re-read 2026-11-21: the plan of the target's first buffer runs inside `SFXCheckStreamJumpInstant`
+    (`UpdateMusicMarkers(stream, 1)`, 0x72d4:27) before `SFXUpdateStreams` sets +0x3F4 = 1 when the read finishes
+    (0xa1a0:176), so the arm takes the first eligible marker of the target's second buffer, not its start marker,
+    unless +0x3F4 was still armed from an earlier jump [M]. After `SFXStartMusic` +0x3F4 is set before the first plan
+    (0x92dc:168), but `HasJustJumped` is 0 there, so nothing waits.
+  - The arm order per eligible marker (type != 7): first "+0x3F4 set and no CanJump marker active → plant it, clear
+    +0x3F4", then "+0x3F8 set → +0x3F4 = +0x3F8, +0x3F8 = 0" [M 0xb560:44-53]; the jump reads ("Read jump" 0xb560:79,
+    "Buffer overwrite jump" 0xc2c8:40) set +0x3F8. Hence the second marker after a deferred jump.
 - Requests equal to `IOPLastJump` or `IOPNowPlaying` are no-ops. The "now playing" section is the last *jump target*. It is **not** updated when playback flows or loops into another section (e.g. 4 → 5, 6 → 1).
 - Instant requests are dropped while `Status ∉ {2, 8}` (initialising, or in the middle of another instant jump) or while an end / pause marker is armed (`EndMarker.CheckMe`), and are retried each frame via the latch.
 
