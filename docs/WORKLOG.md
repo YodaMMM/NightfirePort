@@ -331,3 +331,16 @@ re-judged from the yard-south-1 stand). Helpers stay level+difficulty gated; rea
 only, no top-ups, never lower damage or health, never change guard code; each lever judged
 on its own real run. Whole walkreal_0700000d_live and interactables_0700000d_live before
 finishing. Report: docs/reports/retune-nb-0d-15.md.
+The round-15 outcome: THE WALK IS GREEN — the ignore on
+walk_arrival_to_the_c5_door_real_damage_00agent is REMOVED. Seven lever runs measured
+(15-a..15-g: RETURN_FAST negative unthinned, NORTH_S1 PROVEN +81 every roll, the stuck dwell
+identified — the return's plate waypoint unreachable from the south, the #4 mover uncaught by
+the box-centre aim, the early head act fatal), then the mechanism: the walk_to also stuck at
+the trench edge WITH crouched=true head_bump=true — Bond entered the return CROUCHED (the
+press chain's odd toggle count); the guaranteed stand press + the nav web crossed the edge at
++355 (first crossing ever), the fast second leg + the stand act killed #4 at +46, and the
+full mission completed in 32562 ticks (run 15-k; the committed no-env run identical). The
+committed defaults are the cd() closure (the green shape for the container roll only; the
+env override wins; d1/d2/plain byte-identical). Whole binaries on the final tree:
+walkreal_0700000d_live 4 passed / 0 failed / 1 ignored (142.78 s), interactables_0700000d_live
+11 passed / 0 failed (29.72 s). Report: docs/reports/retune-nb-0d-15.md.
