@@ -46,7 +46,8 @@ a part with a model. `Wmap` + `wn#1..94` index these items spatially (`wn` u16 l
   `EAGL::<model article>::{as  0000}::Model[0].XX` (XX = NNNN for most parts, not all: paris
   1,811 equal / 79 different; the decoder follows the string).
   Parts whose tail is not `sr` are effects (`ef#`), the invisible `{as  ffff}` barriers, and the
-  `trafficlight`-form tails — not decoded (paris: 86 placements).
+  `trafficlight`-form tails (paris: 86 placements). These are collision-only articles and effect
+  parts with no model: docs/formats/trackobj.md §4.
 - `__Model:::<…>::Model[0].XX` symbol (a `.data` offset; the image holds `.data` at file offset
   0x40, and every relocated pointer is `.data`-relative): `+0x00` parent (`Colours` block with the
   texture name), `+0xc0` u32 = XX, `+0xc8` u32 group count, `+0xcc` pointer to the group table.
