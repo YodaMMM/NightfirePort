@@ -322,6 +322,24 @@ pub struct Walker {
     /// the flank for across guards; this holds the same line inside `shoot`/`shoot_bounded` for
     /// every caller (the return-fire stands included). Bond holds instead.
     pub flank_hold_z: Option<f32>,
+    /// OPT-IN (retune-nb-01-3, the 07000001 d3 00 Agent walk): the flank POINT's own west
+    /// bound — a perpendicular flank point west of this x is refused (Bond holds, the same
+    /// hold counting) even when the TARGET guard stands east of `flank_hold_x`'s line.
+    /// `flank_hold_x` checks the guard's park; this checks where the flank NAV would walk:
+    /// the d3 t83962-shaped death picked a mouth guard's flank at (-31.6,16.6) — west INTO
+    /// the stairwell pocket — and the walk through the mouth put #3/#17 at 0.8-0.9 u (the
+    /// ×2 TooClose band [M Drone_ModBulletDamage 0x139f50]). Default None: every other walk
+    /// keeps master's flank machinery byte-identical.
+    pub flank_point_x_min: Option<f32>,
+    /// OPT-IN (retune-nb-01-3, the 07000001 d3 walk): inside `shoot_bounded`, while Bond stands
+    /// WEST of this x and the fight is blocked, the sidestep strafe and the far forward push
+    /// are replaced by a back-off (forward -0.6, no strafe). The walls that pin the pocket
+    /// guards' rays also shield the east stands — but the fight's own drift does not know that:
+    /// the v5 run's stairwell-head return-fire fight KILLED #3 in ~200 ticks and then strafed
+    /// Bond to (-31.43,16.36), inside the pack's lines, and he died there on the crossfire
+    /// (55 hits [L the d3_r12_v5 run]). Facing the guard, back-off is east, out of the pocket.
+    /// Default None: every other walk keeps master's fight machinery byte-identical.
+    pub fight_hold_west_of: Option<f32>,
     /// OPT-IN (the 0700001b 00 Agent walk): steer the zero-g float away from a charging space
     /// laser's locked target when no hostile is within 10 u (see tick_inner). False by default.
     pub laser_dodge: bool,
@@ -342,6 +360,15 @@ pub struct Walker {
     /// fetched even with the entry-time list set — it was not in the pickups list at entry).
     /// None by default: every other walk unchanged.
     pub no_fetch_z_above: Option<f32>,
+    /// retune-nb-01-2 (opt-in, set only by the 07000001 d3 00 Agent walk): the x-scope of the
+    /// `no_fetch_z_above` zone — boxes WEST of this x are FETCHABLE even above the z line.
+    /// The round-1/2 ledger: the endgame died at the stairwell head with clip 1 spare 7 while
+    /// the dead guards' drops lay in the west corridor (x < 0) — the zone bans them along with
+    /// the hall interior (the ban's purpose was the HALL's interior ground, x > 0: the west
+    /// lanes own it, the run10/run12 ledgers). The drops are on the walked trail, so the
+    /// resupply's on-trail rule can take them once the zone relaxes. None by default: every
+    /// other walk unchanged (the zone reads exactly as before).
+    pub no_fetch_zone_x_min: Option<f32>,
     /// Per-tick drone watch (level-06-rook-door debugging, env-gated `NF_DRONE_WATCH="3,4"`):
     /// each listed drone's last logged state; tick_inner prints a line on every state change or
     /// >0.03 move, so a leg that runs inside walk_nav_to stays observable. Additive; no test sets
@@ -464,6 +491,7 @@ impl Walker {
             trail: Vec::new(),
             no_fetch: Vec::new(),
             no_fetch_z_above: None,
+            no_fetch_zone_x_min: None,
             alarm_last: Vec::new(),
             drone_watch, watch_last,
             health_last: Vec::new(),
@@ -479,6 +507,8 @@ impl Walker {
             grenade_downgrade_logged: false,
             flank_hold_x: None,
             flank_hold_z: None,
+            flank_point_x_min: None,
+            fight_hold_west_of: None,
             laser_dodge: false,
             record_inputs: None,
             record_states: None,
@@ -886,7 +916,12 @@ impl Walker {
                 .filter(|p| self.no_fetch.iter().all(|t| dxz(*t, [p.m[3][0], p.m[3][1], p.m[3][2]]) > 1.0))
                 // hall-6's zone form (see the field doc): the hall's door plane is z 11.2 —
                 // every interior box is behind it and the west lanes own the interior ground.
-                .filter(|p| self.no_fetch_z_above.map_or(true, |z| p.m[3][2] <= z))
+                // retune-nb-01-2's x-scope: boxes west of `no_fetch_zone_x_min` are fetchable
+                // even above the z line (the west-corridor dead-guard drops — the d3 endgame
+                // lever); the default keeps the zone exact.
+                .filter(|p| self.no_fetch_z_above.map_or(true, |z| {
+                    p.m[3][2] <= z || self.no_fetch_zone_x_min.map_or(false, |xm| p.m[3][0] < xm)
+                }))
                 .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
                 // A box the walker just wedged on is not the box a player keeps trying: exclude
                 // the already-tried spots so the next attempt takes the next-nearest.
@@ -1230,11 +1265,16 @@ impl Walker {
                 // in the first half of each window when the guard is far.
                 let far = dxz(bp, dp) > 8.0;
                 let window = (blocked_streak / 90) % 2 == 0;
+                // fight_hold_west_of (OPT-IN): west of the line and blocked, the fight backs off
+                // instead of strafing/pushing — the sidesteps and the far push both walked Bond
+                // INTO the pocket pack's lines (the v5 death, walker.rs field doc).
+                let held_west = blocked
+                    && self.fight_hold_west_of.is_some_and(|bx| bp[0] < bx);
                 let input = Input {
                     turn: err.clamp(-0.08, 0.08),
                     look: perr.clamp(-0.08, 0.08),
-                    forward: if backing { -1.0 } else if blocked && far && window { 1.0 } else { 0.0 },
-                    strafe: if backing { 0.0 } else if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
+                    forward: if backing { -1.0 } else if held_west { -0.6 } else if blocked && far && window { 1.0 } else { 0.0 },
+                    strafe: if backing { 0.0 } else if held_west { 0.0 } else if blocked { if window { 1.0 } else { -1.0 } } else if repositions % 2 != 0 && t - last_progress < 60 { -1.0 } else if repositions % 2 != 0 { 0.0 } else if t - last_progress < 60 { 1.0 } else { 0.0 },
                     ..Default::default()
                 };
                 // replay-parity-walker-side-effects: the fight's step is a real walker-stepped
@@ -1307,6 +1347,20 @@ impl Walker {
                     [dp[0] + px * side * dist, dp[1], dp[2] + pz * side * dist]
                 };
                 drop(sim);
+                // flank_point_x_min (OPT-IN, retune-nb-01-3): the flank POINT west of the hold
+                // line is a hold, not a walk — the check is on the flank nav's own destination
+                // (`flank_hold_x` checks the guard's park; a mouth guard east of the line could
+                // still flank Bond INTO the pocket pack behind him). `flanks` is already
+                // incremented (the block's entry), so the next pick's side flips — an east point
+                // is taken; two west points and a hold give the leg back at three, the same
+                // budget the other holds return.
+                if !close_buried && self.flank_point_x_min.is_some_and(|mx| fp[0] < mx) {
+                    blocked_streak = 0;
+                    last_progress = t;
+                    eprintln!("[walk] {label}: flank point ({:.1},{:.1},{:.1}) west of the pocket line — holding (no flank into the pocket, hold {flanks})", fp[0], fp[1], fp[2]);
+                    if flanks >= 3 { return false; }
+                    continue;
+                }
                 if close_buried {
                     eprintln!("[walk] {label}: no exposed part for {blocked_streak} ticks at {len:.1} u — stepping back to ({:.1},{:.1},{:.1})", fp[0], fp[1], fp[2]);
                 } else {
