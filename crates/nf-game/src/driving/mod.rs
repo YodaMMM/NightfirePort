@@ -8,6 +8,8 @@ pub mod ai;
 pub mod bounds;
 // The player chase camera (camera.ini HeliCam + FUN_001b2b48).
 pub mod camera;
+// Effects: the particle pool, emitters, wheel smoke/spray/sparks, glare pulse (FUN_001f29d8 family).
+pub mod effects;
 // G-057 suspension: the per-wheel spring–damper (sub_18FC00 + kind siblings).
 pub mod suspension;
 // 647 drive-mission-scripts: the mission state machine (objectives, fails, timers, the PTP end).
