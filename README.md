@@ -2,7 +2,7 @@
 
 > [!WARNING]
 > ## This port is not finished.
-> Nightfire Rust is a work in progress. Expect bugs, missing features, and levels that don't yet play like the original. The driving missions can't be played yet. If you hit a problem, press **F10** in game (or **Report crash** in the launcher) to send a report.
+> Nightfire Rust is a work in progress. Expect bugs, missing features, and levels that don't yet play like the original. The driving missions are not playable yet (an early preview sits behind a developer switch, see below). If you hit a problem, press **F10** in game (or **Report crash** in the launcher) to send a report.
 
 Nightfire Rust is a native Windows PC port of 007: Nightfire (PS2), written in Rust. This 007 Nightfire port is rebuilt from the game's own data and logic (the PlayStation 2 release, NTSC-U SLUS-20579), runs natively on Windows with no emulator, and treats mouse and keyboard as first-class input. The repository is named NightfirePort.
 
@@ -12,10 +12,10 @@ Nightfire Rust is a native Windows PC port of 007: Nightfire (PS2), written in R
 
 - It is a port. The game's behaviour is re-implemented in Rust, using a Ghidra decompile of the disc's executables as the reference for what the original code does.
 - It is not an emulator and not a static recompiler. No PS2 code runs.
-- You need your own disc. The port reads your disc image at run time (picked in the launcher, or `NF_ISO` / a path on the command line). No game files are in this repository, and nothing the tools extract is committed.
+- You need your own disc. The port reads your disc image at run time (picked in the launcher, or `NF_ISO` / a path on the command line). It can also read a folder of files extracted from your own disc (`carve_android` in `nf-formats`). No game files are in this repository, and nothing the tools extract is committed.
 - The 2002 PC "Nightfire" is a different game (Gearbox, GoldSrc) and is not involved.
 
-The disc holds two engines: `ACTION.ELF` (Eurocom's on-foot engine; shipped unstripped with 3,038 functions and 5,603 symbols) and `DRIVING.ELF` (EA's EAGL-based driving engine, stripped). The on-foot engine is where almost all of the work has gone so far.
+The disc holds two engines: `ACTION.ELF` (Eurocom's on-foot engine; shipped unstripped with 3,038 functions and 5,603 symbols) and `DRIVING.ELF` (EA's EAGL-based driving engine, stripped). The on-foot engine is where most of the work has gone; the driving engine is now being ported too.
 
 ## Status at a glance
 
@@ -23,13 +23,14 @@ The disc holds two engines: `ACTION.ELF` (Eurocom's on-foot engine; shipped unst
 
 In short:
 
-- **On foot:** all 27 on-foot archives on the disc load and run. Not every level can be finished yet. The walkthrough tests that drive Bond through the same input a player uses still stop on two levels (07000016 in Countdown and 0700001b in Equinox), several others still move Bond past a spot the walk cannot cross yet, and other levels have known problems. Each level's page in `docs/levels/` lists them.
-- **Driving:** the five driving missions can't be played. Picking one in the mission list shows a notice and unlocks the next mission. Parts of the driving engine exist as model code only: vehicle physics, the road network, AI traffic, input mapping, HUD data and mission scripts.
+- **On foot:** all 27 on-foot archives on the disc load and run. Walkthrough tests drive Bond through the same input a player uses and reach the end of many story levels, including Countdown's finale (07000016) on 00 Agent with real damage. Some levels and harder difficulties still have known problems; each level's page in `docs/levels/` lists them.
+- **Driving:** the driving missions can't be played yet. Picking one in the mission list shows a notice and unlocks the next mission. With `NF_DRIVING=1` set, a driving row loads its track and car and you can drive: the road, buildings, signs and sky draw with their textures, but the night lighting, the missions' own scripts (Paris Prelude opens with a sniper section, for example) and the HUD are not ported yet. The track, texture, collision and car-handling readers came in through a community pull request by 4cecoder, reviewed against the driving engine's code piece by piece.
+- **Android:** an early Android build (`crates/nf-android`, with its app project) is in the repository. It is not part of the Windows release.
 - **Front end:** it follows the game's own menu flow. With the `movies` feature, the disc's videos play where the game plays them: the boot logos, the intro, the menu backdrops, and each mission's briefing and outro.
 - **Multiplayer:** the game's on-foot match rules and modes run on the 8 arenas, with bots, on one screen. There is no split screen. Online play is new in the port (see below).
 - **Cut-scenes:** faces animate from the game's own morph data.
 
-The latest release is v0.1.26 (2026-10-30). The releases since 0.1.19 have been single-player fixes across Double Cross, The Exchange, Night Shift, Chain Reaction, Phoenix Fire and Countdown; among them, Double Cross part 1 can now be finished behind Mayhew (0.1.24). Each release's notes are on the Releases page.
+The latest release is v0.1.41 (2026-11-19). Recent releases brought gamepad support and window sizes (0.1.38), and menus, the Dossier, the codename pages, the pause and mission-failed menus and the Stunner and laser watch effects matched to the original (0.1.41). Each release's notes are on the Releases page.
 
 "Cited" in the graphic is deliberately a loose measure. It counts a function whose address or name appears anywhere in the Rust crates or the docs. The port-map documents hold the stricter per-function grade (ported, partial, stub, stand-in, not started). The verification ledger lists three functions proven bit-exact against recorded PCSX2 calls (`PS2Sinf`, `Quat_QuatToMat`, `Rand_Rand`, 40 of 40 each).
 
@@ -64,7 +65,7 @@ The lobby service only introduces the players; the match itself runs between the
 **Smaller things.**
 
 - A "Keep shell casings" option; the default is the game's own lifetime.
-- Optional gamepad support through gilrs (a build feature, off by default), running the game's own mapping and curves.
+- Gamepad support through gilrs, running the game's own mapping and curves. Release builds include it; when building from source it is the `gamepad` feature.
 - A launcher that updates itself from this repository's GitHub releases.
 
 | | |
@@ -113,7 +114,7 @@ Average frame time at each on-foot story level's start view, release build, a re
 | 0700001b | Equinox | 0.59 ms (1,687 fps) |
 | 0700004a | Phoenix Fire | 1.62 ms (619 fps) |
 
-The slowest level is 07000012 at 1.73 ms (579 fps). Measuring this table found a regression: a debug switch was being read once for every culled draw, which had pushed 07000007, 07000012 and 07000015 to 5.0-7.2 ms (140-200 fps). It is fixed, and the per-frame cost test (`frame_cost_live`) now also budgets the render encode on every single-player archive.
+The slowest level is 07000012 at 1.73 ms (579 fps). A later check (2026-11-19) on a 240 Hz monitor with vsync held 240 fps on all 20 story levels measured. Measuring this table found a regression: a debug switch was being read once for every culled draw, which had pushed 07000007, 07000012 and 07000015 to 5.0-7.2 ms (140-200 fps). It is fixed, and the per-frame cost test (`frame_cost_live`) now also budgets the render encode on every single-player archive.
 
 ## Roadmap
 
@@ -123,7 +124,7 @@ The on-foot side follows the plan's rule of porting one subsystem whole at a tim
 
 Multiplayer has the match core, local and online games, and bots in matches. Split screen is not implemented. The remaining bot behaviours, radar, panes and weapon sets are still open.
 
-The driving engine has its own phased plan (`docs/atlas/driving.md`) and is the furthest out. A later polish phase lists FOV, a rebinding UI, rumble and accessibility.
+The driving engine has its own phased plan (`docs/atlas/driving.md`). Its formats, track geometry, collision and handling are in; next are the lighting, the mission scripts and the HUD. A later polish phase lists FOV, a rebinding UI, rumble and accessibility.
 
 Long-term guardrails from the plan:
 
@@ -134,7 +135,7 @@ Long-term guardrails from the plan:
 
 ## Building and running
 
-Windows builds are published on this repository's Releases page: a single `NightfirePort.exe` (the launcher, which updates itself). You need your own NTSC-U disc image (v1.00).
+Windows builds are published on this repository's Releases page: a single `NightfirePort.exe` (the launcher, which updates itself). You need your own NTSC-U disc image (v1.00). Release builds include the movies and gamepad features.
 
 To build from source you need a Rust toolchain:
 
@@ -169,7 +170,7 @@ Controls:
 
 Optional cargo features:
 
-- `gamepad`: gilrs, off by default.
+- `gamepad`: gilrs, off by default in source builds (on in releases).
 - `movies`: the MPEG-2 decoder for the disc's videos. It is off by default to keep plain builds light, but without it no movie plays, so build with `--features movies` to play the game as shipped.
 
 Tests read the disc only when `NF_ISO` is set and are silent (`NF_SILENT=1`):
@@ -178,16 +179,17 @@ Tests read the disc only when `NF_ISO` is set and are silent (`NF_SILENT=1`):
 NF_ISO="<path to iso>" cargo test --offline --release -- --test-threads=1
 ```
 
-The workspace has six crates:
+The workspace has seven crates:
 
 - `nf-formats`: on-disc format readers.
 - `nf-game`: the fixed-tick simulation ported from `ACTION.ELF`, plus the driving model code.
 - `nf-view`: window, renderer, menus and launcher; the playable app.
 - `nf-audio`: SPU voices mixed in software, played through cpal.
 - `nf-net`: the UDP lockstep session, join codes and the lobby client.
+- `nf-android`: the Android JNI bridge and app project (built only on request, `-p nf-android`).
 - `nf-extract`: a CLI for inspecting your disc: `info`, `manifest`, `elfs`, `files-extract`, `tex-export`, `bigf-extract`, `weapon-matrix`, ... (57 commands).
 
-That is about 370,000 lines of Rust in total.
+That is about 500,000 lines of Rust in total.
 
 ## Legal
 
@@ -212,10 +214,10 @@ Every claim in the docs carries an evidence tag:
 
 Behaviour is checked against the original by recording PCSX2 calls and traces and comparing numbers, not images, so no game data ends up in the tests. The verification ledger lists what is proven bit-exact.
 
-The test suite has about 4,100 `#[test]` functions across 989 integration test files. The last full run on master (2026-10-31) was 3,747 passed, 1 failed (a frame-timing test that passed when re-run on its own), 269 ignored.
+The test suite has about 5,400 `#[test]` functions across 1,311 integration test files. The last full run on master (2026-11-19) was 4,961 passed, 1 failed (a movie test that timed out under the full parallel load and passes on its own), 358 ignored.
 
-- **Walkthroughs:** 26 `walk_*` and 25 `walkreal_*` test files drive the story levels headless; the `walkreal_*` ones drive Bond through the real input path.
+- **Walkthroughs:** 26 `walk_*` and 109 `walkreal_*` test files drive the story levels headless; the `walkreal_*` ones drive Bond through the real input path, many of them on Agent and 00 Agent with real damage.
 - **Placements and archives:** every placement on all 27 story levels is checked to resolve, and all 27 on-foot archives run 600 ticks without a panic.
 - **Performance:** per-frame cost budgets are part of the same suite.
 
-Open work is tracked in a gaps list (`docs/GAPS.md`: 49 items, 23 still open or partly open) and open questions in `docs/UNKNOWNS.md` (48: 21 open, 7 partly answered).
+Open work is tracked in a gaps list (`docs/GAPS.md`: 51 items, 20 still open or partly open) and open questions in `docs/UNKNOWNS.md` (52: 20 open, 7 partly answered).
