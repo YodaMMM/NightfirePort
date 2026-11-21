@@ -28,10 +28,14 @@
 //! - Mission end: DRIVING main's exit tail maps the outcome to the PTP result
 //!   (`crates/nf-game/src/ptp.rs` — result 1 → `Mission_SetStatus(6)`, 0 → status 3).
 //!
-//! [S] boundaries (each listed in the doc): the per-frame evaluation order inside the
-//! descriptors' +0xc functions (`FUN_0020b120`/`0020b1a0`/… — one per type, not decomposed
-//! here), which rule fire advances vs completes a channel, and the trigger-record field
-//! semantics beyond the leading position floats.
+//! [S] boundaries (each listed in the doc): which rule fire advances vs completes a channel.
+//!
+//! **Superseded for the game's rules** by [`crate::driving::script::DriveScript`]
+//! (docs/systems/driving-missions.md): a `Rule` entry's `+0x08` is a *stage* (the bucket
+//! `FUN_00206340` evaluates), not an objective channel, its `+0x0c` is the action list the rule
+//! runs, and the mission ends through the `EPlayerWin` / `EPlayerLose` / `EEndMission` events.
+//! The channel model below stays for the existing callers; [`Mission::from_map_script`] +
+//! [`Mission::step_facts`] run the real rules.
 
 use crate::ptp::{drive_exit, DriveResult};
 
@@ -69,8 +73,10 @@ impl RuleEntry {
     }
 }
 
-/// The 15 rule classes — `FUN_00209390`'s switch arms (alloc size → ctor) with the RTTI names
-/// [D 0x397c28..0x397d18]. `SRuleAlways` (0) fires unconditionally; the rest test sim state.
+/// The 15 rule classes: `FUN_00209390`'s switch arms (alloc size -> ctor), each named by the
+/// typeinfo function in its descriptor's `+4` slot [M: e.g. arm 7 -> ctor 0x20a520 -> descriptor
+/// 0x397ae8 -> 0x20b560 -> "10SRuleRange"]. (The typeinfo strings are not stored in type order:
+/// arms 7..13 are Range, Speed, Timer, Property, Collision, PlayerDir, Difficulty.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuleKind {
     Always,      // 0  0x14 SRuleAlways
@@ -80,13 +86,13 @@ pub enum RuleKind {
     Health,      // 4  0x28 SRuleHealth
     Pip,         // 5  0x20 SRulePIP
     Prog,        // 6  0x18 SRuleProg
-    Property,    // 7  0x28 SRuleProperty
-    Range,       // 8  0x28 SRuleRange
-    Speed,       // 9  0x24 SRuleSpeed
-    Timer,       // 10 0x24 SRuleTimer
-    Difficulty,  // 11 0x1c SRuleDifficulty
+    Range,       // 7  0x28 SRuleRange
+    Speed,       // 8  0x28 SRuleSpeed
+    Timer,       // 9  0x24 SRuleTimer
+    Property,    // 10 0x24 SRuleProperty
+    Collision,   // 11 0x1c SRuleCollision
     PlayerDir,   // 12 0x24 SRulePlayerDir
-    Collision,   // 13 0x18 SRuleCollision
+    Difficulty,  // 13 0x18 SRuleDifficulty
     ProgCounter, // 14 0x20 SRuleProgCounter
 }
 
@@ -100,13 +106,13 @@ impl RuleKind {
             4 => RuleKind::Health,
             5 => RuleKind::Pip,
             6 => RuleKind::Prog,
-            7 => RuleKind::Property,
-            8 => RuleKind::Range,
-            9 => RuleKind::Speed,
-            10 => RuleKind::Timer,
-            11 => RuleKind::Difficulty,
+            7 => RuleKind::Range,
+            8 => RuleKind::Speed,
+            9 => RuleKind::Timer,
+            10 => RuleKind::Property,
+            11 => RuleKind::Collision,
             12 => RuleKind::PlayerDir,
-            13 => RuleKind::Collision,
+            13 => RuleKind::Difficulty,
             14 => RuleKind::ProgCounter,
             _ => return None,
         })
@@ -116,11 +122,11 @@ impl RuleKind {
     pub fn object_size(self) -> usize {
         match self {
             RuleKind::Always => 0x14,
-            RuleKind::Ammo | RuleKind::Damage | RuleKind::Speed | RuleKind::Timer | RuleKind::PlayerDir => 0x24,
-            RuleKind::Death | RuleKind::Difficulty => 0x1c,
-            RuleKind::Health | RuleKind::Property | RuleKind::Range => 0x28,
+            RuleKind::Ammo | RuleKind::Damage | RuleKind::Timer | RuleKind::Property | RuleKind::PlayerDir => 0x24,
+            RuleKind::Death | RuleKind::Collision => 0x1c,
+            RuleKind::Health | RuleKind::Range | RuleKind::Speed => 0x28,
             RuleKind::Pip | RuleKind::ProgCounter => 0x20,
-            RuleKind::Prog | RuleKind::Collision => 0x18,
+            RuleKind::Prog | RuleKind::Difficulty => 0x18,
         }
     }
 }
@@ -282,6 +288,8 @@ pub struct Mission {
     pub state: MissionState,
     /// The PTP drive index for the exit mapping [M ptp::drive_exit].
     pub drive_index: u8,
+    /// The game's rules (triggers + rules + events), when built by [`Mission::from_map_script`].
+    pub script: Option<crate::driving::script::DriveScript>,
 }
 
 /// The mission's outcome [M the mapping in crates/nf-game/src/ptp.rs].
@@ -320,6 +328,7 @@ impl Mission {
             timers,
             state: MissionState::Playing,
             drive_index,
+            script: None,
         };
         match set.as_ref() {
             Some(s) => {
@@ -351,6 +360,29 @@ impl Mission {
         }
         m.set = set;
         m
+    }
+
+    /// A mission run by the game's rules: the track's `Map` script ([`nf_formats::trackstart::map_script`])
+    /// through [`crate::driving::script::DriveScript`]; the channel model still loads from the same
+    /// `Rule`/`MSet` bytes for the callers that read it.
+    pub fn from_map_script(map: nf_formats::trackstart::MapScript, drive_index: u8) -> Mission {
+        let rule: Vec<u8> = map.rules.iter().flat_map(|r| r.raw).collect();
+        let mut m = Mission::load(&rule, map.mset.as_deref(), drive_index);
+        m.script = Some(crate::driving::script::DriveScript::new(map));
+        m
+    }
+
+    /// One sim step of the game's rules ([`Mission::from_map_script`]); the state follows the
+    /// script: won (mission state 3) -> `Complete`, lost (4) -> `Failed`. Without a script it
+    /// does nothing.
+    pub fn step_facts(&mut self, facts: &crate::driving::script::Facts) {
+        let Some(s) = self.script.as_mut() else { return };
+        s.step(facts);
+        self.state = match s.state {
+            crate::driving::script::DriveState::Won => MissionState::Complete,
+            crate::driving::script::DriveState::Lost => MissionState::Failed,
+            _ => MissionState::Playing,
+        };
     }
 
     /// `FUN_00205498`'s tail: the first enabled channel whose index != 0, else 0 [M
@@ -516,6 +548,11 @@ mod tests {
         assert_eq!(RuleKind::from_type(6), Some(RuleKind::Prog));
         assert_eq!(RuleKind::from_type(6).unwrap().object_size(), 0x18); // [M 00209390 case 6]
         assert_eq!(RuleKind::from_type(15), None); // the switch default drops it [M]
+        // Arms 7..13 by their descriptors' typeinfo [M 0x209390 → 0x397ae8.. → 0x20b560..].
+        let arms: Vec<_> = (7..=13).map(|k| RuleKind::from_type(k).unwrap()).collect();
+        assert_eq!(arms, vec![RuleKind::Range, RuleKind::Speed, RuleKind::Timer, RuleKind::Property,
+            RuleKind::Collision, RuleKind::PlayerDir, RuleKind::Difficulty]);
+        assert_eq!(arms.iter().map(|k| k.object_size()).collect::<Vec<_>>(), vec![0x28, 0x28, 0x24, 0x24, 0x1c, 0x24, 0x18]);
         assert!(RuleEntry::parse(&[0u8; 0x1f]).is_none());
     }
 
@@ -545,7 +582,7 @@ mod tests {
         p3[0..4].copy_from_slice(&f32b(10.0));
         p3[8..12].copy_from_slice(&f32b(20.0));
         p3[12..16].copy_from_slice(&f32b(5.0));
-        rule.extend_from_slice(&entry(8, 0, 3, 3, p3));
+        rule.extend_from_slice(&entry(7, 0, 3, 3, p3)); // SRuleRange [M 0x209390 arm 7]
         let mset = mset3();
         let mut m = Mission::load(&rule, Some(&mset), 0);
         assert_eq!(m.active, 1, "the first enabled non-zero channel [M 00205498's scan]");
@@ -619,7 +656,7 @@ mod tests {
     fn timer_rule_counts_down_and_fires() {
         let mut p = [0u8; 16];
         p[0..4].copy_from_slice(&2i32.to_le_bytes()); // 2 seconds
-        let rule = entry(10, 0, 1, 5, p); // SRuleTimer in ch1
+        let rule = entry(9, 0, 1, 5, p); // SRuleTimer in ch1 [M 0x209390 arm 9]
         let mut m2 = [0u8; 0x2f8];
         m2[0x2c + 1] = 1;
         m2[0x4c + 4..0x4c + 8].copy_from_slice(&1i32.to_le_bytes());
@@ -659,7 +696,7 @@ mod tests {
         rule.extend_from_slice(&entry(3, 0, 1, 0x656c_02f3, [0; 16])); // SRuleDeath hash
         let mut p = [0u8; 16];
         p[0..4].copy_from_slice(&2u32.to_le_bytes());
-        rule.extend_from_slice(&entry(11, 0, 1, 12, p)); // SRuleDifficulty == 2
+        rule.extend_from_slice(&entry(13, 0, 1, 12, p)); // SRuleDifficulty == 2 [M arm 13]
         let mut m = Mission::load(&rule, Some(&mset3()), 0);
         // Wrong hash + wrong difficulty: nothing.
         let ev = m.step(crate::driving::DT, &SimSnapshot { died: Some(1), difficulty: 1, ..Default::default() });
