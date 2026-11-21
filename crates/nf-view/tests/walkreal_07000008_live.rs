@@ -2035,6 +2035,23 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         }
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[08 anchorwalk] bond {:?} crouched {} f{}", sim.bond.pos, sim.bond.crouched, sim.drones.frame);
+        // retune-nb-08-18: the PRE-FIGHT CROUCH (the round-17 ledger's lever (1), the ride-free
+        // shape) — the approach burst (14 x -2.00 t27776-27951 [L the round-17 ledger]) lands
+        // on the CROUCHED capsule: the standing burst rate 14 rows/175 ticks vs the crouched
+        // tail 7/1600 [L both baselines]. The fight then OPENS CROUCHED: the crouched eye is
+        // ledge-blindfolded (every bearing stops t0.04-0.15 [L the round-4 16-ray sweep]) so
+        // the t51 dive launch cannot fire, NO ride happens, and #25's snipes are answered by
+        // the fight machinery (the crouched eye's steep rising rays to #25 (y 23, d 47) clear
+        // the ledge [L the round-13 note]). The west stand gate in the loop holds off until the
+        // first low pass is over (rockets == 0 && t < 60) so the crouch survives the pass — the
+        // shipped timeline stands Bond through it (its four in-loop rows are the shipped
+        // standing cost), so the hold-off is a no-op there. D3-GATED: the sisters never run
+        // this block (the d2 opener at the loop head is its own byte-exact press).
+        for _ in 0..6 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.bond.crouched { break; }
+            w.tick(Input { crouch: true, ..Default::default() }, false);
+        }
     }
     // retune-nb-08-10: the d3 anchor walk + the drop press + the crouch drop + the stand-off
     // walk + the stand press moved ABOVE the pane shoot-out (right after the bottom-of-mountain
@@ -2945,21 +2962,34 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 burst_hold -= 1;
                 if !sim.bond.crouched { input.crouch = true; }
             } else if sim.bond.crouched && cp[1] <= 13.7 && cp[0] <= 111.0 {
-                // retune-nb-08-13 lever-2 run: the WEST gate on the stand. The first run stood
-                // Bond at the machine's late EAST dip (t2420, cp (150.2, 14.1, −202.7) — y 13.24
-                // crossed the band) and the standing state bought NOTHING: the east band stops
-                // every eye ray 0.3-0.5 u out (the t2400 dump: eye/gun stops t0.015-0.019 at
-                // x 113.6 [L the lever-1 run]) so no launch can fire east, and the machine's
-                // state-2 cannon pass chewed the standing capsule (w61 rounds at miss
-                // 0.38-0.68, the −2.00 rows t2445-t2493 closing the walk t28257 at (113.05,
-                // 13.47, −179.12) [L the same run]). Every landed launch of the whole retune
-                // fired at the machine WEST of the cabin (x 72.97-97.8 [L the ledger's rocket
-                // lines: t49 (72.97, 13.41, −208.87); the 11-15 ledger (83.4, −190.0), (91.2,
-                // −210.2), (85.2, −188.9)]). The gate stands Bond only for the machine's
-                // WESTERN low passes (x <= 111.0 — west of the west band x 110.4 [D the
-                // measured stops]); the eastern dips leave him crouched on the zap-free trench
-                // and the cannon chips chip the crouched capsule instead.
-                input.crouch = true;
+                // retune-nb-08-18: the FIRST-PASS HOLD-OFF (the ride-free shape's other half).
+                // With the pre-fight crouch live, this gate would stand Bond at the dive's
+                // first west low run (the shipped launch t49 sat exactly there: cp
+                // (72.97, 13.41, −208.87) [L the round-13 ledger]) and re-open the dive launch
+                // — the ride the lever exists to skip. While no rocket has left (rockets == 0)
+                // and the first pass is still live (t < 60 — the band's live window t0-t55 [L
+                // the round-13 [08 gates] dump]) the gate stays shut: the crouched eye cannot
+                // launch anyway (the ledge sweep, the round-4 note), so nothing is lost, and
+                // the later circuit passes stand Bond exactly as shipped. The shipped timeline
+                // is byte-exact: it never reaches this branch during t < 60 standing (the four
+                // in-loop rows are its standing cost).
+                if !(rockets == 0 && t < 60) {
+                    // retune-nb-08-13 lever-2 run: the WEST gate on the stand. The first run stood
+                    // Bond at the machine's late EAST dip (t2420, cp (150.2, 14.1, −202.7) — y 13.24
+                    // crossed the band) and the standing state bought NOTHING: the east band stops
+                    // every eye ray 0.3-0.5 u out (the t2400 dump: eye/gun stops t0.015-0.019 at
+                    // x 113.6 [L the lever-1 run]) so no launch can fire east, and the machine's
+                    // state-2 cannon pass chewed the standing capsule (w61 rounds at miss
+                    // 0.38-0.68, the −2.00 rows t2445-t2493 closing the walk t28257 at (113.05,
+                    // 13.47, −179.12) [L the same run]). Every landed launch of the whole retune
+                    // fired at the machine WEST of the cabin (x 72.97-97.8 [L the ledger's rocket
+                    // lines: t49 (72.97, 13.41, −208.87); the 11-15 ledger (83.4, −190.0), (91.2,
+                    // −210.2), (85.2, −188.9)]). The gate stands Bond only for the machine's
+                    // WESTERN low passes (x <= 111.0 — west of the west band x 110.4 [D the
+                    // measured stops]); the eastern dips leave him crouched on the zap-free trench
+                    // and the cannon chips chip the crouched capsule instead.
+                    input.crouch = true;
+                }
             }
         }
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
@@ -3541,6 +3571,54 @@ shape — #13's 4 rows landed while he was fought third; (3) the reply-cadence l
 (carried rounds 11-16) now DECIDES lever (1)'s value: if the w62 chain is provoked by the
 launch, the ride-free path also skips the chain.
    data, the entry can only rise via the hall (item 1) or the volume (item 2)."]
+// SHIPPED/MEASURED 2026-11-21 round 18 (retune-nb-08-18, still red — the death moved +724
+// ticks): the branch is origin/master b5278f0d1 + 08-17 merged (the round-17 baseline).
+// LEVER (1) THE PRE-FIGHT CROUCH + THE FIRST-PASS HOLD-OFF — TRIED and SHIPPED (the walk
+// survives 724 ticks deeper; still red; the fight cannot be won from the anchor): the crouch
+// press at the anchor arrival (d3-gated, after the [08 anchorwalk] walk, before the fight
+// loop) + the west stand gate held off while rockets == 0 && t < 60 (the shipped timeline
+// never reaches that branch standing during the first pass, so it is byte-exact there).
+// MEASURED [L the 2026-11-21 NF_DMG_TRACE lever run]:
+// - the fight-entry state: armour 0.0 health 26.0 [L the [08 pickups] dump]; the approach
+//   burst landed on the CROUCHED capsule, death t28907 at (113.1,13.1,-179.1) CROUCHED at
+//   the anchor, 61 hits for 100.0, 22 return-fire fights — the fight drained its 26.0 over
+//   989 fight ticks vs the shipped 26.0 over 266 (the crouched zap trickle + #25's cadence).
+// - the t51 dive launch NEVER fired (the intended ride-free shape worked): the [08 gates]
+//   t0 row line_ok false (the crouched eye's ledge blindfold, reproduced: every bearing's
+//   ray stops 0.02-0.12 u out, az0.00:0.08..az5.89:0.09 [L the t0 sweep — the round-4 law]),
+//   and the hold-off kept the crouch through the band's live window t0-t55. ZERO launches
+//   the whole fight, the Hind damage 0.0 of 598 [L the run].
+// - the west gate DID stand Bond once (feet 13.47 at t100, after the hold-off lifted at t60)
+//   but the machine's pass was already y 15.4: line_ok FALSE — the scoped eye ray stops
+//   t0.062 at (110.4,14.2,-180.3) (the west band slot's top ~14.25 stops the rising rays;
+//   the flat 30-u az ray at the same bearing reads CLEAR 1.00 — the slot passes FLAT rays
+//   only) — and the burst arm re-crouched Bond on the next zap (the machine high, the arm's
+//   band-closed condition true). The machine NEVER came low+west again: the flight samples
+//   t0-t900 climb 12.87 -> 15.4 -> 19.5-20.5 and circle east (x 127-142 at t600-t900, state
+//   2/1); the route itself flies y >= 14.6 (the approach dump f27060-27840: y 14.2-22.1), so
+//   the ONLY y <= 13.7 window in the whole fight is the arrival dive. The fight cannot be
+//   won from THIS anchor on THIS timeline: skip the dive (this lever) = zero Hind damage
+//   forever; take it (the shipped shape) = the ride freeze + the post-ride crouch blindfold.
+//   The machine's NEXT attack dive (if the copter's cadence ever re-dives on d3) is UNSAMPLED
+//   within 989 fight ticks — the d2 sister's machine re-dived five times in 2100 ticks [L the
+//   green d2 run], so the cadence question (Copter_Update 0x17dbb8's kind-2 selection vs the
+//   cannon cycle) is the next window's cheap first read.
+// - #25's snipes were NOT answered: his hp stayed 20 INTACT through all 22 return-fire
+//   fights — his three rows (t28115 -6.00, t28827 -6.00, t28907 -2.00, cadence ~712 ticks)
+//   landed with the AT-420 armed, and the walker's return-fire machinery fires the CURRENT
+//   weapon — a guided launcher cannot fight a 47-u guard. NEW LEVER MATERIAL [L the [08
+//   pickups] dump]: THREE un-gone 0x44 dart/tranq pickups sit 1.6-2.8 u from the anchor at
+//   the fight entry (kind 0 rounds 4 at (111.84,13.37,-181.45); kind 1 rounds 4 twice at
+//   (111.62,13.24,-178.47) and (110.67,13.24,-177.72) [L weapon-data.md: 0x44 = the
+//   dart/tranq family]) — a scoop-and-arm lever (the darts for the guard fights, the
+//   launcher restored for the machine windows) is untried and is the cheapest in-fight drain
+//   cut (all of #25's -14.0).
+// NEXT LEVERS (priority): (1) the fight-order upstream savings (the round-17 item (2), the
+// most-hits-first pick over the last-hit pick — a common/walker.rs change, so the whole
+// walkreal_*_live set must run with it) to bank the hall trio's -28.0 on top of this lever's
+// savings — the survive-to-second-dive shape needs the fight-entry health ~70+; (2) the dart
+// scoop-and-arm (the fight-entry pickups above); (3) the copter dive-cadence read (does the
+// d3 machine EVER re-dive? the 0x17dbb8 attack selection)."]
 // nb-scan-all-08 ledger (2026-11-18, still red; the original fight code measures t28298 and
 // every lever this window tried measured WORSE — each on its own real run):
 // 1. the original anchor+crouch fight (112.5, −179.4): death t28298 at (112.25,13.09,−179.16),

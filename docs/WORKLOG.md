@@ -378,3 +378,14 @@ ride). Both reverted; the final tree is the merge itself. Whole binary 6 passed 
 the ride-free survival path) and the fight-order item are in the ignore message. Report:
 docs/reports/retune-nb-08-17.md.
 ## retune-nb-08-18
+Setup from scratch (sandbox reset): clone, work-slim + the verified 369823203-byte ISO
+archive, rustc 1.100, the user-prefix libasound2/libasound2-dev debs, cargo fetch.
+08-17 was not on master: merged it first. Lever (1) the pre-fight crouch + the first-pass
+west-gate hold-off TRIED and SHIPPED on its own NF_DMG_TRACE run: death t28183 -> t28907
+(+724 ticks, the approach burst crouched), zero launches, the Hind damage 0.0 of 598, the
+machine never re-dove within 989 fight ticks (the route flies y >= 14.6; the arrival dive
+is the only y <= 13.7 window), #25 hp 20 intact through 22 return-fire fights (the armed
+launcher cannot fight a guard) — 12 un-gone 0x44 dart pickups at 1.6-2.8 u from the anchor
+are the next cheap lever. Whole binary 6/1, 162.00 s [L]. The next levers (the fight-order
+common/ savings, the dart scoop-and-arm, the dive-cadence read) are in the ignore message.
+Report: docs/reports/retune-nb-08-18.md.
