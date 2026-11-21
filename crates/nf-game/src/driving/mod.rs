@@ -13,6 +13,8 @@ pub mod suspension;
 // 647 drive-mission-scripts: the mission state machine (objectives, fails, timers, the PTP end).
 pub mod mission;
 pub mod physics;
+// Track scene objects: drawn/hidden, in the sim, knocked loose (trackobj.md).
+pub mod props;
 pub mod road;
 // The weapon table, ammo/reload, projectiles and hit damage (FUN_0020f2b8 + the WeaponMan).
 pub mod weapons;

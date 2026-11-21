@@ -108,5 +108,6 @@ eye lands near z 172.7, in front of it.
 - The car's row 0 sign is assumed right = up x forward; it only reaches Anchor_X, which is 0 on
   both tabled cams.
 - Which world geometry the casts see (static collision only, or barriers/props too) is not
-  traced past `FUN_002166f8`. Whether the RACE POS2_Cautionguard barrier is in that set is
+  traced past `FUN_002166f8`. The RACE POS2_Cautionguard rails are smackable scene objects that
+  nothing hides at the start (docs/formats/trackobj.md §2); whether the cast sees scene objects is
   unproven.
