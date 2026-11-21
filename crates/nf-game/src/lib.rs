@@ -72,6 +72,7 @@ pub mod monitor;
 pub mod ptp;
 pub mod driving;
 pub mod driving_hud;
+pub mod driving_hud_draw;
 pub mod music;
 pub mod death;
 pub mod nav;

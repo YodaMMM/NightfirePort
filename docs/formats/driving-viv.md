@@ -32,7 +32,8 @@ entries: the census measured over every one of the 1,499 entries
    - `.atr` `[` (INI-style sections, e.g. `[sentry]`);
    - `.crp` `PRAC` (the car/track physics container; note `CARP` is the driving engine's car-physics
      namespace — reading "PRAC"/"CARP" as related is [S]);
-   - `.gal` `LAGG` (HUD galleries — `hudNTSC.gal`, 251,059 B, identical in every mission .VIV);
+   - `.gal` `LAGG` (galleries — plain in MISC.VIV only; `hudNTSC.gal` in the mission archives is
+     RefPack-compressed, 251,059 B, identical in every mission .VIV — docs/formats/hud-gal.md);
    - `.loc` `LOCH` (locale), `.mpc` `MPCh` (cutscenes), `.ssh` `SHPS` (sprite/texture sheets),
      `.sfn` `FNTS` (fonts), `.def` `acti`/`POV ` (control configs), `.ini` `[def`;
    - `.tun` `fogS` (`data\tuning\Render\Fog\*.tun`) and `Farp` (`data\tuning\Render\<level>.tun`);
