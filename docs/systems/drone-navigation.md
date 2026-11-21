@@ -46,7 +46,7 @@ Constants (`Drone_PostLoad_Init`): length² ≤ 900; |dy| ≤ 4.0; when |dy| > 2
 `AIRoute` (`Drone+0x860` combat, `+0x970` patrol): mode (&7: 0 one-way, 1 one-way to an end point, 2 loop, 3
 ping-pong), valid 0x10, node list, index (s16), count, start / dest / move target, remaining distance +0x88,
 arrival radius +0x8C (seeded 2.0; every `SetupRouteToPosition` stores the caller's radius, for a goal route the
-goal's own `+0x704` [M 0x158b10:104, 0x169240]; port: `Drone::move_to_goal`), look-ahead +0x90 (2.0; 4.0 when `Drone+0x23`), the link creep.
+goal's own `+0x704` [M 0x158b10:104, 0x169240]; port: RunForCover only, the other goal callers keep 2.0 — docs/systems/drone-cover.md), look-ahead +0x90 (2.0; 4.0 when `Drone+0x23`), the link creep.
 
 - **Target nodes** (`AINetwork_NodesForPosition`, player target rebuilt when he moved ≥ 2.0): per navigation path,
   the cel's nodes in a box (±√r² or ±15 in x/z, ±2 in y), nearest first (2D; ties after equals; cel lists are in

@@ -6560,13 +6560,12 @@ impl Drone {
     /// `NDrone2_MoveTarget_IsRouteNode` (0x1550c8), `NDrone2_CanReachGoalPosition` (0x155ad0) and
     /// `NDrone2_GetAnglesToMoveTarget` (0x155db8); `NDrone2_SetRunToPosition` (0x155b30) and
     /// `NDrone2_SetupAlertTarget` (0x155d48) are the goal-set forms.
-    /// The radius is the goal's own (`Drone+0x704`, `goal_arrival`): every game caller hands
-    /// `MoveToGoalPosition` the goal radius in $f12 (RunForCover: `lwc1 $f12, 0x704` before
-    /// `jal 0x1517d8` [M disasm 0x169240/0x169250]), `SetupRouteToPosition` stores it at
-    /// route+0x8C [M 0x158b10:104] and `AINetwork_FollowRoute` arrives past the last node when the
-    /// route distance drops under route+0x8C [M 0x15b110:20-22]. The old flat 2.0 here made the
-    /// follow arrive 2.0 out on every goal with a smaller radius (cover 0.5, scary flee 1.0).
-    fn move_to_goal(&mut self, d: &Data) -> u8 { let r = self.goal_arrival; self.move_to_goal_r(d, r) }
+    /// *Deviation*: the game hands `MoveToGoalPosition` the goal's own radius (`Drone+0x704`) from
+    /// every caller and `SetupRouteToPosition` stores it at route+0x8C [M 0x158b10:104], which
+    /// `AINetwork_FollowRoute` arrives under past the last node [M 0x15b110:20-22]; this default
+    /// keeps the flat 2.0. Only RunForCover passes its goal radius (`move_to_goal_r`); the other
+    /// callers are untriaged (docs/systems/drone-cover.md, Live check).
+    fn move_to_goal(&mut self, d: &Data) -> u8 { self.move_to_goal_r(d, 2.0) }
 
     /// `move_to_goal` with the caller's radius: a fresh route keeps it as its arrival threshold
     /// (`AINetwork_SetupRouteToPosition` 0x158b10 stores the radius at route+0x8C
@@ -7070,7 +7069,11 @@ impl Drone {
             }
             (RUN_FOR_COVER, msg::UPDATE) => {
                 if !in_cover_ok(self, false) || (self.seen && self.dist < 4.0) { self.set_state(ATTACK); return Some(true); }
-                match self.move_to_goal(d) {
+                // The goal's own radius (0.5 from FindCover's SetupGoalPosition), not the flat 2.0:
+                // `lwc1 $f12, 0x704` before `jal 0x1517d8` [M disasm 0x169240/0x169250]. With 2.0 the
+                // guard stopped 1.5 short of the gate pillar's corner on 07000005 (148 ticks, live 198).
+                let r = self.goal_arrival;
+                match self.move_to_goal_r(d, r) {
                     0 | 2 => {
                         let remaining = self.croute.as_ref().map_or(0.0, |r| r.remaining);
                         // `SlideToPosition(0x3CCCCCCC = 0.025, +0x830, y = 1)` [M 0x169150:64-67] — 2.5 %/tick

@@ -115,7 +115,15 @@ the end position (0.2). RunForCover: live 198 ticks (strafe 0xC east of the gate
 south face, strafe 0xD north round its corner, UnderCoverInit at (58.60, 99.07)); the port now takes 199 ticks over
 the same three legs and arrives at (58.57, 99.02) (`cover_run_rounds_the_gate_pillar_like_the_game`). The old 148-tick
 port run stopped 1.5 short south of the pillar: every port goal route was built with a flat 2.0 arrival radius
-instead of the goal's own (fixed in `Drone::move_to_goal`).
+instead of the goal's own. Fixed for RunForCover only (`handle_cover` passes `goal_arrival` to `move_to_goal_r`).
+The game passes the goal radius from EVERY `MoveToGoalPosition` caller (e.g. `ReFindMissionPath` 0x153a30, disasm
+0x153ce4/0x153e64 `lwc1 $f12, 0x704`); the port's other callers keep 2.0 (*deviation*, out of this row's scope).
+**Open reds (2026-11-21):** the RunForCover change turns 17 scripted-walk tests red, 15 of them green on the old
+code (walkreal 01 was not re-run on the old code): escort_follow_07000001 and fix_npc_doors (Bond's walker wedges at (3.4, 10.4) on the way to the 01 corridor
+plate and the escort run stalls), walkreal 01 (2: the contact dies), 02 (geisha group trigger), 03, 06, 08, 0d (2),
+11, 13 (1 more beside the 2 already red), 15 (2), 16 (3) — almost all real-damage deaths or tick caps. The guards'
+own cover runs are the change; whether the reds are only the scripted walks tuned to the old short runs or a port
+fault the longer runs expose is not settled. Widening the radius to every caller added two more (15).
 
 ## Sniper cover (0x97/0x98) [M] (WORKLOG 0079)
 
