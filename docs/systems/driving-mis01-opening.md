@@ -220,6 +220,26 @@ fire at +8 ticks (rule 36: AI elements on), +32 (rule 35: camera anim, sim rate 
 class mapping) is not traced, nor are the stage-19 rules (health / timer rules that disable
 trigger 712 and pick other branches).
 
+## 8a. The Agent / 00 Agent lose at trigger 644
+
+Trigger **644** (sphere, radius 5, at (555.0, -0.06, 445.4), flags 0x407: player, once, live)
+runs `ECallStage(42)` [D]. Stage 42 holds rule **5**: `SRuleDifficulty` mask 6, once, with
+`EKillAIElement(AIEl 5888)`, **`EPlayerLose`**, `EDisableTrigger(712)` [D]. The difficulty rule
+`FUN_0020aac0` reads mission +0x3b8: bit 0 passes difficulty 0, bit 1 difficulty 1, bit 2
+difficulty 2 [M]; +0x3b8 is PTP+0x984 (`FUN_00204de8`), which DRIVING main maps from the front
+end's difficulty 1 -> 0, 2 -> 1, 3/4 -> 2 [M 0x174bf0:70-81], so 0 Operative, 1 Agent, 2 00 Agent.
+Stage 19's rules 45 and 85 (`SRuleProperty` "BLOWOUT" on AI elements 1936853636 / 1936853511),
+105 and 107 (`SRuleDeath` on the same two) each disable 644 [D]. So on Agent and 00 Agent the
+gunner must stop one of the two pursuers before the helicopter reaches 644, or the mission is
+lost there; on Operative nothing happens at 644 and the flight runs on to the hover track.
+
+In the port's view run with no input (`crates/nf-view/tests/driving_mis01_opening_live.rs`):
+644 at tick 849, Agent fails on that tick, Operative flies to (-143.0, 14.3, 542.4) past
+trigger 742. The view follows the spline at the controller's rate 0.5 (`FUN_0013da80` writes
+element +0x18 = 0.5, `FUN_001b1110` copies it to the path player's +0xa4) [M], takes the path
+player's velocity, honours `ESetNextAISpline` (`FUN_00158370` -> `FUN_0013dd28` ->
+`FUN_001b1838`: next animation +0x9c) [M], and runs the script at the front end's difficulty.
+
 ## 9. The gunner's view (aim limits, zoom, sway)
 
 - **Limits** [M `FUN_001a49e0` load, `FUN_001b6c60` clamp; D camera.ini
