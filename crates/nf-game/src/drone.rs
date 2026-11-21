@@ -2167,9 +2167,10 @@ impl Drone {
         // 0x148010:124-127 and `DroneFunc_Set2ndBehaviour` 0x14a618 (latching `+0x29 = 1`, read by
         // `DroneFunc_Using2ndBehaviour` 0x14a5e8) and restores the first block with
         // `DroneFunc_Set1stBehaviour` 0x14a5f0 (clears `+0x29`, `+0x4D8 → +0x4DC`). The port swaps
-        // `props` with this inactive copy (`set_2nd_behaviour` / `set_1st_behaviour`); the
-        // ChangeToAttackMode and GoToGoal-arrival sites are wired, the FirstAttack / PreDroneControl /
-        // HandleImpact ones not yet (docs/systems/dronefunc-rest.md, GAPS G-055).
+        // `props` with this inactive copy (`set_2nd_behaviour` / `set_1st_behaviour`); every site is
+        // wired: ChangeToAttackMode (its EnemyMission / CivilianMission / GoToGoal callers and the
+        // voice-set-0xB creation arm in `type_setup`), GoToGoal's arrival tail, FirstAttack's alt
+        // tail, PreDroneControl's flush and HandleImpact's 09/0A `Set1st` (GAPS G-055).
         let alert_props = (param(5) == 100).then_some(alert_words);
         let alert = nf_formats::drone::ALERTNESS_LEVELS[d.props.get(0x20, &normal) as usize & 3];
         let weapon = nf_formats::drone::weapon_id(skin, param(9), setup.kind);
@@ -2587,6 +2588,18 @@ impl Drone {
             let a = row(self.alt_mode).map_or(0, |t| t.alt);
             (if a != 0 { a } else { row(self.mode).map_or(0, |t| t.alt) }) as u8
         };
+        // The voice-set-0xB arm [M 0x14cbd8:119-127]: `+0x50C >= 1.0` with `+0xD8 == 0xB` (skin
+        // 0x0500001E, the ninja [M 0x14b300:158-162]) runs `NDrone2_ChangeToAttackMode` 0x14a648
+        // (with an alternate state: the alternate mode, the second behaviour block) and RETURNS —
+        // past the alert fold of `+0x5A2` (:128-155, see `start_state`) and the `+0x5A4` /
+        // `+0x13A` fold below (:157-209). Its `+0xAC = 100.0` is overwritten by the caller's stats
+        // read [M 0x14c600:81-108]. [D census, g055_behaviour_census: 07000004 #1 and 07000016
+        // #105/#126, all first-block alertness 1.0 and no alternate state — the swap is a no-op on
+        // the disc; the skipped folds keep the ninja's start state NinjaStand 0xA6.]
+        if self.kind == 0xb && self.alert >= 1.0 {
+            self.change_to_attack_mode();
+            return;
+        }
         if self.alt_mode == 0 && self.alt_state == 0 && (self.second_channel != 0 || self.alert_block >= 1.0) {
             self.alt_state = match self.start_state(d) { 4 | 5 | 6 | 8 | 0x30 | 0x31 | 0x36 | 0x37 | 0x85 | 0x89 => 0x56, 0x10 | 0x2e | 0x32 => 0x12, 0x29 => 0x2a, 0xa6 => 0xa7, _ => 0 };
         }
@@ -2626,7 +2639,9 @@ impl Drone {
         // she keeps her base start state (otherwise Zoe shoots at Bond at the gondola
         // — the 07000008 ally's alert reached 1.0 on the guards' gunfire and the fold put her
         // into the player-hunting ATTACK).
-        if self.alert >= 1.0 && self.team != 2 {
+        // Voice set 0xB never folds: `GetDroneTypeAttackTypeFriend`'s 0xB arm returns before the
+        // fold at creation, and below alertness 1.0 the fold does not run [M 0x14cbd8:119-128].
+        if self.alert >= 1.0 && self.team != 2 && self.kind != 0xb {
             return match s { 4 | 5 | 6 | 0x30 | 0x31 | 0x36 | 0x56 => 0x56, 0x10 | 0x12 | 0x2e | 0x32 | 0xb5 => 0x12, 0x29 | 0x2a => 0x2a, 0xa6 | 0xa7 => 0xa7, x => x as u8 };
         }
         s as u8
@@ -10690,7 +10705,17 @@ impl Drone {
             // 0x14b0f8:6, and `NDrone2_PreDroneControl` 0x148db0:126 behind the +0x18 flag) [M] — a
             // visual-only spawn the port's draw layer does not build (nothing in
             // the AI reads the eyes datum on the ported paths [M 0x16b990 reads it for the cheat arm only]).
-            (0xa6, msg::ENTER) => { self.set_state(crate::kiko::NINJA_ATTACK); true }
+            // ENTER also sets `+0x4F8 |= 0x80000000` (bounded) and `|= 0x10000` (vision), the engage
+            // range `+0xF0 = 3.0` and the combat range `+0xFC = 5.0` [M 0x16b990 case 1:
+            // 0x40400000 / 0x40a00000] before the SetState.
+            (0xa6, msg::ENTER) => {
+                self.bounded = true;
+                self.vision_on = true;
+                self.engage_range = 3.0;
+                self.combat_range = 5.0;
+                self.set_state(crate::kiko::NINJA_ATTACK);
+                true
+            }
             // NinjaAttack 0xa7 (0x16bb50): ENTER — vision on, +0x4F8 |= 0x80000000, alert 1.0, then
             // the distance routing (bands or the close-band evasion / sword / stand-fire choice);
             // UPDATE re-routes each tick while no transition is pending.
