@@ -317,6 +317,8 @@ pub struct DrivingState {
     pub reset: Option<(nf_game::driving::reset::ResetState, Vec<CollisionTri>)>,
     pub hud: Option<DriveHud>,
     pub shine: Option<CarShine>,
+    /// The per-frame car reflection map (crate::drive_reflection, docs/formats/car-model.md §10.6.3).
+    pub reflection: Option<crate::drive_reflection::DriveReflection>,
     pub engine: Option<DriveEngine>,
     pub weapons: Option<DriveWeapons>,
     pub glares: Option<DriveGlares>,
@@ -1309,6 +1311,8 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
     });
     let m0 = materials.len();
     let mut group: Vec<(bool, Option<String>, (i32, i32))> = Vec::new();
+    // Per drawn track strip: (in#0 item, texture, first index, count), for the reflection map.
+    let mut refl_strips: Vec<(usize, Option<usize>, u32, u32)> = Vec::new();
     for ws in strips {
         let gkey = (ws.article.to_ascii_lowercase().starts_with("sky"), ws.texture.clone(), cell_of(&ws));
         // The sky articles (`sky*`) are a small dome (paris: +-30 u as placed, docs/formats/geoprim.md):
@@ -1319,6 +1323,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         let origin = if sky { placements.get(ws.placement).map_or([0.0; 3], |p| p.origin) } else { [0.0; 3] };
         let positions = if sky { ws.positions.iter().map(|q| [q[0] - origin[0], q[1] - origin[1], q[2] - origin[2]]).collect() } else { ws.positions };
         let vcols = ws.colors;
+        let placement = ws.placement;
         let strip = nf_formats::crp_mesh::MeshStrip { positions, uvs: ws.uvs, colors: Vec::new(), texture: ws.texture };
         let n = materials.len();
         let (b0, b1) = (bmin, bmax);
@@ -1336,6 +1341,7 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
             (bmin, bmax) = (b0, b1); // the dome does not widen the track bounds
             for m in &mut materials[n..] { m.layer = Layer::SkyCamera; m.draw.pass = 0; m.draw.zwrite = false; m.radius = 1.0e6; }
         }
+        if !sky { for m in &materials[n..] { refl_strips.push((placement, m.key.map(|k| k.1 as usize), m.first_index, m.index_count)); } }
         for _ in n..materials.len() { group.push(gkey.clone()); }
     }
     // Merge consecutive same-group materials whose index ranges touch (one draw per texture per cell).
@@ -1836,11 +1842,22 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         let loc = nf_formats::loc::Loc::parse(&read_any("IDL_ENG.loc")?).ok()?;
         Some(DriveHud { layout, draw: nf_game::driving_hud_draw::DriveHudDraw::new(), sheets, health, last_tick: 0, font, loc })
     })();
+    // The car reflection map's inputs (crate::drive_reflection): the track items, the vehicles,
+    // `cref` (the track sheet's, else ext.ssh's) and the car's reflective strips.
+    let reflection = car_render.clone().and_then(|cr| {
+        let read = |name: &str| bigf.entries.iter().find(|x| x.name.eq_ignore_ascii_case(name))
+            .and_then(|e| iso.read_bytes(viv_base + e.offset as u64, e.size as u64).ok())
+            .and_then(|raw| maybe_decompress(&raw).ok());
+        let mut own: Vec<u32> = posed_parts.iter().map(|&(_, s)| s).collect();
+        own.extend(player_attach_slot);
+        crate::drive_reflection::DriveReflection::build(&mut scene, &crp_bytes, &refl_strips, cr, tex_by_name.get("cref").copied(), &read, shine.as_ref(), &own)
+    });
     let state = DrivingState {
         fx,
         reset,
         hud,
         shine,
+        reflection,
         engine,
         glares: (|| {
             let placed = nf_formats::trackfx::placed_effects(&crp).ok()?;
@@ -1952,6 +1969,7 @@ mod tests {
             reset: None,
             hud: None,
             shine: None,
+            reflection: None,
             engine: None,
             weapons: None,
             glares: None,

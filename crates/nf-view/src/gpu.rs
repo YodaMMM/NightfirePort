@@ -598,6 +598,8 @@ pub struct Renderer {
     pub screen_offset: [f32; 2],
     ibuf: wgpu::Buffer,
     tex_bgs: Vec<wgpu::BindGroup>,
+    /// The driving view's reflection map pass (drive_reflection.rs), when the scene has one.
+    refl: Option<crate::drive_reflection::ReflGpu>,
     /// Per texture slot: its first bind group, frame count and rate (animated textures).
     tex_frames: Vec<(usize, u32, u32)>,
     /// Per material: layer, first index, index count (sorted by layer: sky pass first).
@@ -728,7 +730,7 @@ impl Renderer {
         // where nothing nearer was drawn. The old (Always, no write) left the far plane clear behind
         // the mountains and the skybox painted over them: plain sky and sea where the PS2 has
         // mountains (also 04's "mountains", 0d's "Mountains_new", the 05/06/08 Sky_Tower pieces).
-        let make_pipeline = |d: Draw| {
+        let make_pipeline_fmt = |d: Draw, format: wgpu::TextureFormat| {
             let (compare, write) = match d.pass { 6 => (wgpu::CompareFunction::Always, false), 0 => (wgpu::CompareFunction::LessEqual, d.zwrite), 4 => (wgpu::CompareFunction::LessEqual, false), _ => (wgpu::CompareFunction::LessEqual, d.zwrite) };
             let alpha_keep = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
             let blend = match d.blend {
@@ -778,6 +780,7 @@ impl Renderer {
                 cache: None,
             })
         };
+        let make_pipeline = |d: Draw| make_pipeline_fmt(d, format);
         let hud_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("nf-view hud"), source: wgpu::ShaderSource::Wgsl(HUD_SHADER.into()) });
         let hud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&tbgl)], immediate_size: 0 });
         let make_hud = |blend: wgpu::BlendState, fs: &str| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -925,8 +928,17 @@ impl Renderer {
             });
             (tex, t.width, t.height)
         });
-        for t in &scene.textures {
+        // The driving view's reflection map: a render target in the texture table (drive_reflection.rs).
+        let refl_tex = scene.drive_reflection.as_ref().map(|m| m.tex);
+        let mut refl_target: Option<(wgpu::Texture, usize)> = None;
+        for (ti, t) in scene.textures.iter().enumerate() {
             tex_frames.push((tex_bgs.len(), 1 + t.more.len() as u32, t.rate));
+            if refl_tex == Some(ti) {
+                let (tex, bg, v) = crate::drive_reflection::map_target(device, &tbgl, &sampler);
+                refl_target = Some((tex, tex_bgs.len()));
+                tex_bgs.push(bg); tex_views.push(v);
+                continue;
+            }
             let (bg, v) = make_tex2(t.width, t.height, &t.rgba);
             tex_bgs.push(bg); tex_views.push(v);
             for f in &t.more { let (bg, v) = make_tex2(t.width, t.height, f); tex_bgs.push(bg); tex_views.push(v); }
@@ -997,6 +1009,18 @@ impl Renderer {
             let indirect = device.create_buffer(&wgpu::BufferDescriptor { label: Some("draw args"), size: 20 * (sub_runs.iter().map(|r| r.len().max(1) as u64).sum::<u64>() + 1), usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             Batch { bg, snow_tex, indirect, args: Vec::new(), segs: Vec::new() }
         });
+        let refl = refl_target.map(|(target, at)| {
+            let batch_bg = wtbgl.as_ref().map(|l| {
+                let mut refs: Vec<&wgpu::TextureView> = tex_views.iter().collect();
+                refs[at] = &tex_views[0];
+                refs.push(&snow_view);
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("reflection map textures (bindless)"), layout: l,
+                    entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureViewArray(&refs) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) }],
+                })
+            });
+            crate::drive_reflection::ReflGpu::new(device, queue, target, scene, &ubgl, [&pal_buf, &col_buf, &wts_buf, &mtg_buf], batch_bg, &|d| make_pipeline_fmt(d, crate::drive_reflection::MAP_FORMAT))
+        });
         let order_cap = draws.len();
         let cel_boxes = scene.cels.iter().map(|c| (c.min, c.max)).collect();
         let cel_graph = scene.cel_graph.clone();
@@ -1026,7 +1050,7 @@ impl Renderer {
             for ch in &cel_graph.chains { for &c in ch { if (c as usize) < n { reached[c as usize] = true; } } }
             reached.iter().map(|r| !r).collect()
         };
-        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), particle_alpha_pipeline, particle_add_pipeline, particle_vbuf, particle_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, sky_spin: 0.0, pass_timestamps: None, probe_skip: Vec::new() }
+        Renderer { shard_pipeline, shard_vbuf, shard_groups: Vec::new(), particle_alpha_pipeline, particle_add_pipeline, particle_vbuf, particle_groups: Vec::new(), woman_tex, snow_pipeline, snow_vbuf, snow_bg, hud_pipeline, hud_add_pipeline, hud_sub_pipeline, hud_vbuf, hud_bgs, pipelines, fog, notex, nofog, uniform, uniform_bg, staged: Vec::new(), orphan_nodes, destroy_dead: Vec::new(), destroy_wreck_draw: Vec::new(), destroy_wreck_all: scene.destroy_wrecks.iter().map(|(c, _)| c.map(f32::to_bits)).collect(), destroy_tint: Vec::new(), batch, vbuf, skin_buf, snow_skin, pal_buf, col_buf, wts_buf, mtg_buf, skin_layout, skin_pos: Default::default(), skin_collapsed: Default::default(), pal_shadow: Default::default(), sub_runs, sub_meta, live_prefix: Vec::new(), split_runs: true, last_indices: 0, char_light_centre: Vec::new(), lights: Default::default(), light_memo: Vec::new(), light_memo_gen: 1, light_memo_lights: Default::default(), los_memo: Vec::new(), los_memo_world: (0, 0), wreck_of: Vec::new(), wreck_of_src: Vec::new(), dead_sorted: Vec::new(), screen_aspect: 0.0, screen_offset: [0.0; 2], ibuf, tex_bgs, tex_frames, draws, order: Vec::with_capacity(order_cap), cel_boxes, cel_graph, viewer_cel: Default::default(), last_vis: None, last_cell_vis: None, movie_tex: None, movie_bg: None, movie_size: None, movie_vbuf, hud_tbgl: tbgl, hud_sampler: sampler, sky_flash_mask: 0, sky_spin: 0.0, pass_timestamps: None, probe_skip: Vec::new(), refl }
     }
 
     /// The game's depth-0 pyramid for the walk [M `Vision_Calculate_View_Fustrum` 0x1e7df8,
@@ -1261,6 +1285,13 @@ impl Renderer {
         }
         if !all.is_empty() { queue.write_buffer(&self.particle_vbuf, 0, bytemuck::cast_slice(&all)); }
     }
+    /// The driving view's reflection map for this frame (`Scene::drive_reflection`), staged before
+    /// `render`; `None` or an inactive frame skips the map pass.
+    pub fn set_reflection(&mut self, queue: &wgpu::Queue, frame: Option<&crate::drive_reflection::MapFrame>) {
+        if let Some(r) = self.refl.as_mut() { r.set_frame(queue, frame, &self.tex_frames); }
+    }
+    /// The reflection map's render target (tests read it back).
+    pub fn reflection_target(&self) -> Option<&wgpu::Texture> { self.refl.as_ref().map(|r| &r.target) }
     pub fn set_shards(&mut self, queue: &wgpu::Queue, groups: &[(usize, Vec<crate::scene::Vertex>)]) {
         self.shard_groups.clear();
         let mut all: Vec<crate::scene::Vertex> = Vec::new();
@@ -1293,6 +1324,8 @@ impl Renderer {
         let clear = if (pillar.is_some() && movie.is_none()) || (movie.is_some() && self.screen_aspect > 0.0) || shifted { wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 } }
             else if fog_on > 0.0 { wgpu::Color { r: (fog_rgb[0] * GAIN) as f64, g: (fog_rgb[1] * GAIN) as f64, b: (fog_rgb[2] * GAIN) as f64, a: 1.0 } } else { wgpu::Color { r: 0.05, g: 0.06, b: 0.08, a: 1.0 } };
         let mut enc = device.create_command_encoder(&Default::default());
+        // The driving reflection map first: the car overlay in the main pass samples it.
+        if let Some(rg) = self.refl.as_ref() { rg.encode(&mut enc, &self.vbuf, &self.skin_buf, &self.ibuf, &self.snow_skin, &self.tex_bgs, self.batch.is_some()); }
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,

@@ -24,6 +24,7 @@ pub mod dev;
 #[cfg(not(target_os = "android"))]
 pub mod devwin;
 pub mod driving;
+pub mod drive_reflection;
 pub mod hud;
 pub mod credits;
 pub mod fe_pages;
@@ -3069,6 +3070,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let movie_arg = movie.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
     r.set_shards(&queue, &scene.shard_draws());
     r.set_particles(&queue, &particles_for(scene, cam));
+    r.set_reflection(&queue, scene.drive_reflection.as_ref().map(|m| &m.frame));
     let mut enc = r.render(&device, &queue, &view, &depth, vp, vp_rot, cam.pos.to_array(), time as u32, &snow, hud, movie_arg, if cut { Some(band) } else { None });
     let row = (4 * w).next_multiple_of(256);
     let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
@@ -6300,7 +6302,7 @@ impl App {
                         self.cam.yaw = yaw;
                         self.cam.pitch = pitch;
                     }
-                    { let (r, u) = billboard_axes(&self.cam); self.scene.drive_particles = drv.particle_groups(r, u); }
+                    { let (r, u) = billboard_axes(&self.cam); self.scene.drive_particles = drv.particle_groups(r, u); drv.reflection_frame(&mut self.scene, r, u); }
                     { let a = self.gfx.as_ref().map_or(16.0 / 9.0, |g| g.config.width as f32 / g.config.height.max(1) as f32); let h = drv.hud_frame(&self.scene, a); self.scene.drive_hud = h; }
                     if matches!(
                         drv.mission_state,
@@ -6638,6 +6640,7 @@ impl App {
                 let fp_enc = std::time::Instant::now();
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 g.renderer.set_particles(&g.queue, &particles_for(&self.scene, &draw_cam));
+                g.renderer.set_reflection(&g.queue, self.scene.drive_reflection.as_ref().map(|m| &m.frame));
                 let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
                 if let Some(path) = self.capture_req.take() {
                     let (w, h) = (g.config.width.max(1), g.config.height.max(1));
@@ -7558,7 +7561,7 @@ pub fn run() -> Result<()> {
             cam = Camera { pos: Vec3::new(v[0], v[1], v[2]), yaw: v[3], pitch: v[4], fov: GAME_FOV };
         }
         let opts = scene::ViewOpts { reinforcements: false, firing: false, right: [1.0, 0.0, 0.0], up: [0.0, 1.0, 0.0] };
-        { let (r, u) = billboard_axes(&cam); scene.drive_particles = drv.particle_groups(r, u); }
+        { let (r, u) = billboard_axes(&cam); scene.drive_particles = drv.particle_groups(r, u); drv.reflection_frame(&mut scene, r, u); }
         { let a = 1280.0 / 720.0; let h = drv.hud_frame(&scene, a); scene.drive_hud = h; }
         let (layout, _) = scene.skin_layout();
         let (mut pal, _) = scene.skin_palette(&layout, None, ticks as f32, opts, None);

@@ -567,6 +567,15 @@ The view returned by `CarRender::reflection_view(car_pos, main_forward)` holds e
 projection, the item query (`ReflectionItemQuery::keeps`), the vehicle count, the fog and the
 steps of §10.6.3.
 
+**The port's driving view** (`crates/nf-view/src/drive_reflection.rs`, test
+`driving_reflection_live`): one 256 × 256 render target per frame, drawn before the main pass from
+this camera in the game's texel space (no `mirror_x`), with the steps of §10.6.3, fog off, the
+kept items in table order and up to 4 AI vehicles; the player car's Paint / Chrome / Glass strips
+(Reflect > 0) sample it with the §10.5 pass-3 ST and colour, additively. Port choices, not traced:
+the clear (black, alpha 1.0); the vehicles ranked by distance to the main eye, the player's car
+left out; every item tested with `keeps` (the cell tree gather is not ported); items at LOD 0;
+the sampler repeats; the map takes no display gain.
+
 ### 10.7 Unproven
 
 - The texture function (TFX / TCC) of every pass. TEX0 comes from the texture packets
