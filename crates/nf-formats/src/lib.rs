@@ -34,6 +34,7 @@ pub mod ps2float;
 pub mod mpeg2;
 pub mod pss;
 pub mod refpack;
+pub mod rendertun;
 pub mod sfx;
 pub mod soundbank;
 pub mod ssh;

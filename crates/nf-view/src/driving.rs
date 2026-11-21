@@ -659,10 +659,20 @@ pub fn load_driving_scene(iso_path: &str, viv_name: &str) -> Result<(Scene, Driv
         let sky = ws.article.to_ascii_lowercase().starts_with("sky");
         let origin = if sky { placements.get(ws.placement).map_or([0.0; 3], |p| p.origin) } else { [0.0; 3] };
         let positions = if sky { ws.positions.iter().map(|q| [q[0] - origin[0], q[1] - origin[1], q[2] - origin[2]]).collect() } else { ws.positions };
+        let vcols = ws.colors;
         let strip = nf_formats::crp_mesh::MeshStrip { positions, uvs: ws.uvs, colors: Vec::new(), texture: ws.texture };
         let n = materials.len();
         let (b0, b1) = (bmin, bmax);
+        let v0 = vertices.len();
         push_strip(&strip, None, &mut vertices, &mut indices, &mut materials, &mut bmin, &mut bmax);
+        // The part's per-vertex colours light the track (the night lighting is baked into them;
+        // PS2 scale, 0x80 = 1.0) [D docs/formats/geoprim.md; the microcode's pass-through is unproven].
+        if !vcols.is_empty() && vertices.len() - v0 == vcols.len() {
+            for (v, c) in vertices[v0..].iter_mut().zip(&vcols) {
+                let f = |x: u8| (x as u32 * 2).min(255) as u8;
+                v.rgba = [f(c[0]), f(c[1]), f(c[2]), 255];
+            }
+        }
         if sky {
             (bmin, bmax) = (b0, b1); // the dome does not widen the track bounds
             for m in &mut materials[n..] { m.layer = Layer::SkyCamera; m.draw.pass = 0; m.draw.zwrite = false; m.radius = 1.0e6; }

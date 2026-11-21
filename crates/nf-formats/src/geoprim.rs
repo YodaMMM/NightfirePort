@@ -47,6 +47,12 @@
 //!      span v = 0..1 exactly].
 //!    The VU1 microcode that consumes these (eaglrm.o) was not disassembled — there is no VU
 //!    disassembler in the repo — so the /256 scale and the strip-list unit are data-proven only.
+//! 5. **Draw chain** — the batch stored in a group entry is NOT what that entry draws. The model
+//!    draw sets the part index (`+0xc0`) and runs each entry's render list; the list's op 4 puts
+//!    `table[part]` (a DMA call) into the chain, which leads to that part's colour upload and the
+//!    batch it calls [M `FUN_002843a0` 0x2843a0, `FUN_002a3290` 0x2a3290 case 4]. Per-part
+//!    textures come from the same list (op 3 / op 6, `+ part × 0x60`). See
+//!    [`ModelIndex::draw_chain`] and docs/formats/geoprim.md §4b for the proof on all 8 tracks.
 //!
 //! Pure decoding: no drawing. Malformed data errors instead of overrunning.
 
@@ -103,6 +109,11 @@ pub struct LocalStrip {
     pub texture: Option<String>,
     pub positions: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
+    /// Per-vertex RGB from the chain's masked `UNPACK V3-8` (unsigned bytes, the w lane comes from
+    /// the VIF row) [D]; empty when the chain carries none. 0x80 is the GS's 1.0 for a modulated
+    /// texture; that the VU1 microcode passes these to the GS unscaled is not proven (eaglrm.o is
+    /// not disassembled).
+    pub colors: Vec<[u8; 3]>,
 }
 
 /// One world-space strip: a placed model strip.
@@ -115,6 +126,8 @@ pub struct WorldStrip {
     pub texture: Option<String>,
     pub positions: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
+    /// Per-vertex RGB, see [`LocalStrip::colors`].
+    pub colors: Vec<[u8; 3]>,
 }
 
 impl WorldStrip {
@@ -272,7 +285,19 @@ impl<'m> ModelIndex<'m> {
                 models.insert(m.to_owned(), s.value);
             } else if s.name.starts_with("__EAGL::TAR:::") {
                 if let Some(i) = s.name.find("TEX0::") {
-                    textures.entry(s.value).or_insert_with(|| s.name[i + 6..].to_owned());
+                    // The sheet name is the descriptor's +4 word (up to 4 ASCII bytes, 0-padded):
+                    // it equals the symbol's `TEX0::` tail on every `{T0@…}` descriptor of the 8
+                    // tracks, and names the real sheet entry on the per-part `{T0|…}` ones whose tail
+                    // is an export label (paris `pb01_1` → `pb02`) [D]. Falls back to the tail.
+                    let at = data.data_offset as usize + s.value as usize;
+                    let raw = module.image.get(at + 4..at + 8).unwrap_or(&[]);
+                    let n = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+                    let name = if (1..=4).contains(&n) && raw[..n].iter().all(|b| b.is_ascii_graphic()) {
+                        String::from_utf8_lossy(&raw[..n]).into_owned()
+                    } else {
+                        s.name[i + 6..].to_owned()
+                    };
+                    textures.entry(s.value).or_insert(name);
                 }
             }
         }
@@ -323,33 +348,147 @@ impl<'m> ModelIndex<'m> {
         Ok(out)
     }
 
-    /// The texture of a packet: header (+0) → render-method list (+0) → the first `0x0300000N`
-    /// word's following pointer → `__EAGL::TAR` symbol's `TEX0::` name [D].
-    pub fn packet_texture(&self, po: usize) -> Option<String> {
-        let hdr = self.ptr(u32_at(self.img(), po).ok()?).ok()?;
-        let rm = self.ptr(u32_at(self.img(), hdr).ok()?).ok()?;
-        for i in 0..32 {
-            let w = u32_at(self.img(), rm + i * 4).ok()?;
-            if w & 0xffff_fff0 == 0x0300_0000 {
-                let p = u32_at(self.img(), rm + i * 4 + 4).ok()? & 0x0fff_ffff;
-                return self.textures.get(&p).cloned();
+    /// The `__Model:::` object's part index (`+0xc0`): the game copies it into the global that the
+    /// render-method interpreter indexes per-part data with [M `FUN_002843a0` 0x2843a0:
+    /// `DAT_003483fc = *(model + 0xc0)` before the group walk] [D: equals the `Model[0].XX` suffix].
+    pub fn model_part(&self, sym_value: u32) -> Result<u32> { u32_at(self.img(), self.ptr(sym_value)? + 0xc0) }
+
+    /// The render-method instruction list of a group entry: entry `+0` → GeoPrim header, header
+    /// `+0` → the list the interpreter walks [M `FUN_002843a0`: `FUN_002a3290(*entry[1])`;
+    /// `FUN_002a3290`: `puVar32 = *param_1`]. Returns `(image offset, instruction)` for every
+    /// instruction up to the 0 terminator, stepping by the interpreter's lengths [M 0x2a3290]:
+    /// ops 1 and 4 = 2 words, 2 = n + 2, 3 = 1 + n, 5/6/7 = 3 + n (n = low 16 bits), 0xe/0xf = 1.
+    /// Any other op errors (none occurs in the 8 tracks [D]).
+    pub fn render_ops(&self, po: usize) -> Result<Vec<(usize, u32)>> {
+        let hdr = self.ptr(u32_at(self.img(), po)?)?;
+        let rm = self.ptr(u32_at(self.img(), hdr)?)?;
+        let mut out = Vec::new();
+        let mut i = 0usize;
+        loop {
+            let at = rm + i * 4;
+            let o = u32_at(self.img(), at)?;
+            if o == 0 {
+                return Ok(out);
+            }
+            let n = (o & 0xffff) as usize;
+            let len = match o >> 24 {
+                1 | 4 => 2,
+                2 => n + 2,
+                3 => 1 + n,
+                5..=7 => 3 + n,
+                0xe | 0xf => 1,
+                op => return invalid(format!("entry {po:#x}: render op {op:#x} ({o:#x}) at {at:#x} not handled")),
+            };
+            out.push((at, o));
+            i += len;
+            if out.len() > 4096 {
+                return invalid(format!("entry {po:#x}: render list has no terminator"));
+            }
+        }
+    }
+
+    /// The texture a group entry's render list sets for `part`: the first texture reference, in
+    /// list order, that resolves to a named `__EAGL::TAR` descriptor.
+    /// - op 3 (`0x0300000N`, N words): each word's top two bits pick the address: 0 = the word,
+    ///   1 = the word + part × 0x60 (a per-part texture), 2 = a run-time table, 3 = none
+    ///   [M `FUN_002a3290` case 3: `uVar25 >> 0x1e`, `(uVar25 & 0x3fffffff) + DAT_003483fc * 0x60`];
+    /// - op 6 (`0x06KK00NN`): the word at +8, plus KK × part × 0x60 [M case 6:
+    ///   `puVar33[2] + uVar23 * DAT_003483fc * 0x60`, uVar23 = bits 16-23].
+    ///
+    /// [D: every mode-1 op-3 word of the 8 tracks resolves to a named descriptor for its model's
+    /// part, e.g. paris `P_building3_12seg` part 10 → `pb01_10` where part 0 reads `pb01`.]
+    /// `None` = the list names no texture.
+    pub fn packet_texture(&self, po: usize, part: u32) -> Option<String> {
+        for (at, o) in self.render_ops(po).ok()? {
+            let addrs: Vec<u32> = match o >> 24 {
+                3 => (0..(o & 0xffff) as usize)
+                    .filter_map(|j| u32_at(self.img(), at + 4 + j * 4).ok())
+                    .filter_map(|w| match w >> 30 {
+                        0 => Some(w & 0x3fff_ffff),
+                        1 => Some((w & 0x3fff_ffff).wrapping_add(part.wrapping_mul(0x60))),
+                        _ => None,
+                    })
+                    .collect(),
+                6 => {
+                    let k = (o >> 16) & 0xff;
+                    let w = u32_at(self.img(), at + 8).ok()?;
+                    vec![w.wrapping_add(k.wrapping_mul(part).wrapping_mul(0x60))]
+                }
+                _ => continue,
+            };
+            if let Some(t) = addrs.iter().find_map(|a| self.textures.get(a)) {
+                return Some(t.clone());
             }
         }
         None
     }
 
-    /// Every strip of a model, in the model frame. A packet whose render-method list sets no
-    /// texture keeps the previous packet's (paris `S04_s4s_00` Model[0].00: packet 1 sets `0x03000002`
-    /// + descriptor, packet 2's list has no `0x0300000N` word) [D; the carry-over is inferred from
-    /// the list contents, the EAGL state machine itself is not traced]. Each model starts untextured.
+    /// The VIF byte ranges the game sends for group entry `po` drawn as `part`
+    /// [M `FUN_002a3290` case 4 + the PS2 DMA tag rules; D shapes]. The render list's op 4
+    /// (`0x04000002`; exactly one per list in the 8 tracks [D]) copies one quadword from
+    /// `table + 16 × part` into the chain [M: `DAT_003483fc * 0x10 + *puVar32`, 2 doublewords].
+    /// That quadword is a DMA `call` tag with no payload (`0x50000000`, address X). X is either
+    /// - a `call` tag (id 5): its payload is the part's colour upload (`STMASK`/`STROW`/`UNPACK
+    ///   V3-8`), and its address is a `ret` tag (id 6) whose payload is the shared geometry batch; or
+    /// - a `ret` tag (id 6): one batch holding the geometry and its colours, if any.
+    ///
+    /// A tag's VIF stream starts at tag + 8 (its upper 64 bits). The geometry reached this way is
+    /// NOT the batch stored inside the entry object itself: paris `S04_s4s_00`'s entry 0x36858 calls
+    /// the batch stored in object 0x355f8 (8 vertices). Two independent checks
+    /// (docs/formats/geoprim.md §4b): every model's `Colours` list names the chain batches' vertex
+    /// counts (paris 1,354 of 1,357 lists, the 3 others match as a prefix; the objects' own batches
+    /// match 81, each of which the chain matches too), and the chain batches lie inside the
+    /// article's `Base` box where the own batches stray out of it.
+    pub fn draw_chain(&self, po: usize, part: u32) -> Result<Vec<(usize, usize)>> {
+        let ops = self.render_ops(po)?;
+        let (at, _) = *ops
+            .iter()
+            .find(|(_, o)| o >> 24 == 4)
+            .ok_or_else(|| FormatError::Invalid(format!("entry {po:#x}: render list has no op 4")))?;
+        let table = self.ptr(u32_at(self.img(), at + 4)?)?;
+        let e = table + 16 * part as usize;
+        let tag = u32_at(self.img(), e)?;
+        if tag != 0x5000_0000 {
+            return invalid(format!("entry {po:#x} part {part}: table word {tag:#x} at {e:#x} is not an empty DMA call"));
+        }
+        let x = self.ptr(u32_at(self.img(), e + 4)?)?;
+        let payload = |t: usize| -> Result<(u32, (usize, usize))> {
+            let w = u32_at(self.img(), t)?;
+            let end = t + 16 + (w & 0xffff) as usize * 16;
+            if end > self.img().len() {
+                return invalid(format!("DMA tag {t:#x}: {} quadwords run past the image", w & 0xffff));
+            }
+            Ok(((w >> 28) & 7, (t + 8, end)))
+        };
+        let (id, r) = payload(x)?;
+        match id {
+            6 => Ok(vec![r]),
+            5 => {
+                let g = self.ptr(u32_at(self.img(), x + 4)?)?;
+                let (gid, gr) = payload(g)?;
+                if gid != 6 {
+                    return invalid(format!("entry {po:#x} part {part}: colour call {x:#x} targets tag id {gid}, not ret"));
+                }
+                Ok(vec![r, gr])
+            }
+            _ => invalid(format!("entry {po:#x} part {part}: table target {x:#x} has DMA tag id {id}")),
+        }
+    }
+
+    /// Every strip of a model, in the model frame, as the game draws it for the model's part
+    /// (`+0xc0`): per group entry, the draw chain's batch ([`Self::draw_chain`]) with the entry's
+    /// texture ([`Self::packet_texture`]). An entry whose list names no texture keeps the previous
+    /// entry's [inferred from the list contents; the EAGL state machine itself is not traced].
+    /// Each model starts untextured.
     pub fn model_strips(&self, sym_value: u32) -> Result<Vec<LocalStrip>> {
+        let part = self.model_part(sym_value)?;
         let mut out = Vec::new();
         let mut tex = None;
         for po in self.model_packets(sym_value)? {
-            if let Some(t) = self.packet_texture(po) {
+            if let Some(t) = self.packet_texture(po, part) {
                 tex = Some(t);
             }
-            for mut s in decode_packet(self.img(), po)? {
+            for mut s in decode_vif(self.img(), &self.draw_chain(po, part)?, po)? {
                 s.texture = tex.clone();
                 out.push(s);
             }
@@ -358,14 +497,20 @@ impl<'m> ModelIndex<'m> {
     }
 }
 
-/// Decodes one packet's VIF stream into strips (texture left `None`) [D, see the module docs].
+/// Decodes one packet object's own VIF stream (tag at `po + 8`) into strips (texture left `None`)
+/// [D, see the module docs]. The game does not draw an entry object's own batch for that entry
+/// (see [`ModelIndex::draw_chain`]); this stays for inspecting one batch.
 pub fn decode_packet(img: &[u8], po: usize) -> Result<Vec<LocalStrip>> {
     let qwc = (u32_at(img, po + 8)? & 0xffff) as usize;
-    let mut cur = po + 0x10;
-    let end = cur + qwc * 16;
-    if end > img.len() {
-        return invalid(format!("packet {po:#x}: {qwc} quadwords run past the image"));
-    }
+    decode_vif(img, &[(po + 0x10, po + 0x10 + qwc * 16)], po)
+}
+
+/// Decodes the VIF byte ranges of one draw into strips [D]; the VIF state (mode, mask, row) carries
+/// across the ranges, as one DMA chain feeds one VIF. `label` names the batch in errors.
+/// Colours: the masked `UNPACK V3-8` unsigned (every one in the 8 tracks has STMASK 0x40404040 —
+/// x/y/z data, w from the row — mode 0, and `num` = the vertex count [D]).
+pub fn decode_vif(img: &[u8], ranges: &[(usize, usize)], label: usize) -> Result<Vec<LocalStrip>> {
+    let po = label;
     let mut mode = 0u32;
     let mut row = [0u32; 4];
     let mut mask = 0u32;
@@ -373,87 +518,100 @@ pub fn decode_packet(img: &[u8], po: usize) -> Result<Vec<LocalStrip>> {
     let mut ends: Vec<u8> = Vec::new();
     let mut positions: Option<Vec<[f32; 3]>> = None;
     let mut uvs: Option<Vec<[f32; 2]>> = None;
-    while cur + 4 <= end {
-        let code = u32_at(img, cur)?;
-        cur += 4;
-        let cmd = ((code >> 24) & 0x7f) as u8;
-        let imm = code & 0xffff;
-        match cmd {
-            0x00 | 0x01 | 0x02 | 0x03 | 0x04 | 0x06 | 0x07 | 0x10 | 0x11 | 0x13 | 0x14 | 0x15 | 0x17 => {}
-            0x05 => mode = imm & 3,
-            0x20 => {
-                mask = u32_at(img, cur)?;
-                cur += 4;
-            }
-            0x30 | 0x31 => {
-                if cmd == 0x30 {
-                    for (k, r) in row.iter_mut().enumerate() {
-                        *r = u32_at(img, cur + k * 4)?;
-                    }
+    let mut colors: Option<Vec<[u8; 3]>> = None;
+    for &(start, end) in ranges {
+        if end > img.len() {
+            return invalid(format!("batch {po:#x}: VIF range {start:#x}..{end:#x} runs past the image"));
+        }
+        let mut cur = start;
+        while cur + 4 <= end {
+            let code = u32_at(img, cur)?;
+            cur += 4;
+            let cmd = ((code >> 24) & 0x7f) as u8;
+            let imm = code & 0xffff;
+            match cmd {
+                0x00 | 0x01 | 0x02 | 0x03 | 0x04 | 0x06 | 0x07 | 0x10 | 0x11 | 0x13 | 0x14 | 0x15 | 0x17 => {}
+                0x05 => mode = imm & 3,
+                0x20 => {
+                    mask = u32_at(img, cur)?;
+                    cur += 4;
                 }
-                cur += 16;
-            }
-            0x50 | 0x51 => cur += if imm == 0 { 0x10000 } else { imm as usize } * 16,
-            c if c & 0x60 == 0x60 => {
-                let num = match (code >> 16) & 0xff { 0 => 256, n => n as usize };
-                let vn = ((c >> 2) & 3) as usize;
-                let vl = (c & 3) as usize;
-                let masked = c & 0x10 != 0;
-                let usn = code & 0x4000 != 0;
-                let addr = code & 0x3ff;
-                let bytes = if vn == 3 && vl == 3 { num * 2 } else { num * (vn + 1) * [4, 2, 1][vl.min(2)] };
-                let len = (bytes + 3) & !3;
-                if cur + len > end {
-                    return invalid(format!("packet {po:#x}: unpack at {cur:#x} runs past the packet"));
-                }
-                let data = &img[cur..cur + bytes];
-                // A component is plain data when its mask bits are 00 in every row [VIF STMASK].
-                let comp_is_data = |k: usize| !masked || (0..4).all(|r| (mask >> (r * 8 + k * 2)) & 3 == 0);
-                let offset = |k: usize, v: u32| if mode == 1 { v.wrapping_add(row[k]) } else { v };
-                match (vn, vl) {
-                    (3, 0) if num == 1 && addr == 0 && count.is_none() => count = Some(u32_at(data, 0)? as usize),
-                    (3, 2) if num == 1 && positions.is_none() => ends.extend_from_slice(&data[..4]),
-                    (2, 1) | (2, 0) if positions.is_none() => {
-                        if !(0..3).all(comp_is_data) || (vl == 1 && !usn) {
-                            return invalid(format!("packet {po:#x}: position unpack {code:#x} masked or signed"));
+                0x30 | 0x31 => {
+                    if cmd == 0x30 {
+                        for (k, r) in row.iter_mut().enumerate() {
+                            *r = u32_at(img, cur + k * 4)?;
                         }
-                        let mut v = Vec::with_capacity(num);
-                        for i in 0..num {
-                            let c = |k: usize| -> Result<f32> {
-                                Ok(if vl == 1 {
-                                    let u = u16::from_le_bytes([data[i * 6 + k * 2], data[i * 6 + k * 2 + 1]]) as u32;
-                                    (offset(k, u) as f32 - Q_BIAS) / Q_SCALE
-                                } else {
-                                    f32::from_bits(offset(k, u32_at(data, i * 12 + k * 4)?))
-                                })
-                            };
-                            v.push([c(0)?, c(1)?, c(2)?]);
-                        }
-                        positions = Some(v);
                     }
-                    (1, 1) | (1, 0) if positions.is_some() && uvs.is_none() => {
-                        if !(0..2).all(comp_is_data) || (vl == 1 && !usn) {
-                            return invalid(format!("packet {po:#x}: uv unpack {code:#x} masked or signed"));
-                        }
-                        let mut v = Vec::with_capacity(num);
-                        for i in 0..num {
-                            let c = |k: usize| -> Result<f32> {
-                                Ok(if vl == 1 {
-                                    let u = u16::from_le_bytes([data[i * 4 + k * 2], data[i * 4 + k * 2 + 1]]) as u32;
-                                    (offset(k, u) as f32 - Q_BIAS) / Q_SCALE
-                                } else {
-                                    f32::from_bits(offset(k, u32_at(data, i * 8 + k * 4)?))
-                                })
-                            };
-                            v.push([c(0)?, c(1)?]);
-                        }
-                        uvs = Some(v);
-                    }
-                    _ => {}
+                    cur += 16;
                 }
-                cur += len;
+                0x50 | 0x51 => cur += if imm == 0 { 0x10000 } else { imm as usize } * 16,
+                c if c & 0x60 == 0x60 => {
+                    let num = match (code >> 16) & 0xff { 0 => 256, n => n as usize };
+                    let vn = ((c >> 2) & 3) as usize;
+                    let vl = (c & 3) as usize;
+                    let masked = c & 0x10 != 0;
+                    let usn = code & 0x4000 != 0;
+                    let addr = code & 0x3ff;
+                    let bytes = if vn == 3 && vl == 3 { num * 2 } else { num * (vn + 1) * [4, 2, 1][vl.min(2)] };
+                    let len = (bytes + 3) & !3;
+                    if cur + len > end {
+                        return invalid(format!("packet {po:#x}: unpack at {cur:#x} runs past the batch"));
+                    }
+                    let data = &img[cur..cur + bytes];
+                    // A component is plain data when its mask bits are 00 in every row [VIF STMASK].
+                    let comp_is_data = |k: usize| !masked || (0..4).all(|r| (mask >> (r * 8 + k * 2)) & 3 == 0);
+                    let offset = |k: usize, v: u32| if mode == 1 { v.wrapping_add(row[k]) } else { v };
+                    match (vn, vl) {
+                        (3, 0) if num == 1 && addr == 0 && count.is_none() => count = Some(u32_at(data, 0)? as usize),
+                        (3, 2) if num == 1 && positions.is_none() => ends.extend_from_slice(&data[..4]),
+                        (2, 1) | (2, 0) if positions.is_none() => {
+                            if !(0..3).all(comp_is_data) || (vl == 1 && !usn) {
+                                return invalid(format!("packet {po:#x}: position unpack {code:#x} masked or signed"));
+                            }
+                            let mut v = Vec::with_capacity(num);
+                            for i in 0..num {
+                                let c = |k: usize| -> Result<f32> {
+                                    Ok(if vl == 1 {
+                                        let u = u16::from_le_bytes([data[i * 6 + k * 2], data[i * 6 + k * 2 + 1]]) as u32;
+                                        (offset(k, u) as f32 - Q_BIAS) / Q_SCALE
+                                    } else {
+                                        f32::from_bits(offset(k, u32_at(data, i * 12 + k * 4)?))
+                                    })
+                                };
+                                v.push([c(0)?, c(1)?, c(2)?]);
+                            }
+                            positions = Some(v);
+                        }
+                        (1, 1) | (1, 0) if positions.is_some() && uvs.is_none() => {
+                            if !(0..2).all(comp_is_data) || (vl == 1 && !usn) {
+                                return invalid(format!("packet {po:#x}: uv unpack {code:#x} masked or signed"));
+                            }
+                            let mut v = Vec::with_capacity(num);
+                            for i in 0..num {
+                                let c = |k: usize| -> Result<f32> {
+                                    Ok(if vl == 1 {
+                                        let u = u16::from_le_bytes([data[i * 4 + k * 2], data[i * 4 + k * 2 + 1]]) as u32;
+                                        (offset(k, u) as f32 - Q_BIAS) / Q_SCALE
+                                    } else {
+                                        f32::from_bits(offset(k, u32_at(data, i * 8 + k * 4)?))
+                                    })
+                                };
+                                v.push([c(0)?, c(1)?]);
+                            }
+                            uvs = Some(v);
+                        }
+                        (2, 2) if colors.is_none() => {
+                            if !(0..3).all(comp_is_data) || !usn || mode != 0 {
+                                return invalid(format!("packet {po:#x}: colour unpack {code:#x} masked, signed or offset"));
+                            }
+                            colors = Some((0..num).map(|i| [data[i * 3], data[i * 3 + 1], data[i * 3 + 2]]).collect());
+                        }
+                        _ => {}
+                    }
+                    cur += len;
+                }
+                other => return invalid(format!("packet {po:#x}: unhandled VIF command {other:#x} at {:#x}", cur - 4)),
             }
-            other => return invalid(format!("packet {po:#x}: unhandled VIF command {other:#x} at {:#x}", cur - 4)),
         }
     }
     let (Some(count), Some(positions)) = (count, positions) else { return Ok(Vec::new()) };
@@ -463,6 +621,10 @@ pub fn decode_packet(img: &[u8], po: usize) -> Result<Vec<LocalStrip>> {
     let uvs = uvs.unwrap_or_default();
     if !uvs.is_empty() && uvs.len() != count {
         return invalid(format!("packet {po:#x}: {} uvs for {count} positions", uvs.len()));
+    }
+    let colors = colors.unwrap_or_default();
+    if !colors.is_empty() && colors.len() != count {
+        return invalid(format!("packet {po:#x}: {} colours for {count} positions", colors.len()));
     }
     let mut starts = vec![0usize];
     for &b in ends.iter().take_while(|&&b| b != 0) {
@@ -478,6 +640,7 @@ pub fn decode_packet(img: &[u8], po: usize) -> Result<Vec<LocalStrip>> {
             texture: None,
             positions: positions[w[0]..w[1]].to_vec(),
             uvs: if uvs.is_empty() { Vec::new() } else { uvs[w[0]..w[1]].to_vec() },
+            colors: if colors.is_empty() { Vec::new() } else { colors[w[0]..w[1]].to_vec() },
         })
         .collect())
 }
@@ -511,6 +674,7 @@ pub fn track_geometry(crp_bytes: &[u8]) -> Result<TrackGeometry> {
                 texture: s.texture.clone(),
                 positions: s.positions.iter().map(|&v| p.apply(v)).collect(),
                 uvs: s.uvs.clone(),
+                colors: s.colors.clone(),
             });
         }
     }
@@ -613,5 +777,89 @@ mod tests {
         assert_eq!(parse_part_ref("CARP::<<Map>>::{AICo}::8960"), None);
         assert_eq!(parse_part_ref("CARP::x::{as  00g1}"), None);
         assert_eq!(parse_part_ref("EAGL::x::{as  0001}"), None);
+    }
+
+    /// A module image with one model (part 1) whose single group entry stores one batch of its own
+    /// but whose render list's op 4 table calls, per part, a colour upload + a shared batch — the
+    /// paris `S04_s4s_00` shape [M 0x2843a0 / 0x2a3290 case 4, D].
+    fn chain_module() -> crate::crp_mesh::TrackModule {
+        use crate::crp_mesh::{ModuleSection, ModuleSymbol, TrackModule};
+        let mut img = vec![0u8; 0x800];
+        let w = |img: &mut Vec<u8>, at: usize, v: u32| img[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        // Model object at 0: part 1, one group, group table at 0x100.
+        w(&mut img, 0xc0, 1);
+        w(&mut img, 0xc8, 1);
+        w(&mut img, 0xcc, 0x100);
+        w(&mut img, 0x100, 0xA000_FFFF);
+        w(&mut img, 0x104, 0x200);
+        // Entry object 0x200: its own batch is a 3-vertex strip far away.
+        let q = |x: f32| (x * 256.0 + 32768.0) as u16;
+        let own = packet(3, [0, 0, 0, 0], &[[q(90.0), q(0.0), q(0.0)], [q(91.0), q(0.0), q(0.0)], [q(90.0), q(0.0), q(1.0)]], &[[0; 2]; 3]);
+        img[0x200..0x200 + own.len()].copy_from_slice(&own);
+        w(&mut img, 0x200, 0x280); // +0 → header
+        w(&mut img, 0x280, 0x2c0); // header +0 → render list
+        // Render list: op 3 (one per-part texture word, mode 1), op 4 → table 0x300, end.
+        w(&mut img, 0x2c0, 0x0300_0001);
+        w(&mut img, 0x2c4, 0x4000_0000 | 0x5a0);
+        w(&mut img, 0x2c8, 0x0400_0002);
+        w(&mut img, 0x2cc, 0x300);
+        // Table: part 0 → colour call 0x340, part 1 → colour call 0x380.
+        for (k, x) in [0x340u32, 0x380].into_iter().enumerate() {
+            w(&mut img, 0x300 + 16 * k, 0x5000_0000);
+            w(&mut img, 0x304 + 16 * k, x);
+        }
+        // Colour calls: call qwc 2 → geometry tag 0x408; STMASK 0x40404040, UNPACK V3-8 num 4.
+        for (x, c) in [(0x340usize, 0x10u8), (0x380, 0x40)] {
+            w(&mut img, x, 0x5000_0002);
+            w(&mut img, x + 4, 0x408);
+            w(&mut img, x + 8, 0x2000_0000);
+            w(&mut img, x + 12, 0x4040_4040);
+            w(&mut img, x + 16, 0x7a04_c093);
+            for i in 0..12 {
+                img[x + 20 + i] = c + i as u8;
+            }
+        }
+        // The shared batch: tag (ret) at 0x408, two strips (2 + 2 vertices).
+        let shared = packet(4, [6, 0, 0, 0], &[[q(-1.0), q(0.0), q(-1.0)], [q(1.0), q(0.0), q(-1.0)], [q(-1.0), q(0.5), q(1.0)], [q(1.0), q(0.5), q(1.0)]], &[[q(0.0), q(0.0)]; 4]);
+        img[0x400..0x400 + shared.len()].copy_from_slice(&shared);
+        // Texture descriptors 0x60 apart; the sheet name is the +4 word.
+        img[0x5a4..0x5a8].copy_from_slice(b"pb01");
+        img[0x604..0x608].copy_from_slice(b"pb02");
+        let sym = |name: &str, value: u32| ModuleSymbol { name: name.into(), value, size: 4, info: 0x11, shndx: 1 };
+        TrackModule {
+            image: img,
+            elfd_size: 0x800,
+            sections: vec![ModuleSection { name: ".data".into(), sh_type: 1, offset: 0, data_offset: 0, size: 0x800, link: 0, entsize: 0 }],
+            symbols: vec![
+                sym("__Model:::m::{as  0000}::Model[0].01", 0),
+                sym("__EAGL::TAR:::{T0|1}TEX0::pb01", 0x5a0),
+                sym("__EAGL::TAR:::{T0|1}TEX0::pb01_1", 0x600),
+            ],
+            relocations: 0,
+        }
+    }
+
+    #[test]
+    fn a_model_draws_its_render_lists_chain_for_its_part_with_that_parts_colours() {
+        let m = chain_module();
+        let ix = ModelIndex::new(&m).unwrap();
+        assert_eq!(ix.model_part(0).unwrap(), 1);
+        let s = ix.model_strips(0).unwrap();
+        // The geometry is the called batch, not the entry object's own (x = 90..91).
+        assert_eq!(s.len(), 2);
+        assert_eq!(s[0].positions, vec![[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0]]);
+        assert_eq!(s[1].positions, vec![[-1.0, 0.5, 1.0], [1.0, 0.5, 1.0]]);
+        assert_ne!(decode_packet(&m.image, 0x200).unwrap()[0].positions, s[0].positions);
+        // Part 1's colours (table entry 1), split with the strips.
+        assert_eq!(s[0].colors, vec![[0x40, 0x41, 0x42], [0x43, 0x44, 0x45]]);
+        assert_eq!(s[1].colors, vec![[0x46, 0x47, 0x48], [0x49, 0x4a, 0x4b]]);
+        // Part 0 would take table entry 0.
+        let p0 = decode_vif(&m.image, &ix.draw_chain(0x200, 0).unwrap(), 0x200).unwrap();
+        assert_eq!(p0[0].colors[0], [0x10, 0x11, 0x12]);
+        // The per-part texture: base + part × 0x60, named by the descriptor's +4 word.
+        assert_eq!(s[0].texture.as_deref(), Some("pb02"));
+        assert_eq!(ix.packet_texture(0x200, 0).as_deref(), Some("pb01"));
+        // A part past the table (not an empty DMA call) is refused.
+        assert!(ix.draw_chain(0x200, 2).is_err());
     }
 }
