@@ -6,6 +6,8 @@
 pub mod ai;
 // G-056 world-bounds: the driving maps' invisible boundary sheets (DRIVING.ELF 0x331a60).
 pub mod bounds;
+// The player chase camera (camera.ini HeliCam + FUN_001b2b48).
+pub mod camera;
 // G-057 suspension: the per-wheel spring–damper (sub_18FC00 + kind siblings).
 pub mod suspension;
 // 647 drive-mission-scripts: the mission state machine (objectives, fails, timers, the PTP end).
