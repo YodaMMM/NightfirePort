@@ -13267,6 +13267,24 @@ pub fn in_view_of(player: &Player, pos: V3) -> bool {
 fn drawn_room_mask(cel_graph: &crate::celgraph::CelGraph, player: &Player, door_closed: &[bool]) -> Option<Vec<bool>> {
     if cel_graph.portals.is_empty() { return None; }
     let start = player.obj_cel?;
+    let depth0 = viewer_depth0(player)?;
+    crate::celgraph::portal_visible_cels_from_cell_doors(cel_graph, start, player.eye, &depth0, Some(door_closed))
+}
+
+/// The VisCelList chain from the viewer's linked cel (`Vision_Portal_Recurse` 0x1e86e8 inserts the
+/// viewer's cel first, then `Vision_Recurse` the portal-reached cels), with `drawn_room_mask`'s
+/// depth-0 planes. A level without portals lists the viewer's cel alone. `None` = the viewer has no
+/// cel or no aim (the game skips the whole function without a cel [M 0x1e86e8:11]).
+fn viewer_chain(cel_graph: &crate::celgraph::CelGraph, player: &Player, door_closed: &[bool]) -> Option<Vec<usize>> {
+    let start = player.obj_cel?;
+    if start >= cel_graph.cells.len() { return None; }
+    let depth0 = viewer_depth0(player)?;
+    if cel_graph.portals.is_empty() { return Some(vec![start]); }
+    crate::celgraph::portal_cel_chain_from_cell_doors(cel_graph, start, player.eye, &depth0, Some(door_closed))
+}
+
+/// `drawn_room_mask`'s depth-0 planes (see its doc); `None` with a zero aim.
+fn viewer_depth0(player: &Player) -> Option<[[f32; 4]; 5]> {
     let a2 = player.aim[0] * player.aim[0] + player.aim[1] * player.aim[1] + player.aim[2] * player.aim[2];
     if !(a2 > 1e-12) { return None; }
     let l = a2.sqrt();
@@ -13278,7 +13296,7 @@ fn drawn_room_mask(cel_graph: &crate::celgraph::CelGraph, player: &Player, door_
     let fw = [player.aim[0] / l, player.aim[1] / l, player.aim[2] / l];
     let fe = fw[0] * player.eye[0] + fw[1] * player.eye[1] + fw[2] * player.eye[2];
     depth0[4] = [-fw[0], -fw[1], -fw[2], fe + 200.0];
-    crate::celgraph::portal_visible_cels_from_cell_doors(cel_graph, start, player.eye, &depth0, Some(door_closed))
+    Some(depth0)
 }
 
 pub fn visible_to(player: &Player, world: &CollisionWorld, pos: V3, head: V3) -> bool {
@@ -19719,11 +19737,11 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.hold_active = false;
             // Dev-only: a script's event 5 during a held tick is not kept (the hold already freezes them).
             self.npc_enabled = true;
-            self.sky_frame(d.level);
+            self.sky_frame(d.level, player, cel_graph);
             return;
         }
         self.tick_impl(d, player, cel_graph);
-        self.sky_frame(d.level);
+        self.sky_frame(d.level, player, cel_graph);
     }
 
     /// The unit-test entry (hand-built `Player`s carry no viewer cel): the drawn gate keeps the
@@ -19736,16 +19754,33 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// a 2-D `Sound_Play(100, 0x5d)` (0x5e after a reflicker roll) when one leaves 1
     /// [M 0x1e5ad0:100-109]. Only slots with a flash variant run the timers (0700000a/0700000b's
     /// slot 3 on the disc [D]).
-    fn sky_frame(&mut self, level: u32) {
+    /// The viewer's sky gate (`viewer+0x20`, `celgraph::chain_sees_sky`) is re-read from the same
+    /// VisCelList walk the drawn gate runs (`viewer_chain`: the sim's eye, aim and linked cel stand in
+    /// for the render camera's). Without a cel graph (the hand-built harnesses) the gate stays open.
+    /// On 0x0700001B the pair rewrites `SunVector` every frame (`sky::rotating_sky_sun`), which the
+    /// lens flare and the sees-the-sun byte read.
+    fn sky_frame(&mut self, level: u32, player: &Player, cel_graph: Option<&crate::celgraph::CelGraph>) {
+        if let Some(g) = cel_graph {
+            // Only levels whose sky has state to advance need the walk (the timers or the 1b spin).
+            let stateful = level == 0x0700_001b || self.sky.slots.iter().any(|s| s.flash_glist != 0 || s.flash_obj != 0);
+            if stateful {
+                if let Some(chain) = viewer_chain(g, player, &self.doors.closed_flags()) {
+                    self.sky.no_sky_view = !crate::celgraph::chain_sees_sky(g, &chain);
+                }
+            }
+        }
         // One set of lightning globals (`LightningType`/`Reflicker`/`SuperHappyLightningFlag`
         // [L 0x30d0b8/0x30d0b9]): `Lightning_Update` 0x18cf68 (the 0x2c bolts, ticked in `fx`) consumes
         // `Reflicker` [M :23-24] before the frame's `View_DrawSky` calls read and rewrite all three.
         self.sky.globals = self.fx.lightning;
         // The level id gates `rotatosky.168` [M 0x1e5ad0:186-198]: only 0x0700001B spins its sky (the
         // lightning timers ignore it). It was passed 0, so the 1b counter never advanced.
-        for th in self.sky.frame_thunder(level, false, &mut self.sky_rng) {
+        let sees_sky = !self.sky.no_sky_view;
+        let frame = self.sky.frame(level, false, sees_sky, &mut self.sky_rng);
+        for th in frame.thunder {
             self.audio.play(th.id());
         }
+        if let Some(sun) = frame.sun { self.sun_vector = sun; }
         self.fx.lightning = self.sky.globals;
     }
 

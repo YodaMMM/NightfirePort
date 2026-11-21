@@ -1588,7 +1588,10 @@ pub fn parse_cel_graph(level: &Level) -> (Vec<Cel>, CelGraph) {
             // The raw param values: the fixup reads param 3 (`level_tag+0x38`) as a full u32 and
             // param 9 (`level_tag+0x50`) as a u16 — neither through the low-byte view of `param`.
             let param32 = |k: u32| p.params.iter().find(|(i, _)| *i == k).map(|&(_, v)| v).unwrap_or(0);
-            let node_flags = cel_flags_word(flags16);
+            // The 0x10000000 no-sky bit on the room classes with parameter 3 set
+            // (`parseentity_fixup_entity` 0x1d00c0 -> 0x1804c023 / 0x1804c047 [M]).
+            let node_flags = cel_flags_word(flags16)
+                | if matches!(flags16, 0xc023 | 0xc047) && param32(3) != 0 { nf_game::celgraph::CEL_NO_SKY } else { 0 };
             // The world sphere: the object's raw bbox corners through the placement matrix, then the
             // AABB's centre / half-diagonal (`parseentity_transform_bounding_box` 0x1d0fb0).
             // (Merge resolution: this block landed on master with two corrupted lines — the `[m`/`[h`
