@@ -2,6 +2,8 @@
 
 Status: **reviewed against the decompile 2026-11-20 — §9 is the per-function table and
 supersedes §3.1, §5 and §8 wherever they differ** (first port 2026-10-15). The port lives in
+supersedes §3.1, §5 and §8 wherever they differ; §10 (2026-11-21) adds the hostile AI and the
+AI vehicle lifecycle and supersedes §3.3 and §4** (first port 2026-10-15). The port lives in
 `crates/nf-game/src/driving/` (`road.rs` the RNgp/Wmap-side data model + `ai.rs` the AI car step) with the
 RNgp container decode on top of `nf_formats::crp`. Evidence tags: [M] code (function + address,
 DRIVING.ELF — EE address = file offset + 0x107080), [D] disc bytes, [L] EE snapshot, [S] suggested.
@@ -329,6 +331,8 @@ and sets profile 0xc (`FUN_0012e6f8(ai, 0xc)` :130) and pattern 3 (`FUN_0012e468
 | generator | 0x17dc28 / 0x17db68 / 0x17dbb0 | added | `DriveRng`: `p = state·mult; state = p & 0xffff; out = (p >> 8) & 0xffff`; mult 0x075bcd15 (checked in the disc ELF); reset state 0xf874af01 + 39 warm-up draws. Every driving system draws from it; the position of the stream at a traffic pick is unproven. It is not the on-foot stream. |
 | retarget / chase | 0x131080, 0x133850, 0x131770, 0x133f60, 0x135f70, 0x137310, 0x1377c8 | reviewed, not ported | the hostile cars' pursuit, ramming and avoidance. The port had no code for them before this branch and has none now. |
 | weapons | 0x130050 / 0x12f730 / 0x12fa28 / 0x12fd58 | reviewed (§3.3), not ported | needs the actor/animation layer. |
+| retarget / chase | 0x131080, 0x133850, 0x131770, 0x133f60, 0x135f70, 0x137310, 0x1377c8 | see §10 | the ram roll and sight rule of 0x131770 are ported in §10 (`s/drive-ai-hostiles`); the steering arms are still not ported. |
+| weapons | 0x130050 / 0x12f730 / 0x12fa28 / 0x12fd58 | see §10 | ported as fire decisions in §10; the animation-channel side stays with the actor layer. |
 
 ### 9.3 Stand-ins in `AiDriver` [S]
 
@@ -350,3 +354,104 @@ row0)` closes on the carrot; the game's own row-0 / SetSteer sign was not read.
   evaluated straight; the curve object FUN_001a8380 / FUN_001a85d0 is not ported.
 - A live check worth doing: break on FUN_0012e808 in Paris and read +0x84 / +0x8c of a moving
   civilian car (expect 0xc / 7.5).
+
+## 10. Hostile AI and the AI vehicle lifecycle (2026-11-21, branch `s/drive-ai-hostiles`)
+
+Port: `crates/nf-formats/src/driveai.rs` (the `AIEl` / `AICo` decode) and
+`crates/nf-game/src/driving/hostile.rs` (the lifecycle, the chase speeds, the ram/sight timers,
+the weapons). Tests: `crates/nf-game/tests/driving_ai_hostiles.rs` (20; the last one reads the
+disc). Every row below was read in `work/decomp/DRIVING.ELF/`, with the disassembly where the
+decompile drops the argument of `FUN_0013dfc8` (which actor a speed is read from) or a
+branch. Verdicts as §9; **added** = the port had no code for it before this branch.
+
+### 10.1 The data: `AIEl` and `AICo` [M + D]
+
+- `AIEl` (Map child, tag 0x4149456c): `count` elements × 0x100 B, copied verbatim into the
+  database [M 0x12b8b0]. Fields: +0x20 facing row, +0x30 spawn position, +0x40 flags, +0x42
+  difficulty filter, +0x44 type (0 henchman, 1 vehicle), +0x48 state, +0x4c health (the live
+  actor's health points here), +0x54 the pvehicle attribute name, +0x58/+0x5c/+0x60 henchman
+  class/model/weapon, +0x74 a ctor byte, +0x77 helicopter, +0x7c rider count, riders at +0x80
+  (0x20 each: seat, model, weapon, …, +0x14 health, +0x1c skill), +0xf8 the spawn command
+  reference. Flags: 0x1 respawn where it left, 0x2 held by script, 0x4 persistent, 0x8 chase
+  brain (sim kind 2), 0x10 counted (runtime), 0x20 damaged (runtime), 0x40 not counted.
+- Rider seats are attributes in the vehicle's own `.atr` (`AIC_EWIND_POS` window,
+  `AIC_ESUNR_POS` sunroof, `AIC_ESNOW_POS`, `AIC_EVGUN_POS`, `AIC_EVDRI_POS`, `AIC_BOND_POS`);
+  weapon index 1 = `ssmg`, 2 = `bazooka` [D the ELF's 0x327b90 table]. The disc test checks
+  that every rider seat the missions use exists in that car's `.atr`.
+- `AICo` (0xa0 B): what `FUN_00145ff8` copies into the AIVehicle when a script command runs:
+  +0x4c follow distance (AI +0x220), +0x5c catch-up (+0x13c), +0x60 speed cap (+0x138), +0x64
+  seconds between shots (+0x228), +0x68 ram chance (+0x14c), +0x6c lead (+0x150), +0x78 target
+  mode, +0x79 pattern, +0x7a profile, +0x87/+0x90/+0x91/+0x92 weapon bytes (each honoured only
+  when the car's `.atr` says `HAS_MACHINEGUNS`/`HAS_CANNONS`, `HAS_ROCKETS`,
+  `HAS_MISSLES`/`HAS_TORPEDOS`).
+
+Per mission [D, the ISO test]:
+
+| archive | AIEl | AICo | henchmen | held | chase brain | vehicle set (count) | slots h/v/heli | health × by difficulty |
+|---|---|---|---|---|---|---|---|---|
+| MIS01 | 25 | 61 | 0 | 21 | 14 | paris_henchbigbox 15, paris_bombvan 5, paradis_car 3, courier_truck 1, road_block_truck 1 | 32/6/16 | 1.0/1.5/2.0 |
+| MIS11 | 45 | 68 | 0 | 45 | 7 | alpha_sub 2, mini_sub 9, helimine 34 | 32/6/16 | 1.0/1.2/1.4 |
+| MIS13A | 28 | 16 | 14 | 25 | 12 | jungle_hench 8, ultralight 1, jungleheli 3, staticultralight 2 | 32/15/16 | 1.0/1.5/2.0 |
+| MIS13B | 37 | 24 | 11 | 9 | 19 | jungle_hench 11, jungle_bombvan 1, ultralight 7, jungletank 2, patrolboat 5 | 32/15/16 | 1.0/1.1/1.2 |
+| MIS13C | 43 | 35 | 7 | 43 | 36 | ultralightbig 32, patrolboat 1, jungletank 3 | 32/15/16 | 1.0/1.0/1.0 |
+| MIS3 | 63 | 61 | 38 | 58 | 18 | small_snowmobile 8, supersnow 8, openheli 3, junglesnow 2, paris_hench 3, paris_bombvan 1 | 32/6/16 | 1.0/1.1/1.2 |
+| MIS4 | 33 | 37 | 5 | 33 | 19 | alpine_police 9, supersnow 9, subcopter 3, paris_hench 6, plane 1 | 32/6/16 | 1.0/1.2/1.4 |
+| RACE | 3 | 7 | 0 | 2 | 3 | paris_hench 1, alpine_police 1, supersnow 1 | 32/6/16 | 1.0/1.2/1.4 |
+
+The speed factors (MSet +0x2b8/+0x2bc/+0x2c0) are 1.0 on every track. The jungle world `.atr`
+raises `VEHICLE_SLOTS_AVAIL` to 15. Each AI car is built from its own
+`data\sim\attrib\pvehicle\<name>.atr` (`FUN_001862c0` → `FUN_001968a8`) [M]: the hatchback
+steers 0.2 against the player's vanquish 0.09 [D]. Traffic cars come from the table at
+0x36c070 (coupe, sedan2, hatchback, sedan, station_wagon, suv1, taxi) through `FUN_0013fae0`;
+Paris sets `MAX_TRAFFIC=20`, `NUM_TRAFFIC_TYPES_PS2=3`, so three types are drawn at random from
+the seven (MIS01.VIV ships only hatchback, sedan2 and suv1 of them [D]; what the engine does
+with a drawn type that has no `.atr` in the archive was not traced).
+
+### 10.2 The table
+
+| function | address | verdict | port / note |
+|---|---|---|---|
+| AIEl load | 0x12b8b0 | added | `ElementDb::new`, `MapAi::from_crp`: records copied, henchman/vehicle/rider health × the difficulty health factor, slot defaults 32/6/16 from `HENCH_/VEHICLE_/HELI_SLOTS_AVAIL`. The snow2a_mis4 `paris_hench` → `junglesnow` swap is left to the caller (it needs the rendername). |
+| runtime init | 0x12af48 | added | radii 200 / 220, period 1. |
+| range check | 0x12afb8 | added | `range_check`: in range (< 200) → period 1; out → period +1 up to 4, and a live element beyond 220 despawns; a held live element despawns; both only when not persistent (disassembly 0x12b000-0x12b088). |
+| period | 0x12b0d0 / 0x12b0e0 | added | constants. |
+| measure | 0x12b440 | added | `measure`: distance, priority key `(dot+1)·0.5/dist`, the nearest-live stat, the damaged flag (< 4 wheels). |
+| slot manager | 0x12bec8 | added | `ElementDb::tick`: wanted/candidate lists, fit test against the free slots, else a sort by key (FUN_002a8198 with FUN_0012dbf0, descending), persistent first, riders must fit, despawn the unkept, spawn the kept; mission flag 1 = no live hostile within 120. Called once per world frame by `FUN_00159d10`. |
+| key compare | 0x12dbf0 | added | descending; ties stay in index order in the port (the game's qsort is not stable) [S]. |
+| may despawn | 0x12dc18 | added | `may_despawn`: flag 0x4 clear. |
+| spawn | 0x12cb08 | added | `ElementDb::spawn`: the difficulty filter (switch on +0x42), vehicles park traffic within box + 6, sim kind 2 with flag 8 else 4, helicopters in the heli pool, the kill counter (mgr +0x3dc) +1 + riders at the first spawn unless flag 0x40, riders with health > 0 seated (an unknown seat ends the seating), henchmen only for class 0/10/0x12 and with DAT_00326000 set. The world cap (FUN_002012d0: 36 vehicles, 48 with its third argument) that can make the create fail is not modelled. |
+| despawn | 0x12c740 | added | `ElementDb::despawn`: flag 0x1 copies the live position back; a vehicle is gone at health ≤ 0, a missing wheel or its +0x3e8 word set, else respawnable; a helicopter is gone at health ≤ 0; a henchman by its character's query; the live counts drop with the riders. |
+| despawn by id | 0x12da78 | reviewed | called by the helicopter code (0x139be8, 0x13b2a8); not ported. |
+| despawn all | 0x12c448 | reviewed | mission teardown; not ported. |
+| element index | 0x12c608 / 0x12c640 | reviewed | pointer → index helpers. |
+| controller kind | 0x13f118 | reviewed | sim kind 0 → 0x13f618 (parked), 2 → 0x13f748 (state 5 chase, +0x12c = `HAS_TURRET`), 3 → 0x13f868 (traffic); kind 4 gets no AIVehicle controller. |
+| traffic set | 0x13fae0 | added | `traffic_types`: the 7-name table, `MAX_TRAFFIC` (20) / `NUM_TRAFFIC_TYPES_PS2` (`max` if < 8 else 7), random type slots when < 7, a colour draw per car. The attribute behind the colour count (FUN_00196818) was read as `RENDER_NUMCOLORS` [S]. |
+| vehicle ctor | 0x1862c0 / 0x1ff850 | reviewed | builds the car from the pvehicle attribute at +0x5c; `AiVehicleSet` maps names to `CarParams::parse_atr`. |
+| command apply | 0x145ff8 | reviewed | the AICo → AIVehicle copy (decoded in `AiCommand`); the copy itself is not ported, its fields are inputs of the functions below. |
+| target mode | 0x12e670 / 0x12e770 | reviewed | 0 = chase the player (manager handle 0), 1 = drive to the goal point; an element target when +0x50 names a live vehicle. |
+| target speed, chase arms | 0x12e808 | **added** | `chase_target_speed`: profile 1 wait, 0xd pursue (follow distance, the 1.25 box sum against the player, the 0.707 pattern-4 alignment, 0.8 / catch-up / the 30 floor, the 25 lost-target speed, the cap × speed factor), 0xe escort, 0xf road with +0x158. `ai::target_speed` still returns `None` for these arms; this function is their port. |
+| pursuit timers | 0x131770 (part) | **added** | `ram_tick`: every 5 s while the target is seen, `rand/65536 < +0x14c` → ram 3 s (1 s against the player); `sight_tick`: every 0.25 s, seen = `FUN_001330d0`; +0x208 = not seen. |
+| sight | 0x1330d0 | added | `can_see`: ≤ 200 and the world ray (FUN_00215cc8) reports fewer than 2 hits. |
+| pursuit aim | 0x131770 (rest) | reviewed, not ported | the aim point +0x1c0 (the target position; the pattern-3 lead `pos + vel·min(max(lead, 0.2), speed)` — the store of that sum is not visible in the decompile), the hazard scan (DAT_0032b780), the +0x268 block. |
+| weapons dispatch | 0x130050 | added | `fire_step`: alive, +0x170, +0x224, a target; profile 10 rockets, 9 guns, else guns / rockets / missiles by the car's flags. The turret aim `FUN_0012f170` is not ported (`turret_on_target` is an input). |
+| machine guns | 0x12f730 | added | cone 0.99 or the turret on target, line of fire clear; reload `round(fps·rate)`, no floor; the flash words. |
+| rockets | 0x12fa28 | added | cone 0.9, channels 6/5 alternating, a busy launcher holds the shot, reload `round(max(fps·rate, fps·0.5))`. |
+| missiles / torpedoes | 0x12fd58 | added | cone 0.707, channels 8/7, the same reload rule. |
+| line of fire | 0x12f530 | added | `line_clear`: blocked by another chase-state car (+0x6d < 4, not traffic) inside a 0.99 cone and nearer than the target. The shot direction the callers pass is not visible in the decompile; the port takes it as an input. |
+| drive arms | 0x133f60 / 0x135f70 / 0x137310 / 0x1377c8 | reviewed, not ported | the pattern-specific steering (pursuit, block, avoidance). |
+| retarget | 0x131080 / 0x133850 | reviewed, not ported | state 2. |
+| riders | 0x1224b0 / 0x120b70 / 0x11e490 / 0x11ff18 / 0x11aca8 | reviewed, not ported | the seated AICharacter classes (window shooter, sunroof gunner, …); their aim and fire are the character layer. |
+
+### 10.3 Unproven
+
+- DAT_00339f4c is used as ticks per second (it multiplies seconds everywhere above); its value
+  in play (60) was not read live. DAT_00339f54 is a tick counter; its writer was not found.
+- The player "forward" in the priority key (DAT_00333ed8 → +4 → +0x20) is read as the velocity.
+- Which difficulty number is which menu setting.
+- Which section of the world `.atr` the engine reads (the port reads the first, world-named one).
+- What moves a kind-4 vehicle (no AIVehicle controller is attached).
+- Not ported: the per-pattern steering arms, the pursuit aim point, the turret, the riders'
+  own shooting, the helicopter controller, the world vehicle cap, the wiring of all of this
+  into the viewer (nf-view was out of scope).
+- Live check worth doing: in Paris at the first chase, break on FUN_0012cb08 and read the
+  record (+0x40 flags, +0x54 name), and on FUN_0012fa28 read +0x228 / +0x22c of the firing car.
