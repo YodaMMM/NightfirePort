@@ -3,7 +3,9 @@
 **First: this branch moves the shared random stream and turns 18 walks red on other levels. Keep it
 on the branch.** The voice-line fix below changes when guards may bark, and the talk functions
 draw from the shared stream. With it, 18 tests in nine walkreal binaries (01, 02, 03, 06, 08, 11,
-13, 15, 16) go red. Every one of them passes on master (checked on a master build, same machine).
+13, 15, 16) go red. 17 of them pass on master (checked on a master build, same machine). The
+master run of 01's following_mayhew_down_completes_the_level did not finish inside the 10-minute
+cap, so that one baseline is unconfirmed.
 The 0b walks that s/g019-sky broke are green again on this branch.
 
 ## The path from the thunder to the fight
@@ -59,7 +61,8 @@ again before he closed in.
   escort_follow_07000001, first_sight_flag, fix_06_driver, fix_guest_reactions,
   hostage_killer_07000002, interactables_07000015, near_armed_person_07,
   speech_facial_fallback, sky_view_gate_live: all ok.
-- Every walkreal_* binary (109). 100 binaries pass. 9 are red, 18 tests, all green on master:
+- Every walkreal_* binary (109). 100 binaries pass. 9 are red, 18 tests (17 confirmed green on
+  master, following_mayhew unconfirmed):
   - 01: the_plate_refuses_bond_alone (the contact is killed by guard #3 and the level
     restarts), the_exit_fade_starts_on_the_exit_tick..., walk_from_the_spawn_to_the_exit_with_the_contact,
     following_mayhew_down_completes_the_level
