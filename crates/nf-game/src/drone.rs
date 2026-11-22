@@ -11738,9 +11738,12 @@ impl Drone {
     /// (0x67-with-0x68 → 0, same-as-current → 0) [M :163-362].
     fn choose_combat_move(&mut self, d: &Data, rng: &mut Rng) -> u8 {
         use state::*;
-        // 0x13cfb0:35-39 — `DroneAnim_SetCombatMoveAnim`'s FIRST check precedes every combat
-        // move-anim choice, the option list included: a drone directly ahead → state 0x5E.
-        if self.no_bunching & 2 != 0 { return state::COMBAT_WAIT; }
+        // No +0x31C read here: the game's only bit-2 ("drone ahead") readers are
+        // `DroneAnim_SetCombatMoveAnim` 0x13cfb0:35-39 (→ 0x5E) and `DroneFunc_CombatState`'s
+        // 0x5A arm (→ anim 0x21) [M 0x148338 case 2]. ChooseCombatMove reads the scan only
+        // through the +0x17 return byte (`cVar1`, below) and the Can* probes' side bits
+        // [M 0x150c18:55-60]. (The port once returned 0x5E here on bit 2; that sent a
+        // CombatNoRoute guard beside a neighbor to 0x5E, which the game never does.)
         if self.stays(d) { return 0; }
         // The gate's "opponent is aiming at me" is `DroneWeap_OpponentIsAimingAtMe` [M 0x17a500:12-29]:
         // armed Bond AND the +0x2A threat latch `Check_Target` stamps [M 0x1a7810:149-150] — the port's
@@ -12137,10 +12140,11 @@ impl Drone {
     /// anim's yaw offset (±π/2, π) so the anim's own direction follows the route. inert-notes-drone-b, on the old
     /// note here ("the drone-ahead flags of `DroneMove_NoBunching` (`+0x31C`) are not ported"): the flags ARE ported —
     /// `DroneMove_NoBunching` 0x150ad0's writer runs per tick in `Drones::tick` (drone.rs:20227+, the
-    /// side meanings proven against the disassembly at the `no_bunching` field doc) — but it is HELD
-    /// INERT behind `NB_SCAN_LIVE = false` because the live scan regresses walkreal_07000014_live
-    /// 6/0 → 4/2 (the infiltration wedges; needs the 07000014 live check before the flip). The
-    /// consumers below (the bit-2 COMBAT_WAIT park and the side-bit gates) read the zeros until then.
+    /// side meanings proven against the disassembly at the `no_bunching` field doc) — and it runs
+    /// live on every level (the scan block's own note). The bit-2 park below is the game's only
+    /// 0x5E entry [M 0x13cfb0:35-39]; CombatState's 0x5A arm reads bit 2 first and plays anim
+    /// 0x21 instead [M 0x148338 case 2], so 0x5E is reached only from 0x5C's move arm [M 0x148338
+    /// case 4], never from ChooseCombatMove [M 0x150c18 has no +0x31C read].
     fn set_combat_move_anim(&mut self, d: &Data, rng: &mut Rng, route_dist: f32) {
         use anim_state::*;
         // 0x13cfb0:35-39, FIRST: a drone directly ahead (`DroneMove_NoBunching`'s +0x31C bit 2)
@@ -27536,6 +27540,46 @@ mod combat_move_tests {
             let m = dr.choose_combat_move(&d, &mut rng);
             assert_eq!(m, 0, "the empty list takes the default arm [M 0x150c18:329-330]");
             assert_eq!(rng.draws - before, 2, "Rand_Rand(15) and Rand_Rand(0) both step the stream [M 0x1e3738]");
+        }
+    }
+
+    /// `NDrone2_ChooseCombatMove` 0x150c18 never reads +0x31C bit 2: the scan reaches it only
+    /// through the +0x17 return byte and the Can* side bits [M 0x150c18:55-60; the probes' heads].
+    /// The game's only 0x5E entry is SetCombatMoveAnim's bit-2 check [M 0x13cfb0:35-39]. A guard
+    /// with a neighbor dead ahead (bits 2|8, hit) rolls the option list like any other: with no
+    /// evasive property the list is the stand option alone, so the pick is 0x67 or 0 and never
+    /// 0x5E. Fails on the old bit-2 return (0x5E every call).
+    #[test]
+    fn a_drone_ahead_does_not_send_the_combat_move_choice_to_0x5e() {
+        let world = CollisionWorld::empty();
+        let tables = nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() };
+        let props = nf_formats::drone::PropertyTables { descs: Vec::new(), masks: Vec::new(), types: Vec::new() };
+        let scripts = std::collections::HashMap::new();
+        let weapons = nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() };
+        let seqs = std::collections::HashMap::new();
+        let skins = std::collections::HashMap::new();
+        let skeletons = std::collections::HashMap::new();
+        let nav = crate::nav::Network::default();
+        let covers = Vec::new();
+        let mut tuning = nf_formats::tuning::Tuning::default();
+        crate::tuning::read_tuning_vars(&mut tuning, 0x0700_0012);
+        let hitboxes = nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() };
+        let volumes = Vec::new();
+        let models = std::collections::HashMap::new();
+        let ai_points = Vec::new();
+        let d = Data { tables: &tables, props: &props, scripts: &scripts, weapons: &weapons, world: &world, level: 0x0700_0012,
+            sequences: &seqs, skins: &skins, skeletons: &skeletons, nav: &nav, covers: &covers, tuning: &tuning,
+            hitboxes: &hitboxes, volumes: &volumes, sfx: None, models: &models, surfaces: None, voices: None,
+            difficulty: 1, ai_points: &ai_points };
+        for seed in 0..32u32 {
+            let mut dr = drone_at([0.0, 0.0, 0.0]);
+            dr.state = state::COMBAT_NO_ROUTE;
+            dr.no_bunching = 0x0a;
+            dr.no_bunching_hit = true;
+            let mut rng = Rng::new(0x1234_5678 ^ seed.wrapping_mul(0x9e37_79b9));
+            let m = dr.choose_combat_move(&d, &mut rng);
+            assert_ne!(m, state::COMBAT_WAIT, "ChooseCombatMove has no 0x5E arm [M 0x150c18]");
+            assert!(m == 0 || m == state::AIM_STAND, "the stand option alone: 0x67 or 0 [M 0x150c18:316-330], got {m:#04x}");
         }
     }
 }

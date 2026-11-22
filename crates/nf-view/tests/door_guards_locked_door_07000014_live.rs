@@ -11,22 +11,20 @@
 //! while the port's guard cycles 0x5f → STEP_AIM_LEFT/RIGHT 0x73/0x74. The game's
 //! `NDrone2_DSTATE_CombatNoRoute` case 3 keeps the state exactly on ChooseCombatMove picks 0 /
 //! 0x67 / 0x6f and SetStates anything else [M 0x164c08:36-62]; the port's handler mirrors that
-//! keep-set. The game never PICKS the step-aims here because every Can* probe of
-//! `NDrone2_ChooseCombatMove` gates on the +0x31C side bits (`CanStepLeft` 0x14f640:50 `& 8`,
-//! the Right probe `& 0x10`) — and those bits are set EVERY tick by `DroneMove_NoBunching`
-//! 0x150ad0 (called from ControlSTANDARD 0x1490f0:202-226, which also zeroes +0x31C and stamps
-//! the scan's return byte into drone+0x17 = the `cVar1` of ChooseCombatMove 0x150c18:58): the
-//! two guards stand ~2.4 apart at the door [L: (-51.6,41.2) / (-51.2,38.8)], each reads the
-//! other as the +0x314 neighbor, and the 8/0x10 pair lands on BOTH — every dodge/strafe/step
-//! probe refuses, every pick cascades to 0x67 (Rand(4) ≠ 0) or 0, and 0x5f holds.
-//! The port's NoBunching mirror is HELD INERT (`NB_SCAN_LIVE = false` in drone.rs — the flip
-//! regresses walkreal_07000014_live's corridor legs, see the ignore note below), so the port's
-//! side bits stay 0, the probes pass, and the guard cycles. Proven in the port: flipping only
-//! that const still cycles, because the first guard's step-aim wandering separates the pair
-//! past the 3.0 scan radius before the second guard arrives — the cycle and the missing scan
-//! feed each other from the first tick.
-//! The 0x5f hold therefore cannot be pinned without landing the scan (and re-pinning the 014
-//! walk it reshuffles); the ignored test below names exactly that blocker.
+//! keep-set.
+//! The game never PICKS the step-aims here because every step probe refuses: `CanStepLeft`
+//! 0x14f640 needs the +0x31C side bit 8 clear and `NDrone2_MoveTest` (AINetwork_BoundsTest, near
+//! posts) to pass [M 0x14f640:50-93], the Right probe the same with 0x10 [M 0x14f808]. The scan
+//! `DroneMove_NoBunching` 0x150ad0 stamps ONE side bit per tick, toward the +0x314 neighbor
+//! (diff < 0 → 0x10, else 8 [M 0x150ad0:42-48]), so the neighbor refuses one side and the AI
+//! bounds the other: at the [L] spots, facing Bond, the north guard's left step (+z) and the south
+//! guard's right step (−z) both fail the port's bounds test, and the step toward the other guard
+//! carries the side bit — every pick cascades to 0x67 (Rand(4) ≠ 0) or 0, and 0x5f holds.
+//! The scan runs live on every level. What still differs is where the pair settles: the mission
+//! paths end at (-50.98,38.98) / (-51.07,41.06) [D paths 5/7 dest] and the port's guards stop
+//! 0.1-0.45 off those; the first arrival waits in 0x5f while the second is still > 3.0 away (no
+//! side bit), steps toward it, and the pair never settles where both sides refuse. Whether the
+//! game's first arrival also steps before the second one arrives is the live check.
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
@@ -84,22 +82,10 @@ fn released_guards_do_not_work_the_locked_west_door() {
 /// in COMBAT_NO_ROUTE 0x5f at EVERY sample (17 live samples, 30-frame spacing, CUR 0x5f / PREV
 /// 0x5a, opponent set, grace 0 [L 2026-10-30]); the mechanism is the +0x31C side bits the
 /// NoBunching scan stamps per tick [M 0x150ad0:42-55 via 0x1490f0:202-226].
-/// drone-nobunching-side-bits landed the faithful scan (the Steer-pairing keeper [M 0x14eba8:83-85
-/// radius 3.0], the obstacle's movement-lock refusal [M 0x150ad0:22], the +0x17 return byte
-/// [M 0x150ad0:56-62]) behind NB_SCAN_LIVE and re-verified the blockers with it LIVE:
-/// (1) RESOLVED — the mirror is ported and flips green on 01 (walkreal_07000001_live 5/0 with
-/// the scan on, measured this branch);
-/// (2) STILL OPEN, refined — with the scan live the pairing STILL never bites at the door: only
-/// #783 (the group-0xd full-alert template) routes to the door; the released group-9 pair
-/// #778/#780 wake into a no-route combat at their own spawns and shuffle ±1.8 there (end-state
-/// dump: (-29.25,15.12) 0x73 / (-22.87,40.10) 0x73, spawns [D audit] (-30.58,13.36) /
-/// (-23.52,36.03)) while the game's two guards stop 2.4 apart at the door [L 2026-10-30]; AND
-/// the flip regresses walkreal_07000014_live 6/0 → 4/2 (two corridor legs wedge at the 6000-tick
-/// cap, stash-verified pre-flip pass) — which guard behaviour is game-true there is a live check.
-/// Un-ignore when the release-to-door chain and the 014 walk re-pin land; the assert below is
-/// the game's behaviour and must not be weakened.
+/// The scan is live on every level; the open blockers are in the ignore message. The assert
+/// below is the game's behaviour and must not be weakened.
 #[test]
-#[ignore = "TWO named blockers, both evidence-backed with the faithful scan landed behind NB_SCAN_LIVE (drone-nobunching-side-bits): (1) the scan is now PORTED (Steer-pairing keeper 3.0 [M 0x14eba8:83-85], the obstacle's movement-lock refusal [M 0x150ad0:22], the +0x17 return byte [M 0x150ad0:56-62]) and flips green on 01 (walkreal_07000001_live 5/0 with it on, measured on that branch) — but the flip regresses walkreal_07000014_live 6/0 → 4/2 (two corridor legs wedge at the 6000-tick cap; the pre-flip tree passes, stash-verified) so it stays inert pending that walk's live re-pin; (2) at Operative only #783 walks to the door: the released group-9 pair #778/#780 spawn at alertness 1.0 (prop 0x20 = param 19 & 3 = 3 [M bitDescs 0x2c7250; 0x14c600:61-66]) so the game's own wake fold sends them to ATTACK 0x56 [M 0x14cbd8:122-155] and their combat route to a hall-side goal cannot cross the locked door link [M 0x1571b0:262-271] — the decompile chain holds them no-route at their spawns in the game too; the [L] door pair (-51.6,41.2)/(-51.2,38.8) is the MISSION-WALKER pair (#783 + #784), which both exist only at Agent and up — the port reproduces that end state at Agent (at_agent_the_two_mission_walkers_hold_at_the_locked_door_like_the_game) — and the [L] boot's difficulty and guard ids are the live check in docs/reports/level-14-door-pair.md"]
+#[ignore = "blocker (1), the scan held inert, is GONE: the spacing scan runs on every level (nb-scan-all), and ChooseCombatMove no longer returns 0x5E on bit 2 (s/nb-scan-live: the game's ChooseCombatMove has no +0x31C read [M 0x150c18]). Still open: (2) at Operative only #783 walks to the door (#784 is param 2 = 0x2, Agent and up [D audit :85-87]), so no neighbor and no side bit; and at Agent the pair reaches the door but cycles 0x73/0x74: the first walker waits in 0x5f while the second is > 3.0 away, steps toward it (that side passes the bounds test), and the pair never settles at the [L] spots (-51.6,41.2)/(-51.2,38.8), where the port's own bounds test refuses the outer step of each and the side bit refuses the inner one. The live check: the [L] boot's difficulty, and whether the game's first walker steps before the second arrives"]
 fn the_door_guards_hold_combat_no_route_like_the_game() {
     let mut scene = nf_view::load(&iso(), "07000014.bin", false).expect("load 07000014");
     for _ in 0..400 {
@@ -125,7 +111,7 @@ fn the_door_guards_hold_combat_no_route_like_the_game() {
             samples += 1;
             for d in &near {
                 assert_eq!(d.state, COMBAT_NO_ROUTE,
-                    "t{t}: the door guard holds COMBAT_NO_ROUTE 0x5f at every sample in the game (17 live samples, CUR 0x5f / PREV 0x5a [L 2026-10-30]); the port's guard is in {:#04x} at ({:.1},{:.1}) — the NoBunching side bits [M 0x150ad0:42-55] are not stamping while NB_SCAN_LIVE is inert",
+                    "t{t}: the door guard holds COMBAT_NO_ROUTE 0x5f at every sample in the game (17 live samples, CUR 0x5f / PREV 0x5a [L 2026-10-30]); the port's guard is in {:#04x} at ({:.1},{:.1}) [M 0x150c18 step probes, 0x150ad0 side bits]",
                     d.state, d.pos[0], d.pos[2]);
             }
         }
