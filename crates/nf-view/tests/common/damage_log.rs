@@ -27,6 +27,12 @@ thread_local! {
     /// `with_real_damage_glass_fights`: the return-fire pick fights the shooter who is actually
     /// hurting Bond first and skips cooled-down candidates (see `return_fire`).
     static HURTING_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_real_damage_most_hits_first`: the retarget law samples EVERY fight tick (not the
+    /// 30-tick grid) and reads the worst shooter over the WHOLE shooters set, not the worst
+    /// VISIBLE one. Opt-in per test: only the 07000008 00 Agent real-damage walk sets it
+    /// (2026-11-22, the y33 #18 burst: 14.0 landed inside 8 ticks while the 30-tick grid never
+    /// sampled [L the merged-tree run]).
+    static MOST_HITS_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The latest real-damage summary on this thread (refreshed every 60 ticks and at a death).
     static LAST_SUMMARY: std::cell::RefCell<Option<(u32, String)>> = const { std::cell::RefCell::new(None) };
 }
@@ -121,6 +127,23 @@ pub fn with_real_damage_unseen_fights<R>(f: impl FnOnce() -> R) -> R {
     struct Reset;
     impl Drop for Reset { fn drop(&mut self) { UNSEEN_FIGHTS.with(|c| c.set(false)); } }
     UNSEEN_FIGHTS.with(|c| c.set(true));
+    let _reset = Reset;
+    with_real_damage(f)
+}
+
+/// `with_real_damage` plus the MOST-HITS-FIRST retarget: the fight retarget samples EVERY tick
+/// (the shipped law samples every 30th tick — the merged-tree y33 burst landed 14.0 inside 8
+/// ticks between two grid samples, tick 14767 [L the 2026-11-22 run]) and reads the worst
+/// shooter over the WHOLE shooters set, not the worst VISIBLE one — a sniper whose rounds
+/// reach Bond through a gap his own eye ray misses (#18 at (115.2,41.5,-101.8) d 21.5 while
+/// the mid-west stand fought the zero-damage #15) is switched to like any visible one, and
+/// the stand's unseen creep opens the line. Opt-in per test: only the 07000008 00 Agent
+/// real-damage walk sets it; the d1/d2 sisters and every other walk keep the pinned timelines.
+#[allow(dead_code)]
+pub fn with_real_damage_most_hits_first<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { MOST_HITS_FIRST.with(|c| c.set(false)); } }
+    MOST_HITS_FIRST.with(|c| c.set(true));
     let _reset = Reset;
     with_real_damage(f)
 }
@@ -1161,7 +1184,14 @@ impl Walker {
                 // health 68 → 0 (death tick 25116). A player under new, closer fire switches
                 // targets; the shared fight never did. The switch resets the fight's own progress
                 // trackers (hp0/last_hit/aim/unseen) for the new target.
-                if self.dmg.hurting_first && t > 0 && t % 30 == 0 {
+                // MOST-HITS-FIRST (opt-in): sample EVERY tick — a burst rifle lands 14.0 inside
+                // 8 ticks, which falls whole between two 30-tick grid samples (the merged-tree
+                // y33 #18 burst, ticks 14767-14775, the #15 fight ended 14783 [L the 2026-11-22
+                // run]); with the flag the switch fires mid-burst (at +8.0, the third sample
+                // row) and the creep opens the line before the salvo closes. The default law
+                // keeps the 30-tick grid (the d2 timeline stays byte-exact).
+                if self.dmg.hurting_first && t > 0
+                    && (t % 30 == 0 || (MOST_HITS_FIRST.with(|c| c.get()) && t % 1 == 0)) {
                     let now = sim.drones.frame;
                     let dmg_of = |i: usize| -> f32 {
                         sim.drones.player_hits.iter().rev()
@@ -1172,7 +1202,10 @@ impl Walker {
                     let cur = dmg_of(di);
                     let better = self.dmg.shooters(sim).into_iter()
                         .filter(|&i| i != di)
-                        .filter(|&i| DamageLog::visible(sim, i))
+                        // MOST-HITS-FIRST: the worst shooter over the WHOLE set — the unseen
+                        // creep opens the line, so an unseen sniper is switchable exactly like
+                        // a visible one. The default law keeps the VISIBLE-only filter.
+                        .filter(|&i| MOST_HITS_FIRST.with(|c| c.get()) || DamageLog::visible(sim, i))
                         // The cooldown bends to active lethality (see the pick-side note): a
                         // guard visibly dealing > 15 over the window is switchable even inside
                         // his cooldown — the cooldown guards against INVISIBLE re-stands.

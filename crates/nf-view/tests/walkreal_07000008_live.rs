@@ -3983,20 +3983,31 @@ launch, the ride-free path also skips the chain.
 // transit -18.0 (#18 skin 0x500002f weapon 0x15: -2/-6/-6 in 8 ticks at t14767-14775 from
 // (115.2,41.5,-101.8) d 21.5 — the 30-tick retarget grid never samples inside the 8-tick
 // burst — plus #16 -4.0), then the lower level east unseen pair: the stand on #23 killed
-// false and the point-blank #19 burst (-4.00 d 0.8) closed the walk. LEVER TRIED this round:
-// the ledger's (2), the fight-order most-hits-first pick (the wide-fight ring pick + the
-// retarget law's VISIBLE filter dropped, opt-in thread-local) — BYTE-IDENTICAL no-op on its
-// own run (the newest hitter was already the worst shooter at every pick; the #18 burst
-// outruns the 30-tick grid). Reverted. NEXT LEVERS (priority): (1) the fall: the "other
-// 23.0" is the running jump's landing [M Player_CollisionHandler 0x1949a8:108-131 — the
-// damage is fall_timer-60 with the apex reset; the jump apexes ~51 over the 46.05 deck] —
-// measure a softer crossing (a walk-off needs the step's east face at x 141.956 cleared; the
-// sliver east of it is ~0.25 u) or pin whether the game's own player pays it (the d1/d2
-// walks pay it and pass); (2) the #18 y33 answer: a pre-transit stand on the upper sniper or
-// a per-tick retarget while a new shooter's 240-frame damage grows (the burst is 8 ticks;
-// the grid is 30); (3) the mid-fight scoop+arm (the 08-2 ledger's armed-vs-dry deck-fight
-// delta 12.0 vs 52.0 — the pre-nav arm is measured dead; a scoop after the first stand's
-// kill is untried); the machine-fight levers return once the upstream survives.
+// false and the point-blank #19 burst (-4.00 d 0.8) closed the walk. LEVER (2b) SHIPPED this
+// round: the MOST-HITS-FIRST RETARGET (opt-in thread-local `with_real_damage_most_hits_first`,
+// the 00 Agent walk only; the d1/d2 sisters and every other walk byte-exact — the whole
+// binary 6/0/1 [L the 2026-11-22 final-tree run]): the fight retarget samples EVERY tick
+// instead of the 30-tick grid and reads the worst shooter over the WHOLE shooters set, not
+// the worst VISIBLE one. MEASURED: death t16372 -> t25783 (+9411, the deepest merged-tree
+// walk) — the lower level east pair answered, the master ledge-armour leg scooped ~50
+// armour, and the walk REACHED THE D3 MACHINE-FIGHT ANCHOR ("the d3 fight anchor: arrived
+// (112.09,13.56,-179.46)") before the world row (live wire / blast / hurt volume) closed it
+// at (113.1,13.5,-179.1) with 2.0 health from the secure-room #6's five -3.00 rows (t4886-
+// 5020, the re-dealt fight walked Bond into his lane at the creep) [L the 2026-11-22
+// NF_DMG_TRACE run, 48 hits for 77.0 + other 23.0, 17 return-fire fights]. A first variant
+// (the wide-fight ring pick most-hits-first, the old ledger (2)) measured BYTE-IDENTICAL
+// no-op on its own run and was reverted — the newest hitter was already the worst at every
+// deck pick; the grid, not the order, was the gap. NEXT LEVERS (priority): (1) the fall:
+// the "other 23.0" is the running jump's landing [M Player_CollisionHandler 0x1949a8:108-131
+// — the damage is fall_timer-60 with the apex reset; the jump apexes ~51 over the 46.05
+// deck] — measure a softer crossing (a walk-off needs the step's east face at x 141.956
+// cleared; the sliver east of it is ~0.25 u) or pin whether the game's own player pays it
+// (the d1/d2 walks pay it and pass); (2) the secure-room #6 re-deal: the retarget's creep
+// walked Bond INTO #6's lane for -15.0 (was -3.0) — the switch needs the range gate (the
+// round-19 #17 law: any unseen pick needs the range gate) or the pre-switch visibility check;
+// (3) the machine fight from the anchor at ~2.0 health + ~50 armour: the 08-19 anchor shape
+// (the pre-fight crouch, the dive-launch band) re-pinned on the batch-3 stream; the
+// world-row death (live wire / blast) at the anchor is the first read.
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
@@ -4008,5 +4019,9 @@ fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // the hurting-first fallback pick opens the stand on the shooter actually hurting Bond and
     // the stand creeps until the line opens. Opt-in per test: the sisters' timelines stay
     // byte-exact (none of them sets it).
-    walker::with_real_damage_glass_fights(|| walker::with_real_damage_unseen_fights(|| walk_the_whole_mission_on_real_input_at(3)))
+    // retune-nb-08-20 lever: the MOST-HITS-FIRST retarget (opt-in thread-local, damage_log.rs)
+    // — the retarget samples EVERY fight tick and reads the worst shooter over the WHOLE set:
+    // the merged-tree y33 burst (#18, 14.0 inside 8 ticks between two 30-tick grid samples)
+    // fired mid-burst instead of after it. Judged on its own real run.
+    walker::with_real_damage_glass_fights(|| walker::with_real_damage_most_hits_first(|| walker::with_real_damage_unseen_fights(|| walk_the_whole_mission_on_real_input_at(3))))
 }

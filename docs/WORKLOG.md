@@ -417,3 +417,14 @@ origin/master tip (stream batch 3, b60b1ff79) as instructed. Round 20 goal: the
 whole-mission 00 Agent real-damage walk green again. Re-measure the baseline on the
 merged tree first (stream batch 3 moved guard aim/body boxes), then take the next
 untried lever from the ignore message, skipping measured-dead rows.
+Round 20 (2026-11-22): branch from master (stream batch 3) + 08-19 merged. THE MERGED-TREE
+BASELINE FIRST: the batch-3 running jump vs the d3 lip+hop conflict wedged the walk at the
+hall east lip t6540 (6000-tick cap; the in-place hop is dead under the one-sided wall push —
+the hop jump parks ON the lip step, the running-jump comment's own law). SHIPPED: the d3
+east-deck-head crossing switched to the running jump itself (d1/d2 byte-exact). Lever tried
+and shipped: the MOST-HITS-FIRST retarget (opt-in thread-local, 00 Agent only) — the fight
+retarget samples EVERY tick and reads the worst shooter over the WHOLE set: death t16372 ->
+t25783 (+9411), the walk reaches the d3 machine-fight anchor. A first variant (the wide-ring
+pick most-hits-first) measured byte-identical no-op and was reverted. Whole 08 binary 6/0/1
+on every push. Next: the fall 23.0, the secure-room #6 re-deal range gate, the machine fight
+from the anchor. Report: docs/reports/retune-nb-08-20.md.
