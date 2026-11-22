@@ -15890,6 +15890,13 @@ impl Sim {
         if let Some(j) = m.bots.iter().position(|b| b.slot == victim) {
             if m.bots[j].dead { return; }
             if located && !m.register_bullet_hit(victim, attacker) { return; }
+            // mp-bot-hit-fx: the round's flesh puff. The game's case-5 arm puffs at the contact
+            // after its alive and team gates and before the hit message reaches the pain path
+            // [M NDrone2_DealWithObjHit 0x13fff0:179-256, then `Drone_Message` :306], so the
+            // puff stands even when the pain path takes nothing. Cosmetic: the flush spawns it.
+            if let Hurt::Bullet { weapon, at, .. } = h {
+                self.mp_fx.bot_hits.push((attacker, weapon, at));
+            }
             if !(amount > 0.0) { return; } // [M 0x125ed8:41-43 — the raw-damage gate]
             // `BOT_handlePain` 0x125ed8 through the ported `bot_pain`: the shared multiplier block
             // and the armour pool (`BOT_vars+0x769` — the take's case 3 fills it [M 0x18e650:119-133])
