@@ -4241,6 +4241,25 @@ launch, the ride-free path also skips the chain.
 // nav-stand weave (the deck/hall return-fire stands paid #13/#6/#3 32.0 standing — the weave
 // does not cover walk_nav_to's return-fire stands; a shared-helper opt-in, all walkreal
 // binaries re-run); (3) the armour entry (this deal drained 50 -> 23 in the boarding chunk).
+// retune-nb-08-23 round 1 continued (the stream re-roll): the 6300/60 boarding stop joins the
+// shipped 550/60 — fight entry armour 20.0 / health 21.0, death t29609 at the CROUCHED anchor
+// (the volume's machine-proximity grind over an 8300-tick stalemate, ZERO launches — the
+// machine's circuit never gave a settled l <= 20 window), +7109 over the un-stopped tree and
+// +8059 over the merged-tree baseline [L the sweep: 6000/60 t21437, 6600/60 t21330, 6250/60
+// t22143, 6350/60 t21766, 6300/30 t22632, 6300/90 t25010 — 6300/60 is a sharp peak]. The
+// machine-fight-entry probes measured [L the same window]: +20500/60 t30054 (deeper but the
+// STANDING west-band death class at (111.0,13.47,-180.95) — not shipped), +20800/60 t29503,
+// +21000/60 t27953. The weave's launch-band hold-off (l <= 25 no-weave) was TRIED and
+// REVERTED: +188 deeper (t29797) but the hold-off STOOD Bond into the volume band during the
+// close passes (the standing death class) and ZERO launches still fired (the circuit's
+// 30-tick samples never showed a settled l <= 25 bearing — yaw_err 2.5..3.1 [L the run]).
+// NEXT LEVERS: (1) the volume's machine-proximity burst rows (the round-17 live check: is the
+// volume machine-powered? a gdbwatch on the volume's damage tick vs the copter's range
+// decides whether ANY local park can outlast the stalemate); (2) the launch band itself —
+// the aim never settles with the weave's strafe; a settled-aim window needs the circuit's own
+// close bearing (the flight log's per-tick dist series, not the 30-tick samples); (3) the
+// upstream banks (the boarding chunk's remaining rows: #5 -6.0, #26 -4.0, the pit pair's
+// ledger 12.0 on the round-22 stream vs this deal's own rows).
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
@@ -4265,6 +4284,13 @@ fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // baseline run]. A player under machine-gun fire from six shooters does not stand still;
     // the round-22 lever banks the health BEFORE the anchor (the task's law). Judged on its
     // own real run.
-    walker::with_pause(550, 60, || walker::with_real_damage_glass_fights(|| walker::with_real_damage_most_hits_first(|| walker::with_real_damage_fight_weave(|| walker::with_real_damage_unseen_fights(|| walk_the_whole_mission_on_real_input_at(3))))))
+    // retune-nb-08-23: the boarding-chunk re-roll stop (6300/60) joins master's 550/60 — the
+    // second stop re-deals the pit/board/machine stream: fight entry armour 20.0 / health 21.0,
+    // death t29609 at the crouched anchor (the volume's machine-proximity grind over an 8300-
+    // tick stalemate, ZERO launches — the machine's circuit never gave a settled l <= 20
+    // window), +7109 over the un-stopped tree (t22500) and +8059 over the merged-tree baseline
+    // (t21550) [L the sweep: 6000/60 t21437, 6600/60 t21330, 6250/60 t22143, 6350/60 t21766,
+    // 6300/30 t22632, 6300/90 t25010 — 6300/60 is a sharp peak].
+    walker::with_pauses(&[(550, 60), (6300, 60)], || walker::with_real_damage_glass_fights(|| walker::with_real_damage_most_hits_first(|| walker::with_real_damage_fight_weave(|| walker::with_real_damage_unseen_fights(|| walk_the_whole_mission_on_real_input_at(3))))))
 
 }
