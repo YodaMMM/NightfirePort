@@ -736,6 +736,19 @@ pub fn bond_hit_boxes(d: &Data, player: &Player) -> Vec<crate::damage::HitBox> {
     crate::damage::boxes(d.hitboxes.for_skin(hash), &pal, skin)
 }
 
+/// A team-2 drone's `+0x170` opponent as `NDrone2_FindOpponent` 0x1424e0 picks it: a drone
+/// (index into `Drones::list`) or a class-0x3B object, the helicopter, keyed by its placement
+/// index (`Copter::placement`, stable across `Copter::delete`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Team2Opp { Drone(usize), Copter(usize) }
+
+impl Team2Opp {
+    pub fn drone(self) -> Option<usize> { if let Team2Opp::Drone(c) = self { Some(c) } else { None } }
+    pub fn copter(self) -> Option<usize> { if let Team2Opp::Copter(c) = self { Some(c) } else { None } }
+}
+
+fn dist3(a: V3, b: V3) -> f32 { ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() }
+
 /// Bond as the drones see him.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Player {
@@ -1361,6 +1374,11 @@ pub struct Drone {
     /// `None` = `SetOpponent(0)` [M 0x1424e0:101-268; docs/systems/ally-heard-noise.md]. Team-1
     /// drones keep the player opponent (the `+0x44 != 2` arm) and leave this `None`.
     pub opp_drone: Option<usize>,
+    /// `Drone+0x170` for a team-2 drone holding a class-0x3B object: the copter pick (the index
+    /// into `Drones::copters`). Class 0x3B is the helicopter alone (`Copter_Create` 0x17d340:62
+    /// is the ELF's only `obj+0xFF = 0x3b` store [M]); `NDrone2_FindOpponent` 0x1424e0:123-147
+    /// takes it with no range and no sight test. Never set together with `opp_drone`.
+    pub opp_copter: Option<usize>,
     /// `Drone+0x238` — `DroneVision_HaveOpponentSight`'s had-opponent stamp (0 = never):
     /// `DroneFunc_CombatState` 0x148338:20-31 and `NDrone2_HasOpponent` 0x14ad58 honour it for
     /// 30 ticks after the last seen tick.
@@ -2333,6 +2351,7 @@ impl Drone {
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             opp_cursor: 0,
             opp_drone: None,
+            opp_copter: None,
             zero_root: false,
             opp_have_frame: 0,
             opp_los: false,
@@ -11544,7 +11563,7 @@ impl Drone {
             // gate sits INSIDE the opponent-is-player arm — a drone opponent needs no alertness;
             // [M :52-83] `+0x4fc & 0x20` set → 0, else Attack 0x56 (the `+0x4f8 & 0x800` gate is
             // not modelled — no port reader).
-            if self.opp_drone.is_none() {
+            if self.opp_drone.is_none() && self.opp_copter.is_none() {
                 if ailog() {
                     eprintln!("[ailog] guard {} look_for_opponent: team 2 — no drone opponent", self.index);
                 }
@@ -11919,7 +11938,7 @@ impl Drone {
     /// 0x161a40:26/0x1616c0:19/0x161860:52]. Team != 2 = the player fold (`opp_bond`,
     /// 0x1424e0:100-121); team 2 = the scan pick (`opp_drone`).
     fn opp_ptr(&self) -> bool {
-        self.opp_bond || self.opp_drone.is_some()
+        self.opp_bond || self.opp_drone.is_some() || self.opp_copter.is_some()
     }
     fn has_opponent(&self, frame: u32) -> bool {
         // `NDrone2_HasOpponent` 0x14ad58:8-15 — the pointer OR the +0x238 stamp grace, EVERY
@@ -20115,49 +20134,84 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
 
     /// `NDrone2_FindOpponent` 0x1424e0's team-2 arm, per tick (the ControlSTANDARD 0x1490f0:167
     /// call; docs/systems/ally-heard-noise.md §1). For every present team-2 drone:
-    /// re-validate the held opponent — `NDrone2_CanSeeObject(…, 5, 0)` head-to-head FIRST (it
-    /// consumes the shared LOS budget [M 0x1424e0:152, the entry snapshot already taken at
-    /// 0x142554]), then the alive filter on a drone-class opponent [M :161-172]; then the
-    /// drone-list scan [M :191-268] from the rotating `+0x2c0` cursor, skipping self and the held
-    /// opponent's node. The candidates' gates (the exact alive test, the team byte +0x44 == 1,
-    /// the SqDist2D range) run free; the FIRST candidate through them takes the tick's LOS probe
-    /// and the walk stops on the shared `DAT_00299092` counter rule [M :239-242] — the cursor
-    /// lands on the just-probed candidate. The counter increments when a drone-vision probe
-    /// reaches `Collide_LineOfSight` [M 0x176f18:68/:94] and resets only at `Drone_LevelReset`'s
-    /// memset [M 0x13a5bc-0x13a5c8] — the port's `los_probes`, reset in `Drones::new`. The range
-    /// is 800² (640000.0) when there was no held opponent to re-validate, the engage range
-    /// squared when there was [M :191-209, 251-255]; the scan runs even when the held opponent
-    /// was re-validated (the switching arm [M :210-268 after the keep fall-through]). Returns per
-    /// list index the pick (opponent index, its position, the 3D distance, the yaw) and the
-    /// advanced cursors. Not ported: the class-0x3b control-object arm [M :124-146] (no
-    /// object-class model). The port's LOS is the collision world's line of sight — the
-    /// documented stand-in for `AINetwork_TestRayCels` + `Collide_LineOfSight` [S, the
-    /// drone-vision note in tick_inner]; every port probe therefore consumes budget, where the
-    /// game's cel-rejected probes do not.
-    pub fn team2_opponent_picks(&mut self, d: &Data) -> (Vec<Option<(usize, V3, f32, f32)>>, Vec<usize>) {
+    /// - the class-0x3B walk [M :123-147]: the first control object of class 0x3B (the
+    ///   helicopter, `Copter_Create` 0x17d340:62, the ELF's only store of that class) whose
+    ///   state short `+0xF4` is 1..3 and whose direction from the drone (`obj+0x30 - drone
+    ///   obj+0x30`, `Vec_DirToRot` 0x1e3218 → `-atan2f(y, √(x²+z²))`) has a pitch in
+    ///   [-0.5235988, 0.17453294] becomes the opponent: no range, no sight test, no budget, the
+    ///   cursor untouched (the early return :140-141);
+    /// - re-validate the held opponent: `NDrone2_CanSeeObject(…, 5, 0)` FIRST (it consumes the
+    ///   shared LOS budget [M :152]), then the alive filter on a drone-class opponent
+    ///   [M :161-172] or the state short > 3 drop on a class-0x3B one [M :176-177];
+    /// - the drone-list scan [M :191-268] from the rotating `+0x2c0` cursor, skipping self and
+    ///   the held opponent's node. The candidates' gates (the exact alive test, the team byte
+    ///   +0x44 == 1, the SqDist2D range) run free; the FIRST candidate through them takes the
+    ///   tick's LOS probe and the walk stops on the shared `DAT_00299092` counter rule
+    ///   [M :239-242], the cursor on the just-probed candidate. The counter increments when a
+    ///   drone-vision probe reaches `Collide_LineOfSight` [M 0x176f18:68/:94] and resets only at
+    ///   `Drone_LevelReset`'s memset [M 0x13a5bc-0x13a5c8]: the port's `los_probes`, reset in
+    ///   `Drones::new`. The range is 800² (640000.0) when there was no held opponent to
+    ///   re-validate, the engage range squared when there was [M :191-209, 251-255].
+    /// Returns per list index the pick (opponent, its position, the 3D distance, the yaw, this
+    /// tick's sight of it: true for every probed pick, the stand-in ray for a walk pick) and the
+    /// advanced cursors.
+    /// The port's LOS is the collision world's line of sight, the documented stand-in for
+    /// `AINetwork_TestRayCels` + `Collide_LineOfSight` [S, the drone-vision note in tick_inner];
+    /// every port probe therefore consumes budget, where the game's cel-rejected probes do not.
+    /// The copters walk in the port's list order (the game's is the control list's); no shipped
+    /// level has two copters beside a team-2 drone [D census: 07000008 alone carries both, one
+    /// copter].
+    pub fn team2_opponent_picks(&mut self, d: &Data) -> (Vec<Option<(Team2Opp, V3, f32, f32, bool)>>, Vec<usize>) {
         let n = self.list.len();
-        let mut picks: Vec<Option<(usize, V3, f32, f32)>> = vec![None; n];
+        let mut picks: Vec<Option<(Team2Opp, V3, f32, f32, bool)>> = vec![None; n];
         let mut cursors: Vec<usize> = (0..n).map(|i| self.list[i].opp_cursor).collect();
+        if !self.list.iter().any(|x| x.present && x.team == 2) { return (picks, cursors); }
+        // The class-0x3B objects: (placement key, obj+0x30, obj+0xF4, the body's own stream
+        // shapes: `Collide_LineOfSight`'s subject, which never blocks its own ray [M 0x176f18:95-96]).
+        let copters: Vec<(usize, V3, u16, Vec<u32>)> = (0..self.copters.len())
+            .map(|ci| (self.copters[ci].placement, self.copters[ci].pos(), self.copters[ci].state, self.copter_stream_hashes(ci)))
+            .collect();
         for i in 0..n {
             let dr = &self.list[i];
             if !dr.present || dr.team != 2 { continue; }
-            // The held re-validation probes FIRST (the CanSeeObject at 0x1424e0:152 precedes the
-            // alive filter :161-172 — order matters for the shared LOS budget), then the alive
-            // filter on a drone-class opponent [M :161-172; the same test as the scan's minus the
-            // class arm]. A dropped opponent is SetOpponent(0) [M :155].
-            let mut held_ok = false;
-            if let Some(cur) = dr.opp_drone {
-                self.los_probes = self.los_probes.wrapping_add(1); // [M 0x176f18:68/:94 — the probe's budget increment]
-                let seen = d.world.line_of_sight(dr.head(), self.list[cur].head(), crate::world::LOS_GUARD_VISION);
-                if seen && cur < n && self.list[cur].find_opponent_alive() { held_ok = true; }
+            // (a) the class-0x3B walk [M :123-147].
+            let walk = copters.iter().find(|(_, cp, st, _)| {
+                if !(1..=3).contains(st) { return false; } // 0 < (short)+0xF4 < 4 [M :132]
+                let v = [cp[0] - dr.pos[0], cp[1] - dr.pos[1], cp[2] - dr.pos[2]];
+                let pitch = -crate::trig::atan2f_libm(v[1], (v[0] * v[0] + v[2] * v[2]).sqrt()); // [M 0x1e3218:10-12]
+                pitch <= 0.174_532_94 && -0.523_598_8 <= pitch // [M :139]
+            });
+            if let Some((key, cp, _, ex)) = walk {
+                // The walk itself casts nothing. The sight flag the attack entry reads comes from
+                // `ProcessDroneSight`'s ray against `+0x170` [M 0x176a28 → 0x175cb8], which the port
+                // runs against Bond only; the stand-in is the same object-position ray, off the
+                // budget [S].
+                let los = d.world.line_of_sight_excluding(dr.head(), *cp, crate::world::LOS_GUARD_VISION, ex);
+                picks[i] = Some((Team2Opp::Copter(*key), *cp, dist3(*cp, dr.pos), atan2_approx(cp[0] - dr.pos[0], cp[2] - dr.pos[2]), los));
+                continue; // SetOpponent + return 0 [M :140-141]
             }
-            // (b) the scan [M :191-268]: the candidates run the cheap gates free (the alive test
+            // (b) the held re-validation: the probe FIRST [M :152], then the class arms.
+            let mut held: Option<Team2Opp> = None;
+            if let Some(cur) = dr.opp_drone {
+                self.los_probes = self.los_probes.wrapping_add(1); // [M 0x176f18:68/:94, the probe's budget increment]
+                let seen = d.world.line_of_sight(dr.head(), self.list[cur].head(), crate::world::LOS_GUARD_VISION);
+                if seen && cur < n && self.list[cur].find_opponent_alive() { held = Some(Team2Opp::Drone(cur)); }
+            } else if let Some(key) = dr.opp_copter {
+                // A class-0x3B target takes the object-position arm: seer head → obj+0x30
+                // [M 0x176f18:81-96]; then `+0xF4 > 3` drops it [M :176-177].
+                if let Some((_, cp, st, ex)) = copters.iter().find(|(k, ..)| *k == key) {
+                    self.los_probes = self.los_probes.wrapping_add(1); // [M 0x176f18:94]
+                    let seen = d.world.line_of_sight_excluding(dr.head(), *cp, crate::world::LOS_GUARD_VISION, ex);
+                    if seen && *st <= 3 { held = Some(Team2Opp::Copter(key)); }
+                }
+            }
+            // (c) the scan [M :191-268]: the candidates run the cheap gates free (the alive test
             // 0x143098-0x1430f8, the team byte +0x44 == 1 and the SqDist2D gate :227-230); the FIRST
             // candidate through them takes the tick's LOS probe, and the walk stops on the shared
-            // counter rule `snapshot < DAT_00299092` [M :239-242 + the entry snapshot 0x142554] —
-            // the cursor lands on the just-probed candidate, so the next call resumes after it.
+            // counter rule `snapshot < DAT_00299092` [M :239-242] — the cursor lands on the
+            // just-probed candidate, so the next call resumes after it.
             let snapshot = self.los_probes;
-            let range2 = if dr.opp_drone.is_some() { dr.engage_range * dr.engage_range } else { 640000.0 };
+            let range2 = if dr.opp_drone.is_some() || dr.opp_copter.is_some() { dr.engage_range * dr.engage_range } else { 640000.0 };
             let mut pick = None;
             let start = cursors[i] % n.max(1);
             let mut stop = cursors[i];
@@ -20177,14 +20231,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             }
             cursors[i] = stop;
             // The scan's win replaces the held opponent; otherwise the re-validated one stays
-            // [M :247-256 → SetOpponent only on a scan win; the keep falls through].
-            let opp = pick.or(if held_ok { dr.opp_drone } else { None });
-            if let Some(c) = opp {
-                let cd = &self.list[c];
-                let d3 = ((cd.pos[0] - dr.pos[0]).powi(2) + (cd.pos[1] - dr.pos[1]).powi(2) + (cd.pos[2] - dr.pos[2]).powi(2)).sqrt();
-                let yaw = atan2_approx(cd.pos[0] - dr.pos[0], cd.pos[2] - dr.pos[2]);
-                picks[i] = Some((c, cd.pos, d3, yaw));
-            }
+            // [M :234-238: SetOpponent only on a scan win; the keep falls through].
+            let opp = pick.map(Team2Opp::Drone).or(held);
+            picks[i] = opp.and_then(|o| {
+                let op = match o {
+                    Team2Opp::Drone(c) => self.list[c].pos,
+                    Team2Opp::Copter(k) => copters.iter().find(|(kk, ..)| *kk == k)?.1,
+                };
+                Some((o, op, dist3(op, dr.pos), atan2_approx(op[0] - dr.pos[0], op[2] - dr.pos[2]), true))
+            });
         }
         (picks, cursors)
     }
@@ -21056,9 +21111,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     // the drone's own position [M 0x1422d0:25-29]) while `+0xf0`/`+0x1d4` keep
                     // their stale values (the game does not rewrite them).
                     dr.opp_cursor = team2_cursors[i];
-                    dr.opp_los = team2_picks[i].is_some();
-                    dr.opp_drone = team2_picks[i].map(|(c, _, _, _)| c);
-                    if let Some((_, opos, odist, oyaw)) = team2_picks[i] {
+                    dr.opp_los = team2_picks[i].is_some_and(|p| p.4);
+                    dr.opp_drone = team2_picks[i].and_then(|p| p.0.drone());
+                    dr.opp_copter = team2_picks[i].and_then(|p| p.0.copter());
+                    if let Some((_, opos, odist, oyaw, _)) = team2_picks[i] {
                         dr.dist = odist;
                         dr.yaw_to_opp = oyaw;
                         dr.opp_target = opos;
@@ -21257,6 +21313,18 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // (0x600 clear, 0x100 set, health > 0, not class 0x11, not dying), the vision bit 0x10000
         // and the opponent pointer +0x170.
         let eligible = |x: &Drone| x.present && !x.corpse && x.vision_on && x.opp_ptr();
+        // The team-2 close probe's target (`NDrone2_CanSeeObject(drone, +0x170, 5, 0)` [M
+        // 0x175af0:26]): a drone opponent's head (the same stand-in `team2_opponent_picks` probes),
+        // a class-0x3B one's obj+0x30 with its own stream shapes off the ray [M 0x176f18:81-96].
+        let t2_close: Vec<Option<(V3, Vec<u32>)>> = if vision_open {
+            self.list.iter().map(|x| {
+                if !(x.present && x.team == 2 && x.dist < 2.0 && x.sight_range > 0.0) { return None; }
+                if let Some(c) = x.opp_drone { return self.list.get(c).map(|o| (o.head(), Vec::new())); }
+                let key = x.opp_copter?;
+                let ci = self.copters.iter().position(|c| c.placement == key)?;
+                Some((self.copters[ci].pos(), self.copter_stream_hashes(ci)))
+            }).collect()
+        } else { Vec::new() };
         if vision_open {
             for i in 0..self.list.len() {
                 let (before, rest) = self.list.split_at_mut(i);
@@ -21267,15 +21335,26 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if !eligible(dr) { if !(dr.present && !dr.corpse && dr.vision_on) { dr.visibility = 0.0; dr.los = false; } continue; }
                 // `DroneVision_OpponentVisibility` 0x175af0:24-33: under 2 u with a sight range the
                 // head-bone probe runs first; seen = 1.0, else the range/cone formula.
-                // Team 2's opponent is a drone (`opp_drone`), and the port's sight probe is Bond's:
-                // its close probe (against that drone) is not modelled [S].
-                let close = dr.team != 2 && dr.dist < 2.0 && dr.sight_range > 0.0 && {
+                // Team 2's opponent is its pick (`opp_drone` / `opp_copter`), never Bond: the close
+                // probe casts at that object (the `+0x1a0 < 2.0` and `+0xe8 > 0` gates [M :24-25]
+                // folded into `t2_close`) and spends the shared budget like every drone-vision ray
+                // [M 0x176f18:68/:94].
+                let close = if dr.team == 2 {
+                    match &t2_close[i] {
+                        Some((tp, ex)) => {
+                            self.los_probes = self.los_probes.wrapping_add(1); // [M 0x176f18:68/:94]
+                            if ex.is_empty() { d.world.line_of_sight(dr.head(), *tp, crate::world::LOS_GUARD_VISION) }
+                            else { d.world.line_of_sight_excluding(dr.head(), *tp, crate::world::LOS_GUARD_VISION, ex) }
+                        }
+                        None => false,
+                    }
+                } else { dr.dist < 2.0 && dr.sight_range > 0.0 && {
                     let body = |a: V3, b: V3| before.iter().chain(after.iter())
                         .any(|o| o.present && o.enabled && !o.corpse && drone_ray_part(o, d, a, b).is_some());
                     let (seen, c) = dr.sight_probe(d, player, view_bones.as_ref(), &body, VIEW_BONE_HEAD);
                     if c { self.los_probes = self.los_probes.wrapping_add(1); } // [M 0x176f18:94]
                     seen
-                };
+                } };
                 let v = if close { 1.0 } else { dr.visibility_formula() };
                 // A value under 0.7 is stored as 0 [M 0x176a28:107-117].
                 dr.visibility = if v >= 0.7 { v } else { 0.0 };
@@ -21425,7 +21504,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // safety fold, the frozen-counter case].
         for dr in &mut self.list {
             if !vision_open || !dr.present || dr.team != 2 { continue; }
-            if dr.opp_drone.is_some() {
+            if dr.opp_drone.is_some() || dr.opp_copter.is_some() {
                 dr.seen_ticks += 1;
                 dr.unseen_ticks = 0;
                 dr.lost_sight = false;
@@ -25894,6 +25973,7 @@ mod tests {
             global_flinch: None, bond_aiming: false, cull: false, bond_armed: true, stat_ok: true, opp_facing: 0.0, opp_target: [0.0; 3], sighted: false, own_sight: false, first_attack_done: false,
             opp_cursor: 0,
             opp_drone: None,
+            opp_copter: None,
             zero_root: false,
             opp_have_frame: 0,
             opp_los: false,

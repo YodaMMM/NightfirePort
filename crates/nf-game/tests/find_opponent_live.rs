@@ -135,7 +135,7 @@ fn scan_skips_dead_candidates_and_picks_the_live_one() {
         }
         setup(&mut sim.list[g]);
         let (picks, cursors) = sim.team2_opponent_picks(&d);
-        let picked = picks[a].map(|(c, _, _, _)| c);
+        let picked = picks[a].and_then(|p| p.0.drone());
         if *name == "healthy" {
             assert_eq!(picked, Some(g), "{name}: the live guard in range with LOS is picked");
             assert_eq!(sim.los_probes - before, 1, "{name}: one probe (the scan's first cheap candidate) [M 0x1424e0:231-242]");
@@ -174,7 +174,7 @@ fn los_budget_matches_the_counter_rule() {
     let before = sim.los_probes;
     let (picks, _) = sim.team2_opponent_picks(&d);
     assert_eq!(sim.los_probes - before, 1, "one scan probe [M 0x142554 + 0x143144-0x14314c]");
-    assert_eq!(picks[a].map(|(c, _, _, _)| c), Some(g));
+    assert_eq!(picks[a].and_then(|p| p.0.drone()), Some(g));
 
     // (2) holding the guard himself: the re-validation probe only (the scan skips the held node
     // [M :223-226] and no other candidate — the cursor sits on the held one).
@@ -183,7 +183,7 @@ fn los_budget_matches_the_counter_rule() {
     let before = sim.los_probes;
     let (picks, _) = sim.team2_opponent_picks(&d);
     assert_eq!(sim.los_probes - before, 1, "held + no other candidate: only the re-validation probe [M 0x1424e0:152]");
-    assert_eq!(picks[a].map(|(c, _, _, _)| c), Some(g), "the re-validated opponent stays");
+    assert_eq!(picks[a].and_then(|p| p.0.drone()), Some(g), "the re-validated opponent stays");
 
     // (3) holding him with a second cheap candidate first in the walk: the re-validation probe
     // AND the scan's probe — two [M :152 + :231-242].
@@ -216,7 +216,7 @@ fn los_budget_matches_the_counter_rule() {
     assert_eq!(sim.los_probes - before, 1, "the resumed call still spends one probe");
     // The resumed walk's winner is whichever in-range candidate follows the cursor (the map has
     // several) — the pinned facts are the ONE probe and a live pick that is not the buried one.
-    let won = picks[a].map(|(c, _, _, _)| c);
+    let won = picks[a].and_then(|p| p.0.drone());
     assert!(won.is_some_and(|c| c != buried && sim.list[c].team == 1), "a live guard wins on the resumed walk, got {won:?}");
 
     // (5) N allies scanning in one call: the counter grows by N — each ally's call re-snapshots
@@ -249,6 +249,10 @@ fn ally_picks_the_guard_through_the_tick() {
     sim.list[a].team = 2;
     sim.list[a].pos = OPEN_ALLY;
     let away = bond_at([0.0, -500.0, 0.0]);
+    // 07000005's copter #241 carries no gate (param 6 = 0) and flies from the first tick, inside
+    // this borrowed ally's pitch band: the class-0x3B walk [M 0x1424e0:123-147] would take it
+    // ahead of any guard. This test pins the drone pick, so the level's copters stay out.
+    sim.copters.clear();
     for _ in 0..5 { sim.tick(&d, &away); }
     let mut picked = None;
     for _ in 0..30 {
