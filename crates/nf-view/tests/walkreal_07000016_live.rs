@@ -937,12 +937,29 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // ticks on a hunting guard 17-27 u out (12 rounds, zero damage) while the ring
         // guards emptied him (the 1988 death).
         for (label, wp) in APPROACH {
-            if wp.at[1] > 5.5 { clear_hostiles_16(w, 40.0, 900); }
+            if wp.at[1] > 5.5 {
+                // retune-nb-16-6 (the batch-3 run-6 ledger, d3 only): the ring-east pre-clear
+                // stood Bond ON RAMP 3 (y 4.74) fighting the whole y 6.7 gallery 20-34 u out —
+                // the run died there (t973, 20 hits for 100.0, the south brute #2 47.5 in 7),
+                // one ~80-tick leg short of the ring where the clears land at level (the guards
+                // 0.8 u above Bond's feet, the d1 band-fight geometry). A player finishes the
+                // climb first and clears from the ring floor. The d2/tops-up sisters keep the
+                // measured pre-clear.
+                let skip_low_clear = *label == "the ring east"
+                    && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up();
+                if !skip_low_clear { clear_hostiles_16(w, 40.0, 900); }
+            }
             // The Agent walk (d2): the ramp foot and the whole ramp see all
             // three gallery riflemen (#3/#4/#5, 0x1a) [the 11-13 cover map]; the pocket at
             // x 19-20 / z -92..-98 sees none. Dash there (no return fire, straight legs - the nav's
             // hop toward (20.7, -95.6) wedged 771 ticks), arm, and peek-fight from the pocket edge.
             if re_arm && *label == "the lane east"
+                // retune-nb-16-6 (the batch-3 fight-through): d3 skips the pocket excursion —
+                // the re-measure killed its bullet-shadow premise (the laws block above), the
+                // walk fights through the lane/ramp instead. The d2 sister and the tops-up
+                // sisters keep their measured dash (their streams are pinned).
+                && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+            } else if re_arm && *label == "the lane east"
                 // 00 Agent too (11-13): on the d3 roster the same pocket holds - the live
                 // bullet-line scan has the gallery lines dead south of the ramp foot - and the
                 // dash moves the death t1020 -> t4379 (pocket entered at 72.0).
@@ -2803,6 +2820,34 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
         // the ring legs clear at level.
         w.dmg.level_fights = true;
     }
+    // retune-nb-16-6 lever (the batch-3 fight-through, d3 only): the batch-3 re-measure [L the
+    // fresh run on the merged tree: death t1473, (20.00,0.89,−94.04), 27 hits for 100.0, 0
+    // return-fire fights] killed the pocket excursion's premise — the "pocket" is a shallow
+    // cut (Bond y 0.80-0.99 in it [L the NF_WALK_TRACE run]), and with the batch-3 body aim
+    // [M master c229c7780: guards' rounds hit Bond's body boxes, guards aim at his body] the
+    // standing dash bled 100 → 26.5 (the crouched dash 100 → 40.5 [L the two runs]) and the
+    // pocket itself died in 80 ticks to the descended ground closer #0 (his line over the
+    // 0.1 u lip; 58.0 in 6 hits incl. the −40.5 finisher at d 6.2). A player does not dive
+    // into a shallow cut that no longer shades anything — he fights through the lane/ramp
+    // with the d1 law set (finish the hp-20 fights, stay out of the 3.0 always-hit band
+    // [M DroneWeap_DoBulletAccuracy 0x179740:113-115], answer the real dealer, keep the ground
+    // legs moving and clear the ring at level), which is exactly how the d1 sister passes
+    // this same route green on master's batch 3. The old-stream 3912 MEASURED-REVERTED note
+    // above does not carry over: it measured the excursion-present tree where the elevated
+    // fights were the only cost; on batch 3 the excursion is the cost.
+    if difficulty >= 3 && !w.tops_up() {
+        w.dmg.finish_fights = true;
+        w.dmg.back_off = Some(3.5);
+        w.dmg.hurting_first = true;
+        // level_fights stays ON for d3 here (the run-6 vs run-7 pair measured it): WITHOUT it
+        // the reactive pick opens stands on the y 6.7 gallery brutes from the lane/ramp floor
+        // (#2/#5, hp 20, 21-28 u — the run-7 death t896 at the ramp foot, 65.0 in 10 hits from
+        // #2 alone, 2 fights lost); WITH it the ground/ramp legs keep MOVING under the plinks
+        // (the run-6 death was NOT a reactive stand — see the ring-east gate below) and the
+        // ring legs clear the gallery AT LEVEL. The d1 walk can afford the filter too; d3
+        // needs it.
+        w.dmg.level_fights = true;
+    }
     // nb-scan-all MEASURED-REVERTED (the 3912 vs the 12872 ledger): the d1 level_fights law
     // applied to d3 made the walk die EARLIER — with the elevated fights skipped the ring
     // brute #5 (0x50000b2, 0x1a, hp 20, the ring-1 perch (9.1, 6.7, -78.6)) stayed alive and
@@ -3273,6 +3318,14 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// DroneWeap_DoBulletAccuracy 0x179740:74-88]. The d2 gates (the pit-door guard pre-shoot) fire
 /// at 3 too. Real input only; no health/ammo/channel writes.
 #[test]
+/// RED on stream batch 3 (retune-nb-16-6, 2026-11-22): the merged tree re-measured the pocket
+/// excursion dead (t1473 — the batch-3 body aim hits everywhere, the "pocket" is a shallow cut
+/// with a descended ground closer over its lip) and the landed lever is the batch-3 fight-through
+/// (d3 skips the excursion, runs the d1 law set, the ring-east pre-clear waits for ring level):
+/// the furthest measured point moved to the ring itself (t1229, between ring 1 and ring 2), the
+/// refreshed ledger and the next lever (the ring-phase bleed — the south-gallery brute pair
+/// #2/#5) are in the ignore message below. The retune-nb-16-5 GREEN note (the pre-batch-3 tree)
+/// follows for the pit-squad history.
 /// GREEN (retune-nb-16-5, 2026-11-20, merged master ccd79b5be + origin/s/retune-nb-16-4): the
 /// round-4 t17282 death (ONE −19.50 round from squad clone #12 at d 1.4, armour 0.0, health
 /// 19.5) did not move on this tree — re-measured byte-exact first (SniperAim ENTER included).
@@ -3292,7 +3345,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// 2 hits (every delta within the game's chain [D record 99; M 0x1d4424/0x139fac]), ch 0xbf
 /// at +8428, the lift-out hand-back at +9490, the button, end health 17.0 (the pool spent,
 /// 37 hits for 83.0 across the whole walk).
-#[ignore = "stream batch 1121b: Bond dies in the pocket fight near (20.5, 0.9, -92) at t2200-5600; no stop of 37 swept completes it. walks-1121-06-16: the pocket is NOT out of sight, its south face is a glass pane (z -96.67) the 0x1a rounds pass [M Bullet_update 0x12e7b0 glass mask; Collide_Update 0x1ea398:216-229], so the south lane hunter #1 hits Bond in the pocket from 19 u; 190 more stop sets (single to triple, also with a reshaped dash) never complete, the best reaching the pit squad (t22534)"]
+#[ignore = "stream batch 3 re-tune (retune-nb-16-6, 2026-11-22), still red at the furthest measured point (t1229, (-2.83,6.75,-78.60) ON the ring between ring 1 and ring 2, 18 hits for 100.0, 1 return-fire fight). The batch-3 re-measure killed the pocket excursion's premise: the 'pocket' is a shallow cut (Bond y 0.80-0.99 in it [L the NF_WALK_TRACE run]) and with body aim [M master c229c7780] the standing dash bled 100 -> 26.5 and the pocket died in 80 ticks to the descended ground closer #0 over the 0.1 u lip (his line + the −40.5 finisher at d 6.2; death t1473); the crouched dash improved the entry to 40.5 but the pocket still died (t1304); the switch_to_armed there is a 61-tick no-op (a loaded gun qualifies in iteration 1). The landed lever on THIS tree (d3 && !tops_up, file-local): the batch-3 fight-through — the pocket excursion is SKIPPED, the walk runs the d1 law set (finish_fights, back_off 3.5, hurting_first, level_fights) and the ring-east pre-clear is gated until Bond is at ring level. Measured furthest: the lane crossed in ~90 ticks/leg, the ramp climbed, the ring REACHED (never before on batch 3 — every excursion run died in the pocket phase), death on the ring at t1229. The measured WORSE pair, do not retry: level_fights OFF at d3 (the reactive stands fight the y 6.7 gallery brutes from the floor and lose: t896 at the ramp foot, #2 65.0 in 10, 2 fights); the ring-east pre-clear un-gated (Bond stands on ramp 3 y 4.74 vs the gallery 20-34 u out: t973, #2 47.5 in 7). NEXT LEVER: the ring-phase bleed — Bond reaches the ring with the lane/ramp bleed already sunk (the south-gallery brute pair #2 (9.5,6.7,-110.6) hp 20 and #5 (-4.7,6.7,-111.0) hp 20 dealt 77.0 of the 100 from 32-34 u THROUGH the whole approach and are STILL alive on the ring), so the ring clears (clear_hostiles_16 40 u / 900 cap at ring 1..4) must finish the gallery BEFORE he drains: the ring-1..4 bounded stands need the south brutes on their fight list (the visible-gated ring-1 rifleman lever at the ring 1 leg runs only for the punch walk — extend it to the defeat walk d3-gated and cover ring 2..4), or the walk answers #2/#5 from the ring east leg itself where they are 29-31 u and at -0.8 level"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles; the ninja's
     // NinjaStand start): the pocket's close four took 72 -> 12.5 and Bond reached the blast
