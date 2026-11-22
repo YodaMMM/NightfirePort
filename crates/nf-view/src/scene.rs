@@ -1175,6 +1175,31 @@ pub struct LocalDeathFx {
     pub camera_frozen: bool,
 }
 
+/// The collision capsule ends of a human body at `pos` (`Player::capsule`): standing pos+up·0.55 /
+/// pos+up·(0.275 − cc); crouched pos+up·(0.65 − cc) / pos+up·(0.45 − cc) [M Player_Collision 0x194df0].
+pub fn collide_capsule(b: &nf_game::player::Bond, pos: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    if b.crouched {
+        ([pos[0], pos[1] + 0.65 - b.cc, pos[2]], [pos[0], pos[1] + 0.45 - b.cc, pos[2]])
+    } else {
+        ([pos[0], pos[1] + 0.55, pos[2]], [pos[0], pos[1] + 0.275 - b.cc, pos[2]])
+    }
+}
+
+/// The collide-pass body HITTEST of a human body at `pos` (`Player_Collision` 0x194df0's
+/// substate switch: case 0/6 climb/creep [M :202-222], case 3 the crouch [M :228-248], the
+/// default arm for the walk [M :315-333]); the single-player `Player::body` and every MP
+/// slot's `NetBody::body` (each slot is its own `Player_Init` 0x1910f8 object with its own
+/// BL+0x740 HITTEST [M :32-39]).
+pub fn collide_body(b: &nf_game::player::Bond, pos: [f32; 3]) -> ([f32; 3], [f32; 3], f32) {
+    let cc = b.cc;
+    let at = |dy: f32| [pos[0], pos[1] + dy, pos[2]];
+    match b.substate {
+        nf_game::player::SS_CLIMB | nf_game::player::SS_CREEP => (at(0.55), at(0.275 - cc), 0.275),
+        _ if b.crouched => (at(0.1 - (cc - 0.55)), at(0.45 - cc), 0.55),
+        _ => (at(0.275), at(0.55 - cc), 0.55),
+    }
+}
+
 /// The body a live bot presents to the player's Jointy query (`NDrone2_Collision` 0x140e90, the
 /// bot's +0x3f0/+0x400 spine ends and +0x45c radius), upright (up = (0,1,0)):
 /// - standing: top = pos + up·r, bottom = pos + up·(r − hip), r 0.4, or 0.55 when the voice set
@@ -4256,23 +4281,13 @@ impl Sim {
         // REVERTED — it stalled 07000005's truck chain (whose game route is likely the class-5
         // object contact, trigger-port-check #11, still unproven) and touched the ch-0x70 park
         // plate standing.
-        let capsule = if self.bond.crouched {
-            ([pos[0], pos[1] + 0.65 - self.bond.cc, pos[2]], [pos[0], pos[1] + 0.45 - self.bond.cc, pos[2]])
-        } else {
-            ([pos[0], pos[1] + 0.55, pos[2]], [pos[0], pos[1] + 0.275 - self.bond.cc, pos[2]])
-        };
+        let capsule = collide_capsule(&self.bond, pos);
         // The collide-pass body (the object contacts): `Player_Collision` 0x194df0's switch on
         // substate − 1 — case 0/6 (climb 1 / creep 7) [M :202-222], case 3 (the crouch, substate 4)
         // [M :228-248], the default arm for the walk [M :315-333; the walk 0 rides the default —
         // ladder.rs `capsule_hits_default`]. The other arms (0xb-0xe: wire/zipline family) are not
         // split out here [S] — they take the default.
-        let cc = self.bond.cc;
-        let at = |dy: f32| [pos[0], pos[1] + dy, pos[2]];
-        let body = match self.bond.substate {
-            nf_game::player::SS_CLIMB | nf_game::player::SS_CREEP => (at(0.55), at(0.275 - cc), 0.275),
-            _ if self.bond.crouched => (at(0.1 - (cc - 0.55)), at(0.45 - cc), 0.55),
-            _ => (at(0.275), at(0.55 - cc), 0.55),
-        };
+        let body = collide_body(&self.bond, pos);
         let player = nf_game::drone::Player { pos, target: [camera[0], camera[1] - 0.45, camera[2]], eye: camera, aim: look, sph, hanging, capsule, body,
             // standins-drone-922: the facing yaw the flash factor reads [M 0x12d890:328-330].
             yaw: self.bond.yaw,
@@ -15295,6 +15310,7 @@ impl Sim {
                 alive: self.mp_dead_ticks[slot] == 0 && self.mp_hp[slot] > 0.0,
                 pos: b.pos, sph: b.sphere_centre(), head: b.head(), cel: cel_of(b.pos),
                 hanging: matches!(b.substate, nf_game::player::SS_WIRE | nf_game::player::SS_ZIPLINE),
+                body: collide_body(b, b.pos), crouched: b.crouched, capsule: collide_capsule(b, b.pos),
                 armour: self.mp_armour[slot],
                 dual: self.mp.as_ref().is_some_and(|m| m.settings.dual_wield(slot)),
             });
@@ -15311,7 +15327,7 @@ impl Sim {
                 let sph = nf_game::player::Bond::sphere_centre_at(pos, bt.brain.yaw);
                 v.push(nf_game::drone::NetBody {
                     slot: bt.slot, bot: true, local: false, alive: !bt.dead,
-                    pos, sph, head: e, cel: cel_of(pos), hanging: false, armour: 0.0, dual: false,
+                    pos, sph, head: e, cel: cel_of(pos), hanging: false, body: ([0.0; 3], [0.0; 3], 0.0), crouched: false, capsule: (pos, pos), armour: 0.0, dual: false,
                 });
             }
         }

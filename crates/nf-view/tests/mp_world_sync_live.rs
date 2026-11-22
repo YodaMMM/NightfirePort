@@ -375,3 +375,104 @@ fn phoenix_kill_floor_kills_the_remote_body_on_both_machines() {
     assert!(died[0].is_some() && died[0] == died[1], "both machines kill slot 1 at the same tick: {died:?}");
     assert_eq!(a.sim.as_ref().unwrap().mp.as_ref().unwrap().game.slots[1].deaths, 1, "the death scores through MP_PlayerKilled");
 }
+
+/// How a floor-plate walk is driven: `Sp` = machine A's own body through the single-player step
+/// (`step_bond` with no net row, `Drones::net_bodies` None); `Net(slot)` = both machines through
+/// `net_tick`, slot 0 local on A / slot 1 the remote on A.
+#[derive(Clone, Copy, Debug)]
+enum PlateMode { Sp, Net(usize) }
+
+/// Walks one body with real forward input onto every 07000025 door's floor plate (the kind-2
+/// trigger writing the door's open channel) and returns, per door, whether it opened.
+fn sub_pen_plate_walks(mode: PlateMode) -> Option<Vec<(usize, u16, bool)>> {
+    let path = iso()?;
+    let s = settings(0x0700_0025, 2, 0);
+    let a0 = machine(&path, &s, 0);
+    let plates: Vec<(usize, u16, [f32; 3])> = {
+        let d = &a0.sim.as_ref().unwrap().drones;
+        d.doors.list.iter().enumerate().filter_map(|(k, door)| {
+            let t = d.triggers.iter().find(|t| t.out as u16 == door.ch_open && !t.tris.is_empty() && t.lo[1] == t.hi[1])?;
+            Some((k, door.ch_open, [(t.lo[0] + t.hi[0]) / 2.0, t.lo[1], (t.lo[2] + t.hi[2]) / 2.0]))
+        }).collect()
+    };
+    drop(a0);
+    assert!(!plates.is_empty(), "07000025 has door floor plates");
+    let mut out = Vec::new();
+    for &(k, ch, c) in &plates {
+        let mut a = machine(&path, &s, 0);
+        let mut b = machine(&path, &s, 1);
+        let slot = match mode { PlateMode::Sp => 0, PlateMode::Net(sl) => sl };
+        // Start 2.5 units off the plate on its own floor, facing it.
+        let mut placed = false;
+        for j in 0..8 {
+            let ang = j as f32 * std::f32::consts::FRAC_PI_4;
+            let from = [c[0] + 2.5 * ang.sin(), c[1] + 1.0, c[2] + 2.5 * ang.cos()];
+            let yaw = (c[0] - from[0]).atan2(c[2] - from[2]);
+            let sa = a.sim.as_mut().unwrap();
+            let nb = nf_game::player::Bond::stand_at(&sa.world, from, yaw);
+            if (nb.pos[1] - (c[1] + 0.87)).abs() > 0.5 { continue; }
+            if sa.world.segment(nb.head(), [c[0], c[1] + 0.9, c[2]]).is_some_and(|t| t < 0.99) { continue; }
+            let sb = b.sim.as_mut().unwrap();
+            for sim in [sa, sb] {
+                if slot == sim.mp_local_slot { sim.bond = nb.clone(); } else { sim.mp_bonds[slot] = Some(nb.clone()); }
+            }
+            placed = true;
+            break;
+        }
+        if !placed { eprintln!("door {k} ch {ch}: no clear start beside plate {c:?}"); continue; }
+        let mut opened = false;
+        for t in 0..300u32 {
+            let sa = a.sim.as_ref().unwrap();
+            let bd = body(sa, slot).unwrap();
+            let (dx, dz) = (c[0] - bd.pos[0], c[2] - bd.pos[2]);
+            let dist = (dx * dx + dz * dz).sqrt();
+            let mut i = nf_net::NEUTRAL;
+            i.held = 2;
+            let dy = wrap(dx.atan2(dz) - bd.yaw);
+            i.turn = dy.clamp(-0.08, 0.08);
+            i.forward = if dist > 0.25 { if dy.abs() < 0.8 { 1.0 } else { 0.2 } } else { 0.0 };
+            match mode {
+                PlateMode::Sp => {
+                    let sa = a.sim.as_mut().unwrap();
+                    sa.step_bond(nf_view::mpnet::to_player_input(&i), false, false, false);
+                }
+                PlateMode::Net(sl) => {
+                    let mut row = [nf_net::NEUTRAL; nf_net::MAX_AGENTS];
+                    for r in row.iter_mut().take(2) { r.held = 2; }
+                    row[sl] = i;
+                    let ha = nf_view::net_tick(a.sim.as_mut().unwrap(), &row, 0);
+                    let hb = nf_view::net_tick(b.sim.as_mut().unwrap(), &row, 1);
+                    assert_eq!(ha, hb, "door {k} tick {t}: the machines agree");
+                }
+            }
+            let sa = a.sim.as_ref().unwrap();
+            if sa.drones.doors.list[k].pos01 > 0.0 {
+                if let PlateMode::Net(_) = mode { assert!(b.sim.as_ref().unwrap().drones.doors.list[k].pos01 > 0.0, "door {k} opens on both machines"); }
+                opened = true;
+                break;
+            }
+            if t == 299 { let bd = body(sa, slot).unwrap(); eprintln!("door {k} ch {ch}: body ended at {:?} (plate {c:?})", bd.pos); }
+        }
+        eprintln!("{mode:?}: door {k} ch {ch} plate {c:?} opened {opened}");
+        out.push((k, ch, opened));
+    }
+    Some(out)
+}
+
+/// Every human body presses a floor door plate the way single-player Bond does: each MP player
+/// is its own `Player_Init` 0x1910f8 control object whose obj+0xD4 is BL+0x740 [M :32-39], and
+/// `Player_Update` 0x193600 runs `Player_Collision` 0x194df0 on it [M :361] (indexed by the
+/// slot's MPGame row, BL+0x94E [M 0x194df0:73]), so the body HITTEST segment reaches the plates
+/// for every slot, local or remote.
+#[test]
+fn sub_pen_floor_plates_open_doors_for_every_body() {
+    let Some(sp) = sub_pen_plate_walks(PlateMode::Sp) else { eprintln!("skip: NF_ISO not set"); return };
+    let local = sub_pen_plate_walks(PlateMode::Net(0)).unwrap();
+    let remote = sub_pen_plate_walks(PlateMode::Net(1)).unwrap();
+    let sp_open: Vec<usize> = sp.iter().filter(|x| x.2).map(|x| x.0).collect();
+    assert!(!sp_open.is_empty(), "single-player Bond opens a sub pen door from its floor plate: {sp:?}");
+    for (name, r) in [("local", &local), ("remote", &remote)] {
+        let open: Vec<usize> = r.iter().filter(|x| x.2).map(|x| x.0).collect();
+        assert_eq!(open, sp_open, "the {name} MP body opens the same doors from their plates as SP Bond: {r:?} vs {sp:?}");
+    }
+}
