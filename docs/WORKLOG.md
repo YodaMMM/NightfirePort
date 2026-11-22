@@ -357,3 +357,22 @@ lever from the ignore message. Helpers stay gated to the level and the difficult
 input only, no top-ups, never lower damage or health, never change guard code; each lever
 judged on its own real run. Whole walkreal_0700000d_live before finishing.
 Report: docs/reports/retune-nb-0d-16.md.
+The round-16 outcome: BOTH walks still RED on the batch-3 merged tree. The re-measure
+(Agent first): the committed 11000/45 shape dies t4397 at the ladder top (the batch-3 ledger
+reproduced) and the 00agent 0d-15 green is broken by batch 3 too (t3995, 4 hits for 100.0, the
+same ladder top, pre-edit). The ledger's best shape (3000/60 + 11000/45) reaches the yard
+landing and dies t19710/t19740 — THE NEW FACT: the death is INSIDE the landing sweep's own
+pass-3 act (Bond stands the 200-tick cap while the unpicked chippers #2/#7 finish him; "0
+return-fire fights" — the fight answer never engages; the fight-pin theory refuted). The
+round-16 d2-gated lever set (the d1-proven sweep discipline: the 200 caps + the failed
+blacklist + the standing posture; the pool floor 18; the skip-return-fire; the fast stand
+re-open to (142,-291.5) + the second sweep) EXECUTED end-to-end — the floor broke at pool 6.5,
+the stand walk fast-arrived +64, the re-open ran from health 2.25 armour 0, the death moved
++402 deeper (t20142); the pool is the wall (29.4 of falls = raw 42 x 0.7). The ignore message
+carries the refreshed ledger + the next levers (the hop/fall re-tune, the d3 acts gated to d2,
+the floor/cap re-tune). Whole binaries: walkreal_0700000d_live 2/1/2 (the d1 + plain GREEN,
+the byte-identity holds), interactables_0700000d_live 11/0. The suite per-binary (the fast
+runner killed by the sandbox between tool calls, the 5.5 GB four-crate wall hit twice): the
+three non-view crates TOTAL 2153 passed / 71 failed / 11 ignored (the slim-ISO permitted
+misses, the dump/probe tools, and the driving_* set pre-existing on the merged master). The
+report: docs/reports/retune-nb-0d-16.md.
