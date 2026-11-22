@@ -443,3 +443,11 @@ resuming walk died t5260 at d 4.9). Both reverted. Whole 08 binary 6/0/1 on the 
 Next: the machine fight from the anchor at health 2.0 + armour 50.0 (the salvos are the
 wall), fed by the upstream banks (the deck fight's 60.0). Report:
 docs/reports/retune-nb-08-21.md.
+## retune-nb-08-22
+Branch start: cloned fresh (sandbox reset), branch from master 9fff71e1c with 08-20 and
+08-21 merged (08-21 was not on master; clean fast-forward, 08-20 is its ancestor). Round 22
+goal: the whole-mission 00 Agent real-damage walk green again. The task's law: the lever must
+SAVE HEALTH BEFORE THE ANCHOR (an earlier fight skipped, taken from cover, or done in a
+different order) — Bond reaches the machine-fight anchor at 2.0 health. Skip every lever the
+ledger marks measured dead; take the next untried one from the ignore message. Judge each
+lever on its own real run. Whole walkreal_07000008_live binary at the end.
