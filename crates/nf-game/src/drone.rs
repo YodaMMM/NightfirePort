@@ -13663,10 +13663,6 @@ pub fn player_hit_damage(t: &nf_formats::tuning::Tuning, level: u32, raw: f32, w
 /// pathology returns.
 const PANE_RIDE: bool = true;
 const BREAK_WORLD_STOP: bool = PANE_RIDE;
-/// `HostageIdle` 0x15ce60:28-33 / `HostageHide` 0x15cfe0:23-29: the near-armed-guard poll is
-/// ported in `Drones::tick` but held off: with it on, the 07000003 real-damage route walks re-time
-/// around the rescued captives (measured 6/6 to 4/6). Flip after that walk is re-tuned.
-const HOSTAGE_POLL_LIVE: bool = false;
 
 pub struct Drones {
     pub list: Vec<Drone>,
@@ -21821,18 +21817,6 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // (+0xC5) / corpse / health / position / already-paired (+0x2B0) per drone.
         let hostage_pool: Vec<(u8, bool, f32, V3, bool)> = self.list.iter()
             .map(|x| (x.mode, x.corpse, x.health, x.pos, x.captor.is_some())).collect();
-        // inert-notes-drone-b: the armed team-1 candidates for the HostageIdle/HostageHide pair's
-        // `NearArmedDrone(20.0, 0)` poll — `NDrone2_NearArmedDrone` 0x177420's filter: the
-        // candidate present/enabled/non-corpse/health > 0 (the port's fold of the game's
-        // +0x4F8&0x600==0 / &0x100 set / +0xAC>0 / +0xFE bit 0 clear [M 0x177420:57-77], the same
-        // fold the bunching peers document), team byte +0x44 == 1 [M 0x177420:100], and the
-        // weapon-id byte armed — 2..=0x46 | 0x6a..=0x71 [M 0x177420:88-98, the 0x178768 fold the
-        // port's `obj_armed` carries]. Positions snapshot before the mutable borrow (the
-        // captor_pool pattern).
-        let armed_team1_pool: Vec<(usize, V3)> = if !HOSTAGE_POLL_LIVE { Vec::new() } else { self.list.iter().enumerate()
-            .filter(|(_, x)| x.present && x.enabled && !x.corpse && x.health > 0.0
-                && x.team == 1 && x.obj_armed())
-            .map(|(i, x)| (i, x.pos)).collect() };
         let mut killer_binds: Vec<(usize, usize)> = Vec::new();
         // door-guard-pairing: `SetDronePartner` (0x141360) + `NDrone2_DoorGuardHandler` (0x1416d8)
         // for the CivilianDoorGuard pairs. The game pairs inside the 0x31 ENTER and runs the zone
@@ -23084,37 +23068,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 };
                 if freed { dr.set_state(state::HOSTAGE_SAVED); }
             }
-            // inert-notes-drone-b: the HostageIdle/HostageHide pair's per-UPDATE poll — the arm
-            // the drone.rs:9291 note says is "not ported". HostageIdle 0x15ce60 case 3
-            // [M 0x15ce60:28-33]: `NDrone2_NearArmedDrone(20.0, 0)` (0x41a00000) non-zero →
-            // SetState(0xe HostageHide); HostageHide 0x15cfe0 case 3 [M 0x15cfe0:23-29] is the
-            // MIRROR — nobody armed within 20 → SetState(0xd HostageIdle). The filter is
-            // `armed_team1_pool` above; the distance is the game's Vec_Dist3D against the 20.0
-            // arg [M 0x177420:101-104] and the poll ends in
-            // `DroneVision_CanSeeObjectFrom(hostage, candidate, 5, head, cel, 0)` [M 0x177420:
-            // 106-112] — the port's flat `World::line_of_sight` head→candidate stand-in [S, the
-            // shape the sight helpers use]. The census: no drone on the 34 on-foot levels STARTS
-            // in these states (0 rows [D inert_notes_census_b]) — the states are reached in play
-            // through the rescue flow above (HostageSaved → Hide), so the poll's population is
-            // play-only.
-            // HELD INERT (HOSTAGE_POLL_LIVE) — inert-notes-drone-b measured the blocker with the
-            // poll LIVE: walkreal_07000003_live's real-damage full-route walks regress 6/6 → 4/6
-            // (the route's rescued captives — the east captor-room cluster — enter HostageHide
-            // through the HostageSaved flow, and the game's own poll [M 0x15cfe0:23-29] then
-            // re-hides/returns them around the route's armed team-1 guards, shifting the tuned
-            // walk). Pre-fix the same runs pass 6/6; with the poll on they fail reproducibly.
-            // The poll below is the faithful port (the filters pinned at `armed_team1_pool`);
-            // flipping it needs the 07000003 walk re-tune round — see
-            // docs/reports/inert-notes-drone-b.md, "What's left".
-            if HOSTAGE_POLL_LIVE && (dr.state == state::HOSTAGE_IDLE || dr.state == state::HOSTAGE_HIDE) {
-                let near = armed_team1_pool.iter().any(|(i, p)| {
-                    *i != index
-                        && ((p[0] - dr.pos[0]).powi(2) + (p[1] - dr.pos[1]).powi(2) + (p[2] - dr.pos[2]).powi(2)) <= 400.0
-                        && d.world.line_of_sight(dr.head(), *p, crate::world::LOS_GUARD_VISION)
-                });
-                if dr.state == state::HOSTAGE_IDLE && near { dr.set_state(state::HOSTAGE_HIDE); }
-                if dr.state == state::HOSTAGE_HIDE && !near { dr.set_state(state::HOSTAGE_IDLE); }
-            }
+            // The HostageIdle/HostageHide pair's `NearArmedDrone(20.0, 0)` poll [M 0x15ce60:28-33 /
+            // 0x15cfe0:23-29] is the `armed_drone_near` pre-pass (the hostage-state loop beside the
+            // bunching pass) read by the two states' UPDATE arms; a second in-tick copy that once
+            // stood here (gated off) was removed: it set the state outside UPDATE and aimed its
+            // sight ray at the candidate's feet instead of the bone CanSeeObjectFrom reads
+            // [M 0x176f18: class 2/3 targets GetBonePos].
             // `NDrone2_SetupHostageKiller` 0x144030 + the two killer DSTATEs' timer beats, run in the
             // tick because both need the other drones: the pairing (HostageKiller ENTER [M 0x15c728:21-29]
             // — nearest unpaired hostage-state drone; none → the fail arm's Idle 4 [M :27-29]) and the
