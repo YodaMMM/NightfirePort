@@ -451,3 +451,25 @@ SAVE HEALTH BEFORE THE ANCHOR (an earlier fight skipped, taken from cover, or do
 different order) — Bond reaches the machine-fight anchor at 2.0 health. Skip every lever the
 ledger marks measured dead; take the next untried one from the ignore message. Judge each
 lever on its own real run. Whole walkreal_07000008_live binary at the end.
+
+Round 22, second session (sandbox reset, all setup redone from scratch): the round's first
+session had already shipped the WEAVING fight stands (the anchor reached at 37.0 health +
+armour 50, was 2.0) — the walk still red at t21154. This session took the ledger's item (3),
+the excursion legs' stop discipline, and judged FOUR own real runs: variant 1 (stops between
+the legs) WASH — leg 1 paid x0.75 unlatched (the arrival ease held +0x1DC non-zero), a row
+landed DURING a stop, the 120-tick first-moved window expires inside the 330-tick crawl legs
+(death t22980); variant 2 (+ the pre-leg stop) banked the pit (24 -> 12) but the ~100-tick
+pace shift re-rolled the boarding ledge's unseen pair — #27 burst 28.0 where the shipped
+stream paid ZERO (death t20785); VARIANT 3 SHIPPED — the pre-leg stop ALONE (6 no-input
+ticks before the first descent leg, the stream shift 6 ticks): pit 24.0 -> 12.0, the
+mid-game transit clean, the machine-fight entry armour 0.0 health 49.0 (best ever), death
+t25843 — the deepest walk yet (+4260 over the merged-tree baseline t25783), killed by ONE
+kind-44 reply blast -45.00 (d 3.5) into exactly the 45.0 health left. A fourth run (the
+anchor shifted 0.35 u NE) TRIED and REVERTED: the dive launch window closed (ZERO launches,
+hp 598 untouched) and the fight re-dealt into a 19-zap stalemate (death t27890) — and it
+pinned that the kind-44 reply is the machine's response to Bond's OWN rocket (suppressing
+the launch is self-defeating). Whole walkreal_07000008_live binary on the final tree:
+6 passed / 0 failed / 1 ignored, 272.28 s. nf-game lib 1080/0/4, nf-audio all green. The
+refreshed ledger + the next levers (the kind-44 reply answer that keeps the launch, the
+crawl legs' in-walk stop discipline, the armour-entry timing) are in the ignore-message
+comments. Report: docs/reports/retune-nb-08-22.md.

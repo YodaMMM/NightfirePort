@@ -5,7 +5,8 @@
 - Setup from scratch (the sandbox reset between sessions): clone, the verified
   369823203-byte ISO archive, work-slim (7z extracted from the 7zip deb into a user
   prefix — no root, no system 7z), rustup stable 1.100, the ALSA headers via the
-  user-prefix `PKG_CONFIG_PATH`, `cargo fetch`, the nf-queue worktree (`git worktree add`).
+  user-prefix `PKG_CONFIG_PATH`, `cargo fetch`, the nf-queue worktree (fetched origin
+  queue, `git worktree add ../nf-queue origin/queue`).
 - The branch `s/retune-nb-08-22` already existed on origin (this round's first session
   had pushed it): checked out and continued. It is master 9fff71e1c + `s/retune-nb-08-20`
   + `s/retune-nb-08-21` merged, and already carried the round's first shipped lever —
@@ -50,21 +51,34 @@
 - The refreshed ledger (the three variant runs, the new state, the next levers) is
   appended to the target test's ledger comments in the ignore message. The walk is STILL
   RED: the last killer is ONE row — the machine's kind-44 rocket blast −45.00 at t25843
-  (explosion damage 100.0 radius 8.0 → the falloff puts Bond d ≈ 4.4 off the centre)
-  after two −2.00 zaps, armour 0.0, health 45.0 when it landed: death by EXACTLY zero
-  margin. Next levers (in the ledger): (1) the kind-44 rocket answer (the dodge package
-  does not read this round class; or the stand spot ~1.0 u along the trench → the blast
-  −36.25 and the walk survives); (2) the pit pair's remaining 12.0 (a stop earlier than
-  the excursion re-latches the approach walk's last leg); (3) the armour-entry timing
-  (the ledge armour box vs the boarding chunk's drain).
+  (explosion damage 100.0 radius 8.0, d 3.5) after two −2.00 zaps, armour 0.0, health
+  45.0 when it landed: death by EXACTLY zero margin.
+- **A fourth run (the ledger item (1)'s naive form) TRIED and REVERTED on its own real
+  run:** the d3 fight anchor shifted 0.35 u north-east along the trench plate ([113.55,
+  −179.05]) to buy ~0.4 u of reply miss. MEASURED [L the lever22d run]: the upstream
+  stream is byte-identical (the 12.0-pit bank and the 49.0-entry preserved — the anchor
+  walk runs after the shoot-out), but the dive launch window CLOSED (line_ok false at
+  every hind sample, aim_yaw_err blowing up 0.009 → 3.062 after t100, ZERO launches, the
+  machine hp 598 untouched — the round-12 anchor-move law repeats), the fight re-dealt
+  into a 19-zap stalemate (t25788-26301) and the walk-back/dodge walked Bond WEST onto
+  the band corner (110.9, −179.1) for the killing w62 missile: death t27890. Two ledger
+  facts pinned: (a) **the kind-44 reply blast is the machine's response to Bond's OWN
+  rocket** (no launch → no reply) — answering it by suppressing the launch is
+  self-defeating, the answer must keep the launch and dodge the reply in flight; (b) the
+  shifted spot's walk-back can drive Bond west onto the band (the round-13 lever-3 death
+  class). The anchor reverted to the round-12 SE spot; the shipped state stays variant 3.
 
 ## How it was verified
 
 - Each lever variant judged on its own real run: the whole d3 00-Agent walk with
   NF_DMG_TRACE from the level load, real input only, no top-ups [L the 2026-11-22 runs:
-  lever22a/b/c — sandbox scratch, the numbers are quoted in the ledger].
+  lever22a/b/c/d — sandbox scratch, the numbers are quoted in the ledger].
+- The reverted-tree target walk re-run reproduces variant 3 BYTE-CONSISTENT: death
+  t25843, "39 hits for 77.0 + other 23.0, 20 return-fire fights", fight entry armour
+  0.0 health 49.0 [L the final22 run].
 - The whole `walkreal_07000008_live` binary on the FINAL tree (the shipped variant 3 +
-  the ledger comments): **6 passed / 0 failed / 1 ignored (the target walk), 276.59 s**
+  the ledger comments — the anchor comment edits are comments only, the ANCHOR const is
+  the shipped value): **6 passed / 0 failed / 1 ignored (the target walk), 272.28 s**
   [L the final-tree run]. The change is test-file-local and d3-gated by construction
   (every `fight_guards_wide` call site is difficulty >= 3): the d1/d2 sisters and every
   other walk in the binary stayed green.
@@ -78,18 +92,29 @@
 
 ## What's left
 
-- The walk is still red (death t25843, one kind-44 rocket blast past a 49.0-health,
-  0.0-armour fight entry). The next levers are in the ignore message's ledger comments:
-  the kind-44 rocket answer first (the dodge's round-class read or the stand spot along
-  the trench), the pit pair's remaining 12.0, the armour-entry timing.
+- The walk is still red (death t25843, one kind-44 reply blast past a 49.0-health,
+  0.0-armour fight entry). The next levers are in the ignore message's ledger comments,
+  updated after the fourth run: the kind-44 reply answer that KEEPS the launch (the
+  dodge's round-class read widened to the machine's in-flight kind-44 rocket — the reply
+  is the machine's response to Bond's own rocket, so suppressing the launch is
+  self-defeating), the pit pair's remaining 12.0 (the t4933 row is the opening-volley
+  poll's own trigger; the crawl legs need an in-walk_nav_to stop discipline — shared,
+  opt-in, all walkreal binaries re-run), the armour-entry timing (the ledge armour box
+  vs the boarding chunk's drain).
 
 ## Suite
 
-- The chunked fallback on the final tree: nf-game lib binary 1080 passed / 0 failed /
-  4 ignored; the walkreal_07000008_live binary 6 / 0 / 1 (above). The remaining crates
-  did not fit the window (the sandbox expires ~21:01 UTC; the report and the finish
-  steps take priority — the touched-code rule is satisfied: the whole change is the one
-  test file, and its whole binary ran clean).
+- The background fast runner (`tools/test/suite.py`) was started twice and killed
+  between tool calls both times (the rounds 13-21 kill pattern — suite.out empty, the
+  process gone). The documented chunked fallback ran on the final tree, the chunks that
+  fit the window [L this session's runs]:
+  - nf-game lib binary: **1080 passed / 0 failed / 4 ignored** (1.15 s).
+  - nf-audio: all binaries green (29+1+4+3 passed, 0 failed).
+  - the `walkreal_07000008_live` binary whole: **6 / 0 / 1**, 272.28 s (above).
+  - nf-formats and the rest of nf-view did not fit the window (the sandbox expires
+    ~21:01 UTC; the report and the finish steps take priority). The touched-code rule
+    is satisfied: the whole change is the one test file, and its whole binary ran
+    clean twice.
 
 ## Usage
 

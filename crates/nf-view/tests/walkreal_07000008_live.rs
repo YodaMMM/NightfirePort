@@ -2689,6 +2689,17 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         let ANCHOR: [f32; 2] = if difficulty >= 3 { [113.3, -179.3] }
             else if difficulty == 2 { [110.98, -179.31] }
             else { [111.09, -179.72] };
+        // retune-nb-08-22 round 3: the anchor shift TRIED and REVERTED on its own real run —
+        // 0.35 u north-east along the trench plate ([113.55, -179.05]): the dive launch window
+        // CLOSED (line_ok false at every hind sample, aim_yaw_err blowing up 0.009 -> 3.062
+        // after t100, ZERO launches, the machine hp 598 untouched — the round-12 anchor-move
+        // law repeats) and the fight re-dealt into a 19-zap stalemate (t25788-26301) that
+        // ended on the west band's missile at t27890 [L the 2026-11-22 lever22d run]. Two
+        // ledger facts this run pinned: (a) the kind-44 reply blast is the machine's response
+        // to Bond's OWN rocket (no launch -> no reply) — answering it by suppressing the
+        // launch is self-defeating; (b) the walk-back/dodge can walk Bond WEST onto the band
+        // corner from the shifted spot (110.9, -179.1, the round-13 lever-3 death class). The
+        // shipped d3 anchor stays the round-12 SE spot [113.3, -179.3].
         // The zap detector: the newest player_hit is a world hit (owner past the drone list)
         // whose frame is fresh — the volume law's −2.0 rows (run-bleed4-4: frames 20344-20441,
         // (113.0, 13.5, −180.6), no explosion lines).
@@ -4128,16 +4139,23 @@ launch, the ride-free path also skips the chain.
 // ROW: the machine's kind-44 rocket blast −45.00 at t25843 (explosion damage 100.0 radius 8.0
 // → the falloff puts Bond d ≈ 4.4 off the centre) after two −2.00 zaps (t25788/t25817), armour
 // 0.0, health 45.0 when it landed — health 45.0 vs blast 45.0, death by EXACTLY zero margin.
-// NEXT LEVERS (priority): (1) THE KIND-44 ROCKET ANSWER — the dodge machinery (round 7's w62
-// package) does not engage this round class (owner −1 world blast; the salvo gate reads the
-// live w62 rounds): either widen the dodge's round-class read to the machine's in-flight kind-44
-// rockets, or move the stand spot ~1.0 u along the trench (the blast −45.00 → −36.25 at d 5.1
-// survives with 8.75 and the low-band launch windows continue); (2) the pit pair's REMAINING
-// 12.0 — the t4933 pre-latch round is in flight before the excursion starts; a 6-tick stop
-// EARLIER (before the burn-spot arrival leg re-aims) would re-latch the approach walk's last
-// leg too; (3) the armour entry — this deal drained the armour 50 → 0 during the boarding chunk
-// while the shipped deal kept 50: the ledge armour box timing (round 8's item (3)) decides
-// whether the rocket's residue meets armour instead of health.
+// NEXT LEVERS (priority), updated after the round-3 window's fourth run: (1) THE KIND-44
+// REPLY ANSWER — MEASURED this window: the reply blast is the machine's response to Bond's
+// OWN rocket (the anchor-shift run suppressed the launch and the reply never came — but the
+// launch is required: hp 598 / 101 per rocket), so the answer must KEEP the launch and dodge
+// the reply in flight: widen the round-7 dodge package's round-class read to the machine's
+// in-flight kind-44 rocket (the salvo gate reads only the w62 rounds now), or shift the stand
+// spot in a way that PRESERVES the dive launch line (the naive 0.35 u NE shift measured DEAD:
+// line_ok false at every sample, ZERO launches, a 19-zap stalemate death t27890 [L the
+// lever22d run] — the round-12 anchor-move law repeats); (2) the pit pair's REMAINING 12.0 —
+// the t4933 row is the OPENING-VOLLEY POLL's own trigger (the poll breaks WHEN a round lands,
+// the pick's naming round), so it cannot be dodged without re-designing the poll; the
+// excursion legs' remaining rows (t5032/t5151 class) ride the 330-tick crawl legs whose
+// 120-tick latch window expires mid-leg — a stop discipline INSIDE walk_nav_to (the shared
+// helper, opt-in, all walkreal binaries re-run) would cover the crawls; (3) the armour entry
+// — this deal drained the armour 50 → 0 during the boarding chunk while the shipped deal kept
+// 50: the ledge armour box timing (round 8's item (3)) decides whether the reply's residue
+// meets armour instead of health.
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
