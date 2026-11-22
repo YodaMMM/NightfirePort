@@ -122,6 +122,36 @@ fn launch_line_clear(sim: &nf_view::scene::Sim, to: [f32; 3]) -> bool {
     })
 }
 
+/// retune-nb-08-19: the SAME three-source launch-line cast with the sisters' sag band —
+/// a stop at or beyond 80 percent of the way to the machine is the cable sag the GUIDED
+/// round threads, not a wall next to Bond. Evidence: the 2026-11-22 lever run's [08 hind
+/// t0] dump — the eye/gunR/gunL rays to the DIVING machine (y 12.86, d 48.4) all stop
+/// t0.936 at (83.3,12.9,−213.2), 45 u from Bond and 2.4 u from the machine — the gondola
+/// cable's sag the round detonates beside, damaging the machine (the blast radius 8
+/// [L ee_start_05.bin @0x2bf150 + 0x2C·0x10C; M Explode_Propagate 0x17c518 case 0]). The
+/// two sibling sight gates already read exactly this band as clear: `eye_sees` and
+/// `machine_lane_clear` accept stops t >= 0.8 [L the round-12 run's t0 row: "line_ok
+/// false on the t0.936 sag stop alone" — the sag was the ONLY blocker and the launch
+/// fired at t49 once the machine flew past the crossing], and the measured launches'
+/// own stops were t0.85-0.95 (the file's sight-gate comment). A detonation at t >= 0.8
+/// of a launchable pass (l >= 10) is >= 8 u out — at or past the blast's own radius
+/// (radius 8, the falloff zero at k = 8 [M 0x17c518:69-71]) — so it cannot self-blast;
+/// the 0.999 form exists for the NEAR stops (the wall-band t0.02-0.2 class), which stay
+/// rejected. D3 call site only: the sisters' `line_ok` expression is untouched below.
+fn launch_line_clear_far(sim: &nf_view::scene::Sim, to: [f32; 3]) -> bool {
+    let b = sim.bond.pos;
+    let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+    let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+    let right = [cy, 0.0, -fy];
+    let spots = [eye,
+        [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+        [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]];
+    spots.iter().all(|&from| {
+        sim.world.segment_bullet_scoped(sim.world.find_cel(from), from, to)
+            .is_none_or(|t| t >= 0.8)
+    })
+}
+
 /// A player does not board the gondola with a burst-rifle pair alive at 4 u behind him: close
 /// guards (team 1, within 12 u horizontal / 4 u vertical of Bond) are answered with the GUN
 /// (`switch_to_gun` → `stand_and_fire`, the shared fight machinery) before the walk goes on.
@@ -2106,9 +2136,82 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     }
     for _ in 0..240 {
         if w.scene.sim.as_ref().unwrap().gun.weapon == ROCKET { break; }
-        w.tick(Input { switch_to: Some(ROCKET), ..Default::default() }, false);
+        // retune-nb-08-19 (d3 only): AIM AT THE MACHINE DURING THE SWITCH TICKS — the same
+        // ticks do double duty (the switch schedule is unchanged), so the fight loop opens
+        // with the crosshair tracker AND the aim zoom already settled. The 2026-11-22 run
+        // measured why: the dive band's line-true spans (t20, t40 [L the [08 gates] dump])
+        // fell inside the tracker's convergence (yaw_err 0.249 at t20) and the zoom-ramp
+        // wobble (yaw_err 0.180 at t40) — the aim only settled at t30-50, past both spans,
+        // and the dive band (t0-65) closed before a converged tick met an open line. A player
+        // shoulders the launcher and aims at the machine while the switch plays. The sisters'
+        // switch loop keeps its plain Default inputs (their timelines byte-exact).
+        let aim08 = if difficulty >= 3 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let cp2 = sim.drones.copters[ci].pos();
+            let head = sim.bond.head();
+            let to = [cp2[0] - head[0], cp2[1] - head[1], cp2[2] - head[2]];
+            let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(0.01);
+            let dy = to[0].atan2(to[2]);
+            let dp = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
+            Input {
+                switch_to: Some(ROCKET),
+                turn: walker::wrap_pi(dy - sim.bond.yaw).clamp(-0.08, 0.08),
+                look: (dp - sim.bond.pitch).clamp(-0.05, 0.05),
+                aiming: true,
+                ..Default::default()
+            }
+        } else {
+            Input { switch_to: Some(ROCKET), ..Default::default() }
+        };
+        w.tick(aim08, false);
     }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, ROCKET, "the switch to the rocket launcher never landed");
+    // retune-nb-08-19 (round 19): STAND FOR THE ARRIVAL-DIVE LAUNCH — the damage-fraction
+    // approach, judged on its own real run. The round-18 ride-free shape (crouch through the
+    // dive, zero launches) is measured unwinnable: the Hind damage stayed 0.0 of 598 and the
+    // machine never re-dove within 989 fight ticks. The game's own route law says why and what
+    // to do instead:
+    // - [M Copter_Move 0x17d628:63-113] at each route-path END the machine advances to the
+    //   chain path whose +0x16 index equals uVar4, where uVar4 = (uint)(route_path_count *
+    //   damage/(0.9*hp) + 0.5) while the damage fraction is below 0.5, a RANDOM pick at or
+    //   above it (kind-2 paths are skipped, none on 08 [D the 07000008-audit route rows]);
+    //   when no path matches the index the machine LOOPS the current path (t resets to
+    //   path+0x14). With ZERO machine damage the fraction is 0 and the machine can never
+    //   advance — the low windows come only from the spline's own shape.
+    // - [M Copter_Update 0x17dbb8 case 1] the attack state opens every (FRAME_RATE*4)/DiffMod
+    //   ticks (120 at d3) when the player is within 1000 u, inside the view cone, and the
+    //   sight line is clear; case 2 fires gun/missile until FRAME_RATE*5*DiffMod ticks elapse,
+    //   the sight drops, or the machine's own taken damage passes 100 (rec+0x6c > 100.0).
+    // So the ONLY path to machine damage from this anchor is the windows the geometry already
+    // proved: the arrival dive. [L the round-12 SE-anchor run] rocket 1 launched fight t49
+    // (machine y 13.41 <= 13.7) and LANDED -101.0 with ZERO reply-blast rows from this anchor —
+    // and [M 0x17d628] one landed rocket = fraction 101/(0.9*598) = 0.188, which drives
+    // uVar4 off 0 the moment the current path ends (or the loop brings the spline's dive back:
+    // [L the d2 sister's five low-pass launches in 2100 fight ticks] show the low windows
+    // recur on this level once the fight lasts). The player shape: keep the shipped pre-fight
+    // crouch for the approach burst (its savings are measured), then STAND before the fight
+    // loop opens so the standing eye owns the dive's live band t0-t55 [L the round-13 [08
+    // gates] dump] — the crouched eye is ledge-blindfolded there (every bearing stops
+    // 0.02-0.12 u out [L the round-18 t0 sweep]) and can never launch. After the ride the
+    // loop's own burst arm re-crouches him on the first fresh zap (the shipped scheduler;
+    // the arm is gated off while the machine is west+low, so the dive stance holds). The
+    // stand press is the game's own crouch toggle: [M Player_ChangeSubState 0x190630:48-56]
+    // arms the BL+0x960 lockout (FRAME_RATE) on every substate change and [M Player_SSCrouch
+    // 0x1924c0:84-92] reads the stand press only while it is 0 — the crouch press at the
+    // anchorwalk's end is ~150 ticks behind the switch block above, so the lockout is long
+    // expired and one press stands. D3-GATED: the sisters never run this block.
+    if difficulty >= 3 {
+        let mut stood = false;
+        for k in 0..80u32 {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if !sim.bond.crouched { stood = true; break; }
+            if k % 20 == 0 { eprintln!("[08 dive-stand] press k{k} f{} crouched {}", sim.drones.frame, sim.bond.crouched); }
+            w.tick(Input { crouch: true, ..Default::default() }, false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[08 dive-stand] bond {:?} crouched {} stood {stood} f{} copter {:?} — the loop opens standing for the dive's live band",
+            sim.bond.pos, sim.bond.crouched, sim.drones.frame, sim.drones.copters[ci].pos());
+    }
     let mut rockets = 0u32;
     let mut ch4b = false;
     let mut riding = false;
@@ -2372,7 +2475,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                     .segment_flight(from, [from[0] + eff[0] * 12.0, from[1] + eff[1] * 12.0, from[2] + eff[2] * 12.0], true)
                     .is_none() })
         };
-        let line_ok = slit_clear && launch_line_clear(sim, cp);
+        // retune-nb-08-19: the d3 launch line also accepts the SAG band (launch_line_clear_far,
+        // t >= 0.8) — the dive's eye/gun rays stop t0.936 on the gondola cable 45 u out and 2.4 u
+        // from the machine [L the 2026-11-22 run's [08 hind t0] dump], the same band `eye_sees`
+        // and `machine_lane_clear` already accept, and a detonation that far out cannot reach
+        // Bond (the blast radius 8, the falloff zero at k = 8 [M 0x17c518:69-71]). The 0.999
+        // form stays first so the near-stop rejections are byte-identical; d1/d2 short-circuit
+        // before the far cast (their timelines unchanged).
+        let line_ok = slit_clear && (launch_line_clear(sim, cp) || (difficulty >= 3 && launch_line_clear_far(sim, cp)));
         // The doorway fight: Bond rode down INSIDE the carriage (the cabin floor is the origin's
         // −4.5 [D stream 1; the ride logs]) and the game's fight is fought from in here — the
         // cabin's west doorway (the opening he boarded through at the top; the wall band's
@@ -2740,7 +2850,26 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         if rocket.is_some() != riding {
             riding = rocket.is_some();
             let now = sim.drones.copters[ci].damage;
-            if riding { rockets += 1; launch_damage = now; } else { best_rocket = best_rocket.max(now - launch_damage); }
+            if riding { rockets += 1; launch_damage = now; } else {
+                best_rocket = best_rocket.max(now - launch_damage);
+                // retune-nb-08-19: the POST-RIDE CROUCH — the moment the rocket is gone, the
+                // launch's work is done and the standing rim stance is pure exposure: the
+                // 2026-11-22 lever run measured the machine entering its ATTACK state (2)
+                // [M Copter_Update 0x17dbb8 case 1-2: the cone+sight check every
+                // (FRAME_RATE*4)/DiffMod ticks] within 125 ticks of the ride end and a kind-98
+                // missile detonating d 1.1 for -10.00 at fight t815 — the standing Bond was the
+                // target. The crouched pit stance is the measured stealth: the round-18
+                // run took ZERO machine rows in 989 fight ticks crouched (the machine fires
+                // at the last-seen rim spot; the rim hides the pit). The burst-hold scheduler
+                // below does exactly this on a fresh zap; the ride end re-arms it directly
+                // (the ride's substate changes re-arm the stand/crouch lockout [M
+                // Player_ChangeSubState 0x190630:48-56], the hold's presses land once it
+                // expires). The west stand gate still stands Bond for the machine's next
+                // western low pass (the gate reads cp[1] <= 13.7 && cp[0] <= 111.0), so the
+                // second launch window stays open. D3-GATED: the sisters never run the
+                // scheduler block.
+                if difficulty >= 3 { burst_hold = 160; }
+            }
             eprintln!("[08 rocket] t{t} {} — damage {:.1} hp {hp} dist {l:.1} from {from:?} copter {cp:?} clip {} bullets {}",
                 if riding { "launched" } else { "gone" }, sim.drones.copters[ci].damage,
                 sim.drones.inventory.clip.get(ROCKET as usize).copied().unwrap_or(0),
@@ -3679,6 +3808,69 @@ launch, the ride-free path also skips the chain.
 // spare 27-41, the 14 u corridor walk death t1325, the 9 u corridor walk death t1759 —
 // every walk-under-fire variant costs more than the armed tail saves). NEXT LEVER: (3) the
 // Hind outlast (the route period pin, the live check in the report).
+// SHIPPED/MEASURED 2026-11-22 round 19 (retune-nb-08-19, still red — the death moved +428
+// ticks to t29335 and the machine took its first dive-window damage since round 12): the
+// branch is origin/master b5278f0d1 + 08-18 merged (08-18 was not on master; master had not
+// moved). THE DIVE-CADENCE READ (the round-18 ledger's item (3)) DONE AS [M] CODE READS:
+// - [M Copter_Move 0x17d628:63-113] at each route-path END the machine advances to the chain
+//   path whose +0x16 index equals uVar4 = (uint)(route_path_count * damage/(0.9*hp) + 0.5)
+//   while the damage fraction is below 0.5 (a RANDOM pick at or above it; kind-2 paths are
+//   skipped — none on 08 [D the 07000008-audit route rows]) and LOOPS the current path when
+//   no index matches. With ZERO machine damage the machine can never advance: the round-18
+//   ride-free siege was unwinnable BY LAW.
+// - [M Copter_Update 0x17dbb8] case 1 opens the attack every (FRAME_RATE*4)/DiffMod ticks
+//   (120 at d3) on the 1000-u + view-cone + sight check; case 2 fires until
+//   FRAME_RATE*5*DiffMod (600 at d3) ticks, the sight drops, or the taken damage passes 100.
+// LEVER (1) THE DIVE-LAUNCH SHAPE — TRIED and SHIPPED (four d3-gated pieces in the 08 test
+// file only; the sisters byte-exact, the whole binary 6/1):
+//   (a) the DIVE-STAND: after the switch-to-rocket block the walk stands Bond (one press —
+//       the anchorwalk's crouch press is ~150 ticks behind, the lockout long out) so the
+//       fight loop opens STANDING for the dive's live band t0-t65;
+//   (b) the SAG-BAND LAUNCH GATE: the new launch_line_clear_far (the same three-source
+//       cast, t >= 0.8) ORs into line_ok at d3 — the dive's eye/gun rays stop t0.936 on the
+//       gondola cable 45 u out and 2.4 u from the machine [L the 2026-11-22 run's [08 hind
+//       t0] dump]; eye_sees and machine_lane_clear already accept that band; a detonation
+//       >= 0.8 of a launchable pass is >= 8 u out (the falloff zero at k=8 [M 0x17c518]);
+//   (c) the PRE-LOOP AIM: the switch-to-rocket ticks carry the machine aim (d3 only, the
+//       sisters' switch loop untouched) — the 2026-11-22 run measured the dive band's
+//       line-true spans (t20/t40) falling inside the tracker's convergence (yaw 0.249) and
+//       the zoom ramp's wobble (yaw 0.180); aiming during the switch settles both before
+//       the loop opens, and the switch schedule is unchanged;
+//   (d) the POST-RIDE CROUCH: the ride end re-arms burst_hold = 160 — the standing rim
+//       stance drew the machine's ATTACK state (2) within 125 ticks of the ride end and a
+//       kind-98 missile detonated d 1.1 for -10.00 at fight t815 (the intermediate run's
+//       death t28734); the crouched pit stance took ZERO machine rows in ~1100 fight ticks
+//       (the machine fired the whole window at the last-seen rim spot).
+// MEASURED [L the 2026-11-22 NF_DMG_TRACE runs]: the dive launch FIRED at fight t43
+// (machine y 13.18 in the band) and LANDED -101.0 (damage 101.0/598, the ride t43-186,
+// zero reply-blast rows — the round-12 signature reproduced); death t29335 at
+// (113.07,13.09,-179.09) CROUCHED in the pit — +428 vs the round-18 baseline t28907 — 60
+// hits for 100.0, 22 return-fire fights; the whole walkreal_07000008_live binary 6 passed /
+// 1 failed (the target), 167.46 s [L the final-tree run].
+// - the machine NEVER came low again within the sampled 1214 fight ticks: path Some(0),
+//   path-t 1154 at the death (0.5063/t — the path is >2280 ticks long), y 12.86 -> 29.66 —
+//   the next dive is the PATH LOOP's (the dive sat at path-t ~440; the loop brings it back
+//   at path-t ~440 + frame_count), ~700-800 ticks past the death. The route never advanced
+//   (uVar4 = round(N*0.188) needs the path end first).
+// - #25's cadence is the exact budget gap: his rows -6.00/-6.00/-4.00 at ~715 ticks.
+// LEVER (2) THE #25 SUB-FIRE — TRIED and REVERTED on its own runs (two variants): the
+// post-ride gun arm (the guards' own burst rifle 0xa, spare 22 [L the [08] owned dump]) +
+// an in-loop sub-fire at the nearest skin-0x500002f drone DID KILL #25 (his hp 0, his rows
+// stopped) but the death moved 29051/29064 (< 29335): the sub-fire aims Bond NORTH-EAST at
+// #25 (y 23.5), the rotated yaw flips the dodge's anchor-ward side pick (the pick derives
+// its diagonals from bond.yaw [M the dodge's own right/fwd law]), and the next salvo's
+// dodge walked him out of the pit to the west band corner (113.03,13.47,-180.95) where the
+// -15.00 missile blast closed the walk. A future variant must hold the machine bearing
+// through the salvo windows (or pin the dodge's side pick to the anchor bearing, not the
+// live yaw). Also measured: a wrong skin pick wasted 61 rounds on #17 (the station's
+// second skin-0x500002f guard at 79.9 u) — any future pick needs the range gate.
+// NEXT LEVERS (priority): (1) the #25 answer WITHOUT the yaw coupling (the dodge-side pin
+// above, or the sub-fire released well before any salvo window); (2) the fight-order
+// upstream savings (the round-17 item (2), the common/walker.rs most-hits-first pick) to
+// bank the hall trio's -28.0 — the survive-to-path-loop shape needs ~+22 more entry health
+// (the measured gap: #25's -16 + the pit trickle -8 per ~800 ticks vs the entry 26.0);
+// (3) the second-dive window: the flight log shows the loop's dive ~700-800 ticks past the
+// t29335 death — every lever that banks health above moves the death past it.
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair

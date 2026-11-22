@@ -394,3 +394,20 @@ Branch start: sandbox reset, redoing setup. 08-18 not on master: merged it first
 (fast-forward, master had not moved). Round 19 targets: the machine fight cannot be won
 from the current anchor (round-18 finding) — try a different place or approach for that
 fight; levers from the ignore message, skipping measured-dead rows.
+## retune-nb-08-19
+Setup from scratch (sandbox reset): clone, work-slim + the verified 369823203-byte ISO
+archive, rustc 1.100, the user-prefix libasound2/libasound2-dev debs (incl. the runtime
+libasound2t64), cargo fetch. 08-18 not on master: merged it first (fast-forward). THE
+DIVE-CADENCE READ DONE AS [M]: Copter_Move 0x17d628:63-113 advances/loops the route-path
+chain by damage/(0.9*hp) — zero machine damage = no advance ever, the round-18 siege was
+unwinnable by law; Copter_Update 0x17dbb8 case 1-2 pins the attack cadence. Lever (1) the
+DIVE-LAUNCH SHAPE shipped (d3-gated, the 08 test file only): the dive-stand + the
+sag-band launch gate (launch_line_clear_far, t >= 0.8 — the dive rays stop t0.936 on the
+gondola cable) + the pre-loop aim on the switch ticks + the post-ride crouch. MEASURED:
+the dive launch fired t43, LANDED -101.0 (the first dive-window machine damage since
+round 12), death t28907 -> t29335 (+428), zero machine rows on the crouched pit in ~1100
+ticks; the machine's path never advanced (path-t 1154 at death; the loop's dive ~700-800
+ticks past the death). Lever (2) the #25 sub-fire TRIED and REVERTED (two variants): it
+KILLED #25 but the rotated yaw flipped the dodge's side pick and a salvo blast closed the
+walk 271 ticks earlier — ledger material. Whole binary 6/1, 167.46 s [L]. Next levers in
+the ignore message. Report: docs/reports/retune-nb-08-19.md.
