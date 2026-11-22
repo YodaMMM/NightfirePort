@@ -752,6 +752,12 @@ pub struct Sim {
     /// the draw scales it 1 + dist²/MAX_VIEW_CONE (2000.0 [L symtab 0x30d0fc]) capped at 4).
     /// `None` = sight off (no bit, or no first-person datum yet). `laser_on` mirrors the latch.
     pub laser_sight: Option<(nf_game::world::V3, nf_game::world::V3, Option<(nf_game::world::V3, nf_game::world::V3)>)>,
+    /// The laser sight beam's alpha byte obj+0x106, stepped every frame the sight runs
+    /// [M Player_LaserPointer 0x1a65d8:150-171]: ordinary view `+= Rand_Rand(9) − 4`, clamped to
+    /// 0x10..0x30; night sight (viewer+0x236 == 1) `= (byte + 0x3f + Rand_FRand(128)) / 2`. Both
+    /// draws come off the shared seed pair. The start value is [S] 0x20 (the create's byte is not
+    /// traced); the draw does not read it yet (the beam slot has no per-draw alpha).
+    pub laser_alpha: u8,
     /// The level's zip wires (placement type 0x3E, `Wire_Create` 0x1981d8). Bond grabs one by walking
     /// into its world sphere (fix-wire: the real grab + crossing live in `nf_game::player`).
     pub wires: Vec<nf_game::wire::Wire>,
@@ -3421,14 +3427,12 @@ impl Sim {
                 self.hud.info_labels.push_back((h.label, 180.0));
                 if h.sound != 0 { self.drones.audio.play(h.sound); } // 2-D [M 0x1b3380:26]
             }
-            // No walk-in or use-key wire grab: the game's
-            // grab that is certain is the JUMP grab [M Player_HandleJump 0x1916b0:107-147 — action 7 is the
-            // jump (the same press plays the refused-jump sound 0x1db on 07000007), with the icon context
-            // +0x95F == 3], ported in `Bond::physics_tick`. E is action 0xE → `Player_Activate` 0x1a5170, which
-            // has no class-0x2C arm. A walking-pick grab (`Player_DealWithObjHit` 0x194458:104 → CollWire)
-            // exists only if the walking query version reaches `Collide_PickObj`'s world-sphere branch
-            // (versions 0x200/0x201 [M 0x1eae80]) — unproven, and the unculled sphere let 07000002's courtyard
-            // wire swallow Bond in the bunker; left out until measured. `wire_cels` stays for that.
+            // The wire grabs: the JUMP grab [M Player_HandleJump 0x1916b0:107-147, icon context
+            // +0x95F == 3] and the walk-in grab [M Player_DealWithObjHit 0x194458:104 → Player_CollWire;
+            // the walking HITTEST is mode 0x800, whose `Collide_PickObj` 0x1eae80 branch tests the
+            // ×1.5 world sphere, then `Intersect_CylGeom` refines against the wire's own collision
+            // triangles], both in `Bond`. E is action 0xE → `Player_Activate` 0x1a5170, which has no
+            // class-0x2C arm.
 
             let was_on_wire = matches!(self.bond.substate, nf_game::player::SS_WIRE | nf_game::player::SS_ZIPLINE);
             let was_climbing = self.bond.substate == nf_game::player::SS_CLIMB;
@@ -6216,6 +6220,15 @@ impl Sim {
                 let dot = hit.map(|(_, n, _)|
                     ([end[0] + n[0] * 0.01, end[1] + n[1] * 0.01, end[2] + n[2] * 0.01], n));
                 self.laser_sight = Some((datum, end, dot));
+                // The beam's flicker byte, after the ray [M 0x1a65d8:150-171]: night sight takes
+                // Rand_FRand(128) (the char cast of the halved sum), the ordinary view Rand_Rand(9).
+                if self.goggle_mode() == 1 {
+                    let f = self.drones.rng.frand(128.0);
+                    self.laser_alpha = (((self.laser_alpha as f32 + 63.0) + f) * 0.5) as i32 as u8;
+                } else {
+                    let v = self.laser_alpha.wrapping_add(self.drones.rng.rand(9) as u8).wrapping_sub(4);
+                    self.laser_alpha = v.clamp(0x10, 0x30);
+                }
             }
         }
         // `Lights_CalcAmbientLight` (0x1cb178) runs per moving object from `control_movement_object_handler`
@@ -11285,6 +11298,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
             // list. The placement's glist (0x1d1b68) is the wire's geometry record, NOT its cel.
             // `world.find_cel` is the faithful `build_FindCel` port (the ladders use the same).
             let wire_cels = wires.iter().map(|w| world.find_cel(w.centre)).collect::<Vec<_>>();
+            // The walk-in pick's scoping (`Wire::cell` / `Wire::forced`): `Wire_Create` 0x1981d8 runs
+            // `Controls_StraddleTest` 0x134778 on the world sphere — two or more straddled cels put
+            // the wire on the ForcedList, picked from everywhere [M 0x134778, Collide_Pick 0x1eb320
+            // tail]; otherwise only from its own cel's chain.
+            let mut wires = wires;
+            for (w, c) in wires.iter_mut().zip(wire_cels.iter()) {
+                w.cell = c.map(|c| c as u32);
+                w.forced = c.is_some_and(|c| world.debug_straddle(c, w.centre, w.centre, w.radius).len() >= 2);
+            }
             // The third icons (placement kind 0xFA, `ThirdIcon_Create` 0x197070): the interaction
             // contexts written to `BLData+0x95F` each tick (fix-wire2 — the cable's type-3 icons gate
             // the jump-grab). fix-08-walls: each icon carries its object-resolved world sphere
@@ -11424,6 +11446,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 view_aspect: 4.0 / 3.0,
                 zoom_wheel: false,
                 laser_sight: None,
+                laser_alpha: 0x20,
                 fmv_script: None,
                 hurts,
                 // unported-front-end-menus-3: the viewer's shear/swing phases and the underwater
