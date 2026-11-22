@@ -2864,7 +2864,10 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // (t28732). Lever 1000/60 [L the sweep on this tree with the secure-room fight: 1000/60 end
     // health 41.9, five rockets; 800/60, 1000/30, 1000/90, 1200/60, 3000/60, 12000/60, 16000/60,
     // 20000/60 red].
-    walker::with_pause(1000, 60, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
+    // Stream batch 1122 (ChooseCombatMove no longer returns 0x5E on the scan's bit 2 [M
+    // 0x150c18: no +0x31C read]): 1000/60 dies t27069 at the cabin slit (111.14,13.09,-179.34).
+    // Lever 2000/30 [L the 12-value sweep on the joined tree; 100/30, 500/30, 1000/60, 1500/45 die].
+    walker::with_pause(2000, 30, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same

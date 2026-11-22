@@ -2273,7 +2273,11 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage_agent() {
     // Batch 3 (5e9460adb): 4000/90 crosses with 19.3, under the pinned 25; lever 4000/45 [L the
     // 17-value sweep: 3950/45, 4000/45, 4050/45, 4900/60, 5000/60 complete; 4000/30, 4000/60,
     // 3900/90, 4100/90, 5000/45, 5000/90, 5100/60 and 1000-7000/60 fall short or die].
-    walker::with_real_damage_head_hunting(|| walker::with_pause(4000, 45, || walk_spawn_to_the_omega_sector_exit_at(2)));
+    // Stream batch 1122 (ChooseCombatMove no longer returns 0x5E on the scan's bit 2 [M
+    // 0x150c18: no +0x31C read]): 4000/45 dies t9850. Lever 1000/60, exit at 72.9 health [L the
+    // 12-value sweep: 1000/60, 3950/45, 4050/45, 4900/60, 5000/60 complete; 4000/45 and 1500/45
+    // die, 2000/30 crosses at 9.4].
+    walker::with_real_damage_head_hunting(|| walker::with_pause(1000, 60, || walk_spawn_to_the_omega_sector_exit_at(2)));
 }
 
 #[test]
@@ -2381,7 +2385,11 @@ fn walk_spawn_to_the_omega_sector_exit_agent() {
     // moved the fence fights (the #447 range shot's neighbours, the d2 split-south restart,
     // the d2 real-damage death at t10345). Lever: a 90-tick stop at tick 4000, the one value
     // of the 16-value sweep that completes d1, d2, d3 and d2 real damage alike [L].
-    walker::with_pause(4000, 90, || walk_spawn_to_the_omega_sector_exit_at(2));
+    // Stream batch 1122 (the fallback-goal route pull-back AlterDestFor_DROUTE_Nearest
+    // 0x156088 joined): 4000/90 left mine mi3 unexploded at the #447 fence. Lever 2000/30, the
+    // Operative sister's value [L the 13-value sweep: 1000/60, 1500/45, 2000/30, 3000/60,
+    // 5000/60, 6000/60, 8000/60 complete; 500/30, 2000/60, 2600/45, 4000/45, 4000/90 leave mi3].
+    walker::with_pause(2000, 30, || walk_spawn_to_the_omega_sector_exit_at(2));
 }
 
 #[test]

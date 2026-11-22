@@ -8,8 +8,8 @@
 //! The deployable's ground placement — `Collide_PlaceObject` 0x1ecfb8 (the +0.05 y bump, the
 //! 3.0 down ray via `Collide_RayIntersect` flags 0x1D, the normal-offset reseat, the 0x800/0x2000
 //! two-pass triangle pick, the −0.13/0.2/0.96 support gates and the `Mat_Align2Up` fit test [M
-//! 0x1ecfb8:5-70]) — is not ported: its only caller is `GT_DeployMiniGun` 0x181560:57, which the
-//! port has not needed (the mounted turrets spawn placed by their placements) [S].
+//! 0x1ecfb8:5-70]) — is `gt::place_object`: its only caller is `GT_DeployMiniGun` 0x181560:57 (the
+//! Ronin deploy); the mounted turrets here spawn placed by their placements.
 //!
 //! The turret hardware is the `TurretGuns` table [D ACTION.ELF @0x26f520, 12 × 0x1c bytes; LOAD
 //! vaddr 0x107100 = file 0x1000, so file 0x169420]: per entry a 12-byte muzzle offset, the gun
