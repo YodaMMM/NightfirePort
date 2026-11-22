@@ -491,6 +491,7 @@ fn duel_target(w: &mut Walker, label: &str, cap: u32, fixed: Option<usize>) {
     let mut why = "cap";
     let mut hp_watch = f32::MAX;
     let mut taps = 0u32;
+    let mut last_drop = 0u32;
     // A player finishes the guard he is fighting: once locked, the duel stays on him until he
     // drops (the lean-window stream pauses do not break the lock), then re-picks the next
     // recent hitter. Measured without the lock: the duel exited mid-grind at hp 0.2 and the
@@ -544,9 +545,15 @@ fn duel_target(w: &mut Walker, label: &str, cap: u32, fixed: Option<usize>) {
                     locked = Some(hi);
                 }
             }
+            // The fixed arm does NOT read `enabled`: a player aims at any visible guard — the
+            // game's bullets hit ANY present drone [M Drone_CollisionHandler 0x140968:85-95] —
+            // and the tower duel's whole point is engaging #11 BEFORE his AI activates
+            // (measured: at the balcony reach he stands present at hp 20 with enabled clear,
+            // and the enabled-gated duel bailed 0 taps [L this branch's lever-a run]). The
+            // recent-hitter pick arm keeps the gate (it mirrors the shooters' own activity).
             let di = fixed.filter(|&di| {
                 let d = &sim.drones.list[di];
-                d.present && d.enabled && !d.corpse && d.health > 0.0
+                d.present && !d.corpse && d.health > 0.0
             }).or(locked).or_else(|| pick.map(|(di, _)| di));
             let Some(di) = di else { why = "no recent hitter"; break };
             locked = Some(di);
@@ -603,7 +610,18 @@ fn duel_target(w: &mut Walker, label: &str, cap: u32, fixed: Option<usize>) {
             let fire = sim.aiming && !reload && err.abs() < 0.01 && perr.abs() < 0.01
                 && t.saturating_sub(last_tap) >= 4;
             let dhp = sim.drones.list[di].health;
-            if dhp < hp_watch { eprintln!("[06] duel ({label}): #{di} hp {hp_watch:.1} -> {dhp:.1} at +{t}"); hp_watch = dhp; }
+            if dhp < hp_watch { eprintln!("[06] duel ({label}): #{di} hp {hp_watch:.1} -> {dhp:.1} at +{t}"); hp_watch = dhp; last_drop = taps; }
+            // The blocked-line early-out (walk-06-00agent-2): TAPS without a single hp drop mean
+            // the rounds meet the cover geometry, not the guard — measured on the balcony tower
+            // duel: 206 taps for ZERO damage at #11's patrol post (3.96, −55.0) burned the whole
+            // load and the walk fought the mouth DRY (cycling weapons, clip 1 spare 0 [L this
+            // branch's run]). The window counts taps, not ticks, and at 25: the clean grinds
+            // drop every 2-4 taps (the 8-16-tick cadence [L round 1]), a peeking guard pauses
+            // up to ~20 taps between bursts (the round-1 peek law), and the first lever-a run's
+            // 40-TICK window measured PREMATURE — it bailed the strip-approach tower duel with
+            // #11 at hp 9.0 (4 taps short) and the strip duel with #20 at 6.8 [L this branch].
+            // 25 tapless taps still caps a fully blocked line at ~100 ticks / ~25 rounds.
+            if !reload && taps >= 10 && taps - last_drop > 25 { why = "the line is blocked"; break; }
             (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
         };
         if reload {
@@ -988,6 +1006,15 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
     if difficulty >= 3 {
         w.walk_nav_to([10.5, 47.1, -21.8], "the balcony's west reach", 1.6);
         aimed_stand_the_mouth(w);
+        // walk-06-00agent-2 lever (a), MEASURED DEAD here (this branch's own run): the fixed
+        // tower duel from the balcony's west reach landed ZERO of 206 taps on #11 at his patrol
+        // post (3.96, 55.5, −55.0) — the shallow 0.26-rad up-angle puts the rounds into the
+        // tower's own geometry (the torso box the strip approach's 0.57-rad line landed on is
+        // behind the parapet from here), the duel burned the whole load (bailed DRY, clip 0
+        // spare 0) and the walk fought the mouth starving (cycling weapons, clip 1 spare 0).
+        // The duel discipline now carries the blocked-line early-out, but the spot stays
+        // retired: the answer moved to the sight-edge stop (the ledger's own placement, whose
+        // 0.51-rad up-angle matches the proven strip line).
         // THE DROP (real-health-00agent-06-3, measured on master c2c4a6e): with the stands
         // done the player walks west off the balcony — the game's own route (the d1 pin: the
         // route's first plate IS the drop poly #664). Without the walked drop the mouth nav
@@ -1144,6 +1171,12 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         // over their posts (the deck y 48, 06-2's lever 1) out-ranges their sight.
         if difficulty >= 3 {
             w.walk_nav_to([6.0, 42.0, -26.0], "the strip lane's sight edge", 1.2);
+            // walk-06-00agent-2 lever (a) at the sight edge: MEASURED DEAD (this branch's own
+            // run) — the fixed duel locked #11 at his old post (−0.50, 55.5, −51.1) hp 20 and
+            // the blocked-line early-out bailed at 10 taps with ZERO drops: the 0.51-rad
+            // up-angle from z −26 meets the tunnel arch's top face, not the torso box the
+            // strip approach's 0.57-rad line lands on [L this branch]. The strict-ray stands
+            // here stay skipped at 00 (the round-1 gate below).
             // walk-06-00agent lever 2's own run: the strict-ray stand HERE stands Bond in the
             // pair's stream for its cap while the muzzle-flash duel answers the same shooters
             // without the exposure gate (the pair's rays open only inside their 12 u sight
@@ -1163,6 +1196,24 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         // symmetric hit model decides. The pick needs a recent hit (the muzzle-flash evidence);
         // a mop-up pass after the 8-u fight answers a stream that resumes.
         if difficulty >= 3 && !w.tops_up() {
+            // walk-06-00agent-2 lever (a), third placement, judged on its own real run: the
+            // FIXED tower duel from the strip approach — the only angle with a PROVEN line to
+            // #11 (the baseline's duel taps landed 13.4 → 2.4 here, dy/dz = 0.57 rad; the
+            // balcony's 0.26 and the sight edge's 0.51 both measured ZERO drops [L this
+            // branch's runs]). He stands at his old post (−0.5, 55.5, −51.1) hp 20 while
+            // dormant — the fixed arm engages him regardless (the game's bullets hit ANY
+            // present drone [M Drone_CollisionHandler 0x140968:85-95]) — and ten landed torso
+            // taps end him BEFORE his full-auto owns the strip fight. The recent-hitter duel
+            // below then takes the ch-55 pair with the pool intact.
+            let tower = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
+                && d.health > 0.0 && d.team == 1 && d.pos[1] > 50.0 && dxz(d.pos, [-0.4, 55.5, -51.0]) < 8.0) };
+            if let Some(di) = tower {
+                eprintln!("[06] the tower duel (lever a): drone {di} at {:?} hp {:.1}",
+                    w.scene.sim.as_ref().unwrap().drones.list[di].pos, w.scene.sim.as_ref().unwrap().drones.list[di].health);
+                duel_target(w, "the strip-approach tower duel", 600, Some(di));
+            } else {
+                eprintln!("[06] the tower duel (lever a): the tunnel-roof guard not present");
+            }
             duel_the_muzzle_flashes(w, "the strip approach", 1500);
         }
         fight_through(w);
@@ -1311,7 +1362,11 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool)
         // [S] #25's spot is never reached (the corner leg kills first), and taking him from the
         // #24 spot lets the roof guard #11 land 44.0 (t6866) - left for the next round.
         let post = |w: &Walker, at: [f32; 2]| { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
-            && d.health > 0.0 && d.team == 1 && dxz(d.pos, [at[0], 42.0, at[1]]) < 3.0) };
+            && d.health > 0.0 && d.team == 1 && dxz(d.pos, [at[0], 42.0, at[1]]) < 6.0) };
+        // walk-06-00agent-2: the radius is 6.0 — #24 patrols (29.2, −36.0) [L the lever-a run's
+        // death trace], 3.9 u off the old 3.0 finder's (32.0, −38.7), so the finder missed him,
+        // the stand skipped and his 56.0 in 12 shredded the rest of the walk. The same patrol
+        // widening round 1 measured for #25 (4.0 → 6.0).
         if let Some(di) = post(&w, [32.0, -38.7]) {
             // pickup-pushout-walks (00 Agent): with the dropped guns pushed out of the geometry
             // [M Pickup_Create 0x18dda0:166-183] this 0.6 u step's return fire held Bond in place
@@ -1700,7 +1755,7 @@ fn walk_the_castle_interior_to_the_party_real_damage_agent() {
 /// [M 0x1ae1f8:67-69]. Real input only — the
 /// load path is the only difference; no health, ammo or channel writes, no teleports.
 #[test]
-#[ignore = "stream batch 1121b: Bond dies near (32.4, 39.1, -6.2) at about t2900 on the joined stream; no stop of 37 swept (50-10000 ticks, 30-200 long, single and double) completes it; also red on s/auto-aim alone. walks-1121-06-16: 330 more stop sets (first stop 100-2600 x 15-700, second/third 3000-14000) never complete; the runs that pass the guardhouse court all die at the strip approach (5.97, 42.03, -32.77) at about 20 health to the tower post #11 and the pair #19/#20; the court dealers #3/#4 have a clear world line (window/doorway), not a wall shot walk-06-00agent round 1 (this branch, every lever judged on its own real run): the stop/timing space stays dead (the 1121b + walks-1121-06-16 sweeps above). LANDED levers, all gated difficulty>=3 && !tops_up() in this file: (1) the guardroom's BodyArmour #755 fetch (36.06,40.67,-22.21) — the 50 pool is PROVEN the strip phase's margin (the dealer sums: 150 incoming vs 122.5 pool without it); (2) the muzzle-flash duel duel_the_muzzle_flashes — the strict-ray stands cannot take the pair fairly (their rays open only inside the 12 u sight, runs 10-12 below), so the duel aims at the measured chest, fires through the game's symmetric hit model, LOCKS the target until he drops and SWAPS to a y>44 shooter mid-fight; the torso grind measures 2.2 a tap every 8 ticks (game fire-state gated — 4-tick requests change nothing), head boxes only carry <=6 u (the 6 u spread fact; 21 head taps 0 damage at d 26); (3) the strip-arrival + sight-edge strict-ray stands are SKIPPED at 00 real damage (they stood Bond in the stream: 9 landed vs 38 taken standing); (4) duel passes added at the descent and the ledge legs (#24's solo-spot stand then VANISHED him at +99). MEASURED STATE: the duel grinds #20 20->13 and SWAPS to #11 13->2 — Bond dies t7212 at (5.97,42.04,-32.77) ONE TO TWO TAPS short, pool 0 against #11 40.0 + #20 32.5 + the court's 27.5 (the whole 150). NEXT LEVERS: (a) answer the tower #11-class BEFORE the strip (a fixed-target duel at the sight-edge stop — his lines are proven open from the plaza band, the mouth stand killed him at +43), (b) hunt the mouth/balcony phases' un-answered stream that ate ~45 armour before the strip duel in the pre-swap shapes, (c) the corner #25 fixed-target duel (the finder widened to 6.0 for his patrol) and the tunnel/gallery phases beyond"]
+#[ignore = "stream batch 1121b: Bond dies near (32.4, 39.1, -6.2) at about t2900 on the joined stream; no stop of 37 swept (50-10000 ticks, 30-200 long, single and double) completes it; also red on s/auto-aim alone. walks-1121-06-16: 330 more stop sets (first stop 100-2600 x 15-700, second/third 3000-14000) never complete; the runs that pass the guardhouse court all die at the strip approach (5.97, 42.03, -32.77) at about 20 health to the tower post #11 and the pair #19/#20; the court dealers #3/#4 have a clear world line (window/doorway), not a wall shot walk-06-00agent round 1 (this branch, every lever judged on its own real run): the stop/timing space stays dead (the 1121b + walks-1121-06-16 sweeps above). LANDED levers, all gated difficulty>=3 && !tops_up() in this file: (1) the guardroom's BodyArmour #755 fetch (36.06,40.67,-22.21) — the 50 pool is PROVEN the strip phase's margin (the dealer sums: 150 incoming vs 122.5 pool without it); (2) the muzzle-flash duel duel_the_muzzle_flashes — the strict-ray stands cannot take the pair fairly (their rays open only inside the 12 u sight, runs 10-12 below), so the duel aims at the measured chest, fires through the game's symmetric hit model, LOCKS the target until he drops and SWAPS to a y>44 shooter mid-fight; the torso grind measures 2.2 a tap every 8 ticks (game fire-state gated — 4-tick requests change nothing), head boxes only carry <=6 u (the 6 u spread fact; 21 head taps 0 damage at d 26); (3) the strip-arrival + sight-edge strict-ray stands are SKIPPED at 00 real damage (they stood Bond in the stream: 9 landed vs 38 taken standing); (4) duel passes added at the descent and the ledge legs (#24's solo-spot stand then VANISHED him at +99). MEASURED STATE: the duel grinds #20 20->13 and SWAPS to #11 13->2 — Bond dies t7212 at (5.97,42.04,-32.77) ONE TO TWO TAPS short, pool 0 against #11 40.0 + #20 32.5 + the court's 27.5 (the whole 150). NEXT LEVERS: (a) answer the tower #11-class BEFORE the strip (a fixed-target duel at the sight-edge stop — his lines are proven open from the plaza band, the mouth stand killed him at +43), (b) hunt the mouth/balcony phases' un-answered stream that ate ~45 armour before the strip duel in the pre-swap shapes, (c) the corner #25 fixed-target duel (the finder widened to 6.0 for his patrol)  and the tunnel/gallery phases beyond walk-06-00agent-2 round 2 (this branch, every lever judged on its own real run): LANDED, all gated difficulty>=3 && !tops_up() in this file: (1) duel_target's fixed arm no longer reads enabled — a player shoots what he sees (the game's bullets hit ANY present drone [M Drone_CollisionHandler 0x140968:85-95]); #11 stands en0 (dormant) through the balcony/landing phases [L the mouth pick census] and the enabled-gated fixed duel bailed 0 taps; (2) the blocked-line early-out: 25 consecutive TAPS without one hp drop bail the duel — the first balcony tower duel burned 206 taps for ZERO damage (the whole load, clip 0 spare 0) and the walk fought the mouth starving (cycling weapons clip 1 spare 0); an earlier 40-TICK window measured PREMATURE (bailed #11 at hp 9.0 and #20 at 6.8 [L the lever-a runs]); (3) the #24 finder 3.0 -> 6.0 — his patrol (29.2,-36.0) sits 3.9 off the old finder, the stand skipped and his 56.0 in 12 shredded the walk; (4) lever (a) ANSWERED: the FIXED tower duel from the STRIP APPROACH (cap 600) — the only PROVEN line to #11 (the baseline's duel taps landed 13.4 -> 2.4 from the 0.57-rad strip angle); the balcony's 0.26-rad line (0 of 206) and the sight edge's 0.51-rad line (0 of 10) both measured DEAD — the shallower angles meet the tunnel arch's top face, not the torso box. MEASURED STATE: the tower duel kills #11 (grind 20 -> 9.0, dead mid-duel — the fixed arm then re-picked #20 and ground 6.8 -> 0.2), the strip phases cost 32.5 health, the #24 solo-spot stand VANISHED him at +43, the corner stand VANISHED #25 at +51, the descent ran clean — death t8566 at (12.97,41.83,-36.04) at the SE corner, 27 hits for 100.0. THE KILLING BLOW: #23's grenade — ONE 20.75 splash (weapon 0x24, skin 0x5000030, (38.5,51.0,-32.2)) at d 27.4 took Bond's last 20.8 exactly. NEXT LEVERS: (a) answer #23 the y-51 deck grenade guard (hp 10) BEFORE the corner — the single splash is the death blow and his perch is outside every ground clear by design (the 00m stall lesson); a fixed duel from the east-floor anchor or the descent, or a lob-timing answer; (b) #5 (hp 10, the second strip post, dealt 2.75 at d 33) — his line measured blocked from the solo spot AND the corner (26 tapless taps); (c) the tower duel's own cost — 32.5 health across the grind while #11/#20 fire; a closer stand or a faster kill trims it"]
 fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the
     // guardhouse pair #3 / #4 fired from the balcony as Bond reached door #47 (80.8 -> 9.2,

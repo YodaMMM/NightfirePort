@@ -43,3 +43,28 @@ the master sweep text and the round-1 ledger). Goal: round 2 of the 06 castle-in
 Agent real-damage walk — take the next untried levers from the round-1 ledger, judge each on its
 own real run, keep the Operative and Agent sisters green, helpers gated to level+difficulty.
 Progress appended below.
+
+### walk-06-00agent-2 progress (2026-11-22, round 2)
+
+Merged origin/master 7562f1e70 + origin/s/walk-06-00agent (three conflicts resolved: README and
+the gadget census from master's newer side, the walk's ignore keeps both sweep texts + the round-1
+ledger). The baseline reproduced exactly (death t7212, #11 at hp 2.4, the whole 150 pool). The
+NF_DMG_TRACE run split the pool: 27.5 pre-fetch, 50 armour soaked by 9 un-answered mouth/balcony
+hits, then the strip duel's 72.5. Round 2 landed four file-local levers (each judged on its own
+real run, all gated difficulty>=3 && !tops_up()):
+
+1. duel_target's fixed arm drops `enabled` — #11 stands dormant (en0) through the balcony phase;
+   the enabled-gated fixed duel bailed 0 taps.
+2. The blocked-line early-out (25 tapless taps): the first balcony tower duel burned 206 taps for
+   ZERO damage and emptied the load; the 40-tick window then measured premature (bail at hp 9.0 /
+   6.8); the tap-count window holds the peeks and still caps a blocked line at ~25 rounds.
+3. The #24 finder 3.0 -> 6.0 (patrol (29.2, -36.0) is 3.9 off; his 56.0 in 12 shredded the
+   finder-missed run).
+4. Lever (a) ANSWERED at the strip approach: the fixed tower duel (the only proven line to #11 —
+   0.57 rad; the balcony 0.26 and the sight edge 0.51 measured 0/206 and 0/10). #11 dies mid-duel;
+   the pick re-locks #20 and grinds him to 0.2; #24 VANISHED at +43; #25 VANISHED at +51.
+
+State: death t8566 at the SE corner (12.97, 41.83, -36.04) — 27 hits for 100.0, the killing blow
+#23's ONE grenade (20.75 splash at d 27.4, weapon 0x24). Next levers: the #23 grenade answer, #5's
+blocked line, the tower duel's own 32.5 cost. The d3 walk stays ignored; the ledger is in the
+ignore message.
