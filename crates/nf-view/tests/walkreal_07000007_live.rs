@@ -459,7 +459,11 @@ fn walk_the_party_start_to_finish_real_damage_agent() {
 /// load path is the only difference.
 #[test]
 fn walk_the_party_start_to_finish_real_damage_00agent() {
-    walker::with_real_damage(|| walk_the_party_start_to_finish_at(3));
+    // Stream batch 1122 (the combat move choice without the 0x5E arm, fallback-goal routes pulled
+    // back from the AI boundary, and the other joined guard rules):
+    // the no-stop walk died at (113.24,44.13,-61.99) t9436 to drone #36. Lever: 100/30 [L the
+    // first value swept completes].
+    walker::with_pause(100, 30, || walker::with_real_damage(|| walk_the_party_start_to_finish_at(3)));
 }
 
 /// THE REAL-PATH FIRST-ATTACK FAIL (level-07-library-guards-attack): the party fails when a guard

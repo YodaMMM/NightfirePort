@@ -122,7 +122,7 @@ fn kick_node_pair_enters_kick_object_and_unpauses_the_scripted_prop() {
     let nodes = d.nav.target_nodes(&l.world, pi, goal_probe, 0.0);
     let (_, route) = nf_game::nav::Route::to_position(&d.nav, &l.world, Some(pi), start, goal_probe, &nodes, &[], &|_, _| false).expect("a route through the kick corridor exists");
     let (a, b) = (144u16, 248u16);
-    eprintln!("route nodes {:?} (kick nodes are {a} and {b})", route.nodes.iter().collect::<Vec<_>>());
+    eprintln!("route nodes {:?} (kick nodes are {a} and {b}) dest {:?}", route.nodes.iter().collect::<Vec<_>>(), route.dest);
     let ai = route.nodes.iter().position(|&n| n == a).expect("route passes the first kick node");
     assert_eq!(route.nodes.get(ai + 1), Some(&b), "the route visits the kick pair consecutively");
 
@@ -133,6 +133,12 @@ fn kick_node_pair_enters_kick_object_and_unpauses_the_scripted_prop() {
         let g = &mut sim.list[gi];
         g.return_state = state::ATTACK;
         g.goal = Some(far);
+        // The goal stands past the corridor's AI boundary, so the route is a fallback-goal one and
+        // `AlterDestFor_DROUTE_Nearest` 0x156088 pulls its destination back to ~0.65 (just past
+        // n248) [M 0x15afe0:33-35]. Under the DefaultInit 2.0 arrival the guard would arrive before
+        // n144; the cover-goal 0.5 radius (`SetupGoalPosition(0.5, ..)` [M 0x152548:174-181])
+        // carries it through both kick nodes.
+        g.goal_arrival = 0.5;
         g.state = state::GO_TO_GOAL;
         g.next_state = None;
     }

@@ -1702,7 +1702,14 @@ fn the_notch_holds_the_walk_and_the_grab_needs_its_zone() {
 /// [M Trigger_Activate 0x1b2318:91-107] and ends the level into 07000006 — the same chain the
 /// old stand-in pinned, now reached on real input.
 #[test]
-fn the_door_band_exit_chains_to_07000006_walked() { the_door_band_exit_chains_to_07000006_walked_at(1) }
+fn the_door_band_exit_chains_to_07000006_walked() {
+    // Stream batch 1122 (the combat move choice without the 0x5E arm, fallback-goal routes pulled
+    // back from the AI boundary, and the other joined guard rules):
+    // the walkway pair #12 outlasted the strip answer and the walk fell off the south strip 38.5.
+    // Lever: 100/30 [L the first value swept completes]. The real-damage sister calls the body
+    // directly so its own lever stands.
+    walker::with_pause(100, 30, || the_door_band_exit_chains_to_07000006_walked_at(1))
+}
 
 /// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
 /// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
@@ -1852,7 +1859,7 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
     // Guards' finished voice lines cleared each control pass (s/g019-sky-2): with 9000/200 the
     // walk fell off the south strip 38.5 again. Lever: a 60-tick stop at tick 3000 in its place
     // [L the 7-value sweep: 500/60, 1000/60, 2000/60, 3000/60, 4000/30, 5000/60, 6000/30 all pass].
-    walker::with_real_damage(|| walker::with_pause(2000, 30, the_door_band_exit_chains_to_07000006_walked));
+    walker::with_real_damage(|| walker::with_pause(2000, 30, || the_door_band_exit_chains_to_07000006_walked_at(1)));
     REAL_DAMAGE_BACKOFF.with(|c| c.set(false));
 }
 

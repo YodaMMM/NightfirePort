@@ -3377,7 +3377,11 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact() {
     // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 4000/90 stalled the contact at
     // the hall doorway (3.5,6.3,6.6). Lever: 1000/60 [L the 4-value sweep: 1000/60 and 2000/30
     // complete the plain walk, only 1000/60 also completes the real-damage wrapper].
-    walker::with_pause(1000, 60, || walk_from_the_spawn_to_the_exit_with_the_contact_at(1))
+    // Stream batch 1122 (the combat move choice without the 0x5E arm, fallback-goal routes pulled
+    // back from the AI boundary, and the other joined guard rules):
+    // 1000/60 left the contact hiding beside the plate (LeadHide 0x1f, the stairwell guards
+    // parked at the boundary) and the AND-touch never fired. Lever: 100/30 [L the first value swept].
+    walker::with_pause(100, 30, || walk_from_the_spawn_to_the_exit_with_the_contact_at(1))
 }
 
 fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
@@ -4030,7 +4034,11 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
     // 3500/200 and 8000/60 do not].
     // s/bond-hitboxes-2: 3000/60 stalled the contact at the hall doorway. Lever: 2000/30 [L the
     // 4-value sweep: 2000/30 and 4000/90 complete; 1000/60, 3000/60 do not].
-    let mut w = walker::with_pause(2000, 30, || walk_to_the_exit(&iso, true));
+    // Stream batch 1122 (the combat move choice without the 0x5E arm, fallback-goal routes pulled
+    // back from the AI boundary, and the other joined guard rules):
+    // 2000/30 failed the mission (the contact shot down before the plate). Lever: 500/60 [L the
+    // sweep: 100/30 and 250/30 do not; 500/60 completes].
+    let mut w = walker::with_pause(500, 60, || walk_to_the_exit(&iso, true));
     // The exit tick: the hold stands with the full count, the fade level is 0, the request rides.
     {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -4116,8 +4124,12 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
     // to pocket guard #12 while the pre-stairwell fight held for guard 3. Own lever: 250/30 [L the
     // 9-value sweep: only 250/30 completes; 500/30, 1000/60, 1500/45, 2000/30, 3000/60, 4000/90,
     // 6000/60, 8000/60 do not].
+    // Stream batch 1122 (the combat move choice without the 0x5E arm, fallback-goal routes pulled
+    // back from the AI boundary, and the other joined guard rules):
+    // 250/30 died at (-31.03,6.45,16.36) t15021 to pocket guard #12 at 2.8 u. Lever: 500/200 [L the
+    // 13-value sweep: 100/30 .. 12000/30 do not; 500/200 completes].
     walker::with_real_damage(|| {
-        walker::with_pause(250, 30, || walk_from_the_spawn_to_the_exit_with_the_contact_at(1))
+        walker::with_pause(500, 200, || walk_from_the_spawn_to_the_exit_with_the_contact_at(1))
     });
 }
 
@@ -4158,7 +4170,11 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
     // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 4000/90 died at (-33.44,6.37,-0.33)
     // t7904 to drone #4 at 1.5 u. Lever: 1500/45 [L the 8-value sweep: 500/30, 700/45, 1500/45,
     // 2500/90 complete; 1000/60, 2000/30, 3000/60, 4000/90 do not].
-    walker::with_pause(1500, 45, || {
+    // Stream batch 1122 (the combat move choice without the 0x5E arm, fallback-goal routes pulled
+    // back from the AI boundary, and the other joined guard rules):
+    // 1500/45 died at (-31.43,6.37,16.36) t9787 to pocket guards #3/#4. Lever: 1000/60 [L the
+    // sweep: 100/30, 250/30, 500/60 do not; 1000/60 completes].
+    walker::with_pause(1000, 60, || {
         walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));
     })
 }
