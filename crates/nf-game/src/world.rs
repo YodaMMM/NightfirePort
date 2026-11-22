@@ -493,6 +493,23 @@ impl Geo {
         self.objects.pop();
     }
 
+    /// `push_flags` with each triangle's plane supplied (already in world space) instead of its
+    /// winding plane: the same object, bounds, materials and flags `push_flags` builds.
+    fn push_flags_planed(&mut self, tris: impl IntoIterator<Item = ([V3; 3], u8, [f32; 4])>, node_pass: bool) {
+        let start = self.tris.len();
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for (w, m, pl) in tris {
+            for p in &w { for k in 0..3 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); } }
+            self.planes.push(pl);
+            self.tris.push(w);
+            self.mats.push(m);
+            self.pass.push(node_pass);
+        }
+        let blocker = self.tris.len() > start && self.mats[start..].iter().all(|&m| m == 0x40);
+        self.oneway.extend(std::iter::repeat(blocker).take(self.tris.len() - start));
+        if self.tris.len() > start { self.objects.push(Object { lo, hi, tris: start..self.tris.len() }); }
+    }
+
     /// `push_flags` that always adds the object — an empty collision mesh too (an empty tri range
     /// with inverted bounds, which no box test meets and `chunk` turns into no runs). The scoped
     /// static build needs one object per pushed instance: `chunk`'s `owners` key IS the object
@@ -1795,6 +1812,31 @@ impl CollisionWorld {
     /// Whether glist object `hash` has collision geometry.
     pub fn has_shape(&self, hash: u32) -> bool { self.shapes.contains_key(&hash) }
 
+    /// An FNV-1a digest of the moving-object set `set_dynamic` built (every triangle, plane,
+    /// surface byte and flag, the objects' bounds and ranges, the movers, the glist flags) — the
+    /// bit-identity check for changes to how the set is built.
+    pub fn dynamic_digest(&self) -> u64 {
+        let d = self.dynamic.read().unwrap();
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        let mut eat = |b: &[u8]| for &x in b { h ^= x as u64; h = h.wrapping_mul(0x1000_0000_01b3); };
+        let g = &d.geo;
+        for t in &g.tris { for p in t { for f in p { eat(&f.to_bits().to_le_bytes()); } } }
+        for q in &g.planes { for f in q { eat(&f.to_bits().to_le_bytes()); } }
+        eat(&g.mats);
+        for &x in &g.pass { eat(&[x as u8]); }
+        for &x in &g.oneway { eat(&[x as u8]); }
+        for o in &g.objects {
+            for f in o.lo.iter().chain(o.hi.iter()) { eat(&f.to_bits().to_le_bytes()); }
+            eat(&(o.tris.start as u64).to_le_bytes()); eat(&(o.tris.end as u64).to_le_bytes());
+        }
+        for (id, p, c) in &d.movers {
+            eat(&id.to_le_bytes());
+            for r in p.iter().chain(c.iter()) { for f in r { eat(&f.to_bits().to_le_bytes()); } }
+        }
+        for f in &d.flags { eat(&f.to_le_bytes()); }
+        h
+    }
+
     /// Replaces the moving objects: each `(id, glist hash, row-vector world matrix)`; the id (stable from tick to
     /// tick) pairs an object with its matrix of the previous call.
     pub fn set_dynamic(&self, parts: &[(u64, u32, Mat4)]) {
@@ -1861,14 +1903,19 @@ impl CollisionWorld {
                 geo.oneway.extend_from_slice(&d.geo.oneway[start..end.min(d.geo.oneway.len())]);
                 geo.oneway.resize(geo.tris.len(), false);
                 geo.objects.push(Object { lo: po.lo, hi: po.hi, tris: geo.tris.len() - (end - start)..geo.tris.len() });
+            } else if let Some(pl) = self.shape_planes.get(&h).filter(|pl| pl.len() == t.len()) {
+                // frame-cost-1122: a shape with one stored plane per triangle gets those planes
+                // moved into world space directly. The old path built each triangle's winding
+                // plane first and then overwrote every one of them with these same records (the
+                // push keeps every triangle, so the count test it ran is `t.len()`); same floats,
+                // without the throwaway plane maths and the per-part plane Vec.
+                geo.push_flags_planed(t.iter().zip(pl).enumerate().map(|(k, (t, q))| (
+                    t.map(|p| transform(&m, p)),
+                    mats.and_then(|v| v.get(k).copied()).unwrap_or(0),
+                    plane_world(&m, [q[0], q[1], q[2]], q[3]),
+                )), pane_part);
             } else {
-                let before = geo.tris.len();
                 geo.push_flags(t.iter().enumerate().map(|(k, t)| (t.map(|p| transform(&m, p)), mats.and_then(|v| v.get(k).copied()).unwrap_or(0))), pane_part);
-                if let Some(pl) = self.shape_planes.get(&h) {
-                    if geo.tris.len() - before == pl.len() {
-                        geo.set_tail_planes(&pl.iter().map(|q| plane_world(&m, [q[0], q[1], q[2]], q[3])).collect::<Vec<_>>());
-                    }
-                }
             }
             if geo.objects.len() > n { movers.push((id, d.last.get(&id).copied().unwrap_or(m), m)); last_objects.push((id, h, m)); flags.push(self.shape_flags.get(&h).copied().unwrap_or(0)); }
         }

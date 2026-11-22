@@ -245,7 +245,7 @@ pub fn portal_cel_chain_from_cell_doors(graph: &CelGraph, start: usize, eye: [f3
                 ((p.flags & 2) == 0, p.cel_a, true)
             } else { continue };
             if !side_open {
-                if std::env::var_os("NF_PORTAL_DEBUG").is_some() { eprintln!("[pwalk] d{depth} cell {cell} -> {dest}: side closed (flags {:x})", p.flags); }
+                if dbg { eprintln!("[pwalk] d{depth} cell {cell} -> {dest}: side closed (flags {:x})", p.flags); }
                 continue;
             }
             // The side's plane: the node attached to celB carries the forward plane, the celA node

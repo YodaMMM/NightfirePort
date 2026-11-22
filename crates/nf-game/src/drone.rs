@@ -3211,7 +3211,7 @@ impl Drone {
     // written below (`Drone_AnimInfo[danim]+8`, nf-formats/src/drone.rs `state_of`) — the port's
     // `anim_state::AIM_STAND = 0x0a`. No behavior sits behind the table dispatch to port.
     fn set_danim(&mut self, d: &Data, danim: u16, blend: u16) -> bool {
-        if danim == 0x188 && std::env::var_os("NF_SDLOG").is_some() { eprintln!("[sd] -> 188 blend {}", blend); }
+        if danim == 0x188 && crate::env_flag!("NF_SDLOG") { eprintln!("[sd] -> 188 blend {}", blend); }
         // The replaced danim: a 180° turn (info flag 0x100) still running.
         let old_info = d.tables.info.get(self.anim.danim as usize).copied().unwrap_or([0; 24]);
         let old_turn = self.anim.danim != 0 && old_info[1] & 1 != 0 && self.anim.script.is_some() && !self.anim.held;
@@ -3224,7 +3224,7 @@ impl Drone {
             // set whose script ends up skipped keeps the word [M 0x13aee8:50 writes before the
             // skip check; the word is the no-physics bit's source, not the playing script's].
             self.anim.info_word = u32::from_le_bytes([info[0], info[1], info[2], info[3]]);
-            if std::env::var_os("NF_PHYS_TRACE").is_some() && self.anim.info_word & 2 != 0 {
+            if crate::env_flag!("NF_PHYS_TRACE") && self.anim.info_word & 2 != 0 {
                 eprintln!("[phys] danim {danim:#x} carries the no-physics bit (voice {:#x} state {:#x})", self.voice_type, info[8]);
             }
             self.anim.state = u16::from_le_bytes([info[8], info[9]]);
@@ -7681,7 +7681,7 @@ impl Drone {
                 // case 0xc: `DroneFunc_AnyoneNear(2.0)` re-arms FRAME_RATE_INT·5 = 300; clear falls
                 // through to Stunned_Recover 0x4c [M 0x162eb0 case 0xc] — the same live-pos query the
                 // stun-grenade loop uses (`stun_kept_down`).
-                if std::env::var("TASE_DBG").is_ok() { eprintln!("[dbg] STUNNED TIMER_C kept_down {}", self.stun_kept_down()); }
+                if crate::env_flag!("TASE_DBG") { eprintln!("[dbg] STUNNED TIMER_C kept_down {}", self.stun_kept_down()); }
                 if self.stun_kept_down() { self.timer_c = Some(frame + 300); } else { self.set_state(STUNNED_RECOVER); }
                 true
             }
@@ -12914,6 +12914,14 @@ impl Drone {
     }
 }
 
+/// Resets a per-path, per-link table to all zeros with one entry per link of each path, reusing
+/// the vectors already there.
+fn zero_per_link(v: &mut Vec<Vec<u16>>, paths: &[crate::nav::NavPath]) {
+    v.truncate(paths.len());
+    v.resize_with(paths.len(), Vec::new);
+    for (x, p) in v.iter_mut().zip(paths) { x.clear(); x.resize(p.links.len(), 0); }
+}
+
 /// `DroneVision_ProcessDroneSight` 0x176a28:146-178's round robin over `n` list slots: from the
 /// slot after `cursor` (`DAT_00299094`, the last drone visited [M :151-162]), at most `n` visits
 /// (`DAT_00298e1c`, the list count [M :48/:149]); EVERY visited slot becomes the cursor [M :153];
@@ -14780,7 +14788,7 @@ impl Data<'_> {
         // A skin with no part bones gives no parts (the 07000005 ledge cut-scene actors, e.g. 0x0500002E
         // on 0x06000997, whose sequence 0x040007f9 fits: the miss is the empty part list, not the channels).
         let out = pose().unwrap_or_default();
-        if out.is_empty() && std::env::var_os("NF_PARTS_DEBUG").is_some() {
+        if out.is_empty() && crate::env_flag!("NF_PARTS_DEBUG") {
             let sk = self.skins.get(&skin).map(|s| s.skeleton);
             let skel = sk.and_then(|k| self.skeletons.get(&k));
             let q = self.scripts.get(&script).and_then(|s| crate::anim::script_frame(s, frame).map(|(q, _)| q));
@@ -19875,7 +19883,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let res = self.inventory.take_ex(d.weapons, p, loaded, &mut self.health.armour, clock, mp_dual);
         // `NF_PICKUPLOG=1`: the take result and why (fix-player2's drop diagnostics; shared file —
         // one env-gated line only).
-        if std::env::var_os("NF_PICKUPLOG").is_some() {
+        if crate::env_flag!("NF_PICKUPLOG") {
             eprintln!("[take] tick {} weapon {:#x} kind {} rounds {} loaded {} → {:?}", frame, p.weapon, p.kind, p.rounds, loaded, res);
         }
         if let Some(t) = res {
@@ -20008,7 +20016,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     let mut armour = b.armour;
                     let take_up = self.inventory.take_id(p.weapon, Some(b.dual), clock);
                     let taken = self.inventory.take_ex(d.weapons, &p, loaded, &mut armour, clock, Some(b.dual));
-                    if std::env::var_os("NF_PICKUPLOG").is_some() {
+                    if crate::env_flag!("NF_PICKUPLOG") {
                         eprintln!("[take-net] tick {} slot {} weapon {:#x} kind {} → {:?}", frame, b.slot, p.weapon, p.kind, taken);
                     }
                     if self.auto_switch && matches!(taken, Some(crate::pickup::Taken::Weapon { .. })) {
@@ -21749,7 +21757,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 if p.kind & 0xd == 0 { d.nav.target_nodes_in(d.world, pi, player.pos, 0.0, player.cel) } else { Default::default() }
             }).collect();
         }
-        self.used = d.nav.paths.iter().map(|p| vec![0; p.links.len()]).collect();
+        // frame-cost-1122: both per-link tables are zeroed in place (the same all-zero shape the
+        // old per-tick `collect` built, without reallocating every path's vector each tick).
+        zero_per_link(&mut self.used, &d.nav.paths);
         // The flag half of the same per-cycle walk: `Drone_InitComms` 0x139520:125 calls
         // `AINetwork_ClearLinkFlags(0x310)` [M 0x15b498] and then `Drone_BuildDynamicAwarePoints`
         // [M 0x138b10] re-flags the links inside every live class-5 object's danger radius (the
@@ -21758,7 +21768,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // Record-id switch [M 0x138b10:36-160]: 0x2a/0x2c-0x2f and
         // 0x34/0x6c and 0x3b-0x40 → 12.0 / 0x100, 0x36 → 3.0 / 0x200, 0x37 → 8.0 / 0x100 while not
         // stuck; 0x35 stun and 0x3a tripbomb have NO case.
-        self.link_flags = d.nav.paths.iter().map(|p| vec![0u16; p.links.len()]).collect();
+        zero_per_link(&mut self.link_flags, &d.nav.paths);
         for g in &self.grenades {
             if g.state >= 2 { continue; }
             if let Some((radius, flag)) = hazard_link_flag(g.weapon_type, g.stuck) {
@@ -23186,7 +23196,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // else the door's obj+0xF4 == 4.
             dr.hit_door_open = dr.hit_door.map_or(true, |i| self.doors.list[i].state == crate::door::OPEN);
             if !dr.started { dr.started = true; dr.post_load_frame = Some(frame); dr.send(d, rng, frame, msg::ENTER); dr.entered = frame; dr.log.push((frame, dr.state)); }
-            if let Some(t) = dr.timer_c { if frame >= t { if std::env::var("TASE_DBG").is_ok() { eprintln!("[dbg] timer_c fires frame {} drone {} state {}", frame, index, dr.state); } dr.timer_c = None; dr.send(d, rng, frame, msg::TIMER_C); } }
+            if let Some(t) = dr.timer_c { if frame >= t { if crate::env_flag!("TASE_DBG") { eprintln!("[dbg] timer_c fires frame {} drone {} state {}", frame, index, dr.state); } dr.timer_c = None; dr.send(d, rng, frame, msg::TIMER_C); } }
             if let Some(t) = dr.timer_d { if frame >= t { dr.timer_d = None; dr.send(d, rng, frame, msg::TIMER_D); } }
             if let Some(t) = dr.idle_timeout { if frame >= t { dr.idle_timeout = None; dr.send(d, rng, frame, msg::IDLE_TIMEOUT); } }
             if let Some((t, m)) = dr.delayed { if frame >= t { dr.delayed = None; dr.send(d, rng, frame, m); } }
@@ -25358,7 +25368,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             if let (true, Some(i)) = (level_01, dr.pane_contact) { kills.extend(self.breaks.drone_pressed(i, dr.pane_pressed, dr.pos, &mut self.rng)); }
             for k in kills {
                 self.break_kills.push((k.placement, k.kind, k.sound));
-                if std::env::var("TASE_DBG").is_ok() { eprintln!("[brk-contact] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", self.frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
+                if crate::env_flag!("TASE_DBG") { eprintln!("[brk-contact] f{} placement {} kind {} sound {} at ({:.1},{:.1},{:.1})", self.frame, k.placement, k.kind, k.sound, k.pos[0], k.pos[1], k.pos[2]); }
                 let id = u32::from(k.sound);
                 self.audio.play3d(id, k.pos, None);
                 if let Some(t) = d.sfx {

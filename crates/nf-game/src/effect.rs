@@ -416,7 +416,7 @@ pub fn penetration_roll_node(rng: &mut Rng, material: u8, weapon_id: u16, node_p
     pierce |= material & 0x40 != 0;
     if material & 0x80 != 0 {
         pierce |= rng.rand(0x3f) & 1 != 0;
-        if std::env::var_os("NF_RNGLOG").is_some() {
+        if crate::env_flag!("NF_RNGLOG") {
             eprintln!("[rnglog] penetration_roll +1 (draw #{})", rng.draws);
         }
     }
@@ -498,7 +498,7 @@ impl Effects {
             // when the +0x74 mesh is 0 [M 0x1aaa00:19] (no shipped row has enable set with mesh
             // 0 [D EffectInfo 0x3037c0], so this matches the old gate on the disc data).
             let count = rng.rand(rec.debris_count as u32) + 1;
-            if std::env::var_os("NF_RNGLOG").is_some() {
+            if crate::env_flag!("NF_RNGLOG") {
                 eprintln!("[rnglog] debris_count +1 (draw #{})", rng.draws);
             }
             let n = n_create;
@@ -560,7 +560,7 @@ impl Effects {
             // NOTHING here; the old port drew anyway — an RNG draw the game never makes
             // (bullet-pass-water).
             if ricochet_mask != 0 && rng.rand(rec.ricochet_n as u32) as u8 & ricochet_mask as u8 != 0 {
-                if std::env::var_os("NF_RNGLOG").is_some() {
+                if crate::env_flag!("NF_RNGLOG") {
                     eprintln!("[rnglog] ricochet_roll +1 (draw #{})", rng.draws);
                 }
                 // Reflect: `dir + normal·(−(rest+1)·dot(dir,normal))`, normalised, with the restitution
