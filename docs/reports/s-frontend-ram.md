@@ -38,4 +38,5 @@ lobby tests below, and the menu code takes no `Scene` input.
   vertices, 12632 attachments), passes now; also checks 07000001 still builds its pools.
 - load_scene_equality, fe_frame_buttons, fe_pages_draw2, menu_audio_flows, menu_music_flow,
   campaign_flow_live, pause_results_flows_live, mp_lobby_one_screen, mp_net_lobby, mp_menu_flow,
-  mp_debriefing_flow, movie_over_scene_live, lib flow_audit.
+  mp_debriefing_flow, movie_over_scene_live, lib flow_audit (19/19; one run hit an external
+  timeout and passed alone in 53 s), lib headless_app_harness (35/35). All pass.
