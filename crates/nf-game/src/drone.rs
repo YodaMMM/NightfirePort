@@ -9282,6 +9282,10 @@ impl Drone {
                 if !self.stationary { self.attack_talk(d.level, rng); }
                 self.call_anim(d, anim_state::AIM_STAND, 0, 0);
                 self.vision_on = true;
+                // `NDrone2_InvalidateAttackRoute` 0x155020 in the non-sniper arm (`+0xC5 != 2`)
+                // [M 0x166328:30-35]: the next chase recomputes the route from here even when the
+                // player has not moved 2.0 (his target stamp unchanged).
+                if self.mode != 2 { self.croute = None; }
                 // [M 0x166328:48-52] the impact-danim deferral: a guard still playing danim 0x13 (the
                 // hit reaction; Drone_AnimInfo[0x13] +8 = anim state 0x4c) when AimStandFire enters
                 // clears `+0x3b` (firing) and arms timer C for FRAME_RATE_INT ticks — the first
@@ -9383,7 +9387,12 @@ impl Drone {
             (CROUCH_COVER, msg::TIMER_C) => { self.set_state(AIM_STAND); true }
             // ENTER fires unconditionally [M 0x167060:27-29 — case 1's `DroneWeap_Fire` has no +0x1E
             // gate; the gate lives only in case 3]: a buried muzzle still fires on entering crouch-fire.
-            (AIM_CROUCH_FIRE, msg::ENTER) => { self.call_anim(d, anim_state::CROUCH_AIM, 0, 0); self.vision_on = true; self.fire(d, rng, frame, true); true }
+            // The same arm runs `NDrone2_InvalidateAttackRoute` 0x155020 for non-snipers
+            // (`+0xC5 != 2`) [M 0x167060:24-26].
+            (AIM_CROUCH_FIRE, msg::ENTER) => {
+                if self.mode != 2 { self.croute = None; }
+                self.call_anim(d, anim_state::CROUCH_AIM, 0, 0); self.vision_on = true; self.fire(d, rng, frame, true); true
+            }
             // `NDrone2_DSTATE_AimCrouchFire` 0x167060 (state 0x70) UPDATE fires from the crouch
             (AIM_CROUCH_FIRE, msg::UPDATE) => {
                 self.desired_yaw = self.yaw_to_opp;
@@ -26559,6 +26568,34 @@ mod abseil_tests {
         assert_eq!(dr.goal, Some(alarm));
     }
 
+    /// `NDrone2_DSTATE_AimStandFire` 0x166328 case 1 (non-sniper arm) and
+    /// `NDrone2_DSTATE_AimCrouchFire` 0x167060 case 1 (`+0xC5 != 2`) run
+    /// `NDrone2_InvalidateAttackRoute` 0x155020 [M 0x166328:35, 0x167060:26]: the chase route is
+    /// recomputed on the next `MoveToObject` even though the player target stamp (the
+    /// `VerifyRouteTarget` 0x15ae68 gate) has not moved. Sister: the sniper mode keeps it
+    /// (the game's mode-2 arm leaves for 0x2b without the call).
+    #[test]
+    fn aim_fire_entries_invalidate_the_chase_route() {
+        empty_data!(0x0700_0001, d_keep, d);
+        let mut rng = Rng::new(0x5eed);
+        for s in [state::AIM_STAND_FIRE, state::AIM_CROUCH_FIRE] {
+            let mut dr = drone_at([0.0, 0.0, 0.0]);
+            dr.target.stamp = 7;
+            dr.croute = Some(kept_route([10.0, 0.0, 0.0], 7));
+            dr.anim.danim = 0x13; // AimStandFire's impact-danim deferral: no entry shot
+            dr.state = s;
+            dr.send(&d, &mut rng, 100, msg::ENTER);
+            assert!(dr.croute.is_none(), "state {s:#x} ENTER invalidates the attack route");
+            let mut sn = drone_at([0.0, 0.0, 0.0]);
+            sn.mode = 2;
+            sn.target.stamp = 7;
+            sn.croute = Some(kept_route([10.0, 0.0, 0.0], 7));
+            sn.anim.danim = 0x13;
+            sn.state = s;
+            sn.send(&d, &mut rng, 100, msg::ENTER);
+            assert!(sn.croute.is_some(), "state {s:#x}: the sniper arm makes no InvalidateAttackRoute call");
+        }
+    }
     /// `NDrone2_ControlSTANDARD` 0x1490f0:82-94: every control pass reads `+0x4D0` through
     /// `Sound_IsFinnished` and zeroes it once the line is finished [M]. The pool node the line
     /// held is then free for the next sound (`Sound_UpdateSounds` 0x1dda70 frees a state-2 node),
