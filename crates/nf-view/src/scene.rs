@@ -9902,10 +9902,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
+        // The combat / effect draw pools below (tracers, beams, glows, projectiles, swooshes, impacts,
+        // occluders, scan brackets, rain, leaves, satchel digits) are skipped on the front-end map
+        // 0x07000048: it places nothing, Bond owns nothing there and the sim never ticks under the
+        // menus, so no pool slot is ever posed. Every other load builds them as before.
+        let pools = drones.filter(|d| d.level_id != crate::menu::FRONTEND_LEVEL);
         // Bullet tracers: drone bullets draw `GUN_BULLET_TRAIL` (Bullet_update state 0), stretched along their
         // direction by the speed (Control_GetObjMatrix scale 1, 1, speed); a pool of slots, hidden when unused.
         // Slot TRACER_SLOTS is the gadget beam (fix-laser-beam: the Laser/Stunner's per-shot beam draw).
-        if let (Some(_), Some(&(tmap, tobj))) = (drones, level.by_hash.get(&0x0200_0123)) {
+        if let (Some(_), Some(&(tmap, tobj))) = (pools, level.by_hash.get(&0x0200_0123)) {
             // Pool-slot replay (level-load-time): slot 0 decodes, slots 1..N replay it (identical
             // identity-matrix geometry; only the attachment index and `tracer` slot differ).
             let tplacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
@@ -9951,7 +9956,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 (TRACER_SLOTS + 7, 0x0200_05cd), (TRACER_SLOTS + 8, 0x0200_026e),
                 // goggles: the night-sight beam sprite 0x2000131 [M 0x1a65d8:151-155].
                 (NIGHT_BEAM_SLOT, 0x0200_0131)] {
-                if drones.is_some() {
+                if pools.is_some() {
                     if let Some(&(bmap, bobj)) = level.by_hash.get(&hash) {
                         let binst = Instance { map: bmap, object: bobj, matrix: anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]), placement: level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default() };
                         add_instance(level, &binst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
@@ -9962,7 +9967,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         }
         // goggles: the body-glow pool (GLOW_GUARDS × the main object + 15 children) and the
         // x-ray-only placed objects. Both draw only while the sim says so (`frame_state`).
-        if drones.is_some() {
+        if pools.is_some() {
             let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
             let pl0 = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
             if let (Some(&(mm, mo)), Some(&(cm, co))) = (level.by_hash.get(&nf_game::body_glow::MAIN_GFX), level.by_hash.get(&nf_game::body_glow::CHILD_GFX)) {
@@ -10025,13 +10030,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let proj_slots = GRENADE_SLOTS + TRACER_SLOTS + PLAYER_BULLET_SLOTS;
         crate::phase_mark("b5b view models (sleeves/FP)", t); t = std::time::Instant::now();
         let mut proj_meshes: Vec<u32> = Vec::new();
-        if drones.is_some() {
+        if pools.is_some() {
             for w in 1..0x73usize {
                 let m = placed_weapons.projectile_mesh(w);
                 if m != 0 && !proj_meshes.contains(&m) && level.by_hash.contains_key(&m) { proj_meshes.push(m); }
             }
         }
-        if let Some(wd) = drones.and_then(|d| d.weapons.as_ref()) {
+        if let Some(wd) = pools.and_then(|d| d.weapons.as_ref()) {
             for w in 1..0x73usize {
                 let m = wd.projectile_mesh(w);
                 if m != 0 && !proj_meshes.contains(&m) && level.by_hash.contains_key(&m) { proj_meshes.push(m); }
@@ -10055,7 +10060,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // rocket-swoosh: the ribbon segments (`Swoosh_Create` 0x18d8e8 sets the object's gfx from the hash —
         // 0x2000918 `SwooshStart` / 0x2000481 `Swoosh`, a 0.15-wide tube along local −z [D 07000008 bounds]).
         // One pool per mesh the level resolves; `frame_state` poses the k-th live segment of that mesh.
-        if drones.is_some() {
+        if pools.is_some() {
             for mesh in [0x0200_0918u32, 0x0200_0481] {
                 let Some(&(smap, sobject)) = level.by_hash.get(&mesh) else { continue };
                 let pident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
@@ -10093,7 +10098,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // 200-node decal FIFO (`DList_Init(0x3496e0, 0x60, 200)` 0x1cf268) and 32 casing objects
         // (`Bullet_InitCasingLists` 0x12fd48); debris are unbounded per-impact objects (≤ 6, ≤ ~54 ticks) —
         // the port caps the draw slots.
-        if let Some(dc) = drones {
+        if let Some(dc) = pools {
             if let Some(surf) = &dc.surfaces {
                 let mut decal_meshes: Vec<u32> = surf.effects.iter().map(|r| r.decal).filter(|m| *m != 0).collect();
                 let mut debris_meshes: Vec<u32> = surf.effects.iter().map(|r| r.debris_mesh).filter(|m| *m != 0).collect();
@@ -10170,7 +10175,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // 1200-tick countdown (0x17eba0), drawn at `obj+0x30` with no rotation. One Effect pool per
         // level archive that resolves the mesh, 4 slots (the game caps nothing; clouds are rare).
         crate::phase_mark("b5d impact pools (decal/casing/debris/gas)", t); t = std::time::Instant::now();
-        if drones.is_some() {
+        if pools.is_some() {
             if let Some(&(m, o)) = level.by_hash.get(&0x0200_0273) {
                 let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
                 let cplacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
@@ -10183,7 +10188,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         }
         // fix-microcam-brackets: the Micro-Camera's target brackets — `HUD_UpdateCameraPane` 0x1a12d8 creates one
         // one-frame object per candidate drone at its root with gfx "DroneScan" 0x02000832 (Effect kind 6).
-        if drones.is_some() {
+        if pools.is_some() {
             if let Some(&(m, o)) = level.by_hash.get(&DRONE_SCAN) {
                 let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
                 let splacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
@@ -10204,7 +10209,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // the same placement `Drones` builds its weather from — elsewhere the 128 slots were dead weight.
         let rains = level.maps.iter().flat_map(|m| m.placements.iter())
             .any(|p| p.flags & 0xff == 0xdf && p.params.iter().find(|(i, _)| *i == 0).is_some_and(|&(_, v)| v as u8 == 1));
-        if drones.is_some() && rains {
+        if pools.is_some() && rains {
             // The second pass (0x02000039 `smoke_1_dust` per drop, viewer rotation) is level-gated:
             // GameState+12 − 0x07000009 < 3 [M DrawDrops 0x18cb90] — only 09..0b carry its pool.
             let second = drones.is_some_and(|d| matches!(d.level_id.wrapping_sub(0x0700_0009), 0..=2));
@@ -10234,7 +10239,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // obj+0x106 = 0xff, which `Leaf_Update` spends at cost 0). One Effect pool per 0x2b
         // generator (its cel fixes the tint), `LEAF_SLOTS` slots each; only levels that place a
         // generator get one (07000004 ×2, 07000041 ×1 [D main-map 0x2b placements]).
-        if drones.is_some() {
+        if pools.is_some() {
             if let (Some(mm), Some(&(lm, lo))) = (level.main_map(), level.by_hash.get(&LEAF_MESH)) {
                 let lident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
                 let lplacement = level.maps[mm].placements.first().cloned().unwrap_or_default();
@@ -10258,7 +10263,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // `SatchelDigits[sec%10]` [L SatchelDigits @0x2bed90 = 0x2000791..0x200079a], linked to the
         // satchel's cel. The port pools them as Effect kinds 4 (tens) / 5 (units): 2 slots per digit
         // mesh (the first two stuck satchels draw).
-        if drones.is_some() {
+        if pools.is_some() {
             let dplacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
             let dident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
             for digit in 0..10u32 {

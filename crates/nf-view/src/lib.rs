@@ -1004,6 +1004,11 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
         .with_difficulty(sim.drones.difficulty)
 }
 
+/// The front-end map's archive (`menu::FRONTEND_LEVEL`, 07000048.bin): the menus' 2D container.
+pub fn is_front_end_archive(archive: &str) -> bool {
+    archive.len() >= 8 && u32::from_str_radix(&archive[..8], 16).is_ok_and(|c| c == menu::FRONTEND_LEVEL)
+}
+
 fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
     load_impl_gc(iso_path, archive, all, save, dev, give, mp, mp_settings, difficulty, bonus, false)
 }
@@ -1073,7 +1078,14 @@ fn load_impl_gc(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game:
     phase_mark("03 level+levelbin parse, skeletons, 07F sequences", t); t = std::time::Instant::now();
     // The level's own sleeve, before any merge lends foreign ones (see the substitution below).
     let own_sleeve = SLEEVES.iter().copied().find(|h| level.by_hash.contains_key(h));
-    merge_weapon_models(&iso, &read, &archive[..8], &mut level)?;
+    // The front-end map (0x07000048) skips the merge: it places no character, no pickup and no
+    // world instance [D 07000048: 0 placements drawn], Bond owns no weapon there and the sim never
+    // ticks under the menus (`fe.is_none()` gate), so no draw ever reads a merged weapon mesh. Its
+    // code sorts after every story archive, so the merge cloned 44 maps from 8 archives
+    // (4.4M triangles, ~1 s and ~1.3 GB peak per front-end load) for nothing.
+    if !is_front_end_archive(archive) {
+        merge_weapon_models(&iso, &read, &archive[..8], &mut level)?;
+    }
     phase_mark("04 weapon-models merge", t); t = std::time::Instant::now();
 
     // The dev view models (folded 190-fix-dev2): each level archive ships only its own weapons'
