@@ -89,3 +89,13 @@ with citations, un-ignore the test.
 ## Usage
 
 not visible to me (no token, context-window or cost figures are exposed in this environment).
+
+## ntfy failed
+
+All three fallbacks, exact output:
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`
+2. python3 urllib: `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. wget: `Connecting to ntfy.sh (ntfy.sh)|129.212.146.227|:443... failed: Connection timed out.` /
+   `Connecting to ntfy.sh (ntfy.sh)|2604:a880:800:14:0:3:cb8d:4000|:443... failed: Network is unreachable.`
+   (plus three more IPv6 `Network is unreachable` lines).
