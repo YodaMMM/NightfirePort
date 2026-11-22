@@ -221,6 +221,20 @@ impl Network {
         self.bounds_test(feet, np, false, false).0 == 1
     }
 
+    /// `NDrone2_MoveTestFromNode` 0x1554a8 (node → pos) with the hit out the dest pull-back asks
+    /// for: the 3D reach (dist² ≤ 900, DAT_002c7954), |dy| ≤ 4.0 (DAT_002c794c) and the slope band,
+    /// then `AINetwork_BoundsTest` with the hit pointer set and the near arm off [M 0x1554a8:31-53;
+    /// the AlterDest call site 0x156088 passes t0 = the stack hit, t1 = 0, t2 = 1]. −1 = the line
+    /// crosses a boundary (the nearest crossing comes back), 1 = clear, 0 = out of reach.
+    pub fn move_test_from_node_hit(&self, np: V3, pos: V3) -> (i32, Option<V3>) {
+        let dy = pos[1] - np[1];
+        let h2 = (pos[0] - np[0]).powi(2) + (pos[2] - np[2]).powi(2);
+        if h2 + dy * dy > 900.0 || dy.abs() > 4.0 { return (0, None); }
+        if dy.abs() > self.slope_dy && dy.abs().atan2(h2.sqrt()) > self.max_slope { return (0, None); }
+        if !self.bounds { return (1, None); }
+        self.bounds_test(np, pos, false, true)
+    }
+
     /// `AINetwork_BoundsTest` over every wall (one cel).
     pub fn bounds_test(&self, a: V3, b: V3, near: bool, want_hit: bool) -> (i32, Option<V3>) {
         let mut best: Option<(f32, V3)> = None;
@@ -689,8 +703,10 @@ impl Route {
     /// `OptimiseRoute`. Err = the failure code (4/5/6/8).
     /// `AINetwork_SetupRouteToObject` (0x158948) / `AINetwork_SetupRouteToPosition` (0x158b10) /
     /// `AINetwork_CalcRouteToObject` (0x15aee8, via `NDrone2_MoveToObject` 0x151618) — the port's
-    /// single route build. The game's `AlterDestFor_DROUTE_Nearest` (0x156088) dest pull-back for
-    /// unreachable goals is not ported (gap, docs/systems/uncited-audit.md).
+    /// single route build. A fallback-goal route (the A*'s result 1: no goal node reaches the
+    /// destination) then runs `AINetwork_AlterDestFor_DROUTE_Nearest` 0x156088 — both callers
+    /// call it on `CalcRoute == 1` [M 0x15afa8-0x15afb4, 0x15afe0:33-35] — see
+    /// [`Route::alter_dest_nearest`].
     pub fn to_position(net: &Network, world: &CollisionWorld, path: Option<usize>, start: V3, dest: V3, goal: &TargetNodes, used: &[u16], locked: &dyn Fn(usize, u16) -> bool) -> Result<(u8, Route), u8> {
         if net.move_test(world, start, dest, true, false).0 == 1 {
             let mut r = Route::new(path.unwrap_or(0), RouteMode::OneWay, Vec::new(), Vec::new(), start, dest);
@@ -716,7 +732,28 @@ impl Route {
         let mut r = Route::new(pi, RouteMode::OneWay, nodes, links, start, dest);
         r.calc(net, 0);
         r.target = r.creep.a;
+        // `CalcRoute` returns OptimiseRoute's pass-through of the A* result [M 0x156760:158], and
+        // its `LinkCreep_Calc(route, 0)` runs before the pull-back [M 0x156ba8 tail], as here.
+        if res == 1 { r.alter_dest_nearest(net); }
         Ok((res, r))
+    }
+
+    /// `AINetwork_AlterDestFor_DROUTE_Nearest` 0x156088 [M disasm 0x156088-0x15615c]: the route's
+    /// LAST node (`route+0xF0[count−1]`, :0x1560b8-0x1560e4) move-tests to the destination
+    /// (`NDrone2_MoveTestFromNode`, the hit out on the stack); when the line crosses a boundary
+    /// (−1) the destination becomes the crossing pulled 1.0 back toward that node —
+    /// `hit − Vec_Normalise(hit − node)` (two `vsub`s around the jal 0x1e3000) — and the route's
+    /// +0 flag gets 0x40 (no reader in the tree). So a guard whose target stands past an AI
+    /// boundary heads for the boundary just short of it instead of the target behind it.
+    /// Returns true when the destination moved.
+    pub fn alter_dest_nearest(&mut self, net: &Network) -> bool {
+        let Some(&last) = self.nodes.last() else { return false };
+        let np = net.paths[self.path].nodes[last as usize].pos;
+        let (res, hit) = net.move_test_from_node_hit(np, self.dest);
+        let (-1, Some(h)) = (res, hit) else { return false };
+        let d = crate::trig::vec_normalise([h[0] - np[0], h[1] - np[1], h[2] - np[2]]);
+        self.dest = [h[0] - d[0], h[1] - d[1], h[2] - d[2]];
+        true
     }
 
     fn node_pos(&self, net: &Network, k: usize) -> V3 { net.paths[self.path].nodes[self.nodes[k] as usize].pos }
@@ -970,6 +1007,34 @@ mod tests {
         let mut adj = vec![Vec::new(); nodes.len()];
         for (k, l) in links.iter().enumerate() { adj[l.a as usize].push(k as u16); adj[l.b as usize].push(k as u16); }
         Network { paths: vec![NavPath { name: "t".into(), kind, nodes, links, adj }], walls: Vec::new(), bounds: false, slope_dy: 2.0, max_slope: 0.8727 }
+    }
+
+    /// `AINetwork_AlterDestFor_DROUTE_Nearest` 0x156088 on a fallback-goal route (A* result 1,
+    /// [M 0x15afa8-0x15afb4]): the last node's line to the target crosses a boundary, so the
+    /// route's destination becomes the crossing pulled 1.0 back toward that node
+    /// (`hit − normalise(hit − node)` [M disasm 0x1560fc-0x156128]); a real-goal route (0) and a
+    /// clear line keep the destination.
+    #[test]
+    fn a_fallback_route_pulls_its_destination_back_from_the_boundary() {
+        let mut n = net(&[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]], &[(0, 1)], 2);
+        n.bounds = true;
+        n.walls.push(Wall { a: [-5.0, 0.0, 2.0], b: [7.0, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0, cels: [None; 2] });
+        let w = CollisionWorld::empty();
+        let (start, dest) = ([-1.0, 0.0, 0.0], [5.0, 0.0, 4.0]);
+        let fallback = TargetNodes { found: None, fallback: Some(1) };
+        let (res, r) = Route::to_position(&n, &w, Some(0), start, dest, &fallback, &[0], &|_, _| false).unwrap();
+        assert_eq!(res, 1, "the fallback goal");
+        assert_eq!(r.dest, [5.0, 0.0, 1.0], "the crossing (5, 0, 2) pulled 1.0 back toward node 1");
+        // The pulled-back destination is what the route's remaining distance runs to.
+        assert!((r.distance(&n, [5.0, 0.0, 0.0]) - 1.0).abs() < 1e-5);
+        // A real goal keeps the destination [M: AlterDest only on CalcRoute == 1].
+        let found = TargetNodes { found: Some(1), fallback: None };
+        let (res, r) = Route::to_position(&n, &w, Some(0), start, dest, &found, &[0], &|_, _| false).unwrap();
+        assert_eq!((res, r.dest), (0, dest));
+        // A clear last leg keeps it too (MoveTestFromNode = 1, not −1).
+        n.walls[0] = Wall { a: [-5.0, 0.0, 2.0], b: [4.0, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0, cels: [None; 2] };
+        let (res, r) = Route::to_position(&n, &w, Some(0), start, dest, &fallback, &[0], &|_, _| false).unwrap();
+        assert_eq!((res, r.dest), (1, dest));
     }
 
     #[test]
