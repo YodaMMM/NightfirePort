@@ -109,3 +109,8 @@ face (x -16.29) still blocks every round from the lobby floor — the live check
 
 not visible to me (no token, credit, context-window or cost figures are exposed in this
 environment; nothing to copy).
+
+## ntfy
+
+curl timed out after 20 s (`curl: (28) Connection timed out after 20002 milliseconds`), the
+python urllib fallback timed out at 25 s; the wget fallback delivered (exit 0).
