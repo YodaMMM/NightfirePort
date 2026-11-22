@@ -204,6 +204,38 @@ fn outro_row(row: &Row) {
 #[test]
 fn the_exchange_briefing_plays_before_the_level_loads() { briefing_row(&ROWS[1]); }
 
+/// The skip stops the movie and its audio: case 6 calls psiStopBackgroundMovie on the pop
+/// [M 0x1c98c8:150]. The glue held the skipped briefing's player (decoder + audio stream) through
+/// the map load's pending window, and with an empty slot re-opened the same code there, so the
+/// briefing's sound ran on after the skip. Fails on the old glue; the slot must stay empty until
+/// phase 2 resolves.
+#[test]
+fn a_skipped_briefing_stops_its_player_at_the_pop() {
+    let iso = iso();
+    let row = &ROWS[1];
+    let code = row.briefing.unwrap();
+    let mut fe = FrontEnd::new();
+    walk_to_mission_select(&mut fe, row.cursor, row.name);
+    let mut slot: Option<nf_view::movie::Player> = None;
+    let mut state6 = 0;
+    for _ in 0..600 {
+        redraw(&mut fe, &mut slot, &iso);
+        if let Some(p) = slot.as_mut() { let _ = p.present(); }
+        if fe.flow.get_state() == ST_MOVIE { state6 += 1; }
+        if state6 >= 30 { break; }
+    }
+    if !slot.as_ref().is_some_and(|p| p.code() == code) { eprintln!("skip: no movie data on this image"); return; }
+    assert!(fe.flow.skip_movie(), "the skip pops state 6");
+    let mut resolved = false;
+    for i in 0..20 {
+        nf_view::mission_movie_glue(&mut fe, &mut slot, &iso);
+        assert!(slot.is_none(), "redraw {i} after the skip: the briefing's player is still up");
+        for _ in 0..8 { fe.tick(); }
+        if fe.flow.phase2_resolved.is_some() { resolved = true; break; }
+    }
+    assert!(resolved, "the skip resolves the level load");
+}
+
 #[test]
 fn double_cross_briefing_plays_before_the_level_loads() { briefing_row(&ROWS[4]); }
 

@@ -519,38 +519,79 @@ fn open_pcm_out(src: std::sync::Arc<Vec<i16>>, rate: f64, looping: bool, gain: f
     let Ok(cfg) = device.default_output_config() else { eprintln!("movie: no output config; running silent"); return None };
     let dev_rate = cfg.sample_rate() as f64;
     let ch = cfg.channels() as usize;
-    // movie-audio: the WHOLE track plays from memory at the device's own clock — the way a PS2
-    // movie's audio is the master the IOP streams continuously [M audioDecSendToIOP 0x107100 keeps
-    // the SPU2 ring full]. Feeding it one 33 ms slice per decoded picture (the old ring) starved it
-    // whenever the picture slipped (gaps = static) and dropped samples when it caught up (pitch
-    // jumps). Linear interpolation from the track's 48 kHz to the device rate.
+    // movie-audio: the whole track from memory at the device's clock (`PcmCursor`).
+    // nf_audio::OUTPUT_GAIN: the port's overall output level, the same as the game mixer's.
     let frames = src.len() / 2;
-    let step = rate / dev_rate;
-    let mut pos = 0.0f64;
+    let mut cur = PcmCursor::new(src, rate, dev_rate, looping, gain * nf_audio::OUTPUT_GAIN);
     let played = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0f64.to_bits()));
     let played2 = played.clone();
     let err = |e: cpal::Error| eprintln!("movie audio: {e}");
     let stream = match cfg.sample_format() {
         cpal::SampleFormat::F32 => device.build_output_stream(cpal::StreamConfig::from(cfg.config()), move |d: &mut [f32], _| {
-            for frame in d.chunks_mut(ch.max(1)) {
-                if pos >= frames as f64 - 1.0 {
-                    if looping { pos = 0.0; } else { frame.fill(0.0); continue; }
-                }
-                let i = pos as usize;
-                let t = (pos - i as f64) as f32;
-                // nf_audio::OUTPUT_GAIN: the port's overall output level, the same as the game mixer's.
-                let at = |k: usize, c: usize| src[2 * k + c] as f32 / 32768.0 * gain * nf_audio::OUTPUT_GAIN;
-                let l = at(i, 0) * (1.0 - t) + at(i + 1, 0) * t;
-                let r = at(i, 1) * (1.0 - t) + at(i + 1, 1) * t;
-                for (k, out) in frame.iter_mut().enumerate() { *out = if k % 2 == 0 { l } else { r }; }
-                pos += step;
-            }
-            played2.store(pos.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            cur.fill(d, ch);
+            played2.store(cur.pos().to_bits(), std::sync::atomic::Ordering::Relaxed);
         }, err, None).ok(),
         _ => { eprintln!("movie audio: unsupported sample format; running silent"); None }
     };
     if let Some(s) = &stream { if let Err(e) = s.play() { eprintln!("movie audio: {e}"); } }
     stream.map(|s| PcmOut { _stream: s, played, frames })
+}
+
+/// The movie track's device-side reader: the cpal callback's whole job, pure so a headless test
+/// can count what reaches the device. The WHOLE track plays from memory at the device's own clock,
+/// the way a PS2 movie's audio is the master the IOP streams continuously [M audioDecSendToIOP
+/// 0x107100 keeps the SPU2 ring full]. Feeding it one 33 ms slice per decoded picture (the old
+/// ring) starved it whenever the picture slipped (gaps = static) and dropped samples when it caught
+/// up (pitch jumps). Linear interpolation from the track's rate to the device rate; past the end a
+/// once-through track writes silence, a looping one wraps.
+pub struct PcmCursor {
+    src: std::sync::Arc<Vec<i16>>,
+    frames: usize,
+    step: f64,
+    pos: f64,
+    looping: bool,
+    gain: f32,
+}
+
+impl PcmCursor {
+    /// `src` interleaved stereo i16 at `rate`; `gain` the full output scale (movie gain × output gain).
+    pub fn new(src: std::sync::Arc<Vec<i16>>, rate: f64, dev_rate: f64, looping: bool, gain: f32) -> Self {
+        let frames = src.len() / 2;
+        PcmCursor { src, frames, step: rate / dev_rate, pos: 0.0, looping, gain }
+    }
+
+    /// The track position written so far, in source sample frames (the movie's audio clock).
+    pub fn pos(&self) -> f64 { self.pos }
+
+    /// The track length in source sample frames.
+    pub fn frames(&self) -> usize { self.frames }
+
+    /// True once a once-through track has written its last sample.
+    pub fn done(&self) -> bool { !self.looping && self.pos >= self.frames as f64 - 1.0 }
+
+    /// Fills one device buffer of `ch`-channel interleaved frames.
+    pub fn fill(&mut self, d: &mut [f32], ch: usize) {
+        let ch = ch.max(1);
+        for frame in d.chunks_mut(ch) {
+            if self.frames < 2 || self.pos >= self.frames as f64 - 1.0 {
+                if self.looping && self.frames >= 2 { self.pos = 0.0; } else { frame.fill(0.0); continue; }
+            }
+            let i = self.pos as usize;
+            let t = (self.pos - i as f64) as f32;
+            let at = |k: usize, c: usize| self.src[2 * k + c] as f32 / 32768.0 * self.gain;
+            let l = at(i, 0) * (1.0 - t) + at(i + 1, 0) * t;
+            let r = at(i, 1) * (1.0 - t) + at(i + 1, 1) * t;
+            // The pair goes to the device's FRONT L/R and a mono device gets the mix, the game
+            // mixer's own mapping (nf-audio's music path). Writing L/R to every even/odd channel put
+            // the left channel on a 5.1 device's centre and the right on its LFE, and dropped the
+            // right channel on a mono device.
+            match frame.len() {
+                1 => frame[0] = (l + r) * 0.5,
+                _ => { frame[0] = l; frame[1] = r; frame[2..].fill(0.0); }
+            }
+            self.pos += self.step;
+        }
+    }
 }
 
 /// movie-volume-options: the SfxMasterVolume → movie-gain mapping, pure so the default-feature
