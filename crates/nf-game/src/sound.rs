@@ -176,9 +176,13 @@ impl SoundTriggers {
                 if t.global { self.global_voice = 0; }
                 return t.one_shot != 1;
             }
-            // Still playing: stop on the OFF channel (only when it is a real channel), or when the
-            // ON channel clears and the keep byte is 0 [M 0x1b2790:49-59].
-            let stop = channels.on(t.off as u32) || (t.keep_on == 0 && !channels.on(t.on as u32));
+            // Still playing: stop on the OFF channel only when it is a real channel (`if
+            // (puVar2[1] != 0)` guards the read), or when the ON channel clears and the keep byte
+            // is 0 [M 0x1b2790:49-59]. Channel 0 is a live channel (any trigger whose out word is
+            // 0 writes it [M 0x1b1a78]); the playing arm's guard keeps an OFF-less trigger's line
+            // playing through it. The idle arm above reads `switch_channels[off]` unguarded [M
+            // 0x1b2790:15], so an idle OFF-less trigger does die on ch 0.
+            let stop = (t.off != 0 && channels.on(t.off as u32)) || (t.keep_on == 0 && !channels.on(t.on as u32));
             if !stop { return true; }
             audio.stop(t.handle);
             t.handle = 0;
@@ -348,5 +352,33 @@ mod tests {
         for _ in 0..20 { s.update(None, l, &|x| x == h2); }
         assert!(!s.finished(h2));
         assert_eq!(s.play(0xffff), 0);
+    }
+
+    /// `SoundTrigger_Update` 0x1b2790's playing arm reads the OFF channel only when the trigger
+    /// has one (`if (puVar2[1] != 0)` [M :49-52]). 0700000a's lobby radio line (#0x481: ON ch
+    /// 0xAD, OFF 0, the global voice [D placements]) was stopped 136 frames into its 279 when a
+    /// hall plate wrote ch 0 [L the walkreal sweep, NF_CHWATCH=0 frame 298]. Sister: a real OFF
+    /// channel still stops the line, and the ON channel clearing still stops it with keep 0.
+    #[test]
+    fn a_trigger_without_an_off_channel_plays_through_channel_0() {
+        let trig = |off: u16, keep_on: u8| SoundTrigger { on: 0xad, off, one_shot: 1, id: 0x481, is2d: 1, global: true, keep_on, pos: [0.0; 3], handle: 0 };
+        let run = |off: u16, keep_on: u8, write: &dyn Fn(&mut crate::triggers::Channels)| {
+            let mut st = SoundTriggers { list: vec![trig(off, keep_on)], global_voice: 0 };
+            let mut audio = Sounds::default();
+            let mut ch = crate::triggers::Channels::default();
+            ch.set(0xad, 1, 1);
+            st.tick(&mut audio, &ch);
+            let h = st.list[0].handle;
+            assert_ne!(h, 0, "the ON channel starts the line");
+            write(&mut ch);
+            st.tick(&mut audio, &ch);
+            (st.playing(0x481), st.global_voice == h)
+        };
+        // Ch 0 rises while the line plays: an OFF-less trigger keeps it (and the global voice).
+        assert_eq!(run(0, 0, &|c| c.set(0, 1, 2)), (true, true), "ch 0 must not stop an OFF-less trigger's line");
+        // Sisters: its real OFF channel stops it; the ON channel clearing stops it (keep 0).
+        assert_eq!(run(0x40, 0, &|c| c.set(0x40, 1, 2)), (false, false));
+        assert_eq!(run(0, 0, &|c| c.set(0xad, 0, 2)), (false, false));
+        assert_eq!(run(0, 1, &|c| c.set(0xad, 0, 2)), (true, true), "keep 1 rides the ON channel going low");
     }
 }
