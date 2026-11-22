@@ -290,6 +290,12 @@ fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, radius: f32, d
             // on #16 while #15 hit four more times (#15 32.0 in 7 hits, the pick down t5407).
             // With the abort the line opens at (152.9, 42.1, -116.0), 5.5 u out, and the stand
             // kills #15 in 10 ticks (t5049; #15 12.0 in 3 hits) [L the NF_DMG_TRACE runs].
+            // The lever's PRE-LEG stop: the walk's arrival ease may still hold a non-zero move
+            // quad at the excursion's first tick (the lever run's row t4933 landed on leg 1's
+            // FIRST tick — the moving branch cannot re-arm from a non-zero +0x1DC [M
+            // 0x179a48:44-58]), so leg 1 paid x0.75 unlatched. Six no-input ticks zero the
+            // lane (the dead-zone law above) and the excursion's first move re-latches.
+            w.wait(6);
             for (k, (name, at)) in excursion.iter().enumerate() {
                 // retune-nb-08-9 (d3): TRIED and DEAD on its own real run — the ledger lever (2)
                 // "the descent with the gun ALREADY raised" (a 30-tick aim hold before each leg;
