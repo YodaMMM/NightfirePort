@@ -9272,10 +9272,21 @@ impl Drone {
                 true
             }
             (AIM_STAND_FIRE, msg::ENTER) => {
-                // Non-snipers talk (`+0xC5` ≠ 2; `+0x4F8 & 0x10` and prop 0x40 not modelled).
-                if !self.stationary { self.attack_talk(d.level, rng); }
+                // [M 0x166328:30-49] the aim-anim arm runs only for a NON-locked guard without prop
+                // 0x40: `+0x4F8 & 0x10` set, or prop 0x40, diverts to CombatNoMove 0x59 BEFORE the
+                // anim — a prop-0x40 guard never parks in AimStandFire (its fire home is 0x59's own
+                // case-3 fire arm 0x1643e8:66-96, whose prop-0x40 exit is the 0x68 bounce itself).
+                // The port's placements here carry 0x40 clear [D plc 12/13 word 2 bit 3 via
+                // bitDescs 0x1c7d98], so the arm is a no-op on 07000012's start pair.
+                if self.stationary || self.prop(d, 0x40) { self.set_state(COMBAT_NO_MOVE); return true; }
+                // Non-snipers talk (`+0xC5` ≠ 2).
+                self.attack_talk(d.level, rng);
                 self.call_anim(d, anim_state::AIM_STAND, 0, 0);
                 self.vision_on = true;
+                // [M 0x166328:36-49] the captain's gun swap, AimStandFire's own copy (AimStand 0x67
+                // ENTER 0x166178:33-42 carries the same): a captain (+0x19) still holding the placed
+                // pistol 0x19 re-holds 0x18 before the aim anim and the entry fire.
+                if self.captain && self.weapon == 0x19 { self.weapon = 0x18; }
                 // [M 0x166328:48-52] the impact-danim deferral: a guard still playing danim 0x13 (the
                 // hit reaction; Drone_AnimInfo[0x13] +8 = anim state 0x4c) when AimStandFire enters
                 // clears `+0x3b` (firing) and arms timer C for FRAME_RATE_INT ticks — the first
