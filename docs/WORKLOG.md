@@ -34,3 +34,12 @@ State: Bond dies t7212 at (5.97, 42.04, −32.77) ONE-TO-TWO TAPS short — pool
 #11 40.0 + #20 32.5 + the court's 27.5. The refreshed ledger + the next levers (the fixed-target
 tower duel at the sight edge; the mouth-phase stream hunt; the corner #25 duel + the tunnel
 phases) are in the test's ignore message. The d3 walk stays ignored.
+
+## walk-06-00agent-2 (2026-11-22, s/walk-06-00agent-2)
+
+Branch from origin/master 7562f1e70; origin/s/walk-06-00agent merged in first (three conflicts:
+README + the gadget census taken from master's newer side, the walk's ignore message keeps both
+the master sweep text and the round-1 ledger). Goal: round 2 of the 06 castle-interior→party 00
+Agent real-damage walk — take the next untried levers from the round-1 ledger, judge each on its
+own real run, keep the Operative and Agent sisters green, helpers gated to level+difficulty.
+Progress appended below.
