@@ -89,3 +89,11 @@ Runs on the final tree (whole binary, `--test-threads=1`):
 ## Usage
 
 not visible to me.
+
+## ntfy failed
+
+All three fallbacks timed out from this sandbox (ntfy.sh unreachable):
+- `curl -sS -m 20 ... https://ntfy.sh/nightfire-yoda-8k3x` -> curl: (28) Connection timed out after 20002 milliseconds
+- python3 urllib.request (timeout=20) -> the wrapping call exceeded its budget (no response in 60 s)
+- `wget -q -O- --post-data ...` -> rc 124 (timeout kill)
+- curl retry -> curl: (28) Connection timed out after 20002 milliseconds
