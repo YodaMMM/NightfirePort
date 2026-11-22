@@ -10,17 +10,18 @@
 //!   |scale|) inflated ×1.5, plus the HITTEST radius, against the closest point on the HITTEST
 //!   segment, strict `<` [M :166];
 //! * stage 2, `Collide_Intersect` 0x1ebaa8 → `Intersect_CylGeom` 0x109da0 over the glist's
-//!   collision triangles. A glist whose flags carry bit 0x40 takes the raw one-sided refine
-//!   (`Collide_Intersect` 0x1ebaa8:89-96 sets HITDATA+0x51 |= 2 [M]; the port's
-//!   `seg_touches_tri_raw`); any other glist is measured here with the strict both-sided capsule
-//!   distance (`capsule_hits_tris_strict`) [S: the non-raw branch's ref-point law is not ported].
+//!   collision triangles: `Trigger::game_contact` → `triggers::cyl_geom_min`, the raw branch for a
+//!   glist whose flags carry bit 0x40 (`Collide_Intersect` 0x1ebaa8:89-96 sets HITDATA+0x51 |= 2
+//!   [M]) and the reference-point law for any other.
 //!
 //! The walk HITTEST is the default arm: A = pos + 0.275, B = pos + 0.55 − cc, r 0.55 [M
 //! Player_Collision 0x194df0 :315-333], cc = `player::ROOT_HEIGHT`.
 //!
-//! The port's standing decision is `drone::human_touchers` (standing, not hanging, not riding):
-//! the HITTEST segment (beam glists only), the measured box `Toucher::player(pos − 0.6)` with its
-//! containment branch, and the raw-plate segment.
+//! "port" columns are the shipped stand-in (`drone::human_touchers` → `box_touchers`: the HITTEST
+//! segment on beam glists, the measured box `Toucher::player(pos − 0.6)` with its containment
+//! branch, the raw-plate segment), so the rows list every volume whose standing contact a switch
+//! to the game's model would change. `drone::game_touchers` is checked against the model at every
+//! sample.
 //!
 //! Samples: Bond STANDING on the world floor (cel collision, rays straight down) on a 0.2 grid
 //! over each volume's footprint grown by 3.0, at every floor layer the ray meets in the volume's
@@ -66,17 +67,21 @@ fn mesh_fires(v: &Vol, pos: [f32; 3]) -> bool {
     let d2 = (0..3).map(|k| (c[k] - v.centre[k]).powi(2)).sum::<f32>();
     let reach = v.radius * 1.5 + R;
     if d2 >= reach * reach { return false; }
-    if v.bit40 {
-        v.t.tris.iter().zip(&v.t.planes).any(|(t, (n, d))| triggers::seg_touches_tri_raw(a, b, R, t, n, *d))
-    } else {
-        triggers::capsule_hits_tris_strict(a, b, R, &v.t.tris)
-    }
+    // The ported `Intersect_CylGeom` 0x109da0 (both branches, `Trigger::game_contact`).
+    assert_eq!(v.t.raw, v.bit40);
+    v.t.game_contact(a, b, R).is_some()
 }
 
-/// The port's standing decision (the shipped toucher set).
+/// The shipped stand-in's standing decision (`drone::human_touchers`).
 fn port_fires(v: &Vol, pos: [f32; 3]) -> bool {
     let (a, b) = hittest(pos);
     nf_game::drone::human_touchers(pos, (a, b, R), false, false, false).iter().any(|c| v.t.touched_by(c))
+}
+
+/// The game's own contact as a toucher set (`drone::game_touchers`).
+fn new_fires(v: &Vol, pos: [f32; 3]) -> bool {
+    let (a, b) = hittest(pos);
+    nf_game::drone::game_touchers(pos, (a, b, R), false, false, false).iter().any(|c| v.t.touched_by(c))
 }
 
 /// Why the port fires where the game does not: 0 = the stage-1 sphere rejects (the mesh alone
@@ -87,7 +92,7 @@ fn port_only_cause(v: &Vol, pos: [f32; 3]) -> usize {
     let s2 = if v.bit40 { v.t.tris.iter().zip(&v.t.planes).any(|(t, (n, d))| triggers::seg_touches_tri_raw(a, b, R, t, n, *d)) }
         else { triggers::capsule_hits_tris_strict(a, b, R, &v.t.tris) };
     if s2 { return 0; }
-    let no_contain = nf_game::drone::human_touchers(pos, (a, b, R), false, false, false).iter()
+    let no_contain = nf_game::drone::box_touchers(pos, (a, b, R), false, false, false).iter()
         .any(|c| v.t.touched_by(&nf_game::triggers::Toucher { contain: false, ..*c }));
     if !no_contain { return 1; }
     if triggers::capsule_hits_tris_strict(a, b, R, &v.t.tris) { return 2; }
@@ -116,6 +121,7 @@ fn touch_mesh_census_all_levels() {
     let mut tot_cause = [0usize; 4];
     let mut tot_vol_cause = [0usize; 4];
     let (mut tot_po, mut tot_mo, mut tot_both, mut vol_mo) = (0usize, 0usize, 0usize, 0usize);
+    let mut new_diff = 0usize;
     for &id in dev::LEVELS {
         if only.is_some_and(|o| o != id) { continue; }
         let Some(data) = read(&nf_view::level_archive_name(id)) else { continue };
@@ -196,6 +202,7 @@ fn touch_mesh_census_all_levels() {
                         let fy = from[1] + (to[1] - from[1]) * f;
                         let pos = [x, fy + STAND, z];
                         let (pf, mf) = (port_fires(v, pos), mesh_fires(v, pos));
+                        if new_fires(v, pos) != mf { new_diff += 1; }
                         let o = out_xz(v, x, z);
                         if dump == Some(v.t.placement) && ix % 4 == 0 && iz % 4 == 0 { println!("  sample x {x:.2} z {z:.2} floor {fy:.3} port {pf} mesh {mf}"); }
                         match (pf, mf) {
@@ -229,5 +236,6 @@ fn touch_mesh_census_all_levels() {
         }
     }
     println!("== samples: both {tot_both}, port-only {tot_po} (causes sph/contain/side/reach {tot_cause:?}, volumes {tot_vol_cause:?}), mesh-only {tot_mo} ({vol_mo} volumes)");
+    println!("== game_touchers vs the game model: {new_diff} samples differ (the stage-1 sphere only)");
     println!("== touch volumes {n_vol}, differing {n_diff}; ladders {n_lad} ({n_lad_nomesh} without a mesh, all on the two-stage pick already)");
 }
