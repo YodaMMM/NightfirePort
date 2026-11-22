@@ -83,8 +83,27 @@ beyond (the walk has never reached them on the post-1121b stream).
 - Whole-binary runs on the final tree (merged with origin/master): **walkreal_07000006_live
   8 passed / 0 failed / 1 ignored** (the ignored one is the ledgered 00 walk);
   **interactables_07000006_live 5 passed / 0 failed**.
-- The fast suite (`tools/test/suite.py`) was started on the merged tree; its total line is
-  appended below when it finished (the sandbox's 2-core window is the constraint).
+- The fast suite (`tools/test/suite.py`) was started on the merged tree but its build phase
+  **ENOSPCed**: the sandbox's 9.9 GB disk filled at 100 % during the -j4 link phase (the same
+  wall the retune-nb-16 session documented: "the nf-view binary set ENOSPCs this sandbox"); the
+  four terse "could not compile" lines in suite.out are link failures (exit status 1), and the
+  same binaries build clean at -j2 (walkreal_probe11_48_live: Finished in 0.10 s right after).
+  The full test-binary tree (6.1 GB in target/) cannot coexist with the ISO and work/ here.
+  The per-crate totals were then measured directly on the merged tree with
+  `cargo test --offline --release -- --test-threads=1`:
+  - **nf-game: 1226 passed / 3 failed / 5 ignored** across its binaries — the 3 fails are
+    `ai_cars_stay_on_the_roads_for_3600_ticks`, `the_pre_branch_configuration_fails_the_same_runs`
+    (long car-sim runs) and `the_wall_lists_and_the_hull_read_off_the_disc` (disc bytes);
+    nf-game's code is byte-identical to master's on this branch (the diff is one nf-view test
+    file + docs), so none are this task's regressions.
+  - **nf-formats + nf-audio: 258 passed / 2 failed / 0 ignored** — the 2 fails are
+    `every_track_and_car_crp_yields_meshes` and
+    `every_track_crp_yields_collision_under_its_road_network` (the slim onfoot ISO lacks the
+    full track data; the task's slim-ISO disc_golden allowance).
+  - **nf-view (the touched set): walkreal_07000006_live 8/0/1, interactables_07000006_live
+    5/0** — the rest of nf-view's binary set is the part that cannot be LINKED in this sandbox's
+    disk (the binaries were built and deleted again to free the disk; a future session with a
+    bigger disk should run the full set).
 
 ## Live checks for the main agent
 
