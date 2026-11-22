@@ -41,7 +41,7 @@ fn the_start_pair_keeps_apart_and_reaches_bond() {
 /// The game's three idle runs at d1 read 53-72 at frame 480 and 0-37 at 840 [L]; the rounds
 /// must land in that band, not the old 79 / 58.
 #[test]
-#[ignore = "the port reads 80.75 at 480 / 56.25 at 840 against the game's 53-72 / 0-37 [L]: every round is traced in start_rounds_07000012_live (no rolled hit passes the 120-tick NewSighting gate before t296, and each stand/crouch swap holds fire ~90 ticks for its transition anim); the game's alert tick and transition-anim length need a live read"]
+#[ignore = "the port reads 82.5 at 480 / 28.25 at 840 against the game's 53-72 / 0-37 [L]: 840 is in the band, 480 is not. The gap is the 360-480 window (port -5.25, game -25..-33): the south guard's 0x70 -> 0x67 stand swap at t382 holds fire 90 ticks, and the north guard's rolled hits clip the vending machine corner. Every gate on the path matches the decompile (docs/reports/s-l12-start-gap.md); the game's stance sequence and the north guard's firing spot need a live read"]
 fn the_idle_start_costs_bond_what_the_games_does() {
     let (_, _, _, hp) = idle_start();
     let at = |f: u32| hp.iter().find(|(t, _)| *t == f).unwrap().1;
