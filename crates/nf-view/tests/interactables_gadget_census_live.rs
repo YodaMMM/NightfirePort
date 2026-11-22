@@ -19,7 +19,8 @@
 //!   retried after that entity's ScriptPlayer is opened with the real E.
 //!
 //! A point with no type-2 icon on the level, or a lock with no stand / no carried gadget, is
-//! listed, not failed: those rows are read by hand in the report.
+//! listed, not failed: those rows are read by hand in the report. A point whose icon arm was
+//! reached (ctx 2) and whose fire latched nothing fails.
 
 use nf_view::scene::Sim;
 
@@ -114,6 +115,39 @@ fn open_blocking_sp(sim: &mut Sim, a: V3, b: V3) -> Option<usize> {
     None
 }
 
+/// 07000012's sky bridge break, played to its end. The game's copter wears its four holds down
+/// (t1, t74, t99, t134, 120 points each [M SP_Update 0x1dbda8 tail; D SP #660 p7 = 120]); the
+/// full copter run is `grapple_skybridge_07000012_live`. Here one round on the deck [D
+/// level12_bridge_live's pane hit] starts it and each hold is topped to one round short of its
+/// points, so the next round on a stream object releases it. The script's own stream 8 event 0xD
+/// raises ch 0x3C [D]. True when the channel came up.
+fn break_the_sky_bridge(sim: &mut Sim) -> bool {
+    let Some(bi) = sim.drones.scripts.players.iter().position(|p| p.placement == 660) else { return false };
+    let round = |pos: V3, dir: V3| nf_game::drone::PlayerBullet {
+        pos, dir, speed: 13.2, travelled: 0.0, range: 50.0, damage: 3.5, weapon: 2,
+        first: false, dead: false, bounces: 0, homing: false, target: None, target_copter: false, from_turret: None,
+        gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0,
+    };
+    // Bond waits on the west tower floor, off the deck that falls.
+    let yaw = sim.bond.yaw;
+    sim.place_bond([-11.0, 1.1, 33.0], yaw);
+    sim.drones.player_bullets.push(round([0.0, 1.5, 34.0], [0.0, 0.0, 1.0]));
+    for t in 0..2000u32 {
+        sim.step_bond(Default::default(), false, false, false);
+        sim.drones.health.health = 100.0;
+        if sim.drones.channels.on(0x3c) { return true; }
+        let p = &mut sim.drones.scripts.players[bi];
+        let held = p.info[p.cur].as_ref().is_some_and(|s| s.delay != 0);
+        if held {
+            p.damage = p.hit_points - 0.5;
+            let x = -6.0 + (t % 11) as f32;
+            sim.drones.player_bullets.push(round([x, 1.6, 34.0], [0.0, 0.0, 1.0]));
+            sim.drones.player_bullets.push(round([x, 2.0, 33.0], [0.0, 1.0, 0.0]));
+        }
+    }
+    false
+}
+
 fn census(archive: &str) -> Tally {
     let mut t = Tally::default();
     let load = || {
@@ -146,13 +180,22 @@ fn census(archive: &str) -> Tally {
             let yaw = sim.bond.yaw;
             sim.place_bond([c[0], c[1] + 0.5, c[2]], yaw);
             for _ in 0..60 { sim.step_bond(Default::default(), false, false, false); }
-            // An icon armed by a channel the mission raises later (07000012's on-channel 0x3C):
-            // the channel is set ON for the trial, standing in for that progress [M ThirdIcon
-            // 0x197070:27-32], and the row says so.
+            // An icon armed by a channel the mission raises later [M ThirdIcon 0x197070:27-32].
+            // 07000012's on-channel 0x3C has one writer, the sky bridge's break script (SP #660,
+            // stream 8 event 0xD at its end [D the level audit]): the break is played so the bridge
+            // falls the way it does before the icon can arm. Setting the channel alone left the
+            // bridge's glass tube standing between the arm and the point, an impossible state.
+            // Any other late channel is set ON for the trial, and the row says so.
             if sim.bond.icon_ctx != 2 && on_ch != 0 && !sim.drones.channels.on(on_ch as u32) {
-                let f = sim.drones.frame;
-                sim.drones.channels.set(on_ch as u32, 1, f);
-                tried.push(format!("icon on-channel {on_ch:#x} set on"));
+                if archive == "07000012.bin" && on_ch == 0x3c {
+                    assert!(break_the_sky_bridge(sim), "{name}: the sky bridge break never raised ch 0x3c");
+                    tried.push("the sky bridge broken first (its script raises ch 0x3c)".into());
+                    sim.place_bond([c[0], c[1] + 0.5, c[2]], yaw);
+                } else {
+                    let f = sim.drones.frame;
+                    sim.drones.channels.set(on_ch as u32, 1, f);
+                    tried.push(format!("icon on-channel {on_ch:#x} set on"));
+                }
                 for _ in 0..30 { sim.step_bond(Default::default(), false, false, false); }
             }
             if sim.bond.icon_ctx != 2 { tried.push(format!("({:.1},{:.1},{:.1}) ctx {} (icon on-channel {on_ch:#x} {})", c[0], c[1], c[2], sim.bond.icon_ctx, sim.drones.channels.on(on_ch as u32))); continue; }
@@ -184,7 +227,11 @@ fn census(archive: &str) -> Tally {
             sim.bond.grapple = None;
             sim.bond.substate = nf_game::player::SS_WALK;
         }
-        if !ok { t.listed.push(format!("{name}: no latch from the nearest type-2 icons: {}", tried.join("; "))); }
+        // A point whose icon arm was reached (ctx 2) but whose fire latched nothing is broken: a
+        // player standing where the game lets the claw fire cannot use it.
+        let armed = tried.iter().any(|s| s.ends_with("no latch") || s.contains("latched another point"));
+        if !ok && armed { t.broken.push(format!("{name}: armed but no latch: {}", tried.join("; "))); }
+        else if !ok { t.listed.push(format!("{name}: no latch from the nearest type-2 icons: {}", tried.join("; "))); }
         else if !tried.is_empty() { eprintln!("  pass {name}: {}", tried.join("; ")); }
     }
 
