@@ -272,6 +272,31 @@ impl Network {
         best.map(|b| b.2)
     }
 
+    /// `AINetwork_NavPathForPosition(pos, cel, 1)`: the reachable form [M 0x158488]. The cel pass
+    /// keeps a node only when it is nearer than the best so far AND `NDrone2_MoveTest(pos, node, 0,
+    /// 0, 0, 0)` 0x155330 passes (the flag-0 form: the slope/height/distance gates plus the
+    /// boundary test, no collision ray — `node_scan_ok`); with no such node the all-paths pass
+    /// runs WITHOUT the test, nearest node by 2D distance. The cel stands in as `nav_path_for`'s
+    /// 4-unit height band.
+    pub fn nav_path_for_reachable(&self, pos: V3) -> Option<usize> {
+        let mut best: Option<(f32, usize)> = None;
+        for (pi, p) in self.paths.iter().enumerate().filter(|(_, p)| p.kind & 0xd == 0) {
+            for n in p.nodes.iter().filter(|n| (n.pos[1] - pos[1]).abs() < 4.0) {
+                let d = dist2d(n.pos, pos);
+                if best.is_none_or(|b| d < b.0) && self.node_scan_ok(pos, n.pos) { best = Some((d, pi)) }
+            }
+        }
+        if best.is_none() {
+            for (pi, p) in self.paths.iter().enumerate().filter(|(_, p)| p.kind & 0xd == 0) {
+                for n in &p.nodes {
+                    let d = dist2d(n.pos, pos);
+                    if best.is_none_or(|b| d < b.0) { best = Some((d, pi)) }
+                }
+            }
+        }
+        best.map(|b| b.1)
+    }
+
     /// `AINetwork_NodeSearchCel` (0x156e18) candidates: the path's nodes in the box (±√r² or ±15 in x/z, ±2 in y) with dist2D ≤ r²
     /// (the linear distance against r², as written), nearest first; equal distances keep reverse file order. The game
     /// walks the per-cel node lists (`AINodeSearch+2` = the cel); this port is one cel [S deviation — the header note].

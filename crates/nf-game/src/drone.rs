@@ -1704,8 +1704,8 @@ pub struct Drone {
     /// only 60 ticks later [M 0x1490f0:242].
     pub door_open_at: u32,
     /// `Drone+0xBA8`: the door object this drone is working — stood in by the route's door nodes
-    /// (`NDrone2_ReachedDestNode` 0x153358) or `NDrone2_FindElevatorDoor` 0x14a940 (sniper/elevator
-    /// states, not ported); read by `NDrone2_OpenDoor` 0x14aa38 / `DoorIsOpen` 0x14aaa0 /
+    /// (`NDrone2_ReachedDestNode` 0x153358) or `NDrone2_FindElevatorDoor` 0x14a940 (the SniperAim /
+    /// ElevatorJumper ENTER scans — `elevator_scan`); read by `NDrone2_OpenDoor` 0x14aa38 / `DoorIsOpen` 0x14aaa0 /
     /// `ControlSTANDARD` 0x1490f0:232 (cleared when the door is > 2.0 away) / `LinkCreep_Handler`
     /// 0x15a2c8 (the blocked test is skipped while it stands). Port index into `Doors::list`.
     pub hit_door: Option<usize>,
@@ -1839,8 +1839,9 @@ pub struct Drone {
     /// (the execution-scene setup downstream of this link — `NDrone2_SetupHostageExecute`
     /// 0x14a808, from `NDrone2_DSTATE_HostageKillerAttack` 0x15c940 [M caller grep] — copies the
     /// hostage's and captor's positions into each other's AI+0x670 move-target slot and sets the
-    /// mutual facing yaw `+0x694` via `ATAN2_APPROX` [M 0014a808 decompile]. NOT YET PORTED: the
-    /// port has no HostageKillerAttack state.)
+    /// mutual facing yaw `+0x694` via `ATAN2_APPROX` [M 0014a808 decompile]. The state is ported
+    /// (HOSTAGE_KILLER_ATTACK); those move-target / facing writes are not — a facing detail of
+    /// the execution beat, the hostage's death itself rides the DIE message.)
     /// nearest armed guard; the save fires when it dies [M `NDrone2_DSTATE_Hostage` 0x15cb78:24-36]).
     /// The port stores the captor's `Drones::list` index.
     pub captor: Option<usize>,
@@ -2706,7 +2707,7 @@ impl Drone {
     /// (parameter 9 = 0x16) props 0, 1, 6, 0x41, 0x42, clears 0x13 and sets the engage range `+0xF0` to 10. [L] the
     /// level-start snapshot of 07000005 (work/ee_start_05.bin) differs from the placement words by exactly these bits.
     /// The per-mode writes (0xC, 0xD, 0x11) are in `type_setup`, where the mode is known. The mission-script
-    /// writes keyed on the start script [M 0x14c600:130-155] are not ported.
+    /// writes keyed on the start script [M 0x14c600:130-155] run at creation (the start-script `match p1` after `type_setup`).
     fn init_properties(&mut self, d: &Data, param: &impl Fn(u32) -> u32) {
         let set = |w: &mut [u32; 3], id: usize, v: u32| d.props.set(id, w, v);
         if param(5) < 0x24 {
@@ -3524,8 +3525,9 @@ impl Drone {
     /// disasm 0x13b7dc: `a1 = lb 0x45(a2)` in the dispatch's shared delay slot — the drone's byte, not the event arg).
     /// The game gates 1 / 5 / 6 / 9 / 0xB / 0xE on `0.0 < drone+0xAC` and `script == *(drone+0x530)`; the port's
     /// `script_commands` only ever runs the current script, so the script gate holds structurally and the health gate is
-    /// explicit here. Not ported: 0xE (`Drone_SM_SendMsg(0xB, 10, …)` to the `+0x2B0` partner's SMI +0x108 — the port has
-    /// no partner messaging) and the datum-entity swap behind 3 / 4 (the port's `holstered` bool stands in).
+    /// explicit here. Not ported: 0xE (`Drone_SM_SendMsg(0xB, 10, …)` to the `+0x2B0` partner's SMI +0x108 — carried by
+    /// one script on the whole disc, 07000029's 060003e9 frame 1 [D census of every 07* archive], no single-player
+    /// level) and the datum-entity swap behind 3 / 4 (the port's `holstered` bool stands in).
     fn event_func(&mut self, e: u16) {
         let alive = self.health > 0.0;
         match e {
@@ -5642,7 +5644,7 @@ impl Drone {
             // Knocked_Out 0x43 (0x172b48): no ENTER arm; update (case 0) and impacts (8/9) → Death_Anim.
             (KNOCKED_OUT, msg::UPDATE) => { self.set_state(DEATH_ANIM); true }
             (KNOCKED_OUT, _) => true,
-            // PunchImpact 0x53 (0x172ee0): ENTER sets +0x4F8 |= 0x10000 (flag not modelled) and replays
+            // PunchImpact 0x53 (0x172ee0): ENTER sets +0x4F8 |= 0x10000 (the port's `vision_on`) and replays
             // `NDrone2_PunchImpact(…, resume 0, allow 1)`; update (case 3) is `NDrone2_SeenAndAttacking`
             // (face the opponent, like the grenade-throw state).
             (PUNCH_IMPACT, msg::ENTER) => { self.vision_on = true; self.punch_impact(d, rng, frame, 0, true); true } // `+0x4F8 |= 0x10000` [M 0x172ee0:16]
@@ -6571,8 +6573,9 @@ impl Drone {
     ///   drone in `DSTATE_GoToGoalPosition` 0x63 and returns 0 [M :134-158]; else the goal falls to
     ///   the PLAYER (`SetupGoalPosition(2.0, player)`, return 0) [M :160-169];
     /// - no route (the count-0 path) → goal = the player, return 0 [M :101 → 160-169].
-    /// The route+0xd8==9 re-resolve of Drone+0x954 inside the unreachable arm is not modelled (the
-    /// port carries no route+0xd8; *suggested* — it only fires behind the follow-failure latch).
+    /// Inside the unreachable arm a voice-set-9 drone (Drone+0xD8 — the decompile's `iVar2` is the
+    /// Drone, not the route) re-resolves its nav path +0x954 with the reachable
+    /// `NavPathForPosition` form [M :134-137].
     fn re_find_mission_path(&mut self, d: &Data) -> bool {
         let feet = self.feet();
         let node_pos = |route: &crate::nav::Route, k: usize| d.nav.paths[route.path].nodes[route.nodes[k] as usize].pos;
@@ -6612,6 +6615,10 @@ impl Drone {
             route.calc(d.nav, route.index); // `LinkCreep_Calc(route, 0)` [M :106, 174]
             route.target = route.creep.a; // `LinkCreep_Dest(route, 0)` → +0x670 [M :108, 115-118, 176]
         }
+        // The unreachable-but-closest arm only: voice set 9 (+0xD8 — Mayhew's skins 0x1b / 0x4f)
+        // re-resolves its nav path +0x954 = `AINetwork_NavPathForPosition(obj+0x30, obj+0x20, 1)`
+        // before the route reset [M 0x153a30:134-137]; the reachable arm has no such write [M :174-211].
+        if best_reach.is_none() && self.voice_type == 9 { self.nav_path = Some(d.nav.nav_path_for_reachable(self.pos)); }
         self.croute = None; // InvalidateRoute(+0x860) [M :139-140, 203-204]
         let np = node_pos(self.route.as_ref().unwrap(), k);
         self.goal = Some(np);
@@ -6929,8 +6936,9 @@ impl Drone {
         // collide switch: bit CLEAR returns 0 — no collision — before any other test [M disasm
         // 0x149f08-18]; DefaultInit 0x14b300:60 sets the bit for every drone in the 0x801e2
         // bundle, SetAsDead 0x14a2f0:16 clears it off 0700004a); its +0x570 bit 1 (the anim-info
-        // no-physics bit) is the `no_physics_now` gate above [M 0x149ec8:30-32]; its +0x570 bit 2
-        // (the anim-info no-collide bit, DroneAnim_SetDAnimInternal 0x13aee8:50) is unmodelled.
+        // no-physics bit) is the `no_physics_now` gate above [M 0x149ec8:30-32]. DoCollision and
+        // DoGravity read no other +0x570 bit [M 0x149ec8, 0x141e58:36]; the & 4 bit is read by
+        // `NDrone2_DoAnimation` 0x149f88:15 and SetDAnimInternal 0x13aee8:82 (anim update), not here.
         let (r, top, bottom) = self.capsule(self.hip());
         let (push, pane) = world.pane_push([self.pos[0], self.pos[1] + top, self.pos[2]], [self.pos[0], self.pos[1] + bottom, self.pos[2]], r);
         self.pos[0] += push[0];
@@ -7670,8 +7678,8 @@ impl Drone {
                 // the arm at 0x17a738]. The old port skipped it — a tased guard who woke stayed on
                 // the fists id, so killing him dropped nothing where the game drops the weapon-6
                 // pickup (weapon_data[6]: +2 = 6, +0x80 != 0, +0x92 = 16 [L ee_start_05.bin]).
-                // (The game's skin-0x10 arm first flips +0x44 to 1 [M 0x1630b8:17-19] — not ported,
-                // not weapon handling.) The get-up anim 0x76 with follow-on
+                // (The game's voice-0x10 arm first flips +0x44 to 1 [M 0x1630b8:17-19] — the
+                // `team = 1` line below.) The get-up anim 0x76 with follow-on
                 // Attack 0x56 for non-civilians [M 0x1630b8 case 1].
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1630b8:16]
                 if self.voice_type == 0x10 { self.team = 1; } // `+0x44 = 1` [M 0x1630b8:16-18]
