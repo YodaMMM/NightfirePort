@@ -18,6 +18,10 @@
 //! live −96.71 stop (the explode position is HITDATA+0x40 [M 0x12ce80's 0x4 arm]; the flight
 //! light rides the rocket's own position ≈ 0.55 = one tick's travel behind — the live −96.2).
 //!
+//! From the level start pose the round stops on the wood: the aim snap takes the closed leaves
+//! [L muzzle-live/aim-ray-08-rocket: HIT (139.562, 50.792, -96.706) on the class-0x1c object] and
+//! two live shots exploded at z -96.706, x 139.52..139.54 [L live-1108].
+//!
 //! The port carries the same collision: the doors' dynamic set (world.rs `set_dynamic`, closed
 //! key-1 pose at create), shapes under the synthetic 0x8000_0000|map<<16|obj keys — mid-sim
 //! segment probes hit the stile (mat 3, z −96.706, normal +z) and the pane (mat 0x10).
@@ -77,87 +81,55 @@ fn world_impact(impacts: &[nf_game::drone::PlayerImpact]) -> [f32; 3] {
     }).expect("the rocket's world impact was recorded")
 }
 
-/// The straight fire path from the gate-0 start: the rocket's line crosses `DOOR_Shutter_2`'s
-/// second glass pane (mat 0x10, x 139.63..140.62 at the closed pose) — the glass rule passes it
-/// (no 0x800 in the rocket's +0x6c, no RNG draw) and the round explodes on the missile-cage back
-/// wall at z −100.0 [D cage triangles; L the live pass shot]. The same law rocket_glass08_live
-/// pins, re-pinned here through this task's own harness.
+/// The straight fire path from the gate-0 start: the round's line rides the wood band where the
+/// closed leaves meet, material 0x03 stops it (no glass, pass or roll bit [M 0x12ce80]) and the
+/// rocket explodes on the shutters' face, z -96.706 [L live-1108: from this pose two shots
+/// exploded at x 139.538 / 139.523, z -96.706, normal (0, 0, 1)]. The old door pass (every door
+/// passed rounds) carried this shot through to the -100 wall.
 #[test]
-#[ignore = "open: this pierce only passed while every door passed rounds (the placement-kind stand-in). On the glist word the aim snap lands on the shutters' wood and the round stops at z -96.706, the game's usual stop. Whether the live round from this exact pose reaches the pane needs a live check of the snap point and the spread"]
-fn the_straight_shot_pierces_the_glass_pane_to_the_back_wall() {
+fn the_straight_shot_stops_on_the_shutter_wood() {
     let Some(iso) = iso() else { return };
     let mut scene = setup(&iso);
     let (_spawn, _last, impacts) = fire(&mut scene);
     let blast = world_impact(&impacts);
-    assert!(blast[2] < -99.5 && blast[2] > -100.6, "the pierce ends on the −100 back wall, got z {:.3}", blast[2]);
+    assert!((blast[2] + 96.706).abs() < 0.03, "the round stops on the shutters' face z -96.706, got z {:.3}", blast[2]);
+    assert!(blast[0] > 139.44 && blast[0] < 139.62, "on the wood band x 139.44..139.62, got x {:.3}", blast[0]);
 }
 
-/// A sidestep left puts the rocket's line on the closed shutters' WOOD — `DOOR_Shutter_1`'s right
-/// stile abuts `DOOR_Shutter_3`'s left stile into one wood band x 139.44..139.62 at the closed
-/// pose [D coll-obj: leaf 1 mat-0x03 stiles x_obj −0.001..0.095 and 1.093..1.186 at t.x 138.346
-/// (identity closed quat); leaf 3 mirrored at t.x 140.719 (180° quat)]. The round STOPS —
-/// material 3 has no glass, pass or roll bits, so `Bullet_CollisionHandler`'s walk ends at the
-/// first hit — and explodes at the hit point, z −96.706 with normal +z (the live −96.71 stop;
-/// the flight light rides the rocket's own position one tick behind — the live −96.2 read).
-/// The stop branch, pinned at the surface + the material law: the same harness whose straight
-/// line pierces (shot 1 below is that measurement), sidestepped onto the closed shutters' WOOD —
-/// the world probe names the surface the game's round stops on: mat 0x03 (no glass/pass/roll
-/// bits), facing +z, front face z −96.706 [D coll-obj; the closed key-1 pose]. The material law
-/// [M Bullet_CollisionHandler 0x12ce80] then ends the walk at the first hit with NO RNG draw —
-/// pinned unit-side below — so the round explodes at the hit point (the live −96.71 stop; the
-/// flight light rides the rocket's own position one tick behind — the live −96.2 read). The
-/// end-to-end steered shot needs a held aim offset this harness's strafe-then-fire does not
-/// reproduce deterministically (the aim inertia) — that check needs a live render.
+/// The aim snap from the start pose takes the closed shutters: the game's crosshair ray (head
+/// (139.531, 50.792, -76.431) to the 256-out point (139.924, 50.792, -332.431)) first hits the
+/// class-0x1c door object at (139.562, 50.792, -96.706) [L audits muzzle-live/aim-ray-08-rocket:
+/// the Collide_RayIntersect HIT read at Player_WeaponInitBullet 0x1a4bf0]. The leaves' glist word
+/// carries no 0x60, so `Collide_PickObj` 0x1eae80's mask (0x20 | 0x40 for the 0x20a flags word
+/// [M disasm 0x1a4d68-0x1a4d88]) keeps them, and the leaf's own posed collision triangles give
+/// the hit; the wood (0x03) is no glass, so the 0x20a pass-glass bit does not skip it. The old
+/// placement-kind word (0xdb, bit 0x40) skipped every door here.
 #[test]
-#[ignore = "open: this pierce only passed while every door passed rounds (the placement-kind stand-in). On the glist word the aim snap lands on the shutters' wood and the round stops at z -96.706, the game's usual stop. Whether the live round from this exact pose reaches the pane needs a live check of the snap point and the spread"]
-fn the_steer_line_lands_on_the_wood_stile_at_the_games_z() {
+fn the_aim_snap_lands_on_the_shutter_wood_at_the_games_point() {
     let Some(iso) = iso() else { return };
-    let mut scene = setup(&iso);
-    // Shot 1 measures THIS harness's flight line at the shutters' plane (the spawn→last segment;
-    // the pane it crosses may shatter — the wood stop below is pane-independent).
-    let sim = scene.sim.as_mut().unwrap();
-    let bx0 = sim.bond.pos[0];
-    let (s1, last1, imp1) = fire(&mut scene);
-    let blast1 = world_impact(&imp1);
-    assert!(blast1[2] < -99.5, "shot 1 rides the straight (glass) line to −100, got z {:.3}", blast1[2]);
-    let dir = [last1[0] - s1[0], last1[1] - s1[1], last1[2] - s1[2]];
-    let t = (-96.75 - s1[2]) / dir[2];
-    let cross1 = s1[0] + dir[0] * t;
-    let off = cross1 - bx0; // the muzzle+drift offset of this harness's line
-    // The line rides the muzzle-to-SNAP direction (the corrected filter's snap lands on the cage
-    // back wall, so the flight direction bends toward it — the measured 0.071; the raw-aim line
-    // of the uncorrected tree measured ~0.19). The muzzle offset itself stays 0.15..0.35 [L the
-    // probe's o (139.706, 50.732, -77.129) vs the spawn x].
-    assert!(off > 0.04 && off < 0.35, "the harness's line offset is the muzzle-to-snap line's, got {off:.3}");
-    // Sidestep left until the line sits inside the wood band (139.44..139.62): one strafe tick
-    // moves ≤ 0.107, so exiting at line ≤ 139.56 keeps line ≥ 139.453 — always wood.
-    let sim = scene.sim.as_mut().unwrap();
-    let mut ticks = 0;
-    while sim.bond.pos[0] + off > 139.56 && ticks < 40 {
-        sim.step_bond(Input { strafe: 1.0, ..Default::default() }, false, false, false);
-        ticks += 1;
-    }
-    assert!(ticks < 40, "Bond sidestepped");
-    let line = sim.bond.pos[0] + off;
-    assert!(line > 139.44 && line < 139.62, "the line rides the wood band, got x {line:.3}");
-    for _ in 0..10 { sim.step_bond(Input::default(), false, false, false); }
-    let a: nf_game::world::V3 = [line, 50.77, -90.0];
-    let b: nf_game::world::V3 = [line, 50.77, -110.0];
-    let (tt, n, m) = sim.world.segment_surface_bullet(a, b).expect("the closed shutter is solid on the steered line");
-    assert_eq!(m, 3, "the steered line lands on the wooden stile, got mat {m}");
+    let scene = setup(&iso);
+    let sim = scene.sim.as_ref().unwrap();
+    let d = nf_game::drone::Data {
+        tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+        world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+        skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+        hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+        surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+        ai_points: &sim.ai_points,
+    };
+    let head = [139.531f32, 50.792, -76.431];
+    let raw = [139.924f32, 50.792, -332.431];
+    // 0x2d's +0x6C = 0x1a200 [L ee_start_05.bin @0x2bf150]: no 0x800, the ray passes glass.
+    let (pt, hits) = sim.drones.aim_snap_traced(&d, head, raw, true);
+    assert_eq!(hits.last().map(|h| h.stage), Some("door"), "the closed shutters take the snap, stops {hits:?}");
+    let live = [139.562f32, 50.792, -96.706];
+    let miss = ((pt[0] - live[0]).powi(2) + (pt[1] - live[1]).powi(2) + (pt[2] - live[2]).powi(2)).sqrt();
+    assert!(miss < 0.01, "the snap lands at the game's point {live:?}, got {pt:?} (off {miss:.4})");
+    let a = [pt[0], pt[1], pt[2] + 1.0];
+    let b = [pt[0], pt[1], pt[2] - 1.0];
+    let (_, n, m) = sim.world.segment_surface_bullet(a, b).expect("the shutter is solid at the snap");
+    assert_eq!(m, 3, "the snapped surface is the wood stile, got mat {m:#x}");
     assert!(n[2] > 0.9, "the stile faces +z (down the corridor)");
-    let z = -90.0 + (b[2] - a[2]) * tt;
-    assert!(z < -96.6 && z > -96.8, "the shutters' closed face at z ≈ −96.706, got {z:.3}");
-    // The same probe straight down the corridor line names the shutter surface the flight
-    // crosses. Under the corrected filter the snap lands on the cage back wall (the stat ray's
-    // own point, [L the probe: snapped (139.567, 50.789, -100.000)]), so the flight line bends
-    // onto leaf 3's closed stile (x ~139.59, mat 0x03) — the surface whose OBJECT the game's
-    // flight passes (Bullet_CollisionHandler's obj+0xF0 & 0x60 arm) while the uncorrected tree's
-    // raw-aim line crossed DOOR_Shutter_2's pane (mat 0x10). Both bytes are the closed shutters'
-    // own faces at the game's z; the pierce decision is the object arm's, not the byte's.
-    let a: nf_game::world::V3 = [cross1, 50.77, -90.0];
-    let (_t2, _n2, m2) = sim.world.segment_surface_bullet(a, b).expect("the shutters are solid");
-    assert!(m2 == 0x10 || m2 == 0x03, "the straight line lands on the shutter assembly, got mat {m2:#x}");
 }
 
 /// The material law on this window's two surfaces [M 0x12ce80:136-159]: the rocket's +0x6c
