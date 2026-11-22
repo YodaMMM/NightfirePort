@@ -27,6 +27,28 @@ thread_local! {
     /// `with_real_damage_glass_fights`: the return-fire pick fights the shooter who is actually
     /// hurting Bond first and skips cooled-down candidates (see `return_fire`).
     static HURTING_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_real_damage_most_hits_first`: the retarget law samples EVERY fight tick (not the
+    /// 30-tick grid) and reads the worst shooter over the WHOLE shooters set, not the worst
+    /// VISIBLE one. Opt-in per test: only the 07000008 00 Agent real-damage walk sets it
+    /// (2026-11-22, the y33 #18 burst: 14.0 landed inside 8 ticks while the 30-tick grid never
+    /// sampled [L the merged-tree run]).
+    static MOST_HITS_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `with_real_damage_fight_weave`: the fight stands WEAVE — real strafe input held through
+    /// the stand (a ±0.5 stick, the sides alternate with 6-tick stops between the legs) so
+    /// Bond's move quad never settles while the stand fires. The guards' perfect-shot roll
+    /// then reads a MOVING target: `DroneWeap_DoOpponentTargetting` 0x179a48 sets `+0x1DC`
+    /// from the player's move quad [M :33-41], and `DroneWeap_DoBulletAccuracy` 0x179740
+    /// multiplies the roll by `TargetFirstMoved_Accuracy` (0.25) while the per-drone `+0x1DD`
+    /// latch holds [M :52-54] and by `TargetMoving_Accuracy` (0.75) while the quad is non-zero
+    /// [M :71-73] — a standing stand pays the FULL roll, a weaving stand pays ×0.1875 of it
+    /// for ~90% of its ticks. The stop→move transition re-arms the latch: the stop branch
+    /// clears the `+0x1DE` hold [M 0x179a48:44-58], and the walk's own ease snaps the lane to
+    /// EXACT zero inside 6 no-input ticks (0.0375·0.8^n < 0.01 hits the dead-zone, [M
+    /// Player_Move 0x191dd0:111-141, the port's walk ease]), so each strafe leg re-latches
+    /// ×0.25 per drone. Opt-in per test: only the 07000008 00 Agent real-damage walk sets it
+    /// (2026-11-22); the d1/d2 sisters and every other walk keep the pinned standing
+    /// timelines (their streams never see the weave inputs).
+    static FIGHT_WEAVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The latest real-damage summary on this thread (refreshed every 60 ticks and at a death).
     static LAST_SUMMARY: std::cell::RefCell<Option<(u32, String)>> = const { std::cell::RefCell::new(None) };
 }
@@ -121,6 +143,38 @@ pub fn with_real_damage_unseen_fights<R>(f: impl FnOnce() -> R) -> R {
     struct Reset;
     impl Drop for Reset { fn drop(&mut self) { UNSEEN_FIGHTS.with(|c| c.set(false)); } }
     UNSEEN_FIGHTS.with(|c| c.set(true));
+    let _reset = Reset;
+    with_real_damage(f)
+}
+
+/// `with_real_damage` plus the MOST-HITS-FIRST retarget: the fight retarget samples EVERY tick
+/// (the shipped law samples every 30th tick — the merged-tree y33 burst landed 14.0 inside 8
+/// ticks between two grid samples, tick 14767 [L the 2026-11-22 run]) and reads the worst
+/// shooter over the WHOLE shooters set, not the worst VISIBLE one — a sniper whose rounds
+/// reach Bond through a gap his own eye ray misses (#18 at (115.2,41.5,-101.8) d 21.5 while
+/// the mid-west stand fought the zero-damage #15) is switched to like any visible one, and
+/// the stand's unseen creep opens the line. Opt-in per test: only the 07000008 00 Agent
+/// real-damage walk sets it; the d1/d2 sisters and every other walk keep the pinned timelines.
+#[allow(dead_code)]
+pub fn with_real_damage_most_hits_first<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { MOST_HITS_FIRST.with(|c| c.set(false)); } }
+    MOST_HITS_FIRST.with(|c| c.set(true));
+    let _reset = Reset;
+    with_real_damage(f)
+}
+
+/// `with_real_damage` plus the WEAVING fight stands (see the `FIGHT_WEAVE` field doc and
+/// `stand_and_fire`'s weave input): the stands hold a real ±0.5 strafe with 6-tick stops so
+/// the guards' perfect-shot roll reads a MOVING target (×0.25 first-moved × 0.75 moving =
+/// ×0.1875 of the standing roll, ~90% of the stand's ticks). Opt-in per test: only the
+/// 07000008 00 Agent real-damage walk sets it; the d1/d2 sisters and every other walk keep
+/// the pinned standing timelines (their streams never see the weave inputs).
+#[allow(dead_code)]
+pub fn with_real_damage_fight_weave<R>(f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { FIGHT_WEAVE.with(|c| c.set(false)); } }
+    FIGHT_WEAVE.with(|c| c.set(true));
     let _reset = Reset;
     with_real_damage(f)
 }
@@ -443,6 +497,23 @@ pub struct DamageLog {
     /// feet are tied. Off = master behaviour: no other walk sets the flag and every fight window
     /// is unchanged.
     pub descent_stationary_fights: bool,
+    /// OPT-IN (`with_real_damage_fight_weave`, the 07000008 00 Agent real-damage walk,
+    /// retune-nb-08-22): the fight stands hold a REAL ±0.5 strafe with 6-tick stops (see
+    /// `stand_and_fire`'s weave input) so the guards' perfect-shot roll reads a MOVING target
+    /// — `DroneWeap_DoOpponentTargetting` 0x179a48 derives `+0x1DC` (moving) from the player's
+    /// move quad [M :33-41], `DroneWeap_DoBulletAccuracy` 0x179740 multiplies the roll by
+    /// `TargetFirstMoved_Accuracy` (0.25) on the per-drone `+0x1DD` latch [M :52-54] and by
+    /// `TargetMoving_Accuracy` (0.75) while moving [M :71-73]: the standing stands pay the
+    /// FULL roll (the merged-tree deck fight paid 60.0 for 15 × −4.00 over 640 standing ticks
+    /// [L the 2026-11-22 baseline run]), the weave pays ×0.1875 of it for ~90% of the ticks.
+    /// The 6-tick stop re-arms the per-drone latch (the stop branch clears the `+0x1DE` hold
+    /// [M 0x179a48:44-58]; the walk ease's dead-zone zeroes the lane exactly [M the walk's
+    /// 0.2 ease ±0.1 clamp, Player_Move 0x191dd0:111-141]). Suppressed while `crowd` (the
+    /// back-off's own retreat owns the input) and while `creep` (the blind stand's creep owns
+    /// it), and never on the tied-feet stands (`descent_stationary_fights`) or the gated
+    /// stands (`sniper_stands`/`pre_throw_stands`). Off = the master standing stand everywhere
+    /// else.
+    pub fight_weave: bool,
     last_health: f32,
     last_hits: Vec<(u32, usize, f32)>,
     /// The live-hostile drones this log has already seen alive, with the walker tick of the
@@ -459,7 +530,7 @@ pub struct DamageLog {
 
 impl DamageLog {
     pub fn new() -> DamageLog {
-        DamageLog { min_health: 100.0, last_health: 100.0, die_panics: no_topup_env(), active: no_topup_env(), return_fire: !NO_RETURN_FIRE.with(|c| c.get()) && std::env::var_os("NF_WALK_NO_RETURN_FIRE").is_none(), hurting_first: HURTING_FIRST.with(|c| c.get()), ..Default::default() }
+        DamageLog { min_health: 100.0, last_health: 100.0, die_panics: no_topup_env(), active: no_topup_env(), return_fire: !NO_RETURN_FIRE.with(|c| c.get()) && std::env::var_os("NF_WALK_NO_RETURN_FIRE").is_none(), hurting_first: HURTING_FIRST.with(|c| c.get()), fight_weave: FIGHT_WEAVE.with(|c| c.get()), ..Default::default() }
     }
 
     fn owner_desc(sim: &nf_view::scene::Sim, owner: usize) -> String {
@@ -1161,7 +1232,14 @@ impl Walker {
                 // health 68 → 0 (death tick 25116). A player under new, closer fire switches
                 // targets; the shared fight never did. The switch resets the fight's own progress
                 // trackers (hp0/last_hit/aim/unseen) for the new target.
-                if self.dmg.hurting_first && t > 0 && t % 30 == 0 {
+                // MOST-HITS-FIRST (opt-in): sample EVERY tick — a burst rifle lands 14.0 inside
+                // 8 ticks, which falls whole between two 30-tick grid samples (the merged-tree
+                // y33 #18 burst, ticks 14767-14775, the #15 fight ended 14783 [L the 2026-11-22
+                // run]); with the flag the switch fires mid-burst (at +8.0, the third sample
+                // row) and the creep opens the line before the salvo closes. The default law
+                // keeps the 30-tick grid (the d2 timeline stays byte-exact).
+                if self.dmg.hurting_first && t > 0
+                    && (t % 30 == 0 || (MOST_HITS_FIRST.with(|c| c.get()) && t % 1 == 0)) {
                     let now = sim.drones.frame;
                     let dmg_of = |i: usize| -> f32 {
                         sim.drones.player_hits.iter().rev()
@@ -1172,7 +1250,10 @@ impl Walker {
                     let cur = dmg_of(di);
                     let better = self.dmg.shooters(sim).into_iter()
                         .filter(|&i| i != di)
-                        .filter(|&i| DamageLog::visible(sim, i))
+                        // MOST-HITS-FIRST: the worst shooter over the WHOLE set — the unseen
+                        // creep opens the line, so an unseen sniper is switchable exactly like
+                        // a visible one. The default law keeps the VISIBLE-only filter.
+                        .filter(|&i| MOST_HITS_FIRST.with(|c| c.get()) || DamageLog::visible(sim, i))
                         // The cooldown bends to active lethality (see the pick-side note): a
                         // guard visibly dealing > 15 over the window is switchable even inside
                         // his cooldown — the cooldown guards against INVISIBLE re-stands.
@@ -1391,7 +1472,24 @@ impl Walker {
                 // snipers [L ee_start_05.bin @ 0x2c10b8 flags68 0x408050]) fires its zero spread
                 // [M Bullet_init 0x12c5a0:139-170]. Off (every other walk) the bit never sets and
                 // the pull keeps the record's hip cone [M 0x12c5a0:139-170 mul = 1].
-                (Input { turn: drive_turn, look: drive_look, forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, aiming: self.dmg.aimed_fights || self.dmg.sniper_stands, ..Default::default() }, fire, reload)
+                // fight_weave (OPT-IN, retune-nb-08-22, see the DamageLog field doc): the
+                // stand's REAL strafe input — a ±0.5 stick alternating sides each 46-tick leg
+                // with 6-tick stops between (the 104-tick period). The sway runs perpendicular
+                // to the aim line, so the stand-off distance only GROWS (the TooClose ×2
+                // accuracy/damage gate at 3.0 u [M DroneFiring_TooClose_Distance] is never
+                // entered); the 6-tick stop zeroes the eased lane exactly (0.0375·0.8^6 =
+                // 0.0098 < 0.01 → the walk ease's dead-zone, [M Player_Move 0x191dd0:111-141]),
+                // which re-arms the guards' first-moved latch [M DroneWeap_DoOpponentTargetting
+                // 0x179a48:44-58 — the stop branch clears the +0x1DE hold], and the guards'
+                // roll reads moving + first-moved = ×0.1875 of the standing roll [M
+                // DroneWeap_DoBulletAccuracy 0x179740:52-54, :71-73]. Suppressed where the
+                // stand's own movement law owns the input: the crowd back-off, the blind
+                // creep, the tied-feet descent stands and the gated stands.
+                let weave_strafe = if self.dmg.fight_weave && !crowd && !creep
+                    && !self.dmg.descent_stationary_fights && !self.dmg.sniper_stands && !self.dmg.pre_throw_stands {
+                    match t % 104 { 0..=45 => 0.5, 46..=51 => 0.0, 52..=97 => -0.5, _ => 0.0 }
+                } else { 0.0 };
+                (Input { turn: drive_turn, look: drive_look, strafe: weave_strafe, forward: if crowd { -1.0 } else if creep { 0.5 } else { 0.0 }, aiming: self.dmg.aimed_fights || self.dmg.sniper_stands, ..Default::default() }, fire, reload)
             };
             if reload {
                 // replay-parity-walker-side-effects: the reload step is a real walker-stepped

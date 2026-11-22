@@ -1915,7 +1915,13 @@ impl CollisionWorld {
                     plane_world(&m, [q[0], q[1], q[2]], q[3]),
                 )), pane_part);
             } else {
+                let before = geo.tris.len();
                 geo.push_flags(t.iter().enumerate().map(|(k, t)| (t.map(|p| transform(&m, p)), mats.and_then(|v| v.get(k).copied()).unwrap_or(0))), pane_part);
+                if let Some(pl) = self.shape_planes.get(&h) {
+                    if geo.tris.len() - before == pl.len() {
+                        geo.set_tail_planes(&pl.iter().map(|q| plane_world(&m, [q[0], q[1], q[2]], q[3])).collect::<Vec<_>>());
+                    }
+                }
             }
             if geo.objects.len() > n { movers.push((id, d.last.get(&id).copied().unwrap_or(m), m)); last_objects.push((id, h, m)); flags.push(self.shape_flags.get(&h).copied().unwrap_or(0)); }
         }
