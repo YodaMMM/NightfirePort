@@ -2574,7 +2574,13 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // Operative: the sweep runs STANDING (measured: crouched, three kills and Bond left at 4.6
         // for the plate leg, t20383; standing, four kills and the yard, the plate and the
         // photograph pass - death t23462 at the shooting stand). The Agent sister keeps the crouch.
-        for _ in 0..(if difficulty == 1 || container_drop { 0 } else { 5 }) {
+        // retune-nb-0d-16: the Agent sister sweeps STANDING (the Operative posture — the d1
+        // ledger: "crouched, three kills and Bond left at 4.6 for the plate leg, t20383;
+        // standing, four kills and the yard, the plate and the photograph pass"; and the
+        // 0d-8 law: the crouched pass still drained ~0.1/tick through the 0.75 visibility +
+        // the 0.45 drop). Batch 3's body-box aim made the standing exposure the cheaper
+        // posture at this landing. The d1/d3 paths are unchanged (0 presses either way).
+        for _ in 0..(if difficulty == 2 { 0 } else if difficulty == 1 || container_drop { 0 } else { 5 }) {
             w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
             w.total_ticks += 1;
         }
@@ -2588,7 +2594,13 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // 0xf]) skips it. The crouch stays OFF for the container roll: the standing eye holds
         // the flat clear rays the probe read, and the 0.75 visibility cut does not hide a
         // stand inside four rifles' engage range.
-        let skip_env = difficulty == 1;
+        // retune-nb-0d-16: the Agent sister joins the Operative sweep discipline (the batch-3
+        // re-measure: the d2 400-tick passes re-picked unkillable picks for ~4400 ticks at the
+        // landing spot while the pack chipped 70.6 — death t19710 AT the landing (137.59,
+        // -296.21), the ledger's own floor-fight wall). The d1-proven fight law on this very
+        // level (the Operative walk is GREEN with it): 200-tick passes and a guard that
+        // survives his pass is not re-picked. The d1 path is unchanged (true || false).
+        let skip_env = difficulty == 1 || difficulty == 2;
         if container_drop {
             // retune-nb-0d-7: the corridor armour is the sweep's BUDGET (the take landed at
             // +50 [L the corridor probe run]; the absorb law eats the default-type 0x12 drain
@@ -2948,11 +2960,84 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             let Some((_, di)) = pick else { break };
             shoot_far_box(&mut w, di, "the drop-then-sweep (the nearest first)", if skip_env { 200 } else { 400 });
             if skip_env { let d = &w.scene.sim.as_ref().unwrap().drones.list[di]; if !d.corpse && d.health > 0.0 { failed.push(di); } }
+            // retune-nb-0d-16, THE POOL FLOOR (the yard_run sweep_floor law, the stand-sweep
+            // break above): the batch-3 re-measure pinned the d2 landing death INSIDE the
+            // sweep's pass-3 act — Bond stands the 200-tick cap while the unpicked chippers
+            // (#2 d 6.7, #7 d 24.5 — both blocked from the landing spot) finish him (death
+            // t19740 mid-act, "0 return-fire fights", the position the landing). The
+            // yard_run variant's own law: when the pool hits the floor the run legs take
+            // over — the objectives need no guard kill [L the 0d-10 ledger]. The floor rides
+            // the d2 landing sweep only (d1's pool is measured sufficient for its 12 passes).
+            if difficulty == 2 && real_damage {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let pool = sim.drones.health.health + sim.drones.health.armour;
+                if pool < 18.0 {
+                    eprintln!("[0d] the d2 landing sweep: the pool floor {pool:.1} reached — the stand re-open takes over");
+                    break;
+                }
+            }
         }
         }
-        if (difficulty != 1 || w.scene.sim.as_ref().unwrap().bond.crouched) && !container_drop {
+        // retune-nb-0d-16: the d2 press only STANDS a crouched sweep now (the standing sweep
+        // needs no stand; a press on a standing Bond would crouch him for the yard legs — the
+        // 0d-9 known-fatal slow gait). d1 unchanged (crouched-only either way).
+        if ((difficulty != 1 && difficulty != 2) || w.scene.sim.as_ref().unwrap().bond.crouched) && !container_drop {
             w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
             w.total_ticks += 1;
+        }
+        // retune-nb-0d-16, THE RETURN-FIRE SKIP FOR THE D2 YARD LEGS (the run-9 law, measured
+        // on this level for the container stand-first path): the walker's fight answer PINNED
+        // Bond ON the landing spot — the answer's acts cannot land from there (the rays to the
+        // nearest chippers #2 d 6.7 / #7 d 24.5 blocked from the landing), so the fight never
+        // resolves and the chips ride the whole stall (the 0d-16 lever runs: death t19740 /
+        // t19710, position UNCHANGED (137.59, -296.21) both runs, "0 return-fire fights" — the
+        // answer engaged nothing but held the walk). The objectives (the ST-3 plate, the
+        // photograph, the C5 door) need no guard kill [L the 0d-10 ledger]; the d1/d3 paths
+        // keep their own gating (d1 never set the flag; the container path sets it for the
+        // stand-first escape only).
+        if difficulty == 2 && real_damage {
+            w.skip_return_fire = true;
+        }
+        // retune-nb-0d-16, THE STAND RE-OPEN FOR THE D2 LANDING (the run-9 law, the container
+        // path's own proven shape): the landing sweep kills whoever IS reachable (the 0d-16
+        // run: #3 down at +53) but the nearest survivors' box aims are BLOCKED from the
+        // landing spot (#2 (143.3,-299.8) d 6.7 / #7 (160.8,-288.4) d 24.5 both unpicked —
+        // the pass-3 no-pick break) and their 0x12 cadence finished Bond AT the landing
+        // ~50 ticks after the sweep (death t19740, position unchanged). The probe's
+        // proven-clear stand (142, -291.5) re-opens the band rays (the run-9 probe law); the
+        // walk out is the run-2-proven zero-cost escape (skip_return_fire set above — the
+        // fight answer pinned Bond at the landing both runs). The stand walk runs fast_leg
+        // (the 0d-13 law: the walker's arrival zone crawls at ~0.01 u/tick — the crawl IS the
+        // exposure). The second sweep mirrors the landing loop (the 200-cap + the failed
+        // blacklist, the d1-proven discipline). d1/d3 keep their own paths (d1: the sweep's
+        // standing kills reach the plate leg; d3: the container stand re-open block).
+        if difficulty == 2 && real_damage {
+            fast_leg(&mut w, [142.0, 5.0, -291.5], 1.5, "the d2 landing stand re-open");
+            eprintln!("[0d] the d2 stand re-open: at {:?} health {} armour {}", bond_pos(&w),
+                w.scene.sim.as_ref().unwrap().drones.health.health, w.scene.sim.as_ref().unwrap().drones.health.armour);
+            let mut failed: Vec<usize> = Vec::new();
+            for _ in 0..12 {
+                let pick = {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let mut best: Option<(f32, usize)> = None;
+                    for (i, d) in sim.drones.list.iter().enumerate() {
+                        if !d.present || d.corpse || d.health <= 0.0 { continue; }
+                        if failed.contains(&i) { continue; }
+                        if d.pos[1] >= 10.5 { continue; }
+                        if !(118.0..=182.0).contains(&d.pos[0]) { continue; }
+                        if !(-335.0..=-263.0).contains(&d.pos[2]) { continue; }
+                        if clear_box_aim(sim, i).is_none() { continue; }
+                        let dist = walker::dxz(sim.bond.pos, d.pos);
+                        if best.map_or(true, |(bd, _)| dist < bd) { best = Some((dist, i)); }
+                    }
+                    best
+                };
+                let Some((_, di)) = pick else { break };
+                if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
+                shoot_far_box(&mut w, di, "the d2 stand re-open sweep (the nearest first)", 200);
+                let d = &w.scene.sim.as_ref().unwrap().drones.list[di];
+                if !d.corpse && d.health > 0.0 { failed.push(di); }
+            }
         }
     } else {
         for (at, tol, label) in [
@@ -3431,9 +3516,11 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 // container route at d2 (the 00 Agent hop) boards only standing at the corner, and its hop then
 // misses the container top (hold 36: the yard floor at x 138.9; holds 8/14 stay on the girder,
 // 20 the floor, 26 the top at health 0).
-#[ignore = "batch 3 (stream batch 1121d), 40 measured runs: with the committed 11000/45 stop Bond dies t4397 at the ladder #435 top (213.06, 17.37, -234.51) to the south-roof rifles (#19/#31/#20 28.0 each); 25 single stops 200-3500 die there or on the deck (t11427-13241), the corner crouch hangs him off the aboard plate (ch 0x67 never fires), and 3000/60 plus 18 second stops 5000-19500 all reach the yard landing and die there (137.59, 4.63, -296.21) t19334-20492, the 00 Agent sister's floor-fight wall"]
+#[ignore = "retune-nb-0d-16 (the batch-3 merged tree, master 6691acd8c + 0d-15), 8 measured runs: the committed 11000/45 stop dies t4397 at the ladder top (213.06,17.37,-234.51) to the south-roof rifles #19/#31/#20 (28.0 each, 6 hits for 100.0) — reproduced [L 16-1]; the 00agent sister's 0d-15 green is ALSO broken by stream batch 3 on the merged tree (t3995 at the same ladder top, 4 hits for 100.0 [L 16-0]); the ledger's best shape (3000/60 + a second stop 11000/45) reaches the yard landing and dies t19710/t19740 at (137.59,-296.21) — THE NEW FACT: the death is INSIDE the landing sweep's own pass-3 act, Bond standing the 200-tick cap while the unpicked chippers (#2 (143.3,-299.8) d 6.7 / #7 (160.8,-288.4) d 24.5, both box-aims blocked from the landing spot) finish him, '0 return-fire fights' — the fight answer never engages and the walk never starts [L 16-2..16-4]; the round-16 lever set (the d1-proven sweep discipline — the 200-caps + the failed blacklist + the standing posture — then the pool floor 18 break, the skip-return-fire, the fast stand re-open to (142,-291.5) + the second nearest-first sweep, all d2-gated, d1/d3/plain byte-identical) EXECUTED end-to-end: the floor broke at pool 6.5 (the three sweep passes cost ~30 through the armour), the stand walk fast-arrived +64, the re-open sweep ran — the death moved +402 deeper (t20142) with 34 hits for 70.6 + 29.4 other, the pool the wall (health 2.25 armour 0 at the stand [L 16-5]; 29.4 = the falls, raw 42 x the d2 Normal 0.7 [M 0x1949a8 x 0x1902c8]). NEXT LEVERS: (a) the hop/fall re-tune at this shape — the NF_0D_HOP_HOLD grid re-rolled (hold 13 measured 10.2 fall damage green on the old shape [L s/hard-walks-a]; the 3000/60 re-roll now takes 29.4 — a re-hop or a longer slot fall), (b) the 0d-15-proven d3 acts gated to d2 (NORTH_S1 the #6 corner act from yard-south-1 d ~15.6, NW_KILL the #4 early catch at the park band), (c) the pool floor value + the re-open sweep's pass cap re-tune"]
 fn walk_arrival_to_the_c5_door_real_damage_agent() {
-    walker::with_pause(11000, 45, || walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true)));
+    // retune-nb-0d-16 round: the ledger's best-known shape (3000/60 + a mid second stop) to
+    // reproduce the deep yard-landing wall on the merged tree before lever work.
+    walker::with_pauses(&[(3000, 60), (11000, 45)], || walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true)));
 }
 
 /// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister. GREEN
