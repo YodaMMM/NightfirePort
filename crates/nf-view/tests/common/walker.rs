@@ -728,7 +728,8 @@ impl Walker {
                 if !dr.corpse && dr.health > 0.0 { dr.health = dr.health.max(1000.0); }
             }
         }
-        if self.skip_cutscenes && self.scene.sim.as_ref().unwrap().disabled {
+        // `NF_WALK_WATCH_CUTSCENES` (the voice-cut sweep): every cut-scene plays out, its lines to their end.
+        if self.skip_cutscenes && self.scene.sim.as_ref().unwrap().disabled && std::env::var_os("NF_WALK_WATCH_CUTSCENES").is_none() {
             self.scene.sim.as_mut().unwrap().drones.scripts.skip_request = true;
         }
         let y_before = self.scene.sim.as_ref().unwrap().bond.pos[1];
