@@ -473,6 +473,13 @@ pub fn sound_log() -> bool {
     *F.get_or_init(|| std::env::var_os("NF_SOUND_LOG").is_some())
 }
 
+/// `NF_LINE_LOG` is set: the driver prints one `[line]` row per keyed item at its kill (the
+/// voice-cut sweep's ledger: played vs expected frames and the kill's reason) — a port aid.
+pub fn line_log() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("NF_LINE_LOG").is_some())
+}
+
 /// The null mixer's thread (`NF_NULL_MIXER` with `NF_SILENT`): stops when the output drops.
 struct NullMixer { stop: Arc<std::sync::atomic::AtomicBool>, thread: Option<std::thread::JoinHandle<()>> }
 

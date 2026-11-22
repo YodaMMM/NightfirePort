@@ -100,6 +100,35 @@ struct Item {
     sample_hash: u64,
     /// The port's sound log (`NF_SOUND_LOG`): why the item was marked `DeleteMe` (numbers only).
     why: &'static str,
+    /// The line ledger (`Driver::line_ledger`, tests): the item's `counter` when channel 0 keyed on
+    /// with the sim frame (None while a precache holds it), and that sample's length in game frames.
+    keyed_at: Option<(i32, u32)>,
+    expect_frames: u32,
+}
+
+/// One item's life in the line ledger (tests, the voice-cut sweep): what started, how long its
+/// first sample lasts on the frame clock, and how many updates it ran before the kill pass took it.
+#[derive(Clone, Debug)]
+pub struct LineRec {
+    pub id: u32,
+    pub handle: u32,
+    pub streamed: bool,
+    pub looped: bool,
+    /// 0 = one sample; else the effect's multi-sample cue (a sequence or chord).
+    pub multi: bool,
+    /// The sim frame (`log_frame`) of the key-on and of the kill.
+    pub start_frame: u32,
+    pub end_frame: u32,
+    /// The first sample's length in game frames on the frame clock (`VoiceClock::advance`).
+    pub expect_frames: u32,
+    /// Updates between the key-on and the kill pass.
+    pub played_frames: u32,
+    /// Why the kill pass took it (`Item::why`); "" = still alive at the read.
+    pub why: &'static str,
+    /// The item's channel-0 voice still sounded at the kill (no end flag yet).
+    pub voice_live: bool,
+    /// False: the start never keyed a voice (the setup rejected it, or a precache expired).
+    pub keyed: bool,
 }
 
 /// frame-hitches: one background decode's input (`Driver::predecode_in_background`).
@@ -204,6 +233,8 @@ pub struct Driver {
     pub clock: crate::VoiceClock,
     /// The sound log's frame tag (`NF_SOUND_LOG`): the host writes the sim frame before each batch.
     pub log_frame: u32,
+    /// Test hook (the voice-cut sweep): when set, every item is logged here at its kill (or its rejected start).
+    pub line_ledger: Option<Vec<LineRec>>,
 }
 
 /// `Streams[1..2]`: at most two streamed effects at once (slot 0 is the music) [M `SFXInitialiseStream`].
@@ -232,7 +263,7 @@ impl Driver {
             music_master: 70, mute_sfx: 1, indoors: 100, indoors_target: 100, reverb: 0, reverb_target: 0, underwater: false,
             fade: 10000, fade_music_volume: 10000, fade_status: 0, fade_rate: 30, fade_music: 1, fade_start: 0,
             ducker_current: 100, ducker_volume: 100, ducker_duration: 1, ducker_start: 0, timer_ms: 0, nis_quitten: false, nis_playing: false,
-            key_on_frame_delay: 0, paused: false, clock: Default::default(), log_frame: 0,
+            key_on_frame_delay: 0, paused: false, clock: Default::default(), log_frame: 0, line_ledger: None,
             listener_pos: [0; 3], listener_dir: [0, 1000, 0], listener_norm: [-1000, 0, 0], active: Vec::new(), streams: None, stream_pcm: HashMap::new(), predecoded: None }
     }
 
@@ -373,6 +404,7 @@ impl Driver {
             // (`SampleKeyOn(VoiceHandle[0], …)` [M §3.2 step 3]).
             self.items[k].key_on_delay = 0;
             self.items[k].started_when_nis = self.nis_playing;
+            if self.items[k].keyed_at.is_none() { self.items[k].keyed_at = Some((self.items[k].counter, self.log_frame)); }
             let held = std::mem::take(&mut self.items[k].held);
             // The key-on clears the voice's end state: the SPU's KON resets ENDX, and a stream's
             // end test (`ES_HasStreamEnded`, HasSampleEnded@6ac's stream arm) starts over with the
@@ -406,6 +438,8 @@ impl Driver {
             gpaused: false,
             sample_hash: 0,
             why: "",
+            keyed_at: None,
+            expect_frames: 0,
             started_when_nis: self.nis_playing,
             streamed: false,
         };
@@ -416,7 +450,10 @@ impl Driver {
         // start reports the failure. Left in the list it reached the next `update` before the kill
         // pass, and the polyphonic arm indexed its empty `cued` — a crash (at
         // sfx.rs `fx.subs[cued[k]]`) when the front end restarted its music pair over the live one.
-        if self.items[0].delete { self.items.remove(0); }
+        if self.items[0].delete {
+            if let Some(r) = self.line_ledger.is_some().then(|| self.line_rec(0)).flatten() { if let Some(l) = self.line_ledger.as_mut() { l.push(r); } }
+            self.items.remove(0);
+        }
         1
     }
 
@@ -559,6 +596,11 @@ impl Driver {
             let it = &self.items[i];
             eprintln!("[snd] f{} start {:#x} handle {} voice {front} rear {:?} len {} pitch {:#x} stream {streamed} held {hold} nis {}",
                 self.log_frame, it.id, it.handle, rear, pcm.data.len(), pitch.max(0), it.started_when_nis);
+        }
+        if ch == 0 && self.items[i].keyed_at.is_none() {
+            let step = pitch.max(1) as f64 / 4096.0;
+            self.items[i].expect_frames = (pcm.data.len() as f64 / step / crate::CLOCK_FRAME as f64).ceil() as u32;
+            if !hold { self.items[i].keyed_at = Some((self.items[i].counter, self.log_frame)); }
         }
         let front_cmd = Cmd::Play { voice: front, pcm: pcm.clone(), pitch: pitch.max(0) as u32, left: l, right: r, delay: 0.0, reverb };
         if hold { self.items[i].held.push(front_cmd) } else { out.push(front_cmd) }
@@ -870,6 +912,15 @@ impl Driver {
                     let it = &self.items[k];
                     eprintln!("[snd] f{} kill {:#x} handle {} why {} after {} updates", self.log_frame, it.id, it.handle, if it.why.is_empty() { "?" } else { it.why }, it.counter);
                 }
+                if self.line_ledger.is_some() || crate::line_log() {
+                    if let Some(r) = self.line_rec(k) {
+                        if crate::line_log() {
+                            eprintln!("[line] id {:#x} handle {} f{}-f{} played {} expect {} why {} live {} stream {} loop {} multi {} keyed {}",
+                                r.id, r.handle, r.start_frame, r.end_frame, r.played_frames, r.expect_frames, r.why, r.voice_live, r.streamed, r.looped, r.multi, r.keyed);
+                        }
+                        if let Some(l) = self.line_ledger.as_mut() { l.push(r); }
+                    }
+                }
                 for ch in 0..10 {
                     if let Some(v) = self.items[k].vh[ch].take() {
                         if let Some(x) = self.voices[v].take() {
@@ -883,6 +934,22 @@ impl Driver {
         }
         self.active = self.items.iter().map(|it| (it.id, it.handle)).collect();
         reverb_depth
+    }
+
+    /// The ledger row of item `k` (`keyed` false when it never keyed a voice).
+    fn line_rec(&self, k: usize) -> Option<LineRec> {
+        let it = &self.items[k];
+        let (c0, f0, keyed) = match it.keyed_at { Some((c, f)) => (c, f, true), None => (it.counter, self.log_frame, false) };
+        Some(LineRec { keyed, id: it.id, handle: it.handle, streamed: it.streamed || it.fx.subs.first().is_some_and(|s| s.file < 0),
+            looped: it.fx.looped != 0 || it.vh.iter().flatten().any(|&v| self.voices[v].as_ref().is_some_and(|x| x.looping)),
+            multi: it.fx.multi_sample != 0, start_frame: f0, end_frame: self.log_frame, expect_frames: it.expect_frames,
+            played_frames: (it.counter - c0).max(0) as u32, why: it.why,
+            voice_live: it.vh[0].is_some_and(|v| self.voices[v].as_ref().is_some_and(|x| x.playing)) })
+    }
+
+    /// The ledger rows of the items still alive (tests): `why` "".
+    pub fn live_line_recs(&self) -> Vec<LineRec> {
+        (0..self.items.len()).filter_map(|k| self.line_rec(k).map(|mut r| { r.why = ""; r })).filter(|r| r.keyed).collect()
     }
 
     /// `SFXUpdateEnding` (0x4e20): delete, or for `Loop` re-trigger after the cue delay. True = process again now.
