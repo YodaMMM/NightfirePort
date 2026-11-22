@@ -1,10 +1,9 @@
-//! rocket-glass-08: the 07000008 corridor rocket flew ~5 units short — it exploded on the far
-//! window's pane (material 0x10) instead of the wall behind it. The game's
-//! `Bullet_CollisionHandler` 0x12ce80 lets every bullet pass material 0x10 (glass) unless the
-//! shooter's `weapon_data+0x6c` carries 0x800 [M disasm 0x12cf44..0x12cf64], so the PS2 rocket
-//! crosses the pane and explodes on the wall past it (~24 units, ~72 frames; side-by-side vs
-//! PCSX2 2026-10-16). The port's walk lacked the rule and stopped the round on the pane at
-//! 19.25 units (56 ticks). fix-rocket-glass-08.
+//! rocket-glass-08: the glass rule. The game's `Bullet_CollisionHandler` 0x12ce80 lets every
+//! bullet pass material 0x10 (glass) unless the shooter's `weapon_data+0x6c` carries 0x800 [M
+//! disasm 0x12cf44..0x12cf64]. The 07000008 corridor window is a set of closed shutter doors:
+//! from the level start the straight rocket meets their WOOD (material 0x03), not a pane, and
+//! stops on the shutters' face at z -96.706 [L live-1108, two shots from the start pose]; only a
+//! line that crosses a glass leaf passes through to the wall behind.
 //! Opt-in: set `NF_ISO` to the disc image.
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
@@ -28,12 +27,18 @@ fn glass_passes_unless_the_weapon_burns_it() {
         "a plain wall still stops the round");
 }
 
-/// The task's shot: the unguided launcher fired from the 07000008 level start straight down the
-/// corridor. The port's rocket must cross the window plane (z −96.75, material 0x10) and explode
-/// on the wall face behind it (z −100.0, material 0x0a) — the game's explosion point.
+/// The straight shot from the 07000008 level start: the aim snap lands on the closed shutters'
+/// wood (the leaves' obj+0xF0 glist word carries no 0x60, so `Collide_PickObj` keeps them [M
+/// 0x1eae80 mask, disasm 0x1a4d68-0x1a4d88]) and the round's line rides the wood band where the
+/// two leaves meet (x 139.44..139.62). Material 0x03 carries no glass, pass or roll bit, so
+/// `Bullet_CollisionHandler` 0x12ce80 ends the walk at that hit and the rocket explodes on the
+/// shutters' closed face, z -96.706, normal +z [L live-1108: two shots from this pose exploded
+/// at (139.538, 51.024, -96.706) and (139.523, 50.832, -96.706), normal (0, 0, 1)]. It does not
+/// reach the pane or the -100 wall behind. The old door pass (every door passed rounds, read
+/// from the placement kind 0xdb's 0x40 bit) skipped the leaves in the snap and the flight and
+/// carried this shot through to z -100.
 #[test]
-#[ignore = "open: this pierce only passed while every door passed rounds (the placement-kind stand-in). On the glist word the aim snap lands on the shutters' wood and the round stops at z -96.706, the game's usual stop. Whether the live round from this exact pose reaches the pane needs a live check of the snap point and the spread"]
-fn the_08_corridor_rocket_explodes_past_the_window() {
+fn the_08_corridor_rocket_stops_on_the_shutter_wood() {
     unsafe { std::env::set_var("NF_SILENT", "1"); }
     let Some(iso) = iso() else { return };
     let mut scene = nf_view::load_weapons(&iso, "07000008.bin", false, &[0x2d]).expect("load 08");
@@ -47,47 +52,31 @@ fn the_08_corridor_rocket_explodes_past_the_window() {
     assert_eq!(sim.gun.weapon, 0x2d, "the launcher is drawn");
     for _ in 0..10 { sim.step_bond(Default::default(), false, false, false); }
 
-    let mut spawn = None;
+    let mut fired = false;
     for _ in 0..30 {
         let before = sim.drones.player_bullets.len();
         sim.step_bond(Default::default(), true, false, false);
-        if sim.drones.player_bullets.len() > before {
-            let b = sim.drones.player_bullets.last().unwrap().clone();
-            spawn = Some([b.pos[0] - b.dir[0] * b.travelled, b.pos[1] - b.dir[1] * b.travelled, b.pos[2] - b.dir[2] * b.travelled]);
-            break;
-        }
+        if sim.drones.player_bullets.len() > before { fired = true; break; }
     }
-    let spawn = spawn.expect("a rocket was fired");
-
-    // Fly the round to its death, remembering the last live position.
-    let mut last = spawn;
+    assert!(fired, "a rocket was fired");
     for _ in 0..140 {
         if sim.drones.player_bullets.iter().all(|b| b.weapon != 0x2d) { break; }
         sim.step_bond(Default::default(), false, false, false);
-        if let Some(b) = sim.drones.player_bullets.iter().find(|b| b.weapon == 0x2d) {
-            last = b.pos;
-        }
     }
     assert!(sim.drones.player_bullets.iter().all(|b| b.weapon != 0x2d), "the rocket exploded within 140 ticks");
 
-    // The world impact the flush recorded is the explosion point.
     let blast = sim.drones.player_impacts.iter().find_map(|i| match i {
         nf_game::drone::PlayerImpact::World(p) => Some(*p),
         _ => None,
     }).expect("the rocket's world impact was recorded");
-
-    let dist = ((blast[0] - spawn[0]).powi(2) + (blast[1] - spawn[1]).powi(2) + (blast[2] - spawn[2]).powi(2)).sqrt();
-    // The wall face behind the window sits at z −100.0 [D 07000008 collision, the aim ray's first
-    // non-pass surface past the pane]; the pane it must cross is at z −96.75 (material 0x10).
-    assert!(blast[2] < -98.5, "the rocket exploded past the window plane (−96.75), at z {:.3}", blast[2]);
-    assert!((blast[2] + 100.0).abs() < 0.5, "the rocket exploded on the wall face at z −100.0, got z {:.3}", blast[2]);
-    assert!((21.9..=24.4).contains(&dist),
-        "the flight covers the game's ~24 units (PS2 ~72 frames × 0.3367 u/frame [L]), got {dist:.3}");
-    // Sister check inside the same shot: the surface at the blast is the plain wall, not glass.
-    let end = [last[0], last[1], last[2] - 3.0];
-    if let Some((_, _, m, _)) = sim.world.segment_surface_flags(last, end, false) {
-        assert_eq!(m & 0x3f, 0x0a, "the blast sits on the plain wall (material 0x0a), got {m:#04x}");
-    }
+    assert!((blast[2] + 96.706).abs() < 0.03, "the rocket explodes on the shutters' closed face z -96.706 [L], got z {:.3}", blast[2]);
+    assert!(blast[0] > 139.44 && blast[0] < 139.62, "the blast sits on the wood band x 139.44..139.62, got x {:.3}", blast[0]);
+    // The surface at the blast is the wood (material 0x03), not a pane.
+    let a = [blast[0], blast[1], blast[2] + 1.0];
+    let b = [blast[0], blast[1], blast[2] - 1.0];
+    let (_, n, m) = sim.world.segment_surface_bullet(a, b).expect("the shutter is solid at the blast");
+    assert_eq!(m, 3, "the blast surface is the shutters' wood, got mat {m:#x}");
+    assert!(n[2] > 0.9, "the wood faces +z, down the corridor");
 }
 
 /// Sister: a shot at a plain wall still stops ON its face — the fix must not let rounds tunnel
