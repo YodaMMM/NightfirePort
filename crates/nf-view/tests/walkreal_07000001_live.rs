@@ -55,6 +55,45 @@ fn route_order(w: &Walker, guards: &[usize]) -> Vec<usize> {
 /// Bond-touch only [L the d2 run: his ~t9500 crossing popped nothing, Bond's t10284 crossing
 /// popped g4/12/17 onto him at 5.4 u] — and again late, where it becomes a no-op once ch 0xF
 /// is on. Self-contained: saves/restores the fight bands it sets.
+/// s/real-health-00agent-01: is the ALIVE contact standing in the eye→guard line? On the
+/// merged tree (master dbf17a37d + hard-walks-d) he overtakes Bond during the ambush approach
+/// and cowers at the stairwell head (-30.24,6.34,13.92 [L the run trace]) — INSIDE the 1-u
+/// lane, 0.03-0.32 u off EVERY lane line to the pocket guards ([L the same trace: #12's line
+/// 0.27, #3's 0.32, #17's 0.03 from the mouth at (-29.93,6.0,16.35)]). The port is faithful —
+/// the guards always aim at Bond [M NDrone2_FindOpponent 0x1424e0:100-121, no sight test on
+/// the SP path; SetOpponent 0x1422d0:19-20 stores it with no team filter] and a guard round
+/// crossing the contact lands on him [M NDrone2_DealWithObjHit 0x13fff0 case 5: team-1
+/// shooter → lands iff victim not team 1] — but so does BOND's own fire: the walk's #12 stand
+/// fired ~17 rounds at a fully-bloomed P2K (the cap 0.2464 rad [M bullet::player_spread's
+/// cap]) and 4 of them (3.5 each) landed on the contact's part-4 box at t25015-25440 — the
+/// 10-hp contact died to PLAYER fire and the mission-fail restart posted at t50960 [L the
+/// run]. The walker's box-cone shield (1.5× the one-tap spread) models a fresh barrel, not
+/// the sustained-fight bloom, so the hole stays open — the route fix is at the call level:
+/// a guard whose line passes this close to the alive contact is SKIPPED (the stand is a
+/// hold; the pocket is fought from the stairwell head afterwards, where the lines clear
+/// [L the head stance: #12's line 0.99, #3's 0.75 from (-30.8,6.4,13.1)]). d3-gated by the
+/// call sites; d1/d2 byte-identical.
+fn contact_blocks_line(w: &Walker, ci: usize, gpos: [f32; 3]) -> bool {
+    let sim = w.scene.sim.as_ref().unwrap();
+    let c = &sim.drones.list[ci];
+    if c.corpse || c.health <= 0.0 { return false; }
+    let bp = sim.bond.pos;
+    let eye = [bp[0], bp[1] + sim.bond.eye - sim.bond.crouch_drop, bp[2]];
+    let (ax, az) = (eye[0], eye[2]);
+    let (dx, dz) = (gpos[0] - ax, gpos[2] - az);
+    let len2 = (dx * dx + dz * dz).max(1e-6);
+    let t = (((c.pos[0] - ax) * dx + (c.pos[2] - az) * dz) / len2).clamp(0.0, 1.0);
+    let (px, pz) = (ax + dx * t, az + dz * t);
+    let d = ((c.pos[0] - px).powi(2) + (c.pos[2] - pz).powi(2)).sqrt();
+    // The measured kill was FULL-BLOOM spray: the #12 stand's rounds landed 0.66-0.70 u off the
+    // aim line at 2.5-3 u = 0.22-0.28 rad — the game's spread cap 0.2464 [M bullet::player_spread's
+    // cap, pinned by nf-game's player_spread_blooms_and_the_aim_gate]. A fresh-barrel cone gate
+    // (the walker box cone is 1.5× the one-tap spread) stays open under sustained fire, so the
+    // gate models the cap: the contact blocks anything within 0.2464·dist + margin.
+    let dist_guard = (dx * dx + dz * dz).sqrt().max(1e-3);
+    d < 0.2464 * dist_guard + 0.12
+}
+
 fn run_slab_ambush(w: &mut Walker, ci: usize, difficulty: u32) {
 // The ch-0xF ambush is a PLACED pocket pair, not a door route — [L the trio dump on this
 // tree] #12 (0x5000036 SMG) stands DISABLED at (-31.31, 6.34, 11.51) (the stairwell-head
@@ -188,6 +227,13 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
             v
         };
         for g in lane {
+            // s/real-health-00agent-01: the alive contact in the lane blocks the line — the
+            // stand's bloomed spray is what killed him (see contact_blocks_line). Skip: the
+            // pocket pair is answered from the stairwell head by the sweep/recovery below.
+            if contact_blocks_line(w, ci, w.scene.sim.as_ref().unwrap().drones.list[g].pos) {
+                eprintln!("[01] pocket lane guard {g}: SKIPPED — the alive contact is in the line (d3 gate)");
+                continue;
+            }
             if !w.switch_to_armed("the pocket lane fight") { break; }
             let k = w.shoot_bounded(g, &format!("the pocket lane guard {g} (d3)"), 600);
             eprintln!("[01] pocket lane guard {g}: killed {k} at tick {} health {:.1}", w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
@@ -198,6 +244,44 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
         w.shield_boxes = lane_boxes;
         w.keep_off = Some(band);
         w.dmg.back_off = Some(band);
+        // s/real-health-00agent-01: if the contact holds the lane (every mouth line gated above)
+        // and pocket guards remain, Bond takes the STAIRWELL-HEAD stance (-30.8,6.4,13.1) — the
+        // lines from there clear the parked contact ([L the run trace: #12's line 0.99, #3's
+        // 0.75 from the head]) and the pocket rule still forbids any deeper approach. The head
+        // is on the walk's own route (the stairwell descent below runs it anyway); no trigger
+        // lives there (the AND plate is the stairwell BOTTOM [M the walk's own on_plate y<4]).
+        let pocket_left: Vec<usize> = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            (0..sim.drones.list.len()).filter(|&i| {
+                let d = &sim.drones.list[i];
+                i != ci && d.team == 1 && d.started && !d.corpse && d.enabled && d.health > 0.0
+                    && d.pos[0] < -27.0 && walker::dxz(d.pos, bp) < 14.0
+            }).collect()
+        };
+        if pocket_left.iter().any(|&g| contact_blocks_line(w, ci, w.scene.sim.as_ref().unwrap().drones.list[g].pos)) {
+            eprintln!("[01] the contact holds the lane — Bond takes the stairwell head for the pocket fight (d3)");
+            w.walk_nav_to([-30.8, 6.4, 13.1], "the stairwell head (the pocket fight stance, d3)", 0.8);
+            let prev_ko = w.keep_off;
+            let prev_bo = w.dmg.back_off;
+            let prev_ph = w.prefer_head;
+            // keep_off stays (the ×2 band edge [M Drone_ModBulletDamage 0x139f50]): from the
+            // backed-off head-adjacent stands #12's line clears the parked contact at 1.44 [L
+            // the run-3 geometry] while the close trade at 1.0 u cost 18.0 in run 3.
+            w.dmg.back_off = None;
+            w.prefer_head = true;
+            for g in pocket_left {
+                if w.scene.sim.as_ref().unwrap().drones.list[g].corpse
+                    || w.scene.sim.as_ref().unwrap().drones.list[g].health <= 0.0 { continue; }
+                if contact_blocks_line(w, ci, w.scene.sim.as_ref().unwrap().drones.list[g].pos) { continue; }
+                let k = w.shoot_bounded(g, &format!("the pocket head guard {g} (d3)"), 900);
+                eprintln!("[01] pocket head guard {g}: killed {k} at tick {} health {:.1}", w.total_ticks, w.scene.sim.as_ref().unwrap().drones.health.health);
+                if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+            }
+            w.keep_off = prev_ko;
+            w.dmg.back_off = prev_bo;
+            w.prefer_head = prev_ph;
+        }
     }
     let ambush_rounds = if difficulty >= 3 { 16 } else { 5 };
     for ambush_round in 0..ambush_rounds {
@@ -252,15 +336,29 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
                     }).collect()
                 };
                 for g3 in seen {
+                    if difficulty >= 3 && contact_blocks_line(w, ci, w.scene.sim.as_ref().unwrap().drones.list[g3].pos) {
+                        eprintln!("[01] band-edge exposed guard {g3}: SKIPPED — the alive contact is in the line (d3 gate)");
+                        continue;
+                    }
                     w.shoot_bounded(g3, &format!("band-edge exposed guard {g3}"), 2400);
                     if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
                 }
                 if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
+                if difficulty >= 3 && contact_blocks_line(w, ci, gpos) {
+                    eprintln!("[01] band-edge guard {g2}: SKIPPED — the alive contact is in the line (d3 gate)");
+                    continue;
+                }
                 w.shoot_bounded(g2, &format!("ambush guard {g2} from the band edge"), 2400);
                 if w.scene.sim.as_ref().unwrap().drones.health.health <= 0.0 { break; }
                 continue;
             }
             if difficulty >= 3 {
+                // s/real-health-00agent-01: the contact-line gate first — the bounded stand's
+                // spray must never cross the alive contact (the t25015-25440 kill).
+                if contact_blocks_line(w, ci, gpos) {
+                    eprintln!("[01] ambush guard {g2}: SKIPPED — the alive contact is in the line (d3 gate)");
+                    continue;
+                }
                 // bounded: the round loop re-picks the exposed guard each window
                 if !w.shoot_bounded(g2, &format!("ambush guard {g2} (bounded)"), 300) {
                     let sim = w.scene.sim.as_ref().unwrap();
@@ -2956,6 +3054,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             }).collect()
         };
         if guards.is_empty() { break; }
+        // s/real-health-00agent-01: if EVERY armed peer is contact-blocked, the fight machinery
+        // can only hold — the 12×6000 stall loop is the run-2/3 bleed (Bond parked in the
+        // corridor eating 3.6 SMG rounds while the holds run). Break out to the descent: the
+        // plate legs are short, and the walk's own post-recovery flow takes the plate from here.
+        if difficulty >= 3 && guards.iter().all(|&g| contact_blocks_line(&w, ci, w.scene.sim.as_ref().unwrap().drones.list[g].pos)) {
+            eprintln!("[01] recovery: every armed peer is contact-blocked (d3) — breaking to the descent");
+            break 'recovery;
+        }
         for g in guards {
             let (gpos, los_clear) = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -4322,7 +4428,47 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// 2-4 u (57.4 in 30-38 hits) while the walk's crouched eye reads no exposed part on him for
 /// 540 ticks and the flank goes to 1.6-2.1 u. Next lever: a lane stand that opens #12's boxes
 /// (standing, or a stand east of the contact), or fighting #12 before the slab pops him.
-#[ignore = "00 Agent (s/hard-walks-d): Bond now leaves the ch-0xF pocket at 57.4 (the hit-box shield + torso aim in the lane: the old death was the cylinder shield holding every tap while #12 stepped out beside the contact, not sight), but the lane stand kills only #17; #12 and the captain #3 outlast it behind the contact, the mouth rounds then hold 16 rounds on the walled stairwell #2 (y 10.2) and the contact dies in the pocket at t50960 (mission fail). Route: the contact's settle spot in the 1-u lane blocks every jamb-free line"]
+/// LEDGER (real-health-00agent-01, 2026-11-22 [L the 4 runs on this branch, master dbf17a37d +
+/// hard-walks-d merged]): the DEATH CAUSE is corrected and the driver's port-vs-game check is
+/// done. (1) The contact's death is NOT guard crossfire on this tree: he overtook Bond during
+/// the ambush approach (west armour exit t24200 at (-23.97,14.52) → stairwell head t24900) and
+/// died to FOUR PLAYER rounds (3.5 each, part 4, by_player true, weapon 2, t25015-25440) — the
+/// 624-tick #12 stand's full-bloom P2K spray landing 0.66-0.70 u off the aim line at 2.5-3 u =
+/// 0.22-0.28 rad, the spread cap [M bullet::player_spread's cap]; his center sat 0.03-0.32 u
+/// off EVERY lane line ([L run1: #12's 0.27, #3's 0.32, #17's 0.03 from the mouth]). The
+/// restart exit posted at t50960 — the ledger tick was the FAIL processing, not the death.
+/// (2) The port-vs-game check: FAITHFUL. The guards always aim at Bond [M NDrone2_FindOpponent
+/// 0x1424e0:100-121 — the SP team!=2 arm takes the player object unconditionally, no sight
+/// test; SetOpponent 0x1422d0:19-20 stores it with no team filter; [L ee_start_07000001.bin:
+/// all 14 team-1 guards hold +0x170 = Bond's obj 0x18f5790, the contact 0]]; a guard round
+/// crossing the contact lands on him [M NDrone2_DealWithObjHit 0x13fff0 case 5: team-1 shooter
+/// lands iff victim not team 1]; his health is 10.0 with NO difficulty multiplier at load
+/// [M NDrone2_DefaultInit 0x14b300:52; the damage-side scale is 0x145558:135-156; [L the same
+/// snapshot: team 2, dtype 12, voice 9]]; his hide rule matches [M NDrone2_NotNearArmedDrone
+/// 0x177640, the sole caller AllyLeadHide 0x15ec08:30 at 14.0]. The game kills him the same
+/// way in this crossfire; the walk's own fire is the difference we control.
+/// (3) The route levers TRIED (all d3-gated, this file only — no shared-code change):
+/// the contact-line gate (contact_blocks_line, the cap cone 0.2464·d+0.12) at every d3 ambush
+/// fire site [L run2: every stand skipped, ZERO by_player damage on the contact for the whole
+/// run — Bond's friendly-fire kill is CLOSED]; the stairwell-head fight stance (-30.8,6.4,13.1,
+/// the lines clear the parked contact: #12 0.99/#3 0.75 [L run3]) KILLED #12 (t27257-27273,
+/// two 3.5 part-4 rounds) but the ×2 close trade cost 18.0 and #17's approach fire 18.4 (57.4
+/// → 21.0), then #3's 3.6s finished Bond at t27705 [L run3/4]; with keep_off at the ×2 edge
+/// the same shape reproduced (died t27705) [L run4]; and the parked contact then took GUARD
+/// spray (by_drone 4/17, weapon 18, 1.5 each, 10.0→4.9 by t25103) during the head approach —
+/// his cowering boxes sit in the spray shadow of every lane-adjacent stance.
+/// REMAINING WALL: while the contact is parked at the head, #3 (the 24-hp captain, 0.75-1.6 u
+/// off every line) is unkillable without crossing him, the guards' own spray crosses him from
+/// any lane-adjacent stance, and the close trade with #12-class guards costs ~18 per kill.
+/// NEXT LEVER: the pre-arrival window — fight the lane IN the escort phase the moment Bond's
+/// slab crossing pops the pair, BEFORE the contact's lead route parks him at the head (the
+/// measured window is ~400-700 ticks: the mouth nav took 508, the contact covered 6.3 u in
+/// ~700 [L run1 t24200→t24900]); #17's chest from a contact-free mouth + the head fight for
+/// #12 leaves only #3, who must be drawn out of the pocket (a standing lane walk draws the
+/// crowd's advance [L the hall door-lane measurement]) or killed from a stance west of the
+/// plate where his line clears the contact's DESCENT path. The gate + head fight stay on the
+/// branch, d3-gated; d1/d2 byte-identical (no shared-code change).
+#[ignore = "00 Agent (real-health-00agent-01): the contact-line gate (the 0.2464 cap cone) closed Bond's friendly-fire kill [L run2: zero by_player damage on the contact] and the stairwell-head fight kills #12 [L run3/4], but the parked contact sits 0.03-0.32 u off EVERY lane line and in the spray shadow of the guards' own fire (by_drone 4/17 hits during the head approach) while #3 (24 hp) is unkillable without crossing him — Bond died t27705 to #3's close grind. The port is faithful ([M 0x1424e0/0x13fff0/0x14b300/0x177640]); the lever is the route: fight the lane in the ~400-700-tick pre-arrival window (before the contact's lead parks him at the head), then draw #3 out of the pocket"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }

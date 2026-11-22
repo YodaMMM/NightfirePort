@@ -35,3 +35,19 @@ Bond, rounds are physical objects tested against every other-side body). The lev
 Next: reproduce on this branch, then re-route so the pocket guards die before the contact's
 plate arrival (the game's own hide keeps him east while armed peers are within 14 u — fight the
 lane with the contact out of it).
+
+Progress (2026-11-22 20:00 UTC): reproduced and measured the walk on the merged tree (4 real
+runs, [L traces in /tmp run1-4]). The contact's death cause CORRECTED: he overtook Bond during
+the ambush approach (parked at the stairwell head by t24900) and died to FOUR PLAYER rounds
+(3.5 each, by_player true, t25015-25440) — the 624-tick #12 stand's full-bloom P2K spray
+(0.66-0.70 u off-line at 2.5-3 u = the 0.2464 cap); the t50960 ledger tick was the restart
+processing. The port-vs-game check: faithful (see the previous entry). Route levers tried,
+all in the test file only (d3-gated, no shared-code change): the contact-line gate
+(contact_blocks_line, the cap cone) at every d3 ambush fire site — run2: zero by_player
+damage on the contact all run (Bond's friendly-fire kill CLOSED); the stairwell-head fight
+stance — runs 3/4: #12 killed (two 3.5 part-4 rounds) but the ×2 trade + #17's approach fire
+cost 36.4 of 57.4 and #3's close grind finished Bond at t27705; the parked contact then took
+guard spray (by_drone 4/17). The wall is measured: #3 (24 hp) is unkillable from any
+lane-adjacent stance without crossing the parked contact. The next lever (in the ignore
+message): the ~400-700-tick pre-arrival window fight, then draw #3 out of the pocket. The
+walk stays IGNORED with the measured ledger; the gate + head fight stay on the branch.
