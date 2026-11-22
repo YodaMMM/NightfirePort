@@ -20143,18 +20143,23 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// - re-validate the held opponent: `NDrone2_CanSeeObject(…, 5, 0)` FIRST (it consumes the
     ///   shared LOS budget [M :152]), then the alive filter on a drone-class opponent
     ///   [M :161-172] or the state short > 3 drop on a class-0x3B one [M :176-177];
-    /// - the drone-list scan [M :191-268] from the rotating `+0x2c0` cursor, skipping self and
-    ///   the held opponent's node. The candidates' gates (the exact alive test, the team byte
-    ///   +0x44 == 1, the SqDist2D range) run free; the FIRST candidate through them takes the
-    ///   tick's LOS probe and the walk stops on the shared `DAT_00299092` counter rule
-    ///   [M :239-242], the cursor on the just-probed candidate. The counter increments when a
-    ///   drone-vision probe reaches `Collide_LineOfSight` [M 0x176f18:68/:94] and resets only at
-    ///   `Drone_LevelReset`'s memset [M 0x13a5bc-0x13a5c8]: the port's `los_probes`, reset in
-    ///   `Drones::new`. The range is 800² (640000.0) when there was no held opponent to
-    ///   re-validate, the engage range squared when there was [M :191-209, 251-255].
+    /// - the drone-list scan [M :191-268] from the node after the `+0x2c0` cursor to the list's
+    ///   end (no wrap: running off the end parks the cursor at 0 = the head [M :245-247]),
+    ///   skipping self and the RE-VALIDATED opponent's node [M :196-211: `iVar16` is the record
+    ///   of the opponent left after re-validation, 0 when it was dropped]. A node's cheap gates
+    ///   (the exact alive test, the team byte +0x44 == 1, the SqDist2D range) run free; a node
+    ///   through them takes a LOS probe; every visited node then checks the shared counter
+    ///   `DAT_00299092` against the ENTRY snapshot [M disasm 0x142554 `lhu $s7, 0x282($a1)`
+    ///   before any probe; 0x143144-0x14314c per node], so once any probe ran in this call (the
+    ///   held re-validation included) the walk stops at that node, the cursor on it. The counter
+    ///   increments when a drone-vision probe reaches `Collide_LineOfSight` [M 0x176f18:68/:94]
+    ///   and resets only at `Drone_LevelReset`'s memset [M 0x13a5bc-0x13a5c8]: the port's
+    ///   `los_probes`, reset in `Drones::new`. The range is 800² (640000.0) unless a held
+    ///   opponent survived re-validation, then the engage range squared [M :150-189: a dropped
+    ///   opponent leaves `iVar14 == 0` and skips the :188 store].
     /// Returns per list index the pick (opponent, its position, the 3D distance, the yaw, this
     /// tick's sight of it: true for every probed pick, the stand-in ray for a walk pick) and the
-    /// advanced cursors.
+    /// advanced cursors (the port's cursor is the start index: the game's cursor node + 1).
     /// The port's LOS is the collision world's line of sight, the documented stand-in for
     /// `AINetwork_TestRayCels` + `Collide_LineOfSight` [S, the drone-vision note in tick_inner];
     /// every port probe therefore consumes budget, where the game's cel-rejected probes do not.
@@ -20174,6 +20179,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         for i in 0..n {
             let dr = &self.list[i];
             if !dr.present || dr.team != 2 { continue; }
+            // Entry snapshot of the shared counter [M disasm 0x142554].
+            let snapshot = self.los_probes;
             // (a) the class-0x3B walk [M :123-147].
             let walk = copters.iter().find(|(_, cp, st, _)| {
                 if !(1..=3).contains(st) { return false; } // 0 < (short)+0xF4 < 4 [M :132]
@@ -20205,29 +20212,24 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if seen && *st <= 3 { held = Some(Team2Opp::Copter(key)); }
                 }
             }
-            // (c) the scan [M :191-268]: the candidates run the cheap gates free (the alive test
-            // 0x143098-0x1430f8, the team byte +0x44 == 1 and the SqDist2D gate :227-230); the FIRST
-            // candidate through them takes the tick's LOS probe, and the walk stops on the shared
-            // counter rule `snapshot < DAT_00299092` [M :239-242] — the cursor lands on the
-            // just-probed candidate, so the next call resumes after it.
-            let snapshot = self.los_probes;
-            let range2 = if dr.opp_drone.is_some() || dr.opp_copter.is_some() { dr.engage_range * dr.engage_range } else { 640000.0 };
+            // (c) the scan [M :191-268].
+            let range2 = if held.is_some() { dr.engage_range * dr.engage_range } else { 640000.0 };
+            let skip = held.and_then(Team2Opp::drone);
             let mut pick = None;
-            let start = cursors[i] % n.max(1);
-            let mut stop = cursors[i];
-            for k in 0..n {
-                let c = (start + k) % n;
-                stop = (c + 1) % n;
-                if c == i || dr.opp_drone == Some(c) { continue; } // skipped before the else [M :223-226]
+            let mut c = cursors[i];
+            let mut stop = 0; // ran off the end: the cursor parks at the head [M :245-247]
+            while c < n {
+                if c == i || skip == Some(c) { c += 1; continue; } // [M :206-211]
                 let cd = &self.list[c];
                 let dx = cd.pos[0] - dr.pos[0];
                 let dz = cd.pos[2] - dr.pos[2];
                 let cheap = cd.find_opponent_alive() && cd.team == 1 && dx * dx + dz * dz < range2;
                 if cheap {
                     self.los_probes = self.los_probes.wrapping_add(1); // [M 0x176f18:68/:94]
-                    if d.world.line_of_sight(dr.head(), cd.head(), crate::world::LOS_GUARD_VISION) { pick = Some(c); break; }
-                    if snapshot < self.los_probes { break; } // the counter rule [M :239-242]
+                    if d.world.line_of_sight(dr.head(), cd.head(), crate::world::LOS_GUARD_VISION) { pick = Some(c); stop = c + 1; break; }
                 }
+                if snapshot < self.los_probes { stop = c + 1; break; } // the counter rule, every visited node [M 0x143144-0x14314c]
+                c += 1;
             }
             cursors[i] = stop;
             // The scan's win replaces the held opponent; otherwise the re-validated one stays

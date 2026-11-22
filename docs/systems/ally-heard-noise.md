@@ -31,10 +31,13 @@ CombatNoSight 0x5c every tick. This document is the game's rule set; the port fo
     is team 1 (`+0x44 == 1`), passes the same alive filter, and is within the squared range —
     800² (640000.0) when there was no opponent to re-validate, `+0x1a0²` (the engage range)
     when there was [M 0x1424e0:191-209, 251-255] — and whose `NDrone2_CanSeeObject(…, 5, 0)`
-    passes, wins `SetOpponent`. ONE candidate per tick reaches the LOS check: the per-frame
-    sight counter `DAT_00299092` (bumped by every `CanSeeObjectFrom` LOS call
-    [M 0x176f18:53]) against the value captured at FindOpponent's entry stops the walk
-    [M 0x1424e0:259-262]; the cursor remembers where it stopped.
+    passes, wins `SetOpponent`. The range is the engage range only when a held opponent
+    SURVIVED re-validation (a dropped one leaves 800²), and only a surviving opponent's node is
+    skipped. The per-frame sight counter `DAT_00299092` (bumped by every `CanSeeObjectFrom`
+    LOS call [M 0x176f18:68/:94]) is compared at EVERY visited node with the value captured at
+    FindOpponent's ENTRY [M disasm 0x142554, 0x143144-0x14314c], so once any probe ran in the
+    call (the held re-validation included) the walk stops at the node it is on. The walk does
+    not wrap: reaching the list's end parks the cursor at the head [M :245-247].
 
 `NDrone2_CanSeeObject(drone, obj, 5, 0)` 0x1785e0 → `DroneVision_CanSeeObjectFrom`
 0x176f18: for class-2/3 targets the point is `DroneFunc_GetBonePos(obj, 5)` (the head bone)

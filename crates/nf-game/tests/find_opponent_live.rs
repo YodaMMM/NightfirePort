@@ -261,3 +261,69 @@ fn ally_picks_the_guard_through_the_tick() {
     }
     assert_eq!(picked, Some(g), "the ally's opponent is the live guard after the tick's pick");
 }
+
+/// The counter rule reads the ENTRY snapshot [M disasm 0x142554 `lhu $s7, 0x282($a1)`, before
+/// the held probe] and runs at EVERY visited node [M 0x143144-0x14314c, after the cheap gates]:
+/// with a re-validated opponent the held probe already moved the counter, so the walk stops at
+/// its first visited node even when that node fails the cheap gates. The old port snapshotted
+/// after the held probe and checked only after a probe, so it walked past the far node and spent
+/// a second probe on the near one.
+#[test]
+fn the_held_probe_ends_the_scan_at_the_first_visited_node() {
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let (drones, rng) = l.drones();
+    let g = drones.iter().position(|g| (g.pos[0] - 61.342).abs() < 0.01).expect("the 61.342 guard");
+    let mut sim = l.sim(drones, rng);
+    let a = (0..sim.list.len()).find(|&i| i != g && sim.list[i].present).expect("a live drone");
+    sim.list[a].team = 2;
+    sim.list[a].pos = OPEN_ALLY;
+    let f = (0..sim.list.len() - 1).find(|&i| ![a, g].contains(&i) && ![a, g].contains(&(i + 1))).unwrap();
+    sim.list[f].pos = [OPEN_ALLY[0] + 5000.0, OPEN_ALLY[1], OPEN_ALLY[2]]; // fails the range gate
+    let near = f + 1;
+    sim.list[near].team = 1;
+    sim.list[near].present = true;
+    sim.list[near].enabled = true;
+    sim.list[near].corpse = false;
+    sim.list[near].delete_me = false;
+    sim.list[near].health = 100.0;
+    sim.list[near].pos = [OPEN_ALLY[0] + 1.0, OPEN_ALLY[1], OPEN_ALLY[2] + 1.0];
+    sim.list[a].opp_drone = Some(g);
+    sim.list[a].opp_cursor = f;
+    let before = sim.los_probes;
+    let (picks, cursors) = sim.team2_opponent_picks(&d);
+    assert_eq!(sim.los_probes - before, 1, "the held probe only: the walk stops at the far node");
+    assert_eq!(cursors[a], f + 1, "the cursor parks on the far node (the port stores the node after it)");
+    assert_eq!(picks[a].and_then(|p| p.0.drone()), Some(g), "the re-validated opponent stays");
+}
+
+/// The scan does not wrap: from the cursor to the list's end, then the cursor parks at the head
+/// [M 0x1424e0:245-247 `if (iVar8 == 0) { +0x2c0 = 0; return 0; }`]. A cheap, visible guard BEFORE
+/// the cursor waits for the next call. The old port wrapped and picked him in the same call.
+#[test]
+fn the_scan_stops_at_the_list_end_and_parks_the_cursor() {
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let (drones, rng) = l.drones();
+    let g = drones.iter().position(|g| (g.pos[0] - 61.342).abs() < 0.01).expect("the 61.342 guard");
+    let mut sim = l.sim(drones, rng);
+    let n = sim.list.len();
+    let a = (0..n).find(|&i| i != g && sim.list[i].present).expect("a live drone");
+    sim.list[a].team = 2;
+    sim.list[a].pos = OPEN_ALLY;
+    // Every node from the cursor on fails the cheap gates (moved out of range).
+    let from = g.max(a) + 1;
+    assert!(from < n, "a node past the guard and the ally");
+    for i in from..n { sim.list[i].pos = [OPEN_ALLY[0] + 5000.0, OPEN_ALLY[1], OPEN_ALLY[2]]; }
+    sim.list[a].opp_drone = None;
+    sim.list[a].opp_cursor = from;
+    let before = sim.los_probes;
+    let (picks, cursors) = sim.team2_opponent_picks(&d);
+    assert_eq!(sim.los_probes - before, 0, "no candidate past the cursor: no probe");
+    assert_eq!(picks[a], None, "the guard before the cursor is not reached this call");
+    assert_eq!(cursors[a], 0, "the cursor parks at the head");
+    // The next call starts at the head and reaches him.
+    sim.list[a].opp_cursor = cursors[a];
+    let (picks, _) = sim.team2_opponent_picks(&d);
+    assert!(picks[a].is_some(), "from the head the walk reaches a live guard");
+}
