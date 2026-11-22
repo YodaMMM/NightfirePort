@@ -910,9 +910,132 @@ fn switch_to_a_deep_firearm(w: &mut Walker, label: &str) {
     w.switch_to_armed(label); // anything armed beats the fists
 }
 
+/// The south-gallery AR stands (retune-nb-16-7, the d3 real-damage defeat walk only): the
+/// lane/ramp approach bleeds under the south-gallery AR muzzles — the gallery brutes #2
+/// (9.5, 6.7, −110.6) and #5 (−4.7, 6.7, −111.0), hp 20 at d3, and the east-lane hunter #1
+/// strafed to the gallery floor (11.1, 0.8, −111.1), hp 10 — from 24-37 u [L the
+/// retune-nb-16-7 run 2: 86.0 of the death run's 100 through the approach + the ring east
+/// nav, all STILL alive at the ring, death t1027 at the ring east arrival; run 2's ring
+/// stands died inside the Delta switch's cycling — the probe: gun 0x11 clip 2 spare 9, the
+/// P2K clip 7 carried 41 unfired]. Every automatic answer is out of range: the ring
+/// clears' close gate stands only inside 15 u (clear_hostiles_16 above) and the reactive
+/// pick's own window is 20 u [M damage_log.rs shooters (20.0, 6.0)] — the muzzles stand
+/// 24-37 u out and pour free. A player answers the muzzle that is shooting him from the
+/// south hall before walking on — the punch walk's own measured ring-1 stand (until now
+/// gated to that walk only), extended to this walk d3-gated, to the approach legs where
+/// the dealer's bursts land (the t335/t527 bursts [L run 1]) and to every ring leg: a
+/// bounded stand per exposed muzzle, only while he is exposed from where Bond stands, with
+/// the P2K over the Delta (the clear's own law — the Delta's bolts fly a gravity arc that
+/// misses at this range; the switch itself runs in the corridor's quiet stretch, see the
+/// route head). The dealer goes first: the muzzle who actually dealt the run's damage (the
+/// walk's own audit [L player_hits]) — the run's dealer #2 (58.0) poured from 27 u on the
+/// lane while #5 (28.0) hit from 37 u; nearest-first would stand on #5 and let #2 finish.
+/// The d2 sister keeps its measured shape (the #596 armour absorbs the plinks); the
+/// tops-up sisters and the punch walk keep their streams (the gate misses them).
+/// `min_level` gates WHERE a player takes these stands: ring level (5.0) on the ring legs
+/// — a player who fell off the ring walks the legs, he does not plink across the hall from
+/// the trench — and no gate on the lane/ramp legs, whose floor is the route's own.
+fn stand_off_the_south_gallery_16(w: &mut Walker, label: &str, min_level: f32) {
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let inv = &sim.drones.inventory;
+        eprintln!("[016] the south-gallery stand ({label}) at {:?} gun {:#04x} clip {} spare {} p2k owned {} clip {} carried {}",
+            sim.bond.pos, sim.gun.weapon, sim.gun.clip, sim.gun.spare,
+            inv.owned.get(2).copied().unwrap_or(false), inv.clip.get(2).copied().unwrap_or(0), inv.carried.get(1).copied().unwrap_or(0));
+    }
+    switch_off_the_delta(w);
+    // The cap 700: the kill takes ~335 ticks at 27 u (the P2K's 2.1-a-round body taps ×10
+    // [L run 5's +335 kill]) and a muzzle that ducks mid-stand must not eat a displacement
+    // dance — the peek stand never displaces (see its doc) and gives the kill ~2× margin;
+    // the next leg re-stands him where he re-exposes.
+    for _ in 0..4 {
+        let pick = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            if bp[1] < min_level {
+                eprintln!("[016] off the stand floor ({bp:?}) — the south-gallery stands wait ({label})");
+                None
+            } else {
+                sim.drones.list.iter().enumerate()
+                    .filter(|(_, d)| d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                        && d.pos[2] < -100.0 && d.pos[2] > -130.0 && d.weapon == 0x1a)
+                    .map(|(i, d)| {
+                        let dealt: f32 = sim.drones.player_hits.iter()
+                            .filter(|h| h.1 == i).map(|h| h.2).sum::<f32>();
+                        (dealt, walker::dxz(d.pos, bp), i)
+                    })
+                    .min_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)))
+                    .map(|(_, _, i)| i)
+            }
+        };
+        let Some(gi) = pick else { return };
+        if walker::DamageLog::visible(w.scene.sim.as_ref().unwrap(), gi) {
+            let _ = peek_stand_16(w, gi, "the south-gallery muzzle from the hall", 700);
+        } else {
+            eprintln!("[016] the south-gallery muzzle #{gi} is not exposed from {label}");
+            return;
+        }
+    }
+}
+
+/// The peek stand (retune-nb-16-7): aim at drone `di`'s exposed part and tap, from where
+/// Bond stands — NO displacement. The run-6 lesson: shoot_bounded's blocked branch
+/// sidesteps (a ±1.0 strafe, 90-tick windows) walked Bond 16 u west off the lane into the
+/// trench's rim while the gallery muzzle was ducked [L run 6: (8.9,−81.4) → (−7.3,−84.4)
+/// → (−10.8,−87.1) → the trench rim → the floor y −6.7, death t2815]; a player holds his
+/// spot when the muzzle ducks and lets the next leg re-peek. The tap discipline is the
+/// walk's own chaser-wait loop's (the aim converges through turn/look, the trigger pulses
+/// only on the part, `tick_fire`'s dry-clip arm pulses the game's R). Returns true when
+/// the muzzle dies; false when he stayed ducked for 240 ticks or the cap ran out — the
+/// caller's loop re-picks another muzzle or returns to the legs.
+fn peek_stand_16(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
+    let mut blind = 0u32;
+    let mut last_tap = 0u32;
+    for t in 0..cap {
+        let aim_opt = w.exposed_aim(di);
+        let (dead, err, perr) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[di];
+            let bp = sim.bond.pos;
+            let at = aim_opt.unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]]);
+            let dy = at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
+            let e = walker::wrap_pi((at[0] - bp[0]).atan2(at[2] - bp[2]) - sim.bond.yaw);
+            let pe = ((dy / walker::dxz(bp, at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2) - sim.bond.pitch;
+            (d.corpse || d.health <= 0.0, e, pe)
+        };
+        if dead { return true; }
+        blind = if aim_opt.is_none() { blind + 1 } else { 0 };
+        if blind >= 240 {
+            eprintln!("[walk] {label}: the muzzle {di} stayed ducked for 240 ticks — hold");
+            return false;
+        }
+        let on = aim_opt.is_some() && err.abs() < 0.02 && perr.abs() < 0.028 && t.saturating_sub(last_tap) > 15;
+        let input = Input {
+            turn: err.clamp(-0.08, 0.08),
+            look: perr.clamp(-0.08, 0.08),
+            ..Default::default()
+        };
+        if on { last_tap = t; w.tick_fire(input); } else { w.tick(input, false); }
+    }
+    eprintln!("[walk] {label}: the peek stand's cap on muzzle {di}");
+    false
+}
+
 fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) -> (usize, u32) {
     w.wait_enabled(3000, "the launch-centre arrival");
     w.wait(100);
+    // retune-nb-16-7 (d3 only): the whole south half of the route pours from 24-37 u (the
+    // gallery pair #2/#5 + the ground hunter #1 [L run 2]) and every stand needs the P2K —
+    // the Delta's bolts fly a gravity arc that misses past ~20 u [L the clear's measured
+    // 12-miss stream]. The switch costs 61 ticks a try [M the holster/draw cycle the walker
+    // models]; doing it HERE, in the corridor's quiet stretch (the run's first landed hit
+    // came on the lane east leg [L run 1 t335]), keeps every later stand from paying it
+    // under fire — the run-2 stands died INSIDE the switch's cycling at the ring node
+    // (t1019; the probe: gun 0x11 clip 2 spare 9, the P2K clip 7 carried 41 unfired).
+    if re_arm && station_armour
+        && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        switch_off_the_delta(w);
+    }
     if re_arm && !w.tops_up() {
         // The route leg-wise with the hostile clears between (drone-block-swaps-g055-3, the
         // 07000014 clear_hostiles idiom, test-local): under the flush the ambush guards hunt
@@ -937,6 +1060,19 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // ticks on a hunting guard 17-27 u out (12 rounds, zero damage) while the ring
         // guards emptied him (the 1988 death).
         for (label, wp) in APPROACH {
+            // retune-nb-16-7 (the shooters window, d3 only, per-leg): the level-phase legs run
+            // the wide 40 u window so the reactive pick answers the 20-40 u pourers where the
+            // level gate allows it (the y 6.7 gallery is in the ±2 band at ring level — the
+            // ledger's "clear at level" principle); the ground/lane/ramp legs keep the
+            // default 20 u window and keep MOVING (the run-7 lesson above).
+            if re_arm && station_armour
+                && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+                w.dmg.shooters_window = if *label == "the ring east"
+                    || matches!(*label, "the ring 1" | "the ring 2" | "the ring 3" | "the ring 4")
+                    || label.starts_with("the station") || label.starts_with("the return") {
+                    Some((40.0, 7.5))
+                } else { None };
+            }
             if wp.at[1] > 5.5 {
                 // retune-nb-16-6 (the batch-3 run-6 ledger, d3 only): the ring-east pre-clear
                 // stood Bond ON RAMP 3 (y 4.74) fighting the whole y 6.7 gallery 20-34 u out —
@@ -1165,6 +1301,43 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
                         eprintln!("[016] the gallery rifleman #{gi} is not exposed from the ring east");
                     }
                 }
+            }
+            // retune-nb-16-7 (the ring-phase bleed lever, d3 only): the fight-through reaches the
+            // ring with the lane/ramp bleed already sunk — the south-gallery AR brutes #2
+            // (9.5, 6.7, −110.6) and #5 (−4.7, 6.7, −111.0), hp 20 at d3, dealt 77.0 of the
+            // death run's 100 from 32-34 u THROUGH the whole approach and are STILL alive on
+            // the ring (death t1229 between ring 1 and ring 2, 18 hits for 100.0 [L the
+            // retune-nb-16-6 run]). Every automatic answer is out of range on the ring legs:
+            // the ring clears' close gate stands only inside 15 u (clear_hostiles_16 above) and
+            // the reactive pick's own window is 20 u [M damage_log.rs shooters (20.0, 6.0)] —
+            // the pair stands 26-37 u from the ring legs and pours free across the whole ring
+            // phase. The d2 sister keeps its measured shape (the #596 armour absorbs the
+            // plinks); the tops-up sisters and the punch walk keep their streams (the gate
+            // misses them).
+            if re_arm && station_armour
+                && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+                // The approach-leg stand (retune-nb-16-7): the dealer's first burst lands ON
+                // the lane east leg (#2: 21.0 in 3 at 27.1 u [L run 1 t335-343]) and the
+                // ring-level race needs Bond to arrive with the dealer already answered — a
+                // player kills the gallery dealer from the lane head before walking on, the
+                // ramp-foot-rifleman stand's own idiom. The RAMP stands are measured-worse
+                // and dropped: the ramp foot stands in the NE ring guard #0's line (13.6 u,
+                // y 6.7, hp 25 — he poured 10 free hits into the run-7 ramp-foot stand [L
+                // run 7 t1239-1363]) — the ramp legs keep MOVING (the run-1 shape: 1-2 hits
+                // through the whole climb).
+                if *label == "the lane south" {
+                    stand_off_the_south_gallery_16(w, label, -10.0);
+                }
+                // retune-nb-16-7 MEASURED (runs 8 vs 5/6): the RING-LEVEL stands are the death
+                // magnet, not the answer. Run 8's wide-window reactive fight killed the
+                // gallery brute #5 mid-nav for 14.0 (the cheapest answer this stream has
+                // measured) — and the node stand that followed stood STILL under the
+                // strafed-north rifleman pair's combined pour (#3 at 25.6 u + #4 at 21.3 u +
+                // the ground hunter #1, 3.5 a hit each) and bled 44.0 -> 0 in 130 ticks
+                // [L run 8 t1469-1598]. A player on the ring KEEPS MOVING and lets the
+                // walker's own fights answer what shoots (the wide window admits the y 6.7
+                // gallery in the ±2 level band there); the stands stay on the lane only,
+                // where the pour is two guards and the #2 kill cost ~25 [L run 5].
             }
             // guard-radii-16-chasers: the security-station armour #596 (−19.03, 6.67, −94.48)
             // [D the census/audit placement tables] — 3.8 u west of the station E's console, a
@@ -2847,6 +3020,12 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(difficulty: u
         // ring legs clear the gallery AT LEVEL. The d1 walk can afford the filter too; d3
         // needs it.
         w.dmg.level_fights = true;
+        // retune-nb-16-7 NOTE: the shooters window is widened PER-LEG in the route loop (the
+        // level-phase legs only) — the run-7 lesson: a walk-wide 40 u window opened reactive
+        // fights on the GROUND legs (the ground hunter #1, y 0.8, in band there) and the
+        // fight's own inputs shifted the whole stream (the #2 dealer's first burst moved
+        // t335 → t586 [L run 7]) — the ground legs keep the default 20 u window and keep
+        // MOVING (the ledger's own law).
     }
     // nb-scan-all MEASURED-REVERTED (the 3912 vs the 12872 ledger): the d1 level_fights law
     // applied to d3 made the walk die EARLIER — with the elevated fights skipped the ring
