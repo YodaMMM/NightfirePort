@@ -14416,11 +14416,100 @@ pub struct NetBody {
     pub cel: Option<usize>,
     /// Hanging on a wire/zipline (no volume contacts).
     pub hanging: bool,
+    /// A human slot's collide-pass body HITTEST (as `Player::body`: every MP slot is its own
+    /// `Player_Init` 0x1910f8 object with its own BL+0x740 HITTEST [M :32-39], built by
+    /// `Player_Collision` 0x194df0 from `Player_Update` 0x193600 [M :361]). Radius 0 for a bot.
+    pub body: (V3, V3, f32),
+    /// A human slot in the crouch substate (as `Player::crouched`).
+    pub crouched: bool,
+    /// A human slot's collision capsule ends (as `Player::capsule`): the door contact pick's
+    /// segment. Zero-length for a bot.
+    pub capsule: (V3, V3),
     /// The slot's shared armour (`BLData+0x8B0`) — the armour pickup's refusal gate.
     pub armour: f32,
     /// The slot's character row allows the second SMG: `default_bot_stats[skin]` byte 9 == 1 —
     /// `Pickup_Handler`'s MP take remap reads it [M 0x18e650:146-160] ([`crate::pickup::Inventory::take_id`]).
     pub dual: bool,
+}
+
+/// The trigger touchers of one human body (single-player Bond, or one MP slot): the body
+/// HITTEST segment (or the crouch arm), the measured standing box, the ride's deep reach and the
+/// raw-plate segment, in that order. The reach laws are the ones `Drones::update` documents.
+fn human_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, riding: bool) -> Vec<crate::triggers::Toucher> {
+    let mut player_touchers = vec![{
+        if crouched {
+            // The crouch IS a different pick arm in the game, and `body` already carries
+            // it case-correct (`Player_Collision` 0x194df0's substate switch: case 3 =
+            // the crouch A = pos + 0.1 − (cc − 0.55), B = pos + 0.45 − cc, r 0.55 [M
+            // :228-248], built at the scene's drone::Player site from bond.substate/
+            // crouched/cc). With the crouch rest cc 0.55 [M player.rs CROUCH_ROOT_HEIGHT]
+            // and the crouch park pos−floor 0.607 [L level_reload_live.rs:215] the
+            // crouched body tops ≈ feet+1.26 — under 0a's laser band 1.49..1.76 above the
+            // floor [D 0700000a triggers dump, #607] — so a crouch passes UNDER the beams
+            // in the game, while the standing body 1.86 [M 0x194df0 default arm] crosses.
+            // The port's standing-box toucher fired the beam crouched; that gap is this
+            // arm. The standing stance keeps the measured box reach below (the
+            // truck-chain/park-plate calibrations live there).
+            let (a, b, r) = body;
+            crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !hanging, seg_only: false }
+        } else {
+            // trigger-plane-records: the standing stance NOW USES the game's HITTEST
+            // segment (`Player_Collision` 0x194df0's default arm A = pos+up·0.275, B =
+            // pos+up·(0.55−cc), r 0.55 [M :315-333 + the tail] — the same case-correct
+            // pair the crouch above rides; built at the scene's drone::Player site).
+            // The 2026-11-03/04 reverts' missing half is in: the trigger cels' glist
+            // flags carry bit 0x40 [D 0700000a #607/#614/#621 = 0x645, 07000011 #235 =
+            // 0x50], which routes `Collide_Intersect` 0x1ebaa8:93-99 to the RAW refine —
+            // `Intersect_CylGeom` 0x109da0's plane-crossing anchor + `Dist2Tri` 0x1dfca8's
+            // one-sided entry + the strict < radius refine (triggers.rs
+            // `seg_touches_tri_raw`, the asm cited there) — and the one-sided entry reads
+            // the glist's OWN plane records (the tri's 4th u16 → 3×i16 normal · 2⁻¹⁴ +
+            // the f32 distance at byte +6 [M asm 0x10a1d8-0x10a1e8]; parsed per tri now —
+            // `Collision::triangles_with_planes`), NOT the winding cross whose sign broke
+            // the measured pins on the e7f80cd6 wiring. The record plane fires 0a's low
+            // beam #621 standing (the segment bottom B = pos−0.485 stands 0.16 over the
+            // band top 0.39, inside the 0.55 refine [D band 0.13-0.39]). The raw law is
+            // SCOPED to the 0x645 beam glists (triggers.rs's [S] scope — the port's raw
+            // model over-fired the 0x50 floor plates across 17 walk tests, so `seg_beam`
+            // stays flags == 0x645 until the model matches the game's refine); 011's
+            // Bond-Moment plate #235 (0x50) therefore rides the measured box below, not
+            // the segment — the game routes its bit-0x40 glist through the centroid
+            // anchor [M 0x10a3f0-0x10a4fc], the gap the raw model still has to close.
+            // The 0c ch-27 bay volume silent at the floor rest (the volume floor
+            // 0.755 over pos is BEHIND the floor tri's record plane → the code-99 miss
+            // [M 0x1dfca8:58-68] — the old both-sided capsule fired it). The ride's
+            // class-5 truck contact (trigger-port-check #11) stays unported: the
+            // standing-ride park-plate silence rides on the plate quad's own record plane
+            // under the one-sided law (the trace played crouched only; the live check
+            // stands in the 0a report).
+            let (a, b, r) = body;
+            crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: false, seg_only: true }
+        }
+    }];
+    // The standing body's UPPER reach: the HITTEST segment tops at pos+0.825, but plates above
+    // that fire in the game — 07000005's gatehouse ch 0x5C quad at y 27.05 over a standing
+    // pos 25.88 (the truck hand-off, t1884 [D fix-truck]) and 07000011's #235 at ~pos+0.85.
+    // The measured box (feet pos-0.6, top pos+1.26, r 0.55) keeps that reach beside the
+    // segment's low reach until the game's upper contact is pinned. // [S] unverified shape
+    if !crouched {
+        player_touchers.push(crate::triggers::Toucher { contain: !hanging, ..crate::triggers::Toucher::player([pos[0], pos[1] - 0.6, pos[2]]) });
+    }
+    // The ride's deep reach (see `riding`): script plates only (the truck's ch 0x70 park plate).
+    // A placed plate over a moving floor keeps the box: 0700004a's lift stand must not fire the
+    // top reveal plate. The marker skin never reaches a filter: player touchers carry drone false.
+    if riding && !crouched && body.2 == 0.55 {
+        player_touchers.push(crate::triggers::Toucher { a: body.1, b: [pos[0], pos[1] + 1.26, pos[2]], r: 0.55, drone: false, skin: crate::triggers::RIDE_TOUCHER, contain: false, seg_only: false });
+    }
+    // Bond's collide segment over a raw plate (`Trigger::raw_plate`): the game's walk HITTEST
+    // contact, grounded or in the air [M 0x194df0, 0x109da0]. The box stops at pos-0.6, under
+    // which 07000006's #495/#766 (start #511's arrival pair, the only writers of ch 0x50) and
+    // #524 (the tunnel's ch 0x34 plate) stayed silent. Not on a wire or zipline: the wire arm
+    // clears the pick mask (0x194df0:308) and the zipline arm's segment is not split out.
+    if !hanging {
+        let (a, b, r) = body;
+        player_touchers.push(crate::triggers::Toucher::raw(a, b, r));
+    }
+    player_touchers
 }
 
 /// `NDrone2_DefaultInit` (0x14b300): the voice set `+0xD8` from the character id (skin 0x05000000 + id).
@@ -21708,86 +21797,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // owner (the game's MP bots are Drone_Create objects [M BOT_init 0x1249e8:139]; their class
         // byte's trigger credit is the one residual for a live check). The reach laws are the ones
         // above. [M the walk; the port's per-body design is the MP port design].
-        let mut player_touchers: Vec<crate::triggers::Toucher> = match &self.net_bodies {
-            None => vec![{
-                if player.crouched {
-                    // The crouch IS a different pick arm in the game, and `body` already carries
-                    // it case-correct (`Player_Collision` 0x194df0's substate switch: case 3 =
-                    // the crouch A = pos + 0.1 − (cc − 0.55), B = pos + 0.45 − cc, r 0.55 [M
-                    // :228-248], built at the scene's drone::Player site from bond.substate/
-                    // crouched/cc). With the crouch rest cc 0.55 [M player.rs CROUCH_ROOT_HEIGHT]
-                    // and the crouch park pos−floor 0.607 [L level_reload_live.rs:215] the
-                    // crouched body tops ≈ feet+1.26 — under 0a's laser band 1.49..1.76 above the
-                    // floor [D 0700000a triggers dump, #607] — so a crouch passes UNDER the beams
-                    // in the game, while the standing body 1.86 [M 0x194df0 default arm] crosses.
-                    // The port's standing-box toucher fired the beam crouched; that gap is this
-                    // arm. The standing stance keeps the measured box reach below (the
-                    // truck-chain/park-plate calibrations live there).
-                    let (a, b, r) = player.body;
-                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: !player.hanging, seg_only: false }
-                } else {
-                    // trigger-plane-records: the standing stance NOW USES the game's HITTEST
-                    // segment (`Player_Collision` 0x194df0's default arm A = pos+up·0.275, B =
-                    // pos+up·(0.55−cc), r 0.55 [M :315-333 + the tail] — the same case-correct
-                    // pair the crouch above rides; built at the scene's drone::Player site).
-                    // The 2026-11-03/04 reverts' missing half is in: the trigger cels' glist
-                    // flags carry bit 0x40 [D 0700000a #607/#614/#621 = 0x645, 07000011 #235 =
-                    // 0x50], which routes `Collide_Intersect` 0x1ebaa8:93-99 to the RAW refine —
-                    // `Intersect_CylGeom` 0x109da0's plane-crossing anchor + `Dist2Tri` 0x1dfca8's
-                    // one-sided entry + the strict < radius refine (triggers.rs
-                    // `seg_touches_tri_raw`, the asm cited there) — and the one-sided entry reads
-                    // the glist's OWN plane records (the tri's 4th u16 → 3×i16 normal · 2⁻¹⁴ +
-                    // the f32 distance at byte +6 [M asm 0x10a1d8-0x10a1e8]; parsed per tri now —
-                    // `Collision::triangles_with_planes`), NOT the winding cross whose sign broke
-                    // the measured pins on the e7f80cd6 wiring. The record plane fires 0a's low
-                    // beam #621 standing (the segment bottom B = pos−0.485 stands 0.16 over the
-                    // band top 0.39, inside the 0.55 refine [D band 0.13-0.39]). The raw law is
-                    // SCOPED to the 0x645 beam glists (triggers.rs's [S] scope — the port's raw
-                    // model over-fired the 0x50 floor plates across 17 walk tests, so `seg_beam`
-                    // stays flags == 0x645 until the model matches the game's refine); 011's
-                    // Bond-Moment plate #235 (0x50) therefore rides the measured box below, not
-                    // the segment — the game routes its bit-0x40 glist through the centroid
-                    // anchor [M 0x10a3f0-0x10a4fc], the gap the raw model still has to close.
-                    // The 0c ch-27 bay volume silent at the floor rest (the volume floor
-                    // 0.755 over pos is BEHIND the floor tri's record plane → the code-99 miss
-                    // [M 0x1dfca8:58-68] — the old both-sided capsule fired it). The ride's
-                    // class-5 truck contact (trigger-port-check #11) stays unported: the
-                    // standing-ride park-plate silence rides on the plate quad's own record plane
-                    // under the one-sided law (the trace played crouched only; the live check
-                    // stands in the 0a report).
-                    let (a, b, r) = player.body;
-                    crate::triggers::Toucher { a, b, r, drone: false, skin: 0, contain: false, seg_only: true }
-                }
-            }],
-            Some(bodies) => bodies.iter().filter(|b| b.alive).map(|b| if b.bot {
-                crate::triggers::Toucher { a: [b.pos[0], b.pos[1] - 1.0, b.pos[2]], b: b.head, r: 0.4, drone: true, skin: 0, contain: true, seg_only: false }
+        let player_touchers: Vec<crate::triggers::Toucher> = match &self.net_bodies {
+            None => human_touchers(player.pos, player.body, player.crouched, player.hanging, player.riding),
+            // s/mp-floor-plates: every human slot is a `Player_Init` 0x1910f8 object of its own
+            // (obj+0xD4 = BL+0x740 [M :32-39]) whose `Player_Update` 0x193600 runs
+            // `Player_Collision` 0x194df0 [M :361] (the slot's MPGame row, BL+0x94E [M :73]), so
+            // a net body touches triggers through the same set as single-player Bond (the body
+            // segment, the measured box, the raw-plate segment). The box alone stopped at pos-0.05
+            // and never reached 07000025's door floor plates 0.87 under pos [D].
+            Some(bodies) => bodies.iter().filter(|b| b.alive).flat_map(|b| if b.bot {
+                vec![crate::triggers::Toucher { a: [b.pos[0], b.pos[1] - 1.0, b.pos[2]], b: b.head, r: 0.4, drone: true, skin: 0, contain: true, seg_only: false }]
             } else {
-                crate::triggers::Toucher { contain: !b.hanging, ..crate::triggers::Toucher::player([b.pos[0], b.pos[1] - 0.6, b.pos[2]]) }
+                human_touchers(b.pos, b.body, b.crouched, b.hanging, false)
             }).collect(),
         };
-        // The standing body's UPPER reach: the HITTEST segment tops at pos+0.825, but plates above
-        // that fire in the game — 07000005's gatehouse ch 0x5C quad at y 27.05 over a standing
-        // pos 25.88 (the truck hand-off, t1884 [D fix-truck]) and 07000011's #235 at ~pos+0.85.
-        // The measured box (feet pos-0.6, top pos+1.26, r 0.55) keeps that reach beside the
-        // segment's low reach until the game's upper contact is pinned. // [S] unverified shape
-        if self.net_bodies.is_none() && !player.crouched {
-            player_touchers.push(crate::triggers::Toucher { contain: !player.hanging, ..crate::triggers::Toucher::player([player.pos[0], player.pos[1] - 0.6, player.pos[2]]) });
-        }
-        // The ride's deep reach (see `riding`): script plates only (the truck's ch 0x70 park plate).
-        // A placed plate over a moving floor keeps the box: 0700004a's lift stand must not fire the
-        // top reveal plate. The marker skin never reaches a filter: player touchers carry drone false.
-        if self.net_bodies.is_none() && player.riding && !player.crouched && player.body.2 == 0.55 {
-            player_touchers.push(crate::triggers::Toucher { a: player.body.1, b: [player.pos[0], player.pos[1] + 1.26, player.pos[2]], r: 0.55, drone: false, skin: crate::triggers::RIDE_TOUCHER, contain: false, seg_only: false });
-        }
-        // Bond's collide segment over a raw plate (`Trigger::raw_plate`): the game's walk HITTEST
-        // contact, grounded or in the air [M 0x194df0, 0x109da0]. The box stops at pos-0.6, under
-        // which 07000006's #495/#766 (start #511's arrival pair, the only writers of ch 0x50) and
-        // #524 (the tunnel's ch 0x34 plate) stayed silent. Not on a wire or zipline: the wire arm
-        // clears the pick mask (0x194df0:308) and the zipline arm's segment is not split out.
-        if self.net_bodies.is_none() && !player.hanging {
-            let (a, b, r) = player.body;
-            player_touchers.push(crate::triggers::Toucher::raw(a, b, r));
-        }
         // G-031: this tick's trigger reads see LAST tick's player contacts (see the field); the
         // drones' touchers stand where last tick's walk left them already (the drones move later
         // in this tick), which is the same phase.
@@ -23977,20 +24000,31 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // the game's calc clears it next frame, still before any `Door_Update` reads it.
         {
             let mut movers: Vec<crate::door::DoorMover> = Vec::with_capacity(1 + self.list.len());
-            if self.health.health > 0.0 {
-                // The pick radius is written in the same 0x194df0 switch arm as the capsule: the walk
-                // arms (0/6, the tall pos+0.55 top end) write 0.275, every other arm 0.55. The port's
-                // snapshot carries the capsule but no substate, so the top end identifies the arm.
-                let r = if player.capsule.0[1] - player.pos[1] > 0.3 { crate::player::WALK_PICK_RADIUS } else { 0.55 };
-                movers.push(crate::door::DoorMover {
-                    a: player.capsule.0,
-                    b: player.capsule.1,
+            // The pick radius is written in the same 0x194df0 switch arm as the capsule: the walk
+            // arms (0/6, the tall pos+0.55 top end) write 0.275, every other arm 0.55. The port's
+            // snapshot carries the capsule but no substate, so the top end identifies the arm.
+            let player_mover = |pos: V3, capsule: (V3, V3), body: (V3, V3, f32), sph: V3| {
+                let r = if capsule.0[1] - pos[1] > 0.3 { crate::player::WALK_PICK_RADIUS } else { 0.55 };
+                crate::door::DoorMover {
+                    a: capsule.0,
+                    b: capsule.1,
                     radius: r,
-                    body: if player.body.2 > 0.0 { player.body } else { (player.capsule.0, player.capsule.1, crate::player::RADIUS) },
-                    centre: player.sph,
+                    body: if body.2 > 0.0 { body } else { (capsule.0, capsule.1, crate::player::RADIUS) },
+                    centre: sph,
                     player: true,
                     valid: false,
-                });
+                }
+            };
+            match &self.net_bodies {
+                None => if self.health.health > 0.0 { movers.push(player_mover(player.pos, player.capsule, player.body, player.sph)); },
+                // s/mp-floor-plates: online every live human slot is a player object with its own
+                // HITTEST [M Player_Init 0x1910f8:32-39] swept by its own `Player_Collision`
+                // [M Player_Update 0x193600:361], so every slot's body meets the door leaves (in
+                // slot order), not only this machine's own; a closing leaf otherwise reversed on
+                // one machine only (07000025 door 3, a desync).
+                Some(bodies) => for b in bodies.iter().filter(|b| b.alive && !b.bot) {
+                    movers.push(player_mover(b.pos, b.capsule, b.body, b.sph));
+                },
             }
             for (i, x) in self.list.iter().enumerate() {
                 if !x.present { continue; }
