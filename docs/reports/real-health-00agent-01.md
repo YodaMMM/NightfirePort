@@ -57,6 +57,8 @@ green.
      SMG grind finished Bond at t27705. The parked contact then took guard spray (by_drone
      4/17, weapon 18) — his cowering boxes sit in the spray shadow of every lane-adjacent
      stance.
+   - run5 (the window lever): dead — died t25396 with no window kill; run6/7: the restored
+     state reproduces run4 exactly (dies t27705).
 
 6. **Verification of what shipped:** the whole `walkreal_07000001_live` binary ran:
    **7 passed, 0 failed, 1 ignored** — the d1/d2 real-damage sisters
@@ -71,11 +73,18 @@ green.
 - The walk is still red. The measured wall: while the contact is parked at the stairwell
   head, #3 (the 24-hp captain) is unkillable from any lane-adjacent stance without firing
   through him, the guards' own spray crosses him, and the #12-class close trades cost ~18.
-- The next lever (in the ignore message): fight the lane inside the ~400-700-tick pre-arrival
-  window (between Bond's slab crossing and the contact's lead parking him at the head — the
-  mouth nav took 508 ticks, the contact covered 6.3 u in ~700 [L run1]), then draw #3 out of
-  the pocket (a standing lane walk draws the crowd's advance [L the hall door-lane
-  measurement]) or kill him from a stance whose line clears the contact's descent path.
+- The pre-arrival window lever was TRIED and is MEASURED DEAD ([L run5]): removing the -19
+  retreat put #12 in the x2 band at 2.8 u — Bond died earlier (t25396 vs t27705), no window
+  kill landed, the parked contact took guard spray again. Restored, the state reproduces run
+  4 exactly (dies t27705 [L run7]).
+- Structural finding ([M] the walk's placement dump + [L] runs 1-7): the pop slab covers the
+  corridor's full width and is Bond-touch only, so the contact can never descend before the
+  pop; while he parks at the head, every pocket guard is unkillable under the bloom gate, and
+  the pocket must be cleared for his hide to release (the descent stalls otherwise).
+- The next levers (in the ignore message): (1) the FAST-KILL budget — bait #3's advance out
+  of the pocket (measured to (-30.7,14.7) in run2, where the mouth line clears the parked
+  contact at 0.9 u) and clear the pocket within the contact's 10-hp spray budget; (2) a
+  walker-side guard-spray shield for the contact (the mirror of the player-side gate).
 - The full 4-crate suite did not fit in the sandbox window (the dep tree rebuilt from scratch
   after the reset + the binary runs above took the remainder). The binary that contains the
   changed file ran whole and green apart from the target walk's ignore.

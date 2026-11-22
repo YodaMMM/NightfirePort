@@ -51,3 +51,22 @@ guard spray (by_drone 4/17). The wall is measured: #3 (24 hp) is unkillable from
 lane-adjacent stance without crossing the parked contact. The next lever (in the ignore
 message): the ~400-700-tick pre-arrival window fight, then draw #3 out of the pocket. The
 walk stays IGNORED with the measured ledger; the gate + head fight stay on the branch.
+
+Progress (2026-11-22 19:30 UTC, final): the ledger's next lever (the pre-arrival window) was
+TRIED and is MEASURED DEAD ([L run5]): without the -19 retreat, #12 stands in the x2 band at
+2.8 u and Bond died EARLIER (t25396 vs t27705), no window kill landed, the parked contact took
+guard spray again (by_drone 12). The state was restored to the gate + head fight and the
+reproduce now matches run4 exactly (Bond dies t27705 [L run7]). Structural finding for the
+next worker ([M] the walk's own placement dump + [L] runs 1-7): the pop slab
+(x -26.13..-24.73, z 13.25..16.84) covers the corridor's full width and is Bond-touch only,
+so the contact (whose lead route waits at the head for Bond, then hides there once armed
+peers are live) can NEVER descend before the pop — and while he parks at (-30.24,13.92),
+every pocket guard is unkillable under the bloom gate (his center 0.03-0.32 u off every lane
+line; the guards' own spray crosses him from any lane-adjacent stance). The pocket must be
+cleared for his hide to release (the descent stalls otherwise). Next levers, in order of
+promise: (1) a FAST-KILL budget — the head fight killed #12 in ~30 ticks of taps; if #3 can
+be baited north (his advance measured to (-30.7,14.7) in run2, where the mouth line clears
+the parked contact at 0.9) and killed within the contact's 10-hp spray budget, the pocket
+clears before the spray accumulates; (2) a walker-side guard-spray shield for the contact
+(the mirror of the player-side gate) so the guards' 1.5-hit spray stops counting against his
+10 hp while the pocket clears. The walk stays IGNORED with the measured ledger.
