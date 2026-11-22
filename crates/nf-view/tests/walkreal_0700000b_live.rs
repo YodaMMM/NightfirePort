@@ -1915,7 +1915,12 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage() {
 fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1800/60 [L the
     // 10-value sweep on the joined tree: 1800/60, 250/200, 3500/200 of 24 values complete].
-    walker::with_pause(1800, 60, || {
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 1800/60 died on the roof near (0.4,58.1,32.6)
+    // t17519. Lever: 2200/45 [L the 14-value sweep: only 2200/45 completes].
+    // Batch 3 (guard aim bone, burst latch, wall push joined): 2200/45 died on the roof at (3.93,58.07,41.16)
+    // t17742. Lever: 2600/45 [port 12-value sweep at 5e9460adb: 2600/45, 2000/45, 2200/30, 1000/60, 3500/200
+    // complete; 2600/45 ends with the most health, 28.4].
+    walker::with_pause(2600, 45, || {
         walker::with_real_damage(|| {
             let mut w = load_fresh_at(2);
             w.dmg.lane_fights = true;
@@ -2009,7 +2014,12 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
 fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
     // 10-value sweep on the joined tree: 1000/60, 6000/60 complete].
-    walker::with_pause(1000, 60, || {
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 1000/60 died at (-10.31,57.85,8.06) t18052 on the
+    // roof. Lever: 2000/30 [L the 3-value sweep: only 2000/30 completes; 1000/60, 3000/60 do not].
+    // Batch 3 (guard aim bone, burst latch, wall push joined): 2000/30 died on the roof at (-7.23,58.07,18.67)
+    // t17983. Lever: 2200/30 [port 12-value sweep at 5e9460adb: 2200/30, 2000/60, 1800/30, 1500/60, 6000/60
+    // complete; 2200/30 ends with the most health, 41.5].
+    walker::with_pause(2200, 30, || {
         walker::with_real_damage(|| {
             let mut w = load_fresh_at(3);
             w.dmg.lane_fights = true;

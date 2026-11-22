@@ -74,7 +74,12 @@ fn raising_ch18_deploys_the_wall_gun_and_its_shots_wound_bond() {
     // below the mount (the create-time fire direction is −up of the placement matrix — the
     // floor level is in the cone [M 0017ffa0:144-146, 0x17f9c8:252-257]).
     let fd = sim.drones.gt_turrets[ti].fire_dir;
-    sim.bond.pos = [gun_pos[0] + fd[0] * 40.0, 0.0, gun_pos[2] + fd[2] * 40.0];
+    // fd is straight down (−up of the wall mount), so gun + fd·40 lands INSIDE the wall the
+    // gun hangs on; the game's one-sided push never ejects a spine from behind a face [M
+    // Intersect_CylGeom 0x109da0, flags 99]. Stand him where the old two-sided push used to
+    // eject him: 0.91 out on the room side (+x), at the floor's standing rest.
+    sim.bond.pos = [gun_pos[0] + 0.91, 1.0347183, gun_pos[2] - 0.077];
+    let _ = fd;
     // The real channel path (the game's switch/script write — `switch_channels[18] = 1`).
     let frame = sim.drones.frame;
     sim.drones.channels.set(18, 1, frame);
@@ -124,7 +129,12 @@ fn the_wall_gun_burst_scatters_and_draws_in_the_game_order() {
         let ti = wall_gun(sim);
         let gun_pos = sim.drones.gt_turrets[ti].pos;
         let fd = sim.drones.gt_turrets[ti].fire_dir;
-        sim.bond.pos = [gun_pos[0] + fd[0] * 40.0, 0.0, gun_pos[2] + fd[2] * 40.0];
+        // fd is straight down (−up of the wall mount), so gun + fd·40 lands INSIDE the wall the
+        // gun hangs on; the game's one-sided push never ejects a spine from behind a face [M
+        // Intersect_CylGeom 0x109da0, flags 99]. Stand him where the old two-sided push used to
+        // eject him: 0.91 out on the room side (+x), at the floor's standing rest.
+        sim.bond.pos = [gun_pos[0] + 0.91, 1.0347183, gun_pos[2] - 0.077];
+        let _ = fd;
         let frame = sim.drones.frame;
         sim.drones.channels.set(18, 1, frame);
         // The deploy: the rewind + the looping anims → ARMING completes ~180 ticks [M 0x180498:205-238]
@@ -180,9 +190,12 @@ fn the_wall_gun_burst_scatters_and_draws_in_the_game_order() {
     // identical) — the joined tree's ambient consumers (gas puffs, guard muzzle flashes, guard
     // radii-driven fights) spent exactly 8 more shared draws upstream of the burst; the turret's
     // own per-shot law did not move.
+    // bond-hitboxes-2 re-pin: the rounds test Bond's 16 body boxes (was the cylinder). The
+    // draw positions are the same; the round at draw 11693 now passes between his boxes (the
+    // pattern lists damaging shots only), so the twelve start one shot later, at 12153.
     assert_eq!(measured, &[
-        (24000, 11693), (24000, 12153), (24000, 12607), (24000, 13067),
-        (24000, 13521), (24000, 13981), (24000, 14435), (24000, 14895),
-        (24000, 15349), (24000, 15809), (24000, 16263), (24000, 16723),
+        (24000, 12153), (24000, 12607), (24000, 13067), (24000, 13521),
+        (24000, 13981), (24000, 14435), (24000, 14895), (24000, 15349),
+        (24000, 15809), (24000, 16263), (24000, 16723), (24000, 17177),
     ], "the burst's damage/draw pattern matches the game-ordered stream");
 }

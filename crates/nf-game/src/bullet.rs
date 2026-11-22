@@ -187,8 +187,10 @@ pub enum BulletEvent {
     Object(V3),
 }
 
-/// Bond's hit volume: an upright cylinder from his feet to above his eye (*deviation*: the game tests 16 boxes on
-/// his skeleton, `HumanCollisionBones` 0x2c6be8 via `Collide_Jointy`; the viewer's Bond has no skeleton).
+/// Bond's hit volume when his body boxes are not available: an upright cylinder from his feet to
+/// above his eye. The game tests the 16 `HumanCollisionBones` 0x2c6be8 boxes on his posed skeleton
+/// (`Collide_Jointy` 0x1ec180); the drones' rounds take those boxes (`update_with_boxes`, built by
+/// `Drones::bond_hit_boxes`), the cylinder stays for fixtures without Bond's skin and for the MP bodies.
 #[derive(Clone, Copy, Debug)]
 pub struct PlayerVolume { pub feet: V3, pub height: f32, pub radius: f32 }
 
@@ -271,6 +273,17 @@ impl Bullet {
     pub fn update_with(&mut self, world: &CollisionWorld, player: &PlayerVolume, viewer: V3, rng: &mut crate::drone::Rng,
             pick: &mut dyn FnMut(V3, V3) -> Option<(usize, i16, f32)>,
             objects: &mut dyn FnMut(V3, V3, f32) -> Option<f32>) -> Option<BulletEvent> {
+        self.update_with_boxes(world, player, &[], viewer, rng, pick, objects)
+    }
+
+    /// `update_with` against Bond's body boxes: when `boxes` is not empty the Bond node is
+    /// `Collide_Jointy` 0x1ec180's ray arm over them (the FIRST box in list order the segment
+    /// enters, `Intersect_RayBox` per box, not the nearest [M 0x1ec180: the 0x201 loop returns on
+    /// the first hit]) instead of the `player` cylinder.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_with_boxes(&mut self, world: &CollisionWorld, player: &PlayerVolume, boxes: &[crate::damage::HitBox], viewer: V3, rng: &mut crate::drone::Rng,
+            pick: &mut dyn FnMut(V3, V3) -> Option<(usize, i16, f32)>,
+            objects: &mut dyn FnMut(V3, V3, f32) -> Option<f32>) -> Option<BulletEvent> {
         if self.state >= 2 { return None; }
         if self.travelled > self.range { self.state = 2; return None; }
         let mut step = if self.state == 0 { (rng.frand(0.5) + 0.5) * self.speed } else { self.speed };
@@ -297,7 +310,9 @@ impl Bullet {
         // re-derives the cel with build_FindCel 0x1c8cb0 each tick, exactly like the PlayerBullet
         // flight next door; the no-scope fallback is the flat ray.
         let (tw, tw_pass) = world.segment_flight_contacts_scoped(world.find_cel(self.pos), self.pos, end, self.glass_pass);
-        let tp = segment_cylinder(self.pos, end, player);
+        let tp = if boxes.is_empty() { segment_cylinder(self.pos, end, player) } else {
+            crate::damage::first_box_hit(self.pos, [end[0] - self.pos[0], end[1] - self.pos[1], end[2] - self.pos[2]], boxes).map(|(_, t)| t)
+        };
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
         // CompHitData 0x1d33c0 [M] — QuickSort comparator id 2 (Collide_Update 0x1ea398 / Collide_RayIntersect 0x1ec690 / Collide_SphereIntersect 0x1ec940 / Collide_CylinderIntersect 0x1ecc00 / Collide_FilterBullets 0x1ece30 sort their hit lists by the f32 at HITDATA+0xc, ascending); the port keeps no hit list — the nearest-of comparison below replaces the sort.
         // The drone node of the same sorted list [M Collide_Update 0x1ea398:120-158]: nearest wins.

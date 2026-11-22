@@ -223,14 +223,17 @@ fn replay(level_file: &str, level: u32, frames: &[TFrame], limit: usize, fire_en
                 let pd = &sim_.drones.list[sim_.drones.llist[ix]];
                 pd.state as u16 == row.0 && (pd.pos[0] - row.1[0]).abs() < 0.5 && (pd.pos[2] - row.1[2]).abs() < 0.5
             };
-            let mut m = None;
-            for (i, row) in f.drones.iter().enumerate() {
-                if i >= sim.drones.llist.len() || !row_matches(i, *row) { m = Some(i); break; }
-            }
+            // The removal r is the first row the port does not match whose tail aligns at +1. The
+            // rows BEFORE r are not required to match: a drone that already drifted (one the table
+            // reports diverged from line 0) must not hide the shift — 07000005's drone 1 sits 0.5 off
+            // the game's at the line-885 kill, and the old first-mismatch rule then found the shift a
+            // line late, which logged drones 4-10 as diverged on the shifted row.
             let mut removed_at: Option<usize> = None;
-            if let Some(m) = m {
-                let ok = f.drones.iter().enumerate().skip(m).all(|(i, row)| i + 1 < sim.drones.llist.len() && row_matches(i + 1, *row));
-                if ok && f.drones.len() + (sim.drones.llist.len() - f.drones.len()) >= m + 1 { removed_at = Some(m); }
+            for r in 0..f.drones.len() {
+                if r >= sim.drones.llist.len() { break; }
+                if row_matches(r, f.drones[r]) { continue; }
+                let ok = f.drones.iter().enumerate().skip(r).all(|(i, row)| i + 1 < sim.drones.llist.len() && row_matches(i + 1, *row));
+                if ok { removed_at = Some(r); break; }
             }
             if let Some(r) = removed_at {
                 // The game removed the port's llist[r]: everything before r matched 1:1, the tail aligns
@@ -325,7 +328,7 @@ fn ai_05_truck() {
     let limit = std::env::var("NF_AI_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
     let segs = report("05-truck", "07000005.bin", "05-truck.trace", limit, true);
     if segs.is_empty() { return; }
-    // 07000005: drone 2 matched the WHOLE level (7851 frames); the others held until the player's first
+    // 07000005: drone 2 matched the WHOLE level (7851 frames) on the ray stand-in (see below); the others held until the player's first
     // kill (llist removal at line 885/2168) or the hip-conversion noise; the sniper (12) is state-matched
     // from line 0 (the group-1 spawner's immediate respawn).
     // Drone 13's pin was 7049 (his first divergence at the frame-36372 0x6F guard event) until
@@ -333,7 +336,20 @@ fn ai_05_truck() {
     // stream — his idle-timeout walk then starts a few seconds earlier and the pos divergence moves to
     // trace line 5508 (state 4 still matching, dmax 3.72). Verified pre-merge: fd4ec1b passes at 7049;
     // the re-pick follows master's own precedent (ad5fb7f re-picked ai_live's seed for the same join).
-    pin(&segs[0], &[(2, 7851, "full"), (0, 1342, ""), (12, 0, ""), (13, 5508, "")]);
+    // Drone 2's pin was the whole level (7851, "full") on the bullet-ray stand-in. The room gate on 07000005 (`View_AddCels` 0x1e6ba0 + `Vision_InView` 0x1e89e0, the
+    // drawn rule on every level) draws him from about trace line 5050 (frame 34372; undrawn before): the trace's own
+    // hip y starts swaying at frame 34253 (16.904 constant before, 16.902..16.913 after [L this
+    // trace]), the drawn idle's lift, so the gate's onset is the game's. Drawn, the port's idle
+    // pick (danim 291 at line 5851) walks him 0.06 off the spot by line 5891 where the game's
+    // sway stays within 0.014: the idle variant or its root motion differs (open), not the gate.
+    // Re-pinned 5891 -> 5781 on the batch-3 head: the same mechanism, earlier. Measured per line:
+    // drawn from line 4910, the port plays idle danim 344, then 282 from line 5460, both within
+    // 0.007 of the trace; the pick of danim 289 at line 5760 walks him 0.05 off by line 5781
+    // (0.23 u/s in x) while the trace holds (150.208, 100.809). The pick time is the shared
+    // stream's: reverting the ChooseCombatMove option-list fix alone [M 0x150c18:163-164] moves
+    // the divergence to 5803, the rest is the later joins' draws. The open item is unchanged:
+    // which idle the game plays there and whether it carries root motion.
+    pin(&segs[0], &[(2, 5781, "pos"), (0, 1342, ""), (12, 0, ""), (13, 5508, "")]);
     for i in 4..=10 { pin(&segs[0], &[(i, 2168, "")]); }
 }
 

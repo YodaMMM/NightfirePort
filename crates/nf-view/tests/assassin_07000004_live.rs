@@ -154,12 +154,20 @@ fn a_flip_or_a_swing_halves_the_round() {
 /// Entering NinjaAttack inside the 2.0 band with room behind her, she backflips: the 10% sideflip
 /// roll falls through to the −5 probe, and only a blocked probe reaches the sword-or-fire coin
 /// [M 0x16bb50:48-77]. Twenty entries, every one a backflip or the sideflip roll.
+/// burst-latch: an entry made while her anim is still the backflip's own state bounces on the
+/// tick it is made: `DroneAnim_CallAnim` with the anim state already playing completes the call
+/// at once (`CallFullyComplete` [M 0x13ab58 tail, `param_2 == +0x56a`]), so 0xae hands straight
+/// back to 0xa7 and the ENTER routes again, until the 10% sideflip roll or the state-change cap
+/// ends the tick. Those entries chose the evasion every time (the tick's state log shows only
+/// 0xae / 0xaf), so they count as evasions; how many bounce rides the shared stream (1 on master,
+/// 3 once the burst latch's reschedule draws joined), which the old `>= 18` pin had measured.
 #[test]
 fn inside_the_band_she_backs_off_before_she_swings() {
     let mut w = settle(&mut Vec::new());
     let ni = ninja(&w);
     let mut swung = 0;
     let mut flipped = 0;
+    let mut bounced = 0;
     for _ in 0..20 {
         stand_by(&mut w, ni, 1.2);
         {
@@ -171,16 +179,20 @@ fn inside_the_band_she_backs_off_before_she_swings() {
             dr.state = kiko::NINJA_STAND_FIRE;
             dr.next_state = Some(kiko::NINJA_ATTACK);
         }
+        let n0 = w.scene.sim.as_ref().unwrap().drones.list[ni].log.len();
         w.tick(Input::default(), false);
-        let st = w.scene.sim.as_ref().unwrap().drones.list[ni].state;
-        match st {
+        let dr = &w.scene.sim.as_ref().unwrap().drones.list[ni];
+        let picked: Vec<u8> = dr.log[n0.min(dr.log.len())..].iter().map(|&(_, s)| s).filter(|&s| s != kiko::NINJA_ATTACK).collect();
+        let evasion = |s: u8| matches!(s, kiko::NINJA_BACKFLIP | kiko::NINJA_SIDEFLIP | kiko::NINJA_SIDEFLIP_LEFT | kiko::NINJA_SIDEFLIP_RIGHT);
+        match dr.state {
             kiko::NINJA_SWORD | kiko::NINJA_STAND_FIRE => swung += 1,
-            kiko::NINJA_BACKFLIP | kiko::NINJA_SIDEFLIP | kiko::NINJA_SIDEFLIP_LEFT | kiko::NINJA_SIDEFLIP_RIGHT => flipped += 1,
-            s => eprintln!("[04] entry routed to {s:#x}"),
+            s if evasion(s) => flipped += 1,
+            kiko::NINJA_ATTACK if !picked.is_empty() && picked.iter().all(|&s| evasion(s)) => { bounced += 1; flipped += 1; }
+            s => eprintln!("[04] entry routed to {s:#x} via {picked:x?}"),
         }
     }
-    eprintln!("[04] twenty entries: {flipped} evasions, {swung} swings or stands");
-    assert!(flipped >= 18 && swung == 0, "{flipped} evasions, {swung} swings");
+    eprintln!("[04] twenty entries: {flipped} evasions ({bounced} bounced on the playing backflip), {swung} swings or stands");
+    assert!(flipped == 20 && swung == 0, "{flipped} evasions, {swung} swings");
 }
 
 /// On a direct route the run-in plays the advance anim 0x67 and closes: case 2 falls through into

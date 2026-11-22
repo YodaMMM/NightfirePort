@@ -80,7 +80,7 @@ fn gold_bits(base_map: u32) -> u64 {
 fn drop_at(w: &mut Walker, x: f32, y_guess: f32, z: f32) {
     let floor = w.scene.sim.as_ref().unwrap().world
         .segment([x, y_guess, z], [x, y_guess - 30.0, z]).map(|t| y_guess - 30.0 * t);
-    let y = floor.unwrap_or(y_guess) + 0.1;
+    let y = floor.unwrap_or(y_guess) + 1.1; // the standing rest (obj+0x30 = floor + 1.1, `Bond::stand_at`): a spine dropped through the floor is not lifted by the game's one-sided push [M Intersect_CylGeom 0x109da0, flags 99]
     {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.bond.pos = [x, y, z];

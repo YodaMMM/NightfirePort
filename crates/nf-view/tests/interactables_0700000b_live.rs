@@ -426,7 +426,9 @@ fn qworm_console_installs_on_the_gadget_shot() {
     // The real trigger pull: stand at the proven desk approach (n26, the walked route's last
     // nav point [D nis]; the interactables file's teleport stand-in) and walk the last leg to
     // the desk, then the equip walkreal_0700000b_live's shot uses, and fire at the screen.
-    w.scene.sim.as_mut().unwrap().bond.pos = [-19.64, 47.2, 31.8];
+    // At the standing rest over the floor (`Bond::stand_at`'s +1.1): a spine dropped through
+    // the floor is not lifted by the game's one-sided push [M Intersect_CylGeom 0x109da0].
+    { let s = w.scene.sim.as_mut().unwrap(); let (x, y, z) = (-19.64f32, 47.2f32, 31.8f32); s.bond.pos = [x, s.world.floor_below([x, y + 1.0, z], 10.0).map_or(y, |f| f + 1.1), z]; }
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
     w.try_walk_to(Wp::new(pc[0] + 0.6, pc[1] - 0.5, pc[2] + 0.9).r(0.4), "the Q-Worm C desk (the walked leg)");

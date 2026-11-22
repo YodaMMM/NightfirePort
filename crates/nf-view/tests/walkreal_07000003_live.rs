@@ -2521,7 +2521,9 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
 /// below). No damage, health or ammo writes anywhere.
 #[test]
 fn walk_the_full_route_and_complete_every_objective_real_damage() {
-    walker::with_real_damage_glass_fights(walk_the_full_route_and_complete_every_objective);
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): the no-stop walk died at (1.50,5.96,-33.68) t92659
+    // to drone #16. Lever: 1000/60 [L the sweep: 1000/60 completes].
+    walker::with_pause(1000, 60, || walker::with_real_damage_glass_fights(walk_the_full_route_and_complete_every_objective));
 }
 
 /// Sister of the full walk's key gate: one objective's channel alone never opens the gate —
@@ -2674,7 +2676,13 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_agent() {
 fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 400/90 [L the
     // 10-value sweep on the joined tree: 400/90 the one pass of 37 values complete].
-    walker::with_pause(400, 90, || {
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 400/90 died at (11.11,6.47,-18.80) t4157 to
+    // drone #11. Lever: 250/30 [L the 14-value sweep: 250/30 and 10000/30 complete].
+    // Batch 3 (stream-batch-1121d): 250/30 ran dry in the door-8 cluster funnel and died at
+    // (38.18,6.37,-2.08) t23920 to shotgun guard #18. Lever: 250/30 plus a 90-tick stop at 20000
+    // [L the 24-value sweep: 250/30 with 18000/45, 20000/90 or 21500/30 complete; 250/30 alone,
+    // with 12000/30, 15000/60, 22500/60, 23300/30, and the single stops 500-10000 do not].
+    walker::with_pauses(&[(250, 30), (20000, 90)], || {
         walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
     })
 }

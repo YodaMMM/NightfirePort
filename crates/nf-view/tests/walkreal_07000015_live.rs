@@ -2268,12 +2268,19 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage_agent() {
     // moved the fence fights (the #447 range shot's neighbours, the d2 split-south restart,
     // the d2 real-damage death at t10345). Lever: a 90-tick stop at tick 4000, the one value
     // of the 16-value sweep that completes d1, d2, d3 and d2 real damage alike [L].
-    walker::with_real_damage_head_hunting(|| walker::with_pause(1000, 60, || walk_spawn_to_the_omega_sector_exit_at(2)));
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 1000/60 reached the exit at 18.1
+    // health, short of the real margin. Lever: 4000/90 [L the 4-value sweep: only 4000/90 completes].
+    // Batch 3 (5e9460adb): 4000/90 crosses with 19.3, under the pinned 25; lever 4000/45 [L the
+    // 17-value sweep: 3950/45, 4000/45, 4050/45, 4900/60, 5000/60 complete; 4000/30, 4000/60,
+    // 3900/90, 4100/90, 5000/45, 5000/90, 5100/60 and 1000-7000/60 fall short or die].
+    walker::with_real_damage_head_hunting(|| walker::with_pause(4000, 45, || walk_spawn_to_the_omega_sector_exit_at(2)));
 }
 
 #[test]
 fn walk_spawn_to_the_omega_sector_exit_real_damage() {
-    walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(1));
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): the no-stop walk died at (0.35,41.48,28.33) t7674
+    // to drone #4 at 1.8 u. Lever: 1000/60 [L the 2-value sweep: 1000/60 and 2000/30 complete].
+    walker::with_pause(1000, 60, || walker::with_real_damage_head_hunting(|| walk_spawn_to_the_omega_sector_exit_at(1)));
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-12-13-14-15): the same
@@ -2332,7 +2339,11 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
     // 7050/60, 7100/60 and 25 other stops die]. The guards' hit chance and burst timing at
     // the death were read against DroneWeap_DoBulletAccuracy 0x179740 and DroneWeap_BurstDelay
     // 0x179ba8 and match.
-    walker::with_real_damage_head_hunting(|| walker::with_pause(6950, 60, || walk_spawn_to_the_omega_sector_exit_at(3)));
+    // Batch 3 (5e9460adb): 6950/60 dies at the door[39] north node (t8948, guard #8's 0x1a
+    // rounds from (44, 38)); lever 1000/60 [L the 21-value sweep: only 1000/60 completes;
+    // 900/60, 1100/60, 1000/45, 1000/90, 500/60, 1500/60 and 2000-9000/60 die there or at the
+    // door[51] threshold, t19500].
+    walker::with_real_damage_head_hunting(|| walker::with_pause(1000, 60, || walk_spawn_to_the_omega_sector_exit_at(3)));
 }
 
 #[test]
@@ -2346,7 +2357,9 @@ fn walk_spawn_to_the_omega_sector_exit() {
     // moved the fence fights (the #447 range shot's neighbours, the d2 split-south restart,
     // the d2 real-damage death at t10345). Lever: a 90-tick stop at tick 4000, the one value
     // of the 16-value sweep that completes d1, d2, d3 and d2 real damage alike [L].
-    walker::with_pause(1000, 60, || walk_spawn_to_the_omega_sector_exit_at(1));
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 1000/60 left mine mi3 unexploded at the #447
+    // fence. Lever: 2000/30 [L the 2-value sweep: only 2000/30 completes].
+    walker::with_pause(2000, 30, || walk_spawn_to_the_omega_sector_exit_at(1));
 }
 
 /// The objective chain at the other two menu picks: the same walked route and end with the
@@ -2377,7 +2390,9 @@ fn walk_spawn_to_the_omega_sector_exit_00agent() {
     // moved the fence fights (the #447 range shot's neighbours, the d2 split-south restart,
     // the d2 real-damage death at t10345). Lever: a 90-tick stop at tick 4000, the one value
     // of the 16-value sweep that completes d1, d2, d3 and d2 real damage alike [L].
-    walker::with_pause(4000, 90, || walk_spawn_to_the_omega_sector_exit_at(3));
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 4000/90 wedged at the nav lane west (37.55,41.37,74.98).
+    // Lever: 1000/60 [L the 2-value sweep: 1000/60 and 2000/30 complete].
+    walker::with_pause(1000, 60, || walk_spawn_to_the_omega_sector_exit_at(3));
 }
 
 /// The range shot the merges never pinned: a mine takes a BULLET from a distance, through the

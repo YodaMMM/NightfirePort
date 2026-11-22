@@ -196,7 +196,12 @@ fn monitor_console_shows_the_camera_view_and_e_walks_forward_then_exits() {
     // Sister: before the use — Bond's view, the HUD's ammo text and crosshair, no pane 16.
     {
         let sim = sc.sim.as_mut().unwrap();
-        place_near(sim, mpos);
+        // From the console's west side (x −1): the +x candidate lands inside the console desk,
+        // which the old two-sided push shoved him out of; the game's one-sided push [M
+        // Intersect_CylGeom 0x109da0, flags 99] leaves him there, and the use pick starts inside.
+        sim.bond.pos = [mpos[0] - 1.0, mpos[1] - 0.5, mpos[2]];
+        sim.bond.vel = [0.0; 3];
+        for _ in 0..160 { sim.step_bond(Default::default(), false, false, false); }
         assert!(sim.sec_cam().is_none() && sim.view_override().is_none());
     }
     assert!(quads(&sc, 0x0300_00aa).is_empty(), "no pane-16 brackets before the view");

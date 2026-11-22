@@ -56,6 +56,22 @@ fn sample(w: &Walker, di: usize, out: &mut Vec<Sample>) {
     out.push(Sample { tick: w.total_ticks, clip: d.clip, shots: d.shots.len(), state: d.state });
 }
 
+/// The re-roll stop at the ladder base (a player waiting a moment before the climb): real
+/// input only, it moves when the guards' fight starts. `NF_G1_IDLE` overrides it for a sweep.
+fn idle_at_the_ladder(w: &mut Walker, di: usize, ticks: u32, out: &mut Vec<Sample>) {
+    let ticks = std::env::var("NF_G1_IDLE").ok().and_then(|v| v.parse().ok()).unwrap_or(ticks);
+    for _ in 0..ticks {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+        sample(w, di, out);
+    }
+}
+
+/// The pinned fight's stop at the ladder base (batch 3 stream).
+const IDLE_PINNED: u32 = 60;
+/// The real-health fight's stop at the ladder base (batch 3 stream).
+const IDLE_REAL_HEALTH: u32 = 30;
+
 #[test]
 fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
     let iso = iso();
@@ -76,7 +92,7 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
     }
     let mut samples: Vec<Sample> = Vec::new();
     sample(&w, di, &mut samples);
-
+    idle_at_the_ladder(&mut w, di, IDLE_PINNED, &mut samples);
     // Leg 7 (REAL, verbatim from walk_spawn_to_the_band): the ladder walk-in grab + climb.
     walk_sampled(&mut w, di, Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach", &mut samples);
     let mut climbed = false;
@@ -124,6 +140,10 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.step_bond(nf_game::player::Input { forward: 0.05, ..Default::default() }, false, false, false);
         w.total_ticks += 1;
+        // The walker's top-up (step_bond alone skips it): on the batch-3 stream the ring's other
+        // guards killed Bond at t~9000 mid-window, the opponent pointer cleared with him
+        // [M 0x1424e0:111-114] and guard #1 sat in NoOpponent 0x60 after one clip.
+        w.after_step();
         sample(&w, di, &mut samples);
     }
 
@@ -234,9 +254,14 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
 /// round lands.
 #[test]
 fn guard1_rounds_at_the_ring_real_health_fight() {
-    walker::with_yard_aimed_stands(|| {
+    // walks-1121-0d-13 (the sniper cover fire on the game's gates [M 0x16a610 case 3]) moved the
+    // shared stream: with no stop Bond died at t11325 on the yard floor (drone #13's 0x1e rounds).
+    // Lever 2500/90, the same stop the 0c real-damage walk takes on this tree [L the 10-value
+    // sweep: 1500/45, 2000/60, 2500/90, 3000/30, 3500/60, 5000/30, 6000/60 complete; 3000/60,
+    // 4000/90, 8000/60 die].
+    walker::walker::with_pause(2500, 90, || walker::with_yard_aimed_stands(|| {
         walker::with_far_sniper_stands(|| walker::walker::with_real_damage(real_health_body))
-    });
+    }));
 }
 
 fn real_health_body() {
@@ -257,6 +282,7 @@ fn real_health_body() {
         w.scene.sim.as_ref().unwrap().drones.list[di].state,
         w.scene.sim.as_ref().unwrap().drones.list[di].health);
 
+    idle_at_the_ladder(&mut w, di, IDLE_REAL_HEALTH, &mut samples);
     // The climb + ring legs (verbatim from the shared prologue).
     walk_sampled(&mut w, di, Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach", &mut samples);
     let mut climbed = false;

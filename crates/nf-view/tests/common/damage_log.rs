@@ -495,6 +495,9 @@ impl DamageLog {
                 let p = sim.bond.pos;
                 eprintln!("[dmg] tick {tick} frame {f}: -{dmg:.2} (health {:.1}) Bond ({:.1},{:.1},{:.1}) from {}",
                     sim.drones.health.health, p[0], p[1], p[2], Self::owner_desc(sim, o));
+                if let Some(dr) = sim.drones.list.get(o) {
+                    eprintln!("[dmg]   shooter state {:#x} anim set {:#x} mode {:#x}", dr.state, dr.anim_set, dr.mode);
+                }
                 if o >= sim.drones.list.len() {
                     for e in sim.drones.explosions.iter().rev().take(3) {
                         let d = ((e.0[0] - p[0]).powi(2) + (e.0[1] - p[1]).powi(2) + (e.0[2] - p[2]).powi(2)).sqrt();

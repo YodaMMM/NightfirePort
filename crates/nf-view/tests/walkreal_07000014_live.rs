@@ -2267,7 +2267,10 @@ fn the_skipped_vent_cutscene_hands_bond_back_at_his_grab_spot() {
 fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
     // 10-value sweep on the joined tree: 500/30, 1000/60, 1500/45, 6000/60 (stream batch 1121b on master) complete].
-    walker::with_pause(1000, 60, || {
+    // Batch 3 (5e9460adb): 1000/60 dies on Rook's close (t40510); lever 20000/60 [L the
+    // 20-value sweep: 1000/45, 1000/90, 2000-39000/60 complete; 900/60, 1100/60, 500/60 and
+    // every 1000/60 two-stop run die].
+    walker::with_pause(20000, 60, || {
         walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
     })
 }
@@ -2577,6 +2580,14 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
         // (-35.84, 2.30, 35.09) [D the 2026-11-02 census] — burned with the Q-Claw laser the player
         // already carries from the SkyBridge crossing.
         {
+            // Batch 3 (5e9460adb): after the row walk keypad 0x2c's page stands open [L this
+            // tree's run], and an open page takes Bond's input (the scene's keypad arm); a player backs
+            // out of the page before drawing the laser.
+            for k in 0..20 {
+                if w.scene.sim.as_ref().unwrap().drones.keypad.is_none() { break; }
+                w.tick(nf_game::player::Input { keypad_back: k % 2 == 0, ..Default::default() }, false);
+            }
+            assert!(w.scene.sim.as_ref().unwrap().drones.keypad.is_none(), "the keypad page closes on the back edge");
             let mut drawn = false;
             for _ in 0..240 {
                 w.tick(nf_game::player::Input { switch_to: Some(LASER), ..Default::default() }, false);

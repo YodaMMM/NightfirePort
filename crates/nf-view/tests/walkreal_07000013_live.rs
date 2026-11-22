@@ -574,6 +574,14 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // ledger]); this tree's one run with the loose gate died inside 12's resupply nav,
             // not in the pursuit the lever answers.
         }
+        if real_damage && difficulty == 1 {
+            // batch3 (5e9460adb): the drop at (17.5, 0.9, 1.5) on 12's lower floor is out of
+            // reach on the new floor/wall contact: two fetches stood the 6000-tick cap at
+            // (16.6, 1.40, 3.19) and the third left Bond on the furniture at y 1.93, from which
+            // the south-east bend 2 leg wedged at (19.21, 2.02, -8.94) [L this tree's runs]. A
+            // player who cannot reach it walks on with the pistol.
+            w.no_fetch.push([17.5, 0.9, 1.5]);
+        }
         tower2::walk_12(&mut w);
         tower2::walk_12_exit(&mut w);
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1620,7 +1628,7 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// pre-clear at 14-16 u, no bridge_and_retry, no in-place creep or longer stands — each
 /// measured dead in the margin-4 report). Never lowered damage or health; no top-ups.
 #[test]
-#[ignore = "s/g019-sky-2 (guards drop a finished voice line every control pass): Bond dies t5170 at (-10.52,-368.29,37.94) in 13's lobby west mid (#13's 0x18 bursts, 49.5 in 7 hits), entering 13 at 61.5 instead of 93.0 (12's lobby-east flank cost 28) [L 2026-11-21 run]. Levers tried and dead: 6 third stops 3200-5000, 14 stops 9200-11650 before 12's flank, 79 random 1-4-stop runs (entering 13 at up to 96 still dies there); re-tune and un-ignore"]
+#[ignore = "s/g019-sky-2 (guards drop a finished voice line every control pass, [M NDrone2_ControlSTANDARD 0x1490f0:82-94]): on origin/master 7283c8a76 Bond dies t4542 at (-4.90,-368.39,39.11), 13's lobby west mid: the re-anchor pool fill ends at 34.5 and the mezzanine rifle #4 (skin 0x5000006, 0x18, (16.2,-362.4,43.4) d 22.4) lands 5 rounds of 7.0 in 60 ticks [L walks-1121-0d-13 runs]. Stops tried and dead: 30 third stops 3000-4400 (x 15/45; 3100/45 reaches t7496) and 27 fourth stops 4600-7300 on top of 3100/45 (a stop also re-rolls 11's and 12's walkers); earlier: 6 third stops 3200-5000, 14 stops 9200-11650, 79 random 1-4-stop runs. Next lever: a route change at 13's west-mid leg (the mezzanine east end's line), not a stop"]
 /// GREEN (retune-nb-13-4, 2026-11-19): the walk completed on this tree — MissionState 6, the
 /// entrance touch ch 0x50 written, the objective states asserted, `test result: ok` [L this
 /// session's run]. The round's lever chain, each judged on its own real run: (1) the nb-13-3
@@ -1671,7 +1679,9 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_agent() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
     // 10-value sweep on the joined tree: 1500/45, 2000/30 complete].
-    walker::with_pause(2000, 30, || {
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 2000/30 wedged at the south corridor east
+    // (17.12,1.61,-10.60). Lever: 1000/60 [L the 2-value sweep: only 1000/60 completes].
+    walker::with_pause(1000, 60, || {
         let iso = iso();
         walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 2));
     })

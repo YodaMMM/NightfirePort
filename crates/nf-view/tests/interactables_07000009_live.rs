@@ -75,7 +75,7 @@ fn gold_bits() -> u64 {
 fn settle_near(scene: &mut nf_view::scene::Scene, spot: [f32; 3]) {
     let sim = scene.sim.as_mut().unwrap();
     let floor = sim.world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] - 30.0 * t);
-    if let Some(f) = floor { sim.bond.pos = [spot[0], f + 0.1, spot[2]]; } else { sim.bond.pos = spot; }
+    if let Some(f) = floor { sim.bond.pos = [spot[0], f + 1.1, spot[2]]; } else { sim.bond.pos = spot; } // the standing rest (obj+0x30 = floor + 1.1, `Bond::stand_at`): a spine dropped through the floor is not lifted by the game's one-sided push [M Intersect_CylGeom 0x109da0, flags 99]
     sim.bond.vel = [0.0; 3];
     for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
 }

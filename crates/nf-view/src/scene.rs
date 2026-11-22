@@ -2647,6 +2647,23 @@ impl Sim {
                 cam.pos = b.pos;
                 cam.dir = b.dir;
                 cam.riding = true;
+                // rocket-hit-size: the ride's own contact probe. Right after the steer, case 1 of
+                // `Bullet_update` runs `Collide_SphereIntersect(0.1, obj+0xC0, obj cel, bullet,
+                // owner-or-none, &list, 0, 0, filter 0xa0a, mask 4)` and, on ANY hit, calls
+                // `Bullet_handle_object_destruction(bullet, owner)` — the rocket blows where it is
+                // [M 0x12e7b0:218-234; disasm 0x12ec1c-0x12ec50: f12 = 0x3dcccccd, a0 = obj+0xC0,
+                // t3 = 0xa0a (the delay slot), the stack word 4; mode 0x101 since the 8th arg is 0
+                // (Collide_SphereIntersect 0x1ec940 disasm 0x1ec9cc-0x1ec9d8)]. Only the ridden
+                // round reaches it (`+0x6C & 4`, the owner class 3 in substate 10 [M :177-183]) and
+                // only from its second update (case 1; the spawn tick is the state-0 arm), so the
+                // `first` tick is skipped. The owner is excluded only while BU+0xF4 <= 1.0 — the
+                // port's world holds no body, so the world probe needs no exclusion. The drone,
+                // copter and Bond bodies of the game's pick are not tested here [S]: the round's
+                // own 1-unit flight segment reaches them first on every approach but a graze.
+                let probe = (!b.first).then_some(b.pos);
+                if let Some(at) = probe {
+                    if self.world.sphere_hits(at, 0.1, 0xa0a) { self.drones.detonate_guided(&self.weapons); }
+                }
             } else {
                 if cam.riding { cam.restore = 15; cam.riding = false; } // [M 0x12e660:28 `+0x944 = 0xf`]
                 if cam.restore == 0 {

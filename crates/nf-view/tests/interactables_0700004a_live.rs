@@ -68,7 +68,10 @@ impl Ride {
         w.skip_cutscenes = false;
         {
             let sim = w.scene.sim.as_mut().unwrap();
-            sim.bond = nf_game::player::Bond::stand_at(&sim.world, [3.0, -7.0, -3.4], 0.0);
+            // (3.74, −3.07) on the car floor: the old (3.0, −3.4) overlaps the car's rail, which
+            // the old two-sided push shoved him out of; the game's one-sided push [M 0x109da0]
+            // does not (g031_object_order_live's stand).
+            sim.bond = nf_game::player::Bond::stand_at(&sim.world, [3.74, -7.0, -3.07], 0.0);
         }
         let y0 = w.scene.sim.as_ref().unwrap().bond.pos[1];
         Ride { w, y0, t: 0 }

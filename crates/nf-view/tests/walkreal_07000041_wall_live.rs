@@ -1,11 +1,15 @@
 //! submap-placements pin: 07000041's class-0xd5 "1-Sided Thing" (plc 86 on the kind-1 main map,
-//! object hash ffffffff "1-Sided Thing") blocks Bond from BOTH sides through real input.
+//! object hash ffffffff "1-Sided Thing") blocks Bond from its SOUTH (front) side only, through real
+//! input. [L 2026-11-21 PCSX2: placed (−3.0, 1.2, −43.5) facing −z and held forward, Bond walks
+//! straight through the wall to the far wall at z −52.2468; placed (−3.0, 1.2, −46.4) facing +z,
+//! he stops at z −45.4472.] The push is one-sided [M Intersect_CylGeom 0x109da0: Dist2Tri flags
+//! 99 behind the face → no contact], so the north test below pins the walk-through.
 //!
 //! The game's record: `parsemap_create_dynamic_objects` 0x1d04f0 case 0xd5 → `OneSided_Create`
 //! 0x1e7ce8 — a control object (obj+0xD8 = the placement's celglist, obj+0xff = 0x4c) reached only
 //! through the flag-1 pass `ResetMap_Load` 0x1d6850 over the last block-0x1a (the main map) [M].
-//! Its glist collision rides the pick, so Bond meets it from both sides; the one-sidedness is the
-//! DRAW (`OneSided_Update` 0x1e7d58 toggles obj+0xF0 bit 0x10 by viewer side — the port's
+//! Its glist collision rides the pick, and the push meets it from its front only. The draw is
+//! one-sided too (`OneSided_Update` 0x1e7d58 toggles obj+0xF0 bit 0x10 by viewer side — the port's
 //! per-triangle backface cull is the same job, scene.rs). The placement carries no 0x8000, so the
 //! static-cel pass (parsemap_block_map_data_static 0x1d1998:92) never builds it — before the
 //! submap-placements fold the port's world had a hole there (a probe's 4/4 rays through the wall
@@ -25,10 +29,10 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// Walk to the wall's north face and stall on it; the capsule rests at contact distance and never
-/// crosses the plane.
+/// Walk to the wall's north (back) side and on through it: the game's push ignores a face from
+/// behind [L 2026-11-21, M Dist2Tri flags 99].
 #[test]
-fn the_one_sided_wall_blocks_from_the_north() {
+fn the_one_sided_wall_lets_bond_through_from_the_north() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000041.bin", false).unwrap());
     w.wait_enabled(600, "the wrapper's load");
@@ -51,18 +55,12 @@ fn the_one_sided_wall_blocks_from_the_north() {
         assert!((p[0] - (-3.0)).abs() < 0.6 && p[2] > -44.4 && p[2] < -43.0,
             "Bond stands centred north of the wall, at {:?}", p);
     }
-    // Push into the wall: the walker steers at the point THROUGH the wall (keeps Bond on the
-    // wall's centre x, no edge to slip around), the cap ends the push. The capsule (r ≈ 0.35)
-    // must rest north of the plane −44.90 + contact, never cross.
-    let z_before = w.scene.sim.as_ref().unwrap().bond.pos[2];
-    let arrived = w.walk_slope([-3.0, 1.1, -46.0], "push into the wall (expect blocked)", 0.9, 400);
-    assert!(!arrived, "the push cannot arrive through the wall");
-    let sim = w.scene.sim.as_ref().unwrap();
-    let p = sim.bond.pos;
-    assert!((p[0] - (-3.0)).abs() < 0.8, "no sideways drift around an edge, at x {:.3}", p[0]);
-    assert!(p[2] > -45.45, "Bond stalls north of the wall plane (contact −45.25), at z {:.3}", p[2]);
-    assert!(p[2] < z_before - 0.3, "Bond walked INTO the wall (z {:.3} → {:.3})", z_before, p[2]);
-    assert!(p[2] > -44.95, "Bond never crossed the plane, at z {:.3}", p[2]);
+    // Walk at the point THROUGH the wall: from behind its face the one-sided wall is no obstacle,
+    // the game's Bond walks straight through [L 2026-11-21, see the header].
+    let arrived = w.walk_slope([-3.0, 1.1, -46.0], "through the wall from behind", 0.9, 400);
+    assert!(arrived, "the walk passes through the wall from its back side like the game's [L]");
+    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!((p[0] - (-3.0)).abs() < 0.8 && p[2] < -44.95, "Bond crossed the plane −44.90, at {p:?}");
 }
 
 /// The same wall from the south face: around the west edge, then push +z into it.

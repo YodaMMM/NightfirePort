@@ -287,7 +287,12 @@ fn guard_takes_cover_like_the_game() {
     // and every later draw moves. Seeds 0-30 on this model: 2, 3, 5, 6, 7, 10, 15 and 29 pass every pin;
     // 1, 4, 8, 11, 16, 19, 22, 23, 26-28 and 30 hold the 90-tick lean in UnderCoverAim (live 37), the
     // rest pick another first move.)
-    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 2);
+    // Seed 7 (re-picked at l12-start-damage-fix: the empty combat-move list now draws its
+    // `Rand_Rand(0)` [M 0x150c18:163, 0x1e3738] and every guard shot its shot-pitch
+    // `Rand_Rand(500)` [M 0x178f68:276], so every later draw moves. Seeds 0-30 on this model:
+    // 7, 8, 10, 11, 15, 22, 23, 26, 27 and 30 pass every pin; 1-6, 16, 18, 19, 28 and 29 hold the
+    // 90-tick lean in UnderCoverAim (live 37), the rest pick another first move.)
+    let (drones, gi, rng) = l.drones_seeded(None, 61.342, 7);
     let mut sim = l.sim(drones, rng);
     let player = bond_at([79.86, 22.92, 96.0]);
     for _ in 0..700 { sim.tick(&d, &player); }
@@ -568,7 +573,11 @@ fn bond_kills_guards_with_two_torso_shots() {
     // 0x1ebaa8:300-319) the second round lands on part 32 instead of 4 (los-mask-join; which
     // sight call moves the sniper's pose is not traced). The damage chain is the decompile's:
     // 5.25 per torso hit, dead at the second contact.
-    assert_eq!(hits, [(100, 4, 4.75), (130, 32, -0.5)], "hits {hits:?}");
+    // burst-latch: the second round meets the sniper mid-flinch (BulletImpact 0x55, anim state
+    // 0x4c), whose danim is a shared-stream pick: 0x47 (variant 7) on master, 0x4a (variant 10)
+    // once the latch's reschedule draws joined, and the 0x4a pose puts the round on part 4. The
+    // part stays port-observed; the damage chain is unchanged.
+    assert_eq!(hits, [(100, 4, 4.75), (130, 4, -0.5)], "hits {hits:?}");
     let log: Vec<u8> = sim.list[i].log.iter().map(|&(_, s)| s).collect();
     // A sniper (mode 2): SniperIdle; the first hit sends it to SniperAim (SniperIdle's `HandleImpact(0x2A, 0)`).
     assert_eq!(log[0], state::SNIPER_IDLE, "log {:x?}", sim.list[i].log);
@@ -1350,11 +1359,12 @@ fn guard_gravity_and_collision_spheres() {
     assert!((g4.pos[1] - y2).abs() < 1e-3 && g4.velocity[1] == 0.0, "far lifted no-physics guard hangs from the third pass: y {} (after 2: {y2}) v {}", g4.pos[1], g4.velocity[1]);
 }
 
-/// G-028 sniper cover (WORKLOG 0079): a drone whose anim set is 0x13 (sniper), put in `UnderCoverFire` (0x96) on a
-/// level before 0x0700000E, branches to `UnderCoverSniperFire` (0x97) on the ENTER message — not firing at once.
-/// Sister: a non-sniper (anim set != 0x13) in the same state fires and stays in 0x96.
+/// G-028 sniper cover: `UnderCoverFire` (0x96) ENTER sends the sniper anim set 0x13 to
+/// `UnderCoverSniperFire` (0x97) ONLY on 0x0700000C/0x0700000D — the gate is the unsigned
+/// `GameState+0xC + 0xf8fffff4 < 2` [M 0x16a3e0 case 1]. On 05 (this level) a sniper anim set fires
+/// through 0x96 directly, like every other set (the old port branched on every level below 0x0E).
 #[test]
-fn sniper_cover_branches_to_sniper_fire_state() {
+fn sniper_cover_branches_to_sniper_fire_only_on_0c_and_0d() {
     use nf_game::drone::{state, msg};
     let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data();
@@ -1362,46 +1372,68 @@ fn sniper_cover_branches_to_sniper_fire_state() {
     let mut sim = l.sim(drones, rng);
     let away = bond_at([0.0, -500.0, 0.0]);
     for _ in 0..30 { sim.tick(&d, &away); }
-    // Find a present drone and force it into cover as a sniper.
+    if d.covers.is_empty() { eprintln!("skip: no cover nodes on this level"); return; }
     let i = sim.list.iter().position(|x| x.present && x.cover.is_some()).unwrap_or_else(|| {
-        // None in cover yet: pick the first present drone, give it a cover node manually.
         let i = sim.list.iter().position(|x| x.present).unwrap();
-        if !d.covers.is_empty() {
-            sim.list[i].cover = Some(0);
-            sim.list[i].cover_side = 1;
-            sim.list[i].cover_point = d.covers[0].pos;
-        }
+        sim.list[i].cover = Some(0);
+        sim.list[i].cover_side = 1;
+        sim.list[i].cover_point = d.covers[0].pos;
         i
     });
-    if d.covers.is_empty() { eprintln!("skip: no cover nodes on this level"); return; }
-    // Sniper: anim_set 0x13 → branches to 0x97.
+    assert_eq!(d.level, 0x0700_0005);
+    for set in [0x13u16, 0x14] {
+        let dr = &mut sim.list[i];
+        dr.anim_set = set;
+        dr.state = state::UNDER_COVER_FIRE;
+        dr.next_state = None;
+        dr.clip = 5;
+        dr.firing = false;
+        sim.list[i].send(&d, &mut sim.rng, sim.frame, msg::ENTER);
+        let (s, ns) = (sim.list[i].state, sim.list[i].next_state);
+        assert!(s != state::UNDER_COVER_SNIPER_FIRE && ns != Some(state::UNDER_COVER_SNIPER_FIRE),
+            "anim set {set:#x} on 05 does not branch to 0x97: state {s:#x} next {ns:?}");
+        assert!(sim.list[i].firing, "anim set {set:#x} fires from the 0x96 ENTER (DroneWeap_Fire(1)) [M 0x16a3e0 case 1]");
+    }
+}
+
+/// `UnderCoverSniperFire` (0x97): the ENTER clears the fire request `+0x3B` and the shot flag `+0x40`
+/// [M 0x16a610 case 1], and the UPDATE does nothing while the request is off [M 0x16a610 case 3:
+/// `+0x568 != 2` or `+0x3B == 0` returns] — so the sniper keeps its post until timer C's
+/// `DroneWeap_Fire(1)`, even with Bond facing it and aiming at it from 50 u. The old port kept a
+/// standing request (a round before timer C) and rolled the facing duck every tick from the ENTER.
+#[test]
+fn sniper_cover_fire_holds_until_timer_c() {
+    use nf_game::drone::{state, msg};
+    let Some(l) = Level05::load() else { eprintln!("skip: NF_ISO not set"); return };
+    let d = l.data();
+    let (drones, _, rng) = l.drones(None, 61.342);
+    let mut sim = l.sim(drones, rng);
+    let away = bond_at([0.0, -500.0, 0.0]);
+    for _ in 0..30 { sim.tick(&d, &away); }
+    let i = sim.list.iter().position(|x| x.present).unwrap();
+    let f0 = sim.frame;
     {
         let dr = &mut sim.list[i];
         dr.anim_set = 0x13;
-        dr.state = state::UNDER_COVER_FIRE;
-        dr.next_state = None;
         dr.clip = 5;
+        dr.firing = true;
+        dr.next_state = Some(state::UNDER_COVER_SNIPER_FIRE);
     }
-    // Route the ENTER message by re-entering the state.
-    sim.list[i].send(&d, &mut sim.rng, sim.frame, msg::ENTER);
-    let s = sim.list[i].state;
-    let ns = sim.list[i].next_state;
-    assert!(s == state::UNDER_COVER_SNIPER_FIRE || ns == Some(state::UNDER_COVER_SNIPER_FIRE),
-        "sniper branched to 0x97: state {:#x} next {:?} (level {:#x})", s, ns, d.level);
-
-    // Sister: a non-sniper (anim_set 0x14) in the same state fires and does NOT branch to 0x97.
-    {
+    sim.list[i].send(&d, &mut sim.rng, f0, 0);
+    assert_eq!(sim.list[i].state, state::UNDER_COVER_SNIPER_FIRE, "the forced entry happened");
+    assert!(!sim.list[i].firing, "the ENTER clears the fire request +0x3B [M 0x16a610 case 1]");
+    assert!(!sim.list[i].shot_flag, "the ENTER clears the shot flag +0x40 [M 0x16a610 case 1]");
+    for k in 0..40 {
         let dr = &mut sim.list[i];
-        dr.anim_set = 0x14;
-        dr.state = state::UNDER_COVER_FIRE;
-        dr.next_state = None;
-        dr.clip = 5;
+        dr.opp_facing = 0.0;
+        dr.aimed_at = true;
+        dr.bond_armed = true;
+        dr.dist = 50.0;
+        sim.list[i].send(&d, &mut sim.rng, f0 + k, msg::UPDATE);
+        let (s, ns) = (sim.list[i].state, sim.list[i].next_state);
+        assert!(s == state::UNDER_COVER_SNIPER_FIRE && ns.is_none(),
+            "update {k}: the sniper holds 0x97 with the request off: state {s:#x} next {ns:?}");
     }
-    sim.list[i].send(&d, &mut sim.rng, sim.frame, msg::ENTER);
-    let s2 = sim.list[i].state;
-    let ns2 = sim.list[i].next_state;
-    assert!(s2 != state::UNDER_COVER_SNIPER_FIRE && ns2 != Some(state::UNDER_COVER_SNIPER_FIRE),
-        "non-sniper did NOT branch: state {:#x} next {:?}", s2, ns2);
 }
 
 /// G-028 ambush (WORKLOG 0079): a drone in mode 0x10 (ambush) starts in `AmbushInit` (0x37). With a cover node

@@ -129,19 +129,25 @@ fn the_scoped_capsule_disagrees_with_the_flat_one_at_the_slab_face() {
     for _ in 0..90 { sim.step_bond(Input::default(), false, false, false); }
     let cell = sim.bond.cel.expect("Bond's cel resolves inside the missile room");
     eprintln!("bond cel {cell} pos {:?}", sim.bond.pos);
-    // A capsule segment crossing the slab's west face (z −118.0) at mid-capsule height,
-    // x 157.5 (inside the room's x band, clear of the side walls).
-    let a = [157.5, sim.bond.pos[1] + 0.9, -115.5];
-    let b = [157.5, a[1], -121.0];
+    // Bond's own vertical cylinder spine (root + 0.275 .. root − 0.55, the walk's query shape),
+    // x 157.5 (inside the room's x band, clear of the side walls), 0.25 past the slab's face
+    // (z −118.0). The slab's faces there point −z, away from the room [D: the flat push below
+    // is −z]. Under the game's one-sided cylinder push [M Intersect_CylGeom 0x109da0, flags 99
+    // for a spine behind the plane] a room-side spine is never pushed by them at all, so the
+    // mechanism pin reads past the face: the shared world still carries the slab (the flat push
+    // shoves the spine on south), while Bond's own cel's lists carry none.
+    let y = sim.bond.pos[1];
+    let a = [157.5, y + 0.275, -118.25];
+    let b = [157.5, y - 0.55, -118.25];
+    let (front, _) = sim.world.capsule_push([157.5, y + 0.275, -117.75], [157.5, y - 0.55, -117.75], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+    assert!(front[2].abs() < 0.01, "the slab's −z faces never push a room-side spine (one-sided) (got {front:?})");
     let (flat, _) = sim.world.capsule_push(a, b, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
     let (scoped, _) = sim.world.capsule_push_scoped(Some(cell), a, b, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
     eprintln!("flat push {:?} scoped push {:?}", flat, scoped);
-    assert!(flat[2] > 0.01,
-        "the shared world still carries the exterior slabs (the flat push shoves the capsule back \
-         south) [D probe: cell 15's tris z −125.0..−118.0 inside the room] (got {:?})", flat);
+    assert!(flat[2] < -0.01,
+        "the shared world still carries the exterior slabs (the flat push shoves the spine on south) [D probe: cell 15's tris z −125.0..−118.0 inside the room] (got {:?})", flat);
     assert!(scoped[2].abs() < 0.01,
-        "Bond's own cel's lists carry no wall at the slab face [M Collide_Pick 0x1eb320 per-cel \
-         lists] (got {:?})", scoped);
+        "Bond's own cel's lists carry no wall at the slab face [M Collide_Pick 0x1eb320 per-cel lists] (got {:?})", scoped);
     // Sister: the scoped query against the room's OWN west wall still pushes — attribution, not a
     // blanket cull.
     let wa = [157.5, a[1], -114.5];

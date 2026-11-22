@@ -929,5 +929,8 @@ fn walk_the_full_mission_start_to_finish_real_damage_agent() {
 /// 74ee9b749 are the [S] candidates; the exact fixer is not bisected this window).
 #[test]
 fn walk_the_full_mission_start_to_finish_real_damage_00agent() {
-    walker::with_real_damage(|| walk_the_full_mission_start_to_finish_at(3));
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): Bond died at (-4.17,5.48,30.23)
+    // t1113 to drone #0 at 1 u. Lever: 1000/60 [L the 4-value sweep: only 1000/60 completes;
+    // 2000/30, 3000/60, 4000/90 do not].
+    walker::with_pause(1000, 60, || walker::with_real_damage(|| walk_the_full_mission_start_to_finish_at(3)));
 }

@@ -98,7 +98,7 @@ Neighbour: `+0x5A0` (u16) is a third state slot — `SearchArea` 0x165bf0:95 cop
 | +0x154 | f32[3] | **per-player distance table** (3 players): `PreDroneControl` 0x148db0:37-47 writes `0x47c35000` (100000.0 = far) for absent players, else the distance (loop `glb_players[i]`) | [M1] |
 | +0x19 | u8 | **captain/elite flag** (brief's "drop flag" is wrong): `DefaultInit` 0x14b300:498/502 clears it, :505-531 sets it from props 9/5/8 + `GameState._40_4_` ∈ {1,2,3}; when set, the anim set is remapped (0x5000038/0x500002f/…) and the `DroneCaptain_Mod_*` multipliers apply to health (+0xAC) and damage (+0x100) :556-560; `OnInitDeath` 0x145bd0:23,76,79,108 branches the death accounting on it | [M*] |
 | +0x3A | u8 | **silent-death latch (explosive kill)**: set by `Explode_CollisionHandler` 0x17cde0:9-10 (one-shot around `Explode_Propagate`) and `HitDamage` 0x145558:78; suppresses `NDrone2_DeathTalk` in `OnInitDeath` 0x145bd0:106-108 and gates `DSTATE_Dead` 0x163fe8:53 / `BotDead` 0x171518:29,50 chatter; cleared by `DroneAnim_LocationDeathAnim` 0x13c780:36 | [M*] |
-| +0x3B / +0x3D | u8 | death-flag fixups written by `Drone_SM_RouteMsgDCV` (0x171fb4-0x171ffc; next state ∈ {0x44,0x46,0x47,0x55} → +0x3D = 1, else +0x3B = 0) — already mapped in dcvars-statemachine.md; users: `DroneWeap_Fire` 0x17a8c0, `HandleFiring` 0x17a180 (+0x3D gates firing while dying), `SetCombatMoveAnim` 0x13cfb0, combat DSTATEs (+0x3B) | [M-dis, cross-ref] |
+| +0x3B / +0x3D | u8 | death-flag fixups written by `Drone_SM_RouteMsgDCV` (0x171fb4-0x171ffc; next state ∈ {0x44,0x46,0x47,0x55} → +0x3D = 1, else +0x3B = 0) — already mapped in dcvars-statemachine.md; users: `DroneWeap_Fire` 0x17a8c0, `HandleFiring` 0x17a180 (+0x3D gates firing while dying; port: `burst_latch`), `SetCombatMoveAnim` 0x13cfb0, combat DSTATEs (+0x3B) | [M-dis, cross-ref] |
 | +0x44 | u8 | **team** (1 = enemy, 2 = civilian/guard-friendly — checked with 0x2000 in `ConsiderAlerted:35`): read all over the drone family; `OnInitDeath` 0x145bd0:21/58 (`== 1` → `PlrStat_*`), `FirstAttack` 0x148010:86. Port ✓ | [M*] |
 | +0x135 | u8 | **second switch-channel id** (placement prop 0x13 per `DefaultInit` 0x14b300:465-466; the live level value is cached at +0x137 = `switch_channels[+0x135]`): `PreDroneControl` 0x148db0:51-61 — if `+0x135` set and `switch_channels[+0x135] != 0`, consumes the alt-state (+0x5A4) and clears +0x13A/+0x135; `DroneFunc_HostageSaved` 0x1441c0:11-18 raises `switch_channels_time[+0x135]`; `DSTATE_HostageSaved` 0x15ccf0:24 gates on it | [M*] |
 | +0x13A | u16 | **attack/second tag word** (placement prop 0x15, `DefaultInit:471`): `PreDroneControl` 0x148db0:52-61 — 0xC = force-attack path (`DroneFunc_DoForcedAttack`), any nonzero = consume +0x5A4 alt state; cleared by `FirstAttack` 0x148010:36,62, `SetAsAttacking` 0x14aed8:8; read by `DoModeSettingsOLD` 0x14cfa0:28 and `GetDroneTypeAttackTypeFriend` | [M*] |
@@ -212,5 +212,9 @@ HostageKiller(7), sniper last node in 0x29), then shoot a guard.
   [M-dis 0x17207c-88] — the port cleared only timer C and never reset `damage_taken`. Test:
   `fields_actors_live::a_state_change_clears_both_message_timers` (fails before the fix).
 - Not fixed (documented, need a bigger change): no msg state-filter (msg+4 ∉ {0, 0xC5, current} should drop,
-  [M-dis 0x171e28-44]); `sm_id` = list index vs the game's monotonic u16 instance counter [M 0x13cc70]; the
-  death-flag fixups +0x3B/+0x3D are covered by the port's `firing = false` on death enters, not modelled byte-exact.
+  [M-dis 0x171e28-44]); `sm_id` = list index vs the game's monotonic u16 instance counter [M 0x13cc70]; .
+- The fire-request fixups +0x3B/+0x3D are ported (`Drone::send`'s change loop, `burst_latch`): a change into
+  0x44/0x46/0x47/0x55 keeps the request and arms the burst latch, any other change clears the request
+  [M 0x171df8:125-173]; `handle_firing` drops the request one pass after `+0x3C` latches while the latch stands
+  [M 0x17a180:34-58]; the death ENTERs no longer clear it and the weapon pass runs for dying guards
+  [M 0x1637f8 case 1, 0x1490f0:140-143,231]. Test: `burst_latch_live`.

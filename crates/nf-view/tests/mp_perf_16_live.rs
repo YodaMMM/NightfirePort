@@ -117,7 +117,7 @@ fn iso() -> Option<String> {
 // (humans + bots). A behaviour change from the decompile: 0x25c0_6d1e_41bf_5788 (36 kills) ->
 // 0xb6fb_5b05_bf9b_0ccc (43 kills); with the bot drop and the bot reservations switched off the
 // old value comes back exactly; the machines agree on every tick.
-const PINNED_DIGEST: u64 = 0xce7d_8e35_58a9_738f; // 39 kills, re-pinned for stream batch 1121b on master (the joined bullet-direction, MP-scenario and auto-aim ports over master's bot drops and scenario fixes); was 0xb6fb_5b05_bf9b_0ccc; earlier 0x25c0_6d1e_41bf_5788; earlier 0xa730_a7ac_a608_f75a; // previous note: 48 kills (re-pinned for mp-bot-backoff-2: the CanBackoff probe is the game's (0, 0, −1.8) [M 0x1501a0:57 `0xbfe66666`] scaled by the bot speed mul (a bot's +0xc5 is 0x1e [M 0x14c938 case 0x10]), through the MoveTest, behind the disc anim-state-4 gate; decompile-backed behaviour change, not an optimisation)
+const PINNED_DIGEST: u64 = 0x8d3c_64a1_8b34_2d54; // re-pinned for collide-push-3 (the game's one-sided cylinder push moves every body's wall contact); was 0xce7d_8e35_58a9_738f; 39 kills, re-pinned for stream batch 1121b on master (the joined bullet-direction, MP-scenario and auto-aim ports over master's bot drops and scenario fixes); was 0xb6fb_5b05_bf9b_0ccc; earlier 0x25c0_6d1e_41bf_5788; earlier 0xa730_a7ac_a608_f75a; // previous note: 48 kills (re-pinned for mp-bot-backoff-2: the CanBackoff probe is the game's (0, 0, −1.8) [M 0x1501a0:57 `0xbfe66666`] scaled by the bot speed mul (a bot's +0xc5 is 0x1e [M 0x14c938 case 0x10]), through the MoveTest, behind the disc anim-state-4 gate; decompile-backed behaviour change, not an optimisation)
 
 const TICKS: u32 = 3600;
 

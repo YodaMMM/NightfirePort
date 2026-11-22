@@ -232,7 +232,12 @@ fn hold_the_shelter(w: &mut Walker, max: u32) {
                 && !matches!(d.death_channel, 23..=26) && walker::dxz(d.pos, bp) < 6.0)
         };
         match near {
-            Some(i) => { assert!(w.shoot_bounded(i, "the shelter doorway", 900), "the guard at the shelter doorway dies to Bond's fire"); }
+            Some(i) => {
+                // The level starts Bond on the fists (switch request 1); a player draws the
+                // carried pistol before answering a guard at range.
+                assert!(w.switch_to_gun("the shelter doorway"), "Bond draws a gun");
+                assert!(w.shoot_bounded(i, "the shelter doorway", 900), "the guard at the shelter doorway dies to Bond's fire");
+            }
             None => w.tick(Input::default(), false),
         }
     }

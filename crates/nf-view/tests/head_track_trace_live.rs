@@ -189,27 +189,52 @@ fn head_track_trace_left_right_above_matches_the_game_formula() {
         // The drones list can splice during the settle ticks (spawner waves), shifting indices:
         // stage onto the nearest unarmed drone, settle, re-check, and re-stage until Bond really
         // stands ~1.1 from one (the splices settle within a few tries).
+        // Bond must settle LEVEL with the guest: the side poses check an upright head, and the
+        // game's pitch want is measured in the guest's un-yawed frame (`head_track_want`, the
+        // per-tick equality below), so a Bond standing even 0.25 higher 75 degrees off-axis
+        // saturates the pitch at its 1.0 clamp and the head reads tilted by PITCH, not roll.
+        // The first 07000007 spot (0.3 ahead, 1.1 aside of guest 4) sits on a raised edge:
+        // the old two-sided push threw Bond 2.38 out of the 3.0 gate (that pose was never
+        // tracked, the checks below skipped it); the game's one-sided wall push [M
+        // Intersect_CylGeom 0x109da0, flags 99] keeps him at 1.47, 0.53 up. So: try the side
+        // offsets (every one past the yaw clamp, atan(side/0.3) > 1.1, inside the 2.0
+        // visibility short-circuit) on each unarmed guest in turn, and keep the first spot where
+        // Bond stands grounded at the guest's own floor (rest 1.035 over it vs the guest's 1.0)
+        // and the guest is the nearest unarmed one (the drone the trace follows).
         let di = 'stage: {
-            let mut di = anchor;
-            for _ in 0..4 {
-                let (spot, yaw) = {
-                    let sim = scene.sim.as_ref().unwrap();
-                    let g = &sim.drones.list[di];
-                    let (s_y, c_y) = (g.yaw.sin(), g.yaw.cos());
-                    ([g.pos[0] + 0.3 * s_y + sign * 1.1 * c_y, g.pos[1], g.pos[2] + 0.3 * c_y - sign * 1.1 * s_y],
-                     g.yaw + sign * std::f32::consts::FRAC_PI_2)
-                };
-                {
-                    let sim = scene.sim.as_mut().unwrap();
-                    sim.bond = nf_game::player::Bond::new(spot, yaw);
-                }
-                for _ in 0..5 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
-                di = nearest_unarmed_drone(scene.sim.as_ref().unwrap()).expect("an unarmed drone in 07000007");
+            let order: Vec<usize> = {
                 let sim = scene.sim.as_ref().unwrap();
-                let d = sim.drones.list[di].dist;
-                if d <= 2.0 { break 'stage di; }
+                let ap = sim.drones.list[anchor].pos;
+                let mut v: Vec<(f32, usize)> = sim.drones.list.iter().enumerate()
+                    .filter(|(_, dr)| dr.present && dr.enabled && !dr.corpse
+                        && !((2..=0x46).contains(&dr.weapon) || (0x6a..=0x71).contains(&dr.weapon)))
+                    .map(|(i, dr)| ((dr.pos[0] - ap[0]).powi(2) + (dr.pos[2] - ap[2]).powi(2), i)).collect();
+                v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                v.into_iter().map(|(_, i)| i).collect()
+            };
+            for &cand in &order {
+                for side in [1.1f32, 1.3, 0.9, 1.5, 0.8, 1.2] {
+                    let (spot, yaw) = {
+                        let sim = scene.sim.as_ref().unwrap();
+                        let g = &sim.drones.list[cand];
+                        let (s_y, c_y) = (g.yaw.sin(), g.yaw.cos());
+                        ([g.pos[0] + 0.3 * s_y + sign * side * c_y, g.pos[1], g.pos[2] + 0.3 * c_y - sign * side * s_y],
+                         g.yaw + sign * std::f32::consts::FRAC_PI_2)
+                    };
+                    {
+                        let sim = scene.sim.as_mut().unwrap();
+                        sim.bond = nf_game::player::Bond::new(spot, yaw);
+                    }
+                    for _ in 0..30 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+                    let sim = scene.sim.as_ref().unwrap();
+                    let Some(di) = nearest_unarmed_drone(sim) else { continue };
+                    let d = sim.drones.list[di].dist;
+                    let lift = sim.bond.pos[1] - sim.drones.list[di].pos[1];
+                    println!("{name} stage guest {cand} side {side}: nearest {di} dist {d:.2} grounded {} lift {lift:.3}", sim.bond.grounded);
+                    if di == cand && d <= 2.0 && sim.bond.grounded && (lift - 0.035).abs() < 0.08 { break 'stage di; }
+                }
             }
-            di
+            panic!("{name}: no level spot beside any unarmed guest");
         };
         let mut max_yaw = 0.0f32;
         let mut min_angle = 180.0f32;

@@ -119,7 +119,10 @@ fn the_use_key_opens_door2turbine_and_the_sister_keeps_it_shut() {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.doors.list.iter().position(|d| dxz_pub(d.pos, [39.99, 12.57, -210.45]) < 2.0).expect("door2turbine in the doors list")
     };
-    drop_at(&mut w, [39.99, 13.7, -208.6]);
+    // 0.98 east of the door line: straight in front (39.99) stands in the leaf's swing, which
+    // the old two-sided push used to shove him out of (to x 40.97); the game's one-sided push
+    // [M Intersect_CylGeom 0x109da0] does not.
+    drop_at(&mut w, [40.97, 13.7, -208.45]);
     let before = w.scene.sim.as_ref().unwrap().drones.doors.list[di].state;
     assert_eq!(before & 0xc, 0, "door2turbine starts closed [D; the start snapshot]");
     w.use_door(di, "door2turbine");
