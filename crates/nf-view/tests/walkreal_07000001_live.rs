@@ -172,6 +172,11 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
     // and traded (77.2 -> 6.6); from -19 he steps out after Bond and dies to the return fire at
     // ZERO cost [L the 2026-11-21 retreat sweep: -12/-16.5/-19 all kill him free; -12 leaves
     // the whole pocket within reach of the stairwell legs].
+    // s/real-health-00agent-01: the pre-arrival window lever was TRIED and is MEASURED DEAD
+    // ([L run5 on this branch]): removing the -19 retreat put Bond at the mouth with #12 in
+    // the ×2 band at 2.8 u — dead at t25396 (BEFORE the old t27705), no window kill landed,
+    // and the parked contact took guard spray (by_drone 12) again. The -19 retreat is
+    // load-bearing: it keeps #12 at 4-6 u through the ambush; the d3 -19 retreat stays.
     let back_x = if difficulty >= 3 { -19.0 } else { -22.3 };
     w.walk_nav_to([back_x, 6.4, 14.8], "back off the popped ambush", 1.0);
     // 00 Agent: crouched at the mouth, and the shots BOUNDED (300 ticks, then the round re-picks
@@ -196,12 +201,12 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
     // charge down the lane wins the trade on its neighbours.
     if difficulty >= 3 {
         d3_switch_to_deepest_gun(w, "the pocket lane re-arm");
-        let prev_head = w.prefer_head;
         // s/hard-walks-d: the torso, not the head. With the head pick the P2K's spread put every
         // tap of the 600-tick stand on #12 into the lane's east jamb (z ~13.1, y ~6.8; the round's
         // world stop at t 0.68-0.92 of its segment while the eye-to-box ray read clear) and Bond
         // died at the mouth t26760; the torso pick leaves the pocket at 57.4 [measured on this
         // branch, both with the box shield below].
+        let prev_head = w.prefer_head;
         w.prefer_head = false;
         let prev_fh = w.flank_hold_x;
         w.flank_hold_x = Some(-33.0);
@@ -4460,15 +4465,18 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// REMAINING WALL: while the contact is parked at the head, #3 (the 24-hp captain, 0.75-1.6 u
 /// off every line) is unkillable without crossing him, the guards' own spray crosses him from
 /// any lane-adjacent stance, and the close trade with #12-class guards costs ~18 per kill.
-/// NEXT LEVER: the pre-arrival window — fight the lane IN the escort phase the moment Bond's
-/// slab crossing pops the pair, BEFORE the contact's lead route parks him at the head (the
-/// measured window is ~400-700 ticks: the mouth nav took 508, the contact covered 6.3 u in
-/// ~700 [L run1 t24200→t24900]); #17's chest from a contact-free mouth + the head fight for
-/// #12 leaves only #3, who must be drawn out of the pocket (a standing lane walk draws the
-/// crowd's advance [L the hall door-lane measurement]) or killed from a stance west of the
-/// plate where his line clears the contact's DESCENT path. The gate + head fight stay on the
-/// branch, d3-gated; d1/d2 byte-identical (no shared-code change).
-#[ignore = "00 Agent (real-health-00agent-01): the contact-line gate (the 0.2464 cap cone) closed Bond's friendly-fire kill [L run2: zero by_player damage on the contact] and the stairwell-head fight kills #12 [L run3/4], but the parked contact sits 0.03-0.32 u off EVERY lane line and in the spray shadow of the guards' own fire (by_drone 4/17 hits during the head approach) while #3 (24 hp) is unkillable without crossing him — Bond died t27705 to #3's close grind. The port is faithful ([M 0x1424e0/0x13fff0/0x14b300/0x177640]); the lever is the route: fight the lane in the ~400-700-tick pre-arrival window (before the contact's lead parks him at the head), then draw #3 out of the pocket"]
+/// THE PRE-ARRIVAL WINDOW LEVER WAS TRIED AND IS MEASURED DEAD ([L run5 on this branch]):
+/// removing the -19 retreat to reach the mouth sooner put #12 in the ×2 band at 2.8 u — Bond
+/// died EARLIER (t25396, before the old t27705), no window kill landed, and the parked
+/// contact took guard spray (by_drone 12) again. The -19 retreat is load-bearing (it keeps
+/// #12 at 4-6 u through the ambush); restored, the state reproduces run 4 exactly (Bond dies
+/// t27705 [L run7]). NEXT LEVER: #3's draw-out — a standing lane walk draws the crowd's
+/// advance ([L the hall door-lane measurement]; #3 did advance north to (-30.7,14.7) during
+/// run 2's escort, where his mouth line clears the parked contact at 0.9 u), so the walk
+/// should bait the advance and kill #3 at the lane mouth the moment his line clears, or
+/// shield the contact from the guards' own spray during the descent. The gate + head fight
+/// stay on the branch, d3-gated; d1/d2 byte-identical (no shared-code change).
+#[ignore = "00 Agent (real-health-00agent-01): the contact-line gate (the 0.2464 cap cone) closed Bond's friendly-fire kill [L run2: zero by_player damage on the contact] and the stairwell-head fight kills #12 [L run3/4], but the parked contact sits 0.03-0.32 u off EVERY lane line and in the spray shadow of the guards' own fire (by_drone 4/17) while #3 (24 hp) is unkillable without crossing him — Bond died t27705 to #3's close grind. The pre-arrival window (no -19 retreat) is MEASURED DEAD [L run5: died earlier, t25396, #12 in the x2 band]. The port is faithful ([M 0x1424e0/0x13fff0/0x14b300/0x177640]); NEXT LEVER: bait #3's advance out of the pocket (a standing lane walk draws it; his advanced line clears the parked contact at 0.9 [L run2]) and kill him at the mouth the moment his line clears, or shield the contact from the guards' spray on the descent"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }
