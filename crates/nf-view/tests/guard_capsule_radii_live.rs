@@ -165,7 +165,15 @@ fn a_down_guard_bumps_at_the_games_03_ball() {
     // case 3, 0x1405c8) first firing distance. The AnyoneNear 4.0 band keeps him down while Bond
     // closes [M 0x162eb0 case 0xc / DroneFunc_AnyoneNear 0x14a718].
     let mut first_fire: Option<f32> = None;
-    for _ in 0..1500 {
+    // master-reds-1121: a creep line can end on scenery short of the guard (the batch-3 stream's
+    // 05 run picks #2 at (66.27, 101.83); the straight creep from the SW rests 1.67 u off on a
+    // ~0.2 u lip at (65.4, 26.7, 100.9), the one-sided push holding Bond on its n.y 0.66 face
+    // [measured this branch]). A creep that makes no progress for 120 ticks backs off to 2.2 u on
+    // the next quarter around the guard and creeps again (up to 3 sides). The probe is the
+    // latch distance, which does not depend on the side Bond comes from.
+    let mut side = 0u32;
+    let (mut best, mut best_t) = (f32::MAX, 0u32);
+    for t in 0..3000u32 {
         {
             let sim = w.scene.sim.as_ref().unwrap();
             let dr = &sim.drones.list[gi];
@@ -174,6 +182,20 @@ fn a_down_guard_bumps_at_the_games_03_ball() {
                 break;
             }
             if !dr.down { break; } // he recovered early: the window closed
+            let dd = dxz(sim.bond.pos, dr.pos);
+            if dd < best - 0.01 { best = dd; best_t = t; }
+        }
+        if t - best_t > 120 && side < 3 {
+            side += 1;
+            let (bp, gp) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, sim.drones.list[gi].pos) };
+            let a0 = (bp[0] - gp[0]).atan2(bp[2] - gp[2]) + side as f32 * std::f32::consts::FRAC_PI_2;
+            eprintln!("[capsule] creep stalled at {best:.2}: backing off to side {side}");
+            // Back off (the stick reversed) out of contact, then walk round to 2.2 u on the new side.
+            for _ in 0..40 { w.tick(Input { forward: -0.6, ..Default::default() }, false); }
+            let (sx, sz) = (gp[0] + 2.2 * a0.sin(), gp[2] + 2.2 * a0.cos());
+            w.walk_to(Wp::new(sx, gp[1], sz).r(0.5), &format!("the creep side {side}"));
+            best = f32::MAX; best_t = t;
+            continue;
         }
         let sim = w.scene.sim.as_ref().unwrap();
         let (bp, gp) = (sim.bond.pos, sim.drones.list[gi].pos);

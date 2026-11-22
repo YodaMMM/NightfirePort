@@ -369,6 +369,13 @@ pub struct Walker {
     /// game's spread cap (0.2464 rad — bullet::player_spread's 176-unit cap) so a moving volley
     /// whose pellets would cross the shielded contact is refused before it fires.
     pub shield_bloom: bool,
+    /// master-reds-1121 (opt-in; the 16 kiko walk sets it): `shoot`'s yaw aims at the picked
+    /// part's own x/z instead of the drone origin's. The pitch already aims at the part's height;
+    /// with the yaw on the origin line a guard whose head box stands off his origin (AimStandFire
+    /// 0x68's lean, 0.21 u at 2.3 u) is aimed BESIDE the head at head height, above the torso
+    /// boxes: the 07000016 pit squad's #15 took 400 rounds without a hit (the part's own ray hits
+    /// box 5 at t 0.94 [measured]). Off = master-exact.
+    pub aim_part_yaw: bool,
     /// walk-01-agent (opt-in; the 01 Agent walk sets it): the shield test is the held gun's own
     /// cone against the contact's posed hit boxes instead of the 0.9 u + bloom-cap cylinder.
     /// Bond's round hits a drone iff its ray enters one of the drone's boxes [M Collide_Jointy
@@ -474,7 +481,7 @@ impl Walker {
             alarm_last: Vec::new(),
             drone_watch, watch_last,
             health_last: Vec::new(),
-            shield: None, shield_bloom: false, shield_boxes: false,
+            shield: None, shield_bloom: false, aim_part_yaw: false, shield_boxes: false,
             fighting_blocker: false,
             body_block_response: false,
             bridge_wedged_nav: false,
@@ -1207,12 +1214,13 @@ impl Walker {
                         }
                     }
                 }
-                let dx = dp[0] - bp[0];
-                let dz = dp[2] - bp[2];
+                let yaw_at = if self.aim_part_yaw { at } else { dp };
+                let dx = yaw_at[0] - bp[0];
+                let dz = yaw_at[2] - bp[2];
                 let dy = at[1] - (bp[1] + sim.bond.eye - sim.bond.crouch_drop);
                 let desired = dx.atan2(dz);
                 let err = wrap_pi(desired - sim.bond.yaw);
-                let want_pitch = (dy / dxz(bp, dp).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
+                let want_pitch = (dy / dxz(bp, yaw_at).max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
                 let perr = want_pitch - sim.bond.pitch;
                 let (err, perr) = zero_g_errs(sim, at).unwrap_or((err, perr));
                 let clip_empty = sim.gun.clip == 0 && sim.gun.spare > 0;

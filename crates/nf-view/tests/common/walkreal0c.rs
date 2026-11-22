@@ -1723,6 +1723,23 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     yard_sniper_stands(&mut w, "lip-3", 3);
     w.walk_to(Wp::new(-1.4, 12.4, -223.6).r(1.0), "icon #6 at wire #282's B end");
     yard_sniper_stands(&mut w, "lip-4", 3);
+    // master-reds-1121: a guard parked ON the ride's landing ledge (4..8, -221..-226) shoots the
+    // rider point blank for the whole crossing (the wire rider cannot fire). On the batch-3 stream
+    // (the one-sided wall push) the eastroute's guard 34 holds AimStand 0x67 at (5.98, -224.55),
+    // 1.4 u from the A end, and with guards 0 and 1 kills Bond on the wire at x 4.94 (6 x 16 + 20
+    // [measured this branch]). Shoot any live hostile standing on the landing from the B end first,
+    // as a player would; no hostile there = no change to the walk.
+    for _ in 0..3 {
+        let target = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.list.iter().position(|d| d.present && !d.corpse && d.health > 0.0 && d.team == 1 && d.enabled
+                && (3.0..9.0).contains(&d.pos[0]) && (-227.0..-220.0).contains(&d.pos[2]) && (d.pos[1] - 12.4).abs() < 2.0)
+        };
+        let Some(g) = target else { break };
+        eprintln!("[0c] guard {g} stands on the #282 landing: shooting from the B end");
+        if !w.shoot(g, "the #282 landing guard") { break; }
+    }
+    w.walk_to(Wp::new(-1.4, 12.4, -223.6).r(1.0), "icon #6 at wire #282's B end (after the landing guard)");
     // REAL: grab wire #282 (`wire_silosilo2`, A (5.85, 14.11, −223.15) B (−0.25, 14.11, −223.15)
     // [D probe blk]) — the standing body at (−1.4, −223.6) is inside the wire's world sphere
     // (centre (2.80, 14.11, −223.15) r 5.05 [D probe blk]), so the walk-east contact grab fires

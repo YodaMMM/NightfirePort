@@ -327,6 +327,7 @@ fn the_07000016_real_walk_reaches_the_kiko_death_button_and_the_cinema_clears_th
         // guard; the measured 10800-tick budget expiry with clip 1 spare 0 untouched]. Cycle the
         // wheel to an owned firearm (the real player's move, Input only) before every target.
         assert!(w.switch_to_armed("the pit squad"), "the pit squad: an owned firearm is on the wheel");
+        w.aim_part_yaw = true; // the part-yaw aim (walker.rs `aim_part_yaw`): the pit squad's leaning AimStandFire heads
         assert!(w.shoot(i, "the pit squad"), "the pit squad member #{i} dies to Bond's fire");
     }
     tick_until(&mut w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));

@@ -122,7 +122,19 @@ fn doors_open_on_the_walk_and_stay_shut_untouched() {
         (8.50, -13.50, 1.0, "through door plc 543"), (6.50, -15.50, 1.0, "the south passage"), (6.50, -19.50, 1.0, "the south passage 2"),
         (5.75, -22.75, 1.0, "the south hall"), (-9.75, -22.25, 1.0, "the south hall west"),
     ];
-    for &(x, z, r, label) in legs { w.walk_to(Wp::new(x, 1.1, z).r(r), label); }
+    for &(x, z, r, label) in legs {
+        w.walk_to(Wp::new(x, 1.1, z).r(r), label);
+        // master-reds-1121: the east wing guard (drone #4, hp 12) fires at Bond down the wing from
+        // (24.7, 4.2), and on the batch-3 stream (the guards aim at Bond's body) the fleeing
+        // civilian plc 24 (drone #14, CivilianMission 0x64) runs into his line at (24.77, -2.19):
+        // the round kills him (hit_by_drone 4, 5.25) and the mission fails on Killed Civilians
+        // 0x4000034 before the south corridor [measured this branch]. Bond answers the guard from
+        // the east lobby, as a player would, before walking the wing.
+        if label == "the east lobby east" {
+            let live = { let d = &w.scene.sim.as_ref().unwrap().drones.list[4]; d.present && !d.corpse && d.health > 0.0 && d.team == 1 };
+            if live { assert!(w.shoot(4, "the east wing guard"), "the east wing guard #4 falls to Bond's fire"); }
+        }
+    }
     w.walk_to(Wp::new(-9.90, 1.1, -20.60).r(0.4), "door plc 545, the approach");
     let d545 = door(&w, 545);
     w.use_door(d545, "door plc 545");
