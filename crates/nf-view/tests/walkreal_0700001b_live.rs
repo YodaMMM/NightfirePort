@@ -2723,7 +2723,12 @@ fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
 #[test]
 #[ignore = "s/hard-walks-b (master b60b1ff79): base run k3 latched 365 past its read (the mid-phase defenses 4974..5274 and 6126..6426 killed 0). With the sidestep yielding inside DODGE_RESERVE k5/k4/k3 latch 470/435/160 inside, but the defenses then run through the shared k8/k6 read (7861): MissileDeploy [1,1,2,2,2,3,1,3], stuck at 8864 with 37.5 health [L re-confirmed on this branch's final tree: stuck 8864, hp 37.5, astro 6]. Measured red this round (s/walk-1b-agent): fencing the defense fights on a live k8/k6 UI target (the chain-clear gate, this round's named lever) died 8372 - k8 latched 7191 but the fight-free k6 window bled Bond out; the round-6 core law holds (the fights' cover floats break the shooters' sight clocks) and skip-fight is measured dead at every formulation (r6 iteration 5, r7 lever 8, this round's fence). Next lever: a 60-tick stop sweep in the mid phase (6000..7500) - the Agent walk's sweep this round moved every downstream latch (k6 6822 -> 7104, the k1 window entry 56.9 -> 74.0, all 8 latched) and the hard stream has never been re-rolled"]
 fn walk_arrival_to_drakes_defeat_on_real_health_00agent() {
-    walk_arrival_to_drakes_defeat_on_real_health_at(3);
+    // sweep hook (TEMPORARY, removed before commit): NF_1B_PAUSES3="tick:len,..." re-rolls the
+    // hard stream (the round-22 next lever: the mid-phase stop sweep 6000..7500).
+    let sweeps: Vec<(u32, u32)> = std::env::var("NF_1B_PAUSES3").ok().map(|s| s.split(',')
+        .filter_map(|p| p.split_once(':')).map(|(a, b)| (a.parse::<u32>().unwrap(), b.parse::<u32>().unwrap())).collect())
+        .unwrap_or_else(|| vec![]);
+    walker::with_pauses(&sweeps, || walk_arrival_to_drakes_defeat_on_real_health_at(3));
 }
 
 /// The astronauts' stats and gun, from the disc and the decompile. They are type 1 (`+0xC7`,
