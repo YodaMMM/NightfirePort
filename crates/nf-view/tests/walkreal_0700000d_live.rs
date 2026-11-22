@@ -2445,7 +2445,12 @@ fn walk_arrival_to_the_c5_door_real_damage() {
     // annex body armour taken (as the Agent walk does) and three stops [L the stop grids on this
     // tree: a first stop at 1500/90 reaches the yard (alone it dies t25278 in the yard fight);
     // a third stop 18000/15, 18000/45, 19000/15, 19000/45 or 20000/90 completes].
-    walker::with_pauses(&[(1500, 90), (17200, 15), (19000, 15)], || walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(1, true)));
+    // Stream batch 1122 (the fallback-goal route pull-back AlterDestFor_DROUTE_Nearest
+    // 0x156088 joined): 1500/90 dies t5992 on the gantry approach (212.85,16.95,-234.51) to the
+    // deck riflemen #14/#16. Lever: the first stop 1500/180, end health 83.2 [L the 24-run grid
+    // on the first stop with the later two fixed: 1500/180 and 1500/120 + 17200/30 complete;
+    // 500-3000 at 30-150 die, 1500/120 alone dies at the C5 door fight t26873].
+    walker::with_pauses(&[(1500, 180), (17200, 15), (19000, 15)], || walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(1, true)));
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-0c-0d): the same walked
