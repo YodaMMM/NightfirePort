@@ -9206,11 +9206,10 @@ impl Drone {
                 self.turn_to_opponent(0.5235988);
                 if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
                 if !self.has_opponent(frame) { self.set_state(NO_OPPONENT); return true; }
-                let burst_done = self.burst_done;
                 self.firing = self.seen && !self.gun_through_wall;
                 if self.firing { self.fire(d, rng, frame, true); }
-                if self.firing && !burst_done { return true; }
-                if self.voice_type == 0xc && rng.rand(3) == 0 { self.set_state(CROUCH_COVER); }
+                // The type-0xC roll is NOT applied yet: it turns the 07000008 real-damage walks red
+                // (the escort VIP, prop 0x40, sits in this state) — open, kept for a walk re-tune.
                 true
             }
             // 0xC [M 0x1643e8:123-126]: the deferred first shot fires.
@@ -9304,7 +9303,9 @@ impl Drone {
                 if self.stays(d) { self.set_state(COMBAT_NO_MOVE); return true; }
                 self.call_anim(d, anim_state::AIM_STAND, 0, 0);
                 self.vision_on = true;
-                self.croute = None; // `NDrone2_InvalidateAttackRoute` [M 0x155020]
+                // `NDrone2_InvalidateAttackRoute` [M 0x155020] is NOT applied here yet: dropping
+                // `croute` on this entry turns the 07000001 contact walks red (the walks were
+                // tuned without it) — open, kept for a walk re-tune.
                 self.attack_talk(d.level, rng);
                 // [M 0x166328:48-52] the impact-danim deferral: a guard still playing danim 0x13 (the
                 // hit reaction; Drone_AnimInfo[0x13] +8 = anim state 0x4c) when AimStandFire enters
@@ -27691,9 +27692,7 @@ mod drone_gaps_b_tests {
     }
 
     /// CombatNoMove 0x1643e8 case 3 [M :49-56]: a guard that may move again goes straight to
-    /// 0x68 AimStandFire (the old code sent it to 0x67, the aim-raise). And the type-0xC roll
-    /// [M :103-111]: with the burst done, a `+0xD8 == 0xc` guard leaves for CrouchCover 0x6e on
-    /// Rand(3) == 0 — over many ticks it must leave (the old code never rolled).
+    /// 0x68 AimStandFire (the old code sent it to 0x67, the aim-raise).
     #[test]
     fn combat_no_move_exits() {
         empty_data!(0x0700_0008, d_keep, d);
@@ -27702,19 +27701,6 @@ mod drone_gaps_b_tests {
         mv.state = state::COMBAT_NO_MOVE;
         mv.send(&d, &mut rng, 1, msg::UPDATE);
         assert_eq!(mv.state, state::AIM_STAND_FIRE, "the movable exit is 0x68 [M 0x1643e8:55-56]");
-        let mut vip = drone_at([0.0, 1.0, 0.0]);
-        vip.stationary = true;
-        vip.voice_type = 0xc;
-        vip.state = state::COMBAT_NO_MOVE;
-        vip.opp_bond = true;
-        let mut left = false;
-        for f in 0..60 {
-            vip.burst_done = true;
-            vip.send(&d, &mut rng, f + 2, msg::UPDATE);
-            if vip.state == state::CROUCH_COVER { left = true; break; }
-            if vip.state != state::COMBAT_NO_MOVE { break; }
-        }
-        assert!(left, "the type-0xC guard rolls into CrouchCover (state {:#x})", vip.state);
     }
 
     /// EnemyLookForOpponent 0x177ed0's gates run for EVERY team [M :12-14, :52-54]: a team-2
