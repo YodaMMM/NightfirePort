@@ -117,3 +117,11 @@ window after the lever session. What ran, on the final tree:
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`.
+2. python urllib: no output, no exit — the process hung past 30 s and was killed by the tool
+   timeout (urlopen with timeout=20 never returned).
+3. wget: exit 124 (`timeout 25 wget -q -O- --post-data ... https://ntfy.sh/nightfire-yoda-8k3x`
+   — killed by the 25 s wrapper, empty output).
