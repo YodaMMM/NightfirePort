@@ -1733,7 +1733,20 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 let lane_stand: Option<[f32; 3]> = if difficulty >= 3 {
                     let mut picked: Option<[f32; 3]> = None;
                     let bond_y = w.scene.sim.as_ref().unwrap().bond.pos[1];
-                    for c in [[7.5f32, 9.5], [7.0, 9.5], [7.5, 8.5], [7.0, 8.5], [7.0, 7.6], [6.5, 7.6]] {
+                    // batch3-hard-walks (d3, the 2026-11-22 measured runs [L this tree]): the
+                    // merged stream parks the mouth shotgunner at (3.0-3.8, 14.0-15.0) and
+                    // EVERY east hold-area stand's flight lane to him is walled — the picker
+                    // fell to the crouch line, the 2400-tick taps landed ZERO (guard hp 12 at
+                    // tick 15511) and the fallback press walked INTO his volley (the t16043
+                    // death). The hall-3 instrumentation grid on this tree lists CLEAR crouched
+                    // lanes to BOTH shotgunners from the east cells (x 8, z 6.8-10.6) [L the
+                    // grid print] — east of the aperture, the hold band's own level. The west
+                    // cells (4/4.6) are measured FAKE-CLEAR here: the probe cell sits inside
+                    // the solid (the pocket's east wall stops the stand walk at x 3.4, d 1.2
+                    // short, 3000-tick cap [L the run3/4 wedges]) — never candidates again.
+                    // The live probe picks, so a walled cell is a no-op, never a regression.
+                    for c in [[7.5f32, 9.5], [7.0, 9.5], [7.5, 8.5], [7.0, 8.5], [7.0, 7.6], [6.5, 7.6],
+                              [8.0f32, 8.5], [8.0, 7.6], [8.0, 9.5], [8.0, 10.0], [8.0, 6.8], [8.0, 10.6]] {
                         let sim = w.scene.sim.as_ref().unwrap();
                         let d = &sim.drones.list[g];
                         if d.corpse || d.health <= 0.0 { break; }
@@ -1758,6 +1771,17 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                     w.leg_crouch = true;
                     w.walk_nav_to(c, &format!("hall guard {g} the lane stand (d3, hall-5)"), 0.6);
                     w.leg_crouch = false;
+                    // batch3-hard-walks (d3, the 2026-11-22 measured run [L this tree]): the
+                    // far stand's y is the pick-time bond_y — when the west band's local floor
+                    // is a step higher (6.37 vs the picked 5.99) the nav wedges short of the
+                    // cell (the 3000-tick cap at (3.40,6.80,10.40), grounded=false on the lip)
+                    // and a fight run from a wedge eats the volleys for nothing. A missed stand
+                    // walks BACK to the crouch line and the fight runs the proven shape.
+                    let sb = w.scene.sim.as_ref().unwrap().bond.pos;
+                    if walker::dxz(sb, c) > 1.0 || (sb[1] - c[1]).abs() > 0.5 {
+                        eprintln!("[01] hall guard {g}: the far stand walk missed ({sb:?} vs {c:?}) — back to the crouch line");
+                        w.walk_nav_to([6.5, 6.4, 7.6], &format!("hall guard {g} the crouch line (the stand walk missed)"), 1.0);
+                    }
                 } else {
                     w.walk_nav_to([6.5, 6.4, 7.6], &format!("hall guard {g} the crouch line"), 1.0);
                 }
@@ -2088,9 +2112,24 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                     w.lenient = true;
                     w.walk_to(Wp::new(6.5, home[1], 12.4).r(0.5), &format!("hall guard {g} the last-guard press"));
                     w.lenient = false;
+                    // batch3-hard-walks (d3, the 2026-11-22 measured run [L this tree]): the
+                    // press premise is the melee/pistol rusher EXPOSED from the press spot —
+                    // the #7 press shot printed `exposed true` at +0 and killed him free, the
+                    // #6 press shot printed `exposed false` and the shot machinery's own
+                    // reposition nav walked Bond from (6.60,6.00,11.91) to (7.8,6.0,14.6) —
+                    // INTO the mouth shotgunner's 8-pellet lane — for the t16043 death. A
+                    // guard not exposed from the press spot keeps the lane-fight/escort
+                    // machinery (the west-band stands above are his kill shape); the press
+                    // never walks deeper for his exposure.
+                    let exposed_at_press = w.exposed_aim(g).is_some();
                     let was = w.dmg.abort_on_wound;
                     w.dmg.abort_on_wound = Some(10.0);
-                    let k = w.shoot_bounded(g, &format!("hall guard {g} the press shot"), 300);
+                    let k = if exposed_at_press {
+                        w.shoot_bounded(g, &format!("hall guard {g} the press shot"), 300)
+                    } else {
+                        eprintln!("[01] hall guard {g} the press: not exposed from the press spot — no deeper shot");
+                        false
+                    };
                     w.dmg.abort_on_wound = was;
                     eprintln!("[01] hall guard {g} the press: killed {k} bond {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
                     if k {
@@ -4282,7 +4321,24 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// lane fights with captain #7 and shotgun guard #6 drain 50+ health between t9100 and t15600),
 /// the early stops at the meet-room door (7.08,9.62) by t6700 [L the 41 runs on this branch].
 /// The hall fight needs a new plan (range or cover from #6), not a re-roll.
-#[ignore = "00 Agent hall fight: 41 pause variants die to captain #7 / shotgun #6 (batch 3 sweep)"]
+/// batch3-hard-walks (2026-11-22): the HALL FIGHT IS SOLVED on real input — the d3 lane-stand
+/// candidates gained the east cells (x 8, z 6.8-10.6; the hall-3 grid's CLEAR crouched lanes to
+/// both shotgunners [L the grid print]) and the last-guard press is gated on the target being
+/// exposed AT the press spot (the #6 press printed exposed false and its shot nav walked Bond
+/// into the volley — the t16043 death; the #7 press was exposed true and killed free). Measured
+/// [L the run5]: the mouth shotgunner #6 AND the deep captain #7 both die at the east stand
+/// (g7h0 g6h0 on advance leg 4), Bond exits the hall at 57.4 FULL (the baseline exited at 2.2),
+/// the captains 5/14/15 die free, the pocket pair is fought, Bond reaches t52740 at 57.4 health
+/// + 24.8 armour — the walk's END is now the CONTACT's death: the mission-fail restart posts at
+/// t52776 with the contact hp 0.0 corpse at (-30.5,6.3,13.9), 1.4 u from the pocket SMG #12
+/// (-31.31,11.51) — the pocket lane fights left #12/#17 alive ("killed false") and the contact
+/// parked/cowered in #12's line through the long guard-2 band-edge stalls (15 ambush rounds of
+/// exposed-false holds). NEXT LEVER (a fight-plan change, not a pause sweep): the pocket pair
+/// #12/#17 must die BEFORE the contact parks beside the pocket — a west-band kill stance (the
+/// pocket's own lane) taken while the contact is still east, or the contact's park spot
+/// shepherded out of #12's line before the ambush rounds run; the guard-2 exposed-false stalls
+/// (540×3 × 15 rounds) are the exposure window to shrink.
+#[ignore = "00 Agent: hall fight SOLVED at the east lane stand (57.4 out, was 2.2 + t16043 death); the walk now ends at the contact's own death beside the live pocket SMG #12 at t52776 — next lever is killing #12/#17 before the contact parks in their line (batch3-hard-walks ledger)"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }
