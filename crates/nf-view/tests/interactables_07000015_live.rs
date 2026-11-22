@@ -606,26 +606,48 @@ fn the_dead_ladder_never_grabs_at_point_blank() {
     assert!(min_x < 84.6, "the walk crossed the ladder plane's x 84.529 (min pre-push x {min_x}) — the plane is no movement wall [M the movement pass tests the cel world, Player_Collision 0x194df0] and Bond's capsule passed THROUGH the pick's reach, yet no climb: the admission chain, not the geometry, is the blocker");
 }
 
-/// Sister (can fail): the exclusion is the ADMISSION, not the geometry. At the point-blank stop
+/// Sister (can fail): the exclusion is the ADMISSION, not the geometry. On the walk into the plane
 /// the ladder's own pick WOULD hit — the default walk arm's capsule against the ladder's 0x2E
 /// triangles [M Collide_PickObj 0x1eae80 ×1.5 sphere + the mesh refine 0x109da0 strict < r, the
 /// port's `capsule_hits_default`] — so a change that relinks the ladders (bigger boxes, a
 /// ForcedList port) flips the main test too, and a change to the ladder's parsed mesh or the
 /// pick math fails here.
 #[test]
-#[ignore = "collide-push-3: the pin held Bond 0.7 under the floor at the ladder top (the old two-sided push sank him to y 39.69 and he kept falling); on the game's one-sided push a Bond at that spot stands at y 41.32-42.30 and no standing spot from x 84.9-85.25, z -3.2 to -1.2 reaches the ladder's pick; the point-blank pick needs a re-derived stand"]
 fn sister_the_dead_ladder_mesh_reaches_the_point_blank_stander() {
+    // Rebuilt on the one-sided wall push (the old pin teleported Bond to (85.08, 40.4, -2.4),
+    // 0.7 under the walkway; the one-sided push stands him at y 41.32-42.30 there and no
+    // standing spot reaches the pick). The fixture now rides the main test's own real walk:
+    // the same reach spot on the south walkway, facing west, forward into the ladder plane.
+    // On that walk the pick would hit on some tick (the walk arm's capsule at the pre-push
+    // position against the ladder's 0x2E triangles), while the main test proves no climb ever
+    // engages, so the exclusion is the admission chain, not the geometry.
     let mut w = load15();
-    w.scene.sim.as_mut().unwrap().bond.pos = [85.08, 40.4, -2.4];
+    w.scene.sim.as_mut().unwrap().bond.pos = [85.2, 40.5, -2.4];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
-    w.scene.sim.as_mut().unwrap().bond.yaw = -std::f32::consts::FRAC_PI_2;
     w.wait(10);
-    let sim = w.scene.sim.as_ref().unwrap();
-    let lad = &sim.ladders[0];
-    assert!((lad.centre[0] - 84.529).abs() < 0.01 && (lad.centre[1] - 31.733).abs() < 0.01,
-        "sister: ladder #382 is the east ladder at the probed spot [D placement]");
-    assert!(lad.capsule_hits_default(sim.bond.pre_collide, nf_game::player::RADIUS, sim.bond.cc),
-        "the walk arm's pick DOES reach the point-blank stander [D the 2-tri plane; M 0x1eae80/0x109da0] — the blocker is the admission chain, not the geometry");
+    w.scene.sim.as_mut().unwrap().bond.yaw = -std::f32::consts::FRAC_PI_2;
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let lad = &sim.ladders[0];
+        assert!((lad.centre[0] - 84.529).abs() < 0.01 && (lad.centre[1] - 31.733).abs() < 0.01,
+            "sister: ladder #382 is the east ladder at the probed spot [D placement]");
+        assert!(!lad.capsule_hits_default(sim.bond.pre_collide, nf_game::player::RADIUS, sim.bond.cc),
+            "sister: the stander at the reach spot is outside the pick before the walk");
+    }
+    let mut hit_ticks = 0u32;
+    let mut first_hit: Option<[f32; 3]> = None;
+    for _ in 0..70 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let lad = &sim.ladders[0];
+        if lad.capsule_hits_default(sim.bond.pre_collide, nf_game::player::RADIUS, sim.bond.cc) {
+            hit_ticks += 1;
+            first_hit.get_or_insert(sim.bond.pre_collide);
+        }
+        w.tick(nf_game::player::Input { forward: 1.0, ..Default::default() }, false);
+    }
+    eprintln!("[15-ladder] pick hit on {hit_ticks} of 70 walk ticks, first at {first_hit:?}");
+    assert!(hit_ticks > 0,
+        "the walk arm's pick DOES reach Bond on the real walk into the ladder plane [D the 2-tri plane; M 0x1eae80/0x109da0]: the blocker is the admission chain, not the geometry");
 }
 
 /// KIND: destroyables 0xE1, the external-kill arm — `Destroy_Create` 0x12c318 stores placement
