@@ -87,6 +87,11 @@ thread_local! { pub static CLEAR_EAST_WING_GUARD: std::cell::Cell<bool> = const 
 /// The 543 west-stand crossing (los-mask-repins-12): opt-in per caller — the d3/d2 route keeps
 /// its proven diagonal; only the Operative walk's legs are re-routed so far.
 thread_local! { pub static DOOR_543_WEST_STAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+/// The south hall's west leg through the nav graph (OPT-IN, the d3 chain only): a return-fire
+/// fight at the leg start backs Bond up the south passage to z -19.5, and the leg's straight
+/// line from there ends on the passage's west wall (segment hit t 0.03, the 6000-tick wedge at
+/// (6.43,-19.50)). The nav graph walks back into the hall first.
+thread_local! { pub static NAV_SOUTH_HALL_WEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// The displacement recovery for the east north-lobby legs (OPT-IN, `REANCHOR_NORTH_LOBBY`, the
 /// d3 chain only): every point below was WALKED by this level's own resupply navs on this tree
@@ -469,6 +474,10 @@ pub fn walk_12_exit(w: &mut crate::walker::Walker) {
         (5.75, -22.75, "the south hall"), (-9.75, -22.25, "the south hall west"),
     ];
     for &(x, z, label) in legs {
+        if label == "the south hall west" && NAV_SOUTH_HALL_WEST.with(|c| c.get()) {
+            w.walk_nav_to([x, 1.1, z], label, 1.0);
+            continue;
+        }
         w.walk_to(Wp::new(x, 1.1, z).r(1.0), label);
     }
     // Door plc 545 (−10.58, −19.29) opens on E only (the game's too: it stays shut on approach and
