@@ -117,5 +117,5 @@
 ## Usage
 
 Session context: the driver's task window (2026-11-22 11:19 UTC sandbox start; this report
-written ~12:35 UTC). Token/credit figures: not visible to me — the environment shows no
+written ~12:21 UTC). Token/credit figures: not visible to me — the environment shows no
 input/output token or cost counters to this worker; the session's own tooling exposes none.
