@@ -226,13 +226,62 @@ impl Network {
     /// then `AINetwork_BoundsTest` with the hit pointer set and the near arm off [M 0x1554a8:31-53;
     /// the AlterDest call site 0x156088 passes t0 = the stack hit, t1 = 0, t2 = 1]. −1 = the line
     /// crosses a boundary (the nearest crossing comes back), 1 = clear, 0 = out of reach.
-    pub fn move_test_from_node_hit(&self, np: V3, pos: V3) -> (i32, Option<V3>) {
+    /// The BoundsTest runs on cels: A = the node's MAPNODE+0xC cel (a0/a1 = node+0x10 / node+0xC),
+    /// B = the position's CelPos+0x10 cel (a3) [M 0x1554a8 disasm 0x1555bc-0x1555d8] — see
+    /// [`Network::bounds_test_cels`].
+    /// The out flag (7th argument: t2 = sp+0x10 when the last argument is set, cleared by the
+    /// `sb zero,0x10(sp)` in the jal's delay slot, then `lb` + `movn v0,zero` [M disasm
+    /// 0x1555b0-0x1555e4]) can never zero the result on the shipped game: `AINetwork_BoundsTest`
+    /// 0x157d80 never reads t2 (no instruction in 0x157d80-0x158138 names $10; its arguments are
+    /// spilled from a0-a3/t0/t1 only, and no callee is handed t2 [M disasm]), so the byte stays 0.
+    pub fn move_test_from_node_hit(&self, world: &CollisionWorld, np: V3, np_cel: Option<usize>, pos: V3, pos_cel: Option<usize>) -> (i32, Option<V3>) {
         let dy = pos[1] - np[1];
         let h2 = (pos[0] - np[0]).powi(2) + (pos[2] - np[2]).powi(2);
         if h2 + dy * dy > 900.0 || dy.abs() > 4.0 { return (0, None); }
         if dy.abs() > self.slope_dy && dy.abs().atan2(h2.sqrt()) > self.max_slope { return (0, None); }
         if !self.bounds { return (1, None); }
-        self.bounds_test(np, pos, false, true)
+        self.bounds_test_cels(world, np, np_cel, pos, pos_cel, false, true)
+    }
+
+    /// `AINetwork_BoundsTest` 0x157d80 on the cel graph [M disasm 0x157d80-0x158138]: a null A cel
+    /// answers 0 (0x157e48); `Collide_StraddleCels` walks the 0x201 ray A+1 -> B+1 (both y + 1.0
+    /// [M 0x157e0c-0x157e30]) from A's cel, and B's cel must be among the reached cels or the
+    /// answer is 0 (0x157e64-0x157eb8); then EACH reached cel's own +0x34 wall list is tested
+    /// (head-inserted by `AIBounds_Prepare` 0x1d3008, so newest first; the walk follows link +0xC
+    /// while post A's cel is that cel, else +0x10 while post B's is [M 0x1580b4-0x1580dc]). A wall
+    /// on no reached cel's list is never tested, so where a wall's posts sit in cels the ray does
+    /// not reach, the line passes it. Without the hit pointer a crossing answers 0 at once
+    /// (0x157f88); with it the answer is -1 and the nearest crossing comes back. The near arm
+    /// (t1 set, no hit pointer) skips a wall when either post is within 0.4 (squared <= 0.16:
+    /// `c.olt.s 0.16, d` keeps testing only above) of B or A, as written. A world without a cel
+    /// graph (unit tests) takes the flat [`Network::bounds_test`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn bounds_test_cels(&self, world: &CollisionWorld, a: V3, a_cel: Option<usize>, b: V3, b_cel: Option<usize>, near: bool, want_hit: bool) -> (i32, Option<V3>) {
+        if !world.has_scope() { return self.bounds_test(a, b, near, want_hit); }
+        let Some(ac) = a_cel else { return (0, None) };
+        let Some(cels) = world.ray_cels(ac, [a[0], a[1] + 1.0, a[2]], [b[0], b[1] + 1.0, b[2]]) else { return (0, None) };
+        if !b_cel.is_some_and(|bc| cels.contains(&bc)) { return (0, None); }
+        let mut best: Option<(f32, V3)> = None;
+        for &c in &cels {
+            for w in self.walls.iter().rev().filter(|w| w.cels[0] == Some(c) || w.cels[1] == Some(c)) {
+                if let Some(i) = intersects(w, a, b) {
+                    if !want_hit { return (0, None); }
+                    let d = dist3([i[0], a[1], i[2]], a);
+                    if best.is_none_or(|(bd, _)| d < bd) { best = Some((d, [i[0], w.a[1], i[2]])) }
+                    continue;
+                }
+                if near && !want_hit {
+                    let close = |p: V3| ((p[0] - a[0]).powi(2) + (p[2] - a[2]).powi(2) <= 0.16) || ((p[0] - b[0]).powi(2) + (p[2] - b[2]).powi(2) <= 0.16);
+                    if close(w.a) || close(w.b) { continue; }
+                    let pa = closest_on_segment(a, b, w.a);
+                    let pb = closest_on_segment(a, b, w.b);
+                    let da2 = (pa[0] - w.a[0]).powi(2) + (pa[2] - w.a[2]).powi(2);
+                    let db = ((pb[0] - w.b[0]).powi(2) + (pb[2] - w.b[2]).powi(2)).sqrt();
+                    if (da2 < 0.16 && (pa[1] - w.a[1]).abs() < 2.0) || (db < 0.16 && (pb[1] - w.a[1]).abs() < 2.0) { return (0, None); }
+                }
+            }
+        }
+        match best { Some((_, h)) => (-1, Some(h)), None => (1, None) }
     }
 
     /// `AINetwork_BoundsTest` over every wall (one cel).
@@ -621,6 +670,19 @@ pub struct Route {
     pub creep: Creep,
     /// The player-target stamp the route was computed for (`route+8`).
     pub stamp: u32,
+    /// The destination's cel (`route+0x50`, the CelPos at +0x40): the target object's linked cel
+    /// (`AINetwork_SetupRouteToObject` 0x158948 tail: `route+0x50 = obj+0x20`); the port takes
+    /// `build_FindCel` of the destination [S]. After a pull-back, `NDrone2_FindCel` of the new
+    /// destination [M 0x156088].
+    pub dest_cel: Option<usize>,
+    /// The route's u16 flag word `route+0`; only bit 0x40 (the pull-back,
+    /// `AINetwork_AlterDestFor_DROUTE_Nearest` 0x156088) is modelled. Setup clears it
+    /// (`& 0xffbf`, `AINetwork_SetupRouteToObject` 0x158948), as the port's fresh `Route` does,
+    /// and no code reads it [M: a scan of every lb/lh/lw/lbu/lhu at offset 0, 0x860 (the combat
+    /// route) and 0x970 (the mission route) followed within five instructions by an `andi`
+    /// keeping 0x40 finds only `AINetwork_InvalidateRoute`'s `& 0xffef`, `NDrone2_InitAIPath`'s
+    /// `& 0xfff8` and two cover-node reads].
+    pub flags: u16,
 }
 
 /// `AINetwork_FollowRoute` results.
@@ -640,7 +702,7 @@ impl Route {
     /// (`croute = None`, e.g. `find_safety_from_scary_object`'s "ResetRoute + InvalidateRoute [M 0x152250:128-129]")
     /// and builds a new one.
     fn new(path: usize, mode: RouteMode, nodes: Vec<u16>, links: Vec<u16>, start: V3, dest: V3) -> Route {
-        Route { path, mode, nodes, links, index: 0, start, dest, target: start, remaining: 0.0, radius: 2.0, lookahead: 2.0, creep: Creep::default(), stamp: 0 }
+        Route { path, mode, nodes, links, index: 0, start, dest, target: start, remaining: 0.0, radius: 2.0, lookahead: 2.0, creep: Creep::default(), stamp: 0, dest_cel: None, flags: 0 }
     }
 
     /// `NDrone2_InitAIPath` from `first`: the node list follows the links (a 2-link node leaves by the link not
@@ -730,11 +792,12 @@ impl Route {
             links.pop();
         }
         let mut r = Route::new(pi, RouteMode::OneWay, nodes, links, start, dest);
+        r.dest_cel = world.find_cel(dest);
         r.calc(net, 0);
         r.target = r.creep.a;
         // `CalcRoute` returns OptimiseRoute's pass-through of the A* result [M 0x156760:158], and
         // its `LinkCreep_Calc(route, 0)` runs before the pull-back [M 0x156ba8 tail], as here.
-        if res == 1 { r.alter_dest_nearest(net); }
+        if res == 1 { r.alter_dest_nearest(net, world); }
         Ok((res, r))
     }
 
@@ -742,17 +805,22 @@ impl Route {
     /// LAST node (`route+0xF0[count−1]`, :0x1560b8-0x1560e4) move-tests to the destination
     /// (`NDrone2_MoveTestFromNode`, the hit out on the stack); when the line crosses a boundary
     /// (−1) the destination becomes the crossing pulled 1.0 back toward that node —
-    /// `hit − Vec_Normalise(hit − node)` (two `vsub`s around the jal 0x1e3000) — and the route's
-    /// +0 flag gets 0x40 (no reader in the tree). So a guard whose target stands past an AI
-    /// boundary heads for the boundary just short of it instead of the target behind it.
-    /// Returns true when the destination moved.
-    pub fn alter_dest_nearest(&mut self, net: &Network) -> bool {
+    /// `hit − Vec_Normalise(hit − node)` (two `vsub`s around the jal 0x1e3000). Then the
+    /// destination's cel is re-found (`route+0x50 = NDrone2_FindCel(route+0x40)`) and the route's
+    /// +0 flag gets 0x40 [M 0x156088:47-52] (`Route::flags`: no reader). So a guard whose target
+    /// stands past an AI boundary heads for the boundary just short of it instead of the target
+    /// behind it. The move test walks the cels (`bounds_test_cels`): only walls on the cels the
+    /// node -> destination ray reaches pull it back. Returns true when the destination moved.
+    pub fn alter_dest_nearest(&mut self, net: &Network, world: &CollisionWorld) -> bool {
         let Some(&last) = self.nodes.last() else { return false };
-        let np = net.paths[self.path].nodes[last as usize].pos;
-        let (res, hit) = net.move_test_from_node_hit(np, self.dest);
+        let node = &net.paths[self.path].nodes[last as usize];
+        let np = node.pos;
+        let (res, hit) = net.move_test_from_node_hit(world, np, node.cel, self.dest, self.dest_cel);
         let (-1, Some(h)) = (res, hit) else { return false };
         let d = crate::trig::vec_normalise([h[0] - np[0], h[1] - np[1], h[2] - np[2]]);
         self.dest = [h[0] - d[0], h[1] - d[1], h[2] - d[2]];
+        self.dest_cel = world.find_cel(self.dest);
+        self.flags |= 0x40;
         true
     }
 
@@ -975,7 +1043,7 @@ mod tests {
             path: 0, mode: RouteMode::OneWay, nodes: vec![0, 1, 2], links: vec![0, 1], index: 0, start: [0.0; 3], dest: [20.0, 0.0, 0.0],
             target: [0.0; 3], remaining: 0.0, radius: 2.0, lookahead: 0.5,
             creep: Creep { a: [0.0; 3], b: [10.0, 0.0, 0.0], vec: [0.4, 0.0, 0.0], step: 0, steps: 24, special },
-            stamp: 0,
+            stamp: 0, dest_cel: None, flags: 0,
         };
         // The walker sits 0.5 from the special node: the 0.4-1.0 tier-2 band [M 0x159ed8-0x159eec].
         let feet = [9.5, 0.0, 0.0];
@@ -1035,6 +1103,54 @@ mod tests {
         n.walls[0] = Wall { a: [-5.0, 0.0, 2.0], b: [4.0, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0, cels: [None; 2] };
         let (res, r) = Route::to_position(&n, &w, Some(0), start, dest, &fallback, &[0], &|_, _| false).unwrap();
         assert_eq!((res, r.dest), (1, dest));
+    }
+
+    /// The pull-back's move test walks the cels [M AINetwork_BoundsTest 0x157d80 disasm]: only
+    /// walls on the +0x34 lists of the cels the node -> destination ray reaches (from the node's
+    /// cel, `Collide_StraddleCels`) can pull the destination back, and the destination's cel must
+    /// be among them. The moved destination gets its cel re-found and the route flag 0x40
+    /// [M 0x156088:47-52].
+    #[test]
+    fn the_pull_back_tests_only_the_reached_cels_walls() {
+        use crate::world::{ScopeGraph, ScopePortal};
+        let mut n = net(&[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]], &[(0, 1)], 2);
+        for nd in &mut n.paths[0].nodes { nd.cel = Some(0); }
+        n.bounds = true;
+        let wall = |cel: usize| Wall { a: [-5.0, 0.0, 2.0], b: [7.0, 0.0, 2.0], ha: 2.0, hb: 2.0, flags: 0, cels: [Some(cel); 2] };
+        let (start, dest) = ([-1.0, 0.0, 0.0], [5.0, 0.0, 4.0]);
+        let fallback = TargetNodes { found: None, fallback: Some(1) };
+        let graph = |z_hi: f32, portal: bool| ScopeGraph {
+            cells: vec![([-10.0, -8.0, -10.0], [10.0, 8.0, z_hi]), ([20.0, -8.0, -10.0], [30.0, 8.0, 10.0])],
+            portals: if portal {
+                vec![ScopePortal { tris: [[[0.0, -4.0, 3.0], [10.0, -4.0, 3.0], [10.0, 4.0, 3.0]], [[0.0, -4.0, 3.0], [10.0, 4.0, 3.0], [0.0, 4.0, 3.0]]], a: 0, b: 1, centre: [5.0, 0.0, 3.0] }]
+            } else { Vec::new() },
+            room: vec![true, true],
+        };
+        let run = |n: &Network, w: &CollisionWorld| {
+            let (res, r) = Route::to_position(n, w, Some(0), start, dest, &fallback, &[0], &|_, _| false).unwrap();
+            assert_eq!(res, 1, "the fallback goal");
+            (r.dest, r.dest_cel, r.flags)
+        };
+        // The wall on the node's own cel: pulled back 1.0 from the crossing (5, 0, 2), cel re-found, 0x40 set.
+        n.walls = vec![wall(0)];
+        let w = CollisionWorld::empty_with_graph(graph(10.0, false));
+        assert_eq!(run(&n, &w), ([5.0, 0.0, 1.0], Some(0), 0x40));
+        // The same wall filed on cel 1, which the ray never reaches (no portal): not tested, the
+        // destination stands. (The flat all-walls test pulled it back.)
+        n.walls = vec![wall(1)];
+        assert_eq!(run(&n, &w), (dest, Some(0), 0));
+        // A portal 0 <-> 1 the ray A+1 -> B+1 crosses brings cel 1's list in: pulled back again.
+        let wp = CollisionWorld::empty_with_graph(graph(10.0, true));
+        assert_eq!(run(&n, &wp), ([5.0, 0.0, 1.0], Some(0), 0x40));
+        // The destination's cel must be among the reached cels: a destination outside every
+        // room cel (no cel) answers 0, so even the node cel's own wall moves nothing.
+        n.walls = vec![wall(0)];
+        let wz = CollisionWorld::empty_with_graph(graph(3.5, false));
+        assert_eq!(run(&n, &wz), (dest, None, 0));
+        // A node with no cel answers 0 as well [M 0x157e48].
+        let mut nc = n.clone();
+        nc.paths[0].nodes[1].cel = None;
+        assert_eq!(run(&nc, &w), (dest, Some(0), 0));
     }
 
     #[test]
