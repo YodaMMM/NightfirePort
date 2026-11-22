@@ -56,7 +56,7 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// exposed_part_gun_rays` (the lane ray set the 13 walk fights with) gates each pick, so a
 /// guard behind the lobby furniture is skipped, not crept toward. No position writes, no RNG
 /// draws, no health/ammo writes; the only inputs are the view drives and the trigger taps.
-fn clear_the_visible(w: &mut Walker, label: &str, radius: f32, d3: bool, stop_on_fail: bool, floor_only: bool, loose: bool) {
+fn clear_the_visible(w: &mut Walker, label: &str, radius: f32, d3: bool, stop_on_fail: bool, floor_only: bool, loose: bool, stop_on_success: bool) {
     w.switch_to_armed(label);
     for _ in 0..12 {
         let target = {
@@ -103,6 +103,17 @@ fn clear_the_visible(w: &mut Walker, label: &str, radius: f32, d3: bool, stop_on
         // lesson: the tight gate holds fire on the lobby chargers).
         w.dmg.aimed_fights = false;
         eprintln!("[013] {label}: the pre-clear stand on drone #{di} killed {killed}");
+        // walk-13-op (the refreshed ledger's lever): the kills RE-FEED the lobby's spawner
+        // (start ch 0x29 = the guards' death channels [D §4]) — the lever-2/3 runs measured
+        // the sweep's SECOND stand losing the point-blank trade against the re-fed wave guard
+        // #10 (hp 12, d 4.3 at the sweep's own spot; -24.5 in 7 hits + the unkillable mezzanine
+        // #5's -23.0, death t4784 INSIDE the stand [L the walk-13-op logs]). A player who has
+        // taken the posted guard he came for does not re-stand at the same spot for the
+        // spawner's replacement — the legs' own nav fights answer the wave while MOVING (the
+        // s/hard-walks-b fill pass-2 nav fights killed the same pair killed-true-x2 for -14.0
+        // [L that tree's repro]; the margin-2 iter-1 law answered the wave from the glass band
+        // killed-true-both [L the iter-1 ledger]). d3 only; the other call sites pass false.
+        if killed && stop_on_success { return; }
         if !killed {
             // warm-chain-margin-2: the round-1 ledger's death INSIDE the post-failure stands —
             // #9's stand returned killed false and the sweep stood again while the unseen
@@ -735,7 +746,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
     if real_damage && difficulty >= 2 {
         // warm-chain-margin-3: the d3 walk caps its stands at 700 and keeps the retry (measured
         // green); the d2 sister runs the sight batch's byte-identical 2400-cap sweep.
-        clear_the_visible(&mut w, "13: the spawn pocket", 24.0, difficulty == 3, false, true, false);
+        clear_the_visible(&mut w, "13: the spawn pocket", 24.0, difficulty == 3, false, true, false, false);
     }
     // retune-nb-13 (measured DEAD, not repeated): a pocket reposition + deliberate resupply to
     // dodge the mid-leg fetch — the reposition leg's own ticks fired the low-ammo fetch first
@@ -910,8 +921,14 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // warm-chain-margin-2 (ported to master): a stand that cannot open the guard's box ENDS
         // the sweep here — the tick-2242 death bled out inside the post-failure stands (the
         // stop_on_fail law); the d2 sister keeps the master retry.
-        clear_the_visible(&mut w, "13: the lobby mid re-anchor", 24.0, difficulty == 3, difficulty == 3, true, difficulty == 3);
+        clear_the_visible(&mut w, "13: the lobby mid re-anchor", 24.0, difficulty == 3, difficulty == 3, true, difficulty == 3, difficulty == 3);
     }
+    // walk-13-op (measured DEAD on this timeline, not repeated): the north-west stretch's
+    // walk-on line (return_fire OFF) extended one leg earlier to the west-mid leg measured
+    // WORSE - death t4242, the post trio ALL firing at the mover (#5 23.0 in 12, #4 14.0 in 6,
+    // #10 10.5 in 3 [L the walk-on run]): the sight law fires at movers too once the guards
+    // are engaged, and the leg's answer block never got its health budget. The west-mid leg
+    // keeps the master legs (the fights' return fire answers what it can).
     w.walk_to(Wp::new(-6.0, -368.4, 40.0).r(1.5), "13: the lobby west mid");
     // civ-unignore-2 (the d3 pre-clear, second leg): the north-lobby shooters the east lane's
     // fights only ever answered UNSEEN (the master baseline: fights #0/#4, aim None, killed
@@ -932,7 +949,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // Bond is a smaller target than a statue and the legs' return fire answers (iter-1:
             // the wave was answered from the glass band, killed true both).
         } else {
-            clear_the_visible(&mut w, "13: the lobby west mid", 24.0, false, false, false, false);
+            clear_the_visible(&mut w, "13: the lobby west mid", 24.0, false, false, false, false, false);
         }
     }
     if real_damage && difficulty == 3 {
@@ -1191,7 +1208,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // the way 45 reached the balcony rifle #4 [L the 11-13 run]; the d2 sister keeps 12.0
         // and her byte-identical legs.
         let doorway_radius = if difficulty == 3 { 18.0 } else { 12.0 };
-        clear_the_visible(&mut w, "13: the security-room doorway", doorway_radius, difficulty == 3, false, true, false);
+        clear_the_visible(&mut w, "13: the security-room doorway", doorway_radius, difficulty == 3, false, true, false, false);
         // warm-chain-margin-6 (measured dead, NOT repeated): a deliberate resupply at this
         // spot. The lane 12-u band came back `done (false)` with ZERO attempts (every gun drop
         // sits > 12 u from the door spot or outside the ground band — clip 8, byte-identical,
@@ -1663,7 +1680,7 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// pre-clear at 14-16 u, no bridge_and_retry, no in-place creep or longer stands — each
 /// measured dead in the margin-4 report). Never lowered damage or health; no top-ups.
 #[test]
-#[ignore = "walk-13-op (master 2bd059afe): the s/hard-walks-b ledger's lever (the 13 lobby budget from the re-anchor end on) is TAKEN and the walk is still red, now INSIDE the re-anchor sweep: the run reaches 13 at 48 hp + 50 armour, the spawn-pocket pre-clears + the east lane cost 0.5, and the budget's two pieces landed — (1) the pool fill runs BEFORE the mezzanine stands and one no-gain pass ENDS it: pass 1 fetched the guard 0x19 drop whose gun LANDED IN HAND (held 15 -> clip 8 spare 7) for ZERO health (the s/hard-walks-b tree's pass 1 cost -13.0), and the s/hard-walks-b fill's later waste never runs (its pass 2 cost -14.0 for +7 held, pass 3 -7.0 for NOTHING, held 21 -> 21 [L that tree's repro]); (2) the re-anchor sweep's floor stands run the door drain's measured CHARGER LAW (shoot_loose, d3-only `loose` param) — the wave Spas12 #7 (hp 12, d 7.0) died to the sweep's first stand for 0.0 dealt (the lever-1 run's still-gate sweep stood into his 8-pellet TooClose burst, -24.0 in two frames, death t4000 [L the lever-1 log]). What still kills: the sweep's SECOND stand — the kills re-feed the spawner (start ch 0x29 [D §4]) and the re-fed wave guard #10 (skin 0x5000008, 0x19, hp 12) stands d 4.3 at the sweep's own spot; the loose stand loses the point-blank trade (-24.5 in 7 hits from #10 + -23.0 in 12 from the mezzanine #5, whose balustrade face x -16.29 stops EVERY round from the lobby floor — hp 12 intact all run [L the MEZZ_DRY_END ledger + the walk-13-op runs]) — death t4784 at (-0.55,-368.39,30.89) inside the stand, 0 return-fire fights (raw stands never run the fights) [L the walk-13-op lever-2/3 logs, byte-identical]. The fights' unseen-cover fallback opt-in (UNSEEN_FIGHTS) was probed and measured a NO-OP here (byte-identical death) — reverted; the deaths come inside the raw stands, where the fights never sample. Next lever: the wave pair belongs to the NAV FIGHTS, not the sweep's stands — the s/hard-walks-b tree's fill pass-2 nav fights killed the SAME pair (#7 killed true t4093, #10 killed true t4180) for -14.0 while MOVING [L that tree's repro], and the margin-2 iter-1 law answered the wave from the glass band killed-true-both [L the iter-1 ledger]: cap the re-anchor sweep at its ONE #7 kill (stop-on-success, d3-only) and let the west-mid legs walk with the fights' nav machinery answering (#10 hp 12 dies to a nav fight at d <= 12; #5 stays for the west-mid mezzanine answer block at d 13.1 and the door drain's radius-45 machinery at 11.8)"]
+#[ignore = "walk-13-op (master 2bd059afe): the s/hard-walks-b ledger's lever (the 13 lobby budget from the re-anchor end on) is TAKEN and the walk is still red, now INSIDE the re-anchor sweep: the run reaches 13 at 48 hp + 50 armour, the spawn-pocket pre-clears + the east lane cost 0.5, and the budget's two pieces landed — (1) the pool fill runs BEFORE the mezzanine stands and one no-gain pass ENDS it: pass 1 fetched the guard 0x19 drop whose gun LANDED IN HAND (held 15 -> clip 8 spare 7) for ZERO health (the s/hard-walks-b tree's pass 1 cost -13.0), and the s/hard-walks-b fill's later waste never runs (its pass 2 cost -14.0 for +7 held, pass 3 -7.0 for NOTHING, held 21 -> 21 [L that tree's repro]); (2) the re-anchor sweep's floor stands run the door drain's measured CHARGER LAW (shoot_loose, d3-only `loose` param) — the wave Spas12 #7 (hp 12, d 7.0) died to the sweep's first stand for 0.0 dealt (the lever-1 run's still-gate sweep stood into his 8-pellet TooClose burst, -24.0 in two frames, death t4000 [L the lever-1 log]). What still kills: the sweep's SECOND stand — the kills re-feed the spawner (start ch 0x29 [D §4]) and the re-fed wave guard #10 (skin 0x5000008, 0x19, hp 12) stands d 4.3 at the sweep's own spot; the loose stand loses the point-blank trade (-24.5 in 7 hits from #10 + -23.0 in 12 from the mezzanine #5, whose balustrade face x -16.29 stops EVERY round from the lobby floor — hp 12 intact all run [L the MEZZ_DRY_END ledger + the walk-13-op runs]) — death t4784 at (-0.55,-368.39,30.89) inside the stand, 0 return-fire fights (raw stands never run the fights) [L the walk-13-op lever-2/3 logs, byte-identical]. The fights' unseen-cover fallback opt-in (UNSEEN_FIGHTS) was probed and measured a NO-OP here (byte-identical death) — reverted; the deaths come inside the raw stands, where the fights never sample. TAKEN on the follow-up runs: (3) the sweep is capped at its ONE #7 kill (stop-on-success, d3-only) — the #10 point-blank trade is GONE from every later run (the walk-on run: #10 dealt 10.5 from d 13.1 mid-leg, never the sweep's d 4.3 trade [L the walk-13-op logs]). What still kills: the west half's post trio — every run died MID-LEG to whichever members the re-dealt RNG fed: stop-on-success t4337 (#4 21.0 in 7 + #5 26.5 in 13, 1 fight), walk-on t4242 (#5 23.0 + #4 14.0 + #10 10.5, 0 fights) [L both logs]. MEASURED DEAD, not repeated: the walk-on line (return_fire OFF) extended to the west-mid leg — the sight law fires at MOVERS too once the guards are engaged, and the answer block never got its health budget [L the walk-on run]. The fights cannot answer the trio mid-leg (their boxes close from the leg's line; 0-1 fights per run). Next lever: run the west-mid ANSWER BLOCK at the sweep's kill spot — the re-anchor end, the pre-emptive's own pick law (dy > 2 exposed within 32: the mezzanine far stands, the 0.02/0.028 band that converged on #4 at 21.4 u killed-true [L the nb-13-2 ledger]) — one leg EARLIER than the west-mid end, because all five walk-13-op runs measured the leg itself as the death ground; the floor answers (shoot_loose, the charger law) follow at the same spot. #5's face (x -16.29) still blocks every round from the lobby floor — the live check stands"]
 /// GREEN (retune-nb-13-4, 2026-11-19): the walk completed on this tree — MissionState 6, the
 /// entrance touch ch 0x50 written, the objective states asserted, `test result: ok` [L this
 /// session's run]. The round's lever chain, each judged on its own real run: (1) the nb-13-3

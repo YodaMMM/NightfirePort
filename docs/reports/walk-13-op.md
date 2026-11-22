@@ -50,23 +50,36 @@ x -16.29 stops EVERY round (the 0x1c shotgun's pellets [L the MEZZ_DRY_END ledge
 0x19's single rods — hp 12 intact all run [L the walk-13-op runs]) while his box reads exposed
 (the eye/gun-ray pick returns Some). The lever-1 pre-emptive stand on him cost -9.0 for nothing.
 
-**Next lever (in the ignore message): the wave pair belongs to the NAV FIGHTS, not the sweep's
-stands.** The s/hard-walks-b tree's fill pass-2 nav fights killed the SAME pair (#7 killed true
-t4093, #10 killed true t4180) for -14.0 while MOVING [L that tree's repro], and the margin-2
-iter-1 law answered the wave from the glass band killed-true-both [L the iter-1 ledger]. Shape:
-cap the re-anchor sweep at its ONE #7 kill (stop-on-success, d3-only) and let the west-mid legs
-walk with the fights' nav machinery answering; #5 stays for the west-mid mezzanine answer block
-(d 13.1) and the door drain's radius-45 machinery (11.8).
+**Two follow-up levers probed on their own real runs (after the ledger above was written):**
+
+3. **TAKEN — the sweep is capped at its ONE #7 kill (stop-on-success, d3-only).** The #10
+   point-blank trade is GONE from every later run (#10 dealt 10.5 from d 13.1 mid-leg on the
+   walk-on run, never the sweep's d 4.3 trade). Its own run still died t4337 mid-leg: the
+   re-dealt RNG fed the balcony rifle #4's fire early (21.0 in 7) plus #5 (26.5 in 13), 1 fight.
+4. **MEASURED DEAD, reverted — the walk-on line (return_fire OFF) extended one leg earlier to
+   the west-mid leg.** Death t4242, the post trio ALL firing at the MOVER (#5 23.0 in 12,
+   #4 14.0 in 6, #10 10.5 in 3, 0 fights) — the sight law fires at movers too once the guards
+   are engaged, and the answer block never got its health budget [L both logs].
+
+**Next lever (in the ignore message): run the west-mid ANSWER BLOCK at the sweep's kill spot**
+(the re-anchor end, the pre-emptive's own dy>2 pick law — the mezzanine far stands, the
+0.02/0.028 band that converged on #4 at 21.4 u killed-true [L the nb-13-2 ledger]) one leg
+earlier than the west-mid end, because all five walk-13-op runs measured the leg itself as the
+death ground; the floor answers (shoot_loose, the charger law) follow at the same spot. #5's
+face (x -16.29) still blocks every round from the lobby floor — the live check stands.
 
 ## How it was verified
 
 - The ignored d3 walk alone, four runs (baseline repro + three lever runs), NF_DMG_TRACE /
   NF_RF_TRACE captures (logs in /tmp, not committed).
-- The WHOLE walkreal_07000013_live binary on the final tree: **4 passed, 0 failed, 1 ignored**
+- The WHOLE walkreal_07000013_live binary on the final tree (twice: after the first ledger
+  push and after the follow-up levers): **4 passed, 0 failed, 1 ignored** each time
   (the plain walk, the agent sister, the operative sister and the route-flag thread test all
   green — the sisters stay byte-identical: every lever lives inside the d3 gates, and the d2/d1
   code paths are untouched).
-- interactables_07000013_live: **10 passed, 0 failed**.
+- interactables_07000013_live (final tree): **10 passed, 0 failed**.
+- The ignored d3 walk alone on the final tree: died t4337 (the stop-on-success run's shape, the
+  refreshed ledger).
 - No sim, draw, RNG, damage, health or guard-code change; no top-ups; real input only; every
   position/stand rides the walk's own machinery.
 
@@ -75,8 +88,10 @@ walk with the fights' nav machinery answering; #5 stays for the west-mid mezzani
 - The walk is still red (the ledger above). The next lever is named in the ignore message.
 - The full suite (tools/test/suite.py) did NOT fit this sandbox: background jobs are killed
   between tool calls here (the first nohup suite start died at 20:27 UTC with 0 output), the
-  box has 2 cores, and the first full build alone (all test binaries) is longer than the
-  remaining window after the lever work. The changed code's own binaries ran green whole (the
+  box has 2 cores, and the full build of every test binary alone outlasts the window after the
+  lever work (two 9.5-minute chunk_suite invocations left the build unfinished — the cargo
+  cache keeps the progress; a later session can resume `python3 tools/test/chunk_suite.py
+  <state> --budget <s>` until ALL DONE). The changed code's own binaries ran green whole (the
   counts above); `git diff` shows damage_log.rs pristine and only the test file changed, so no
   other binary's behaviour can differ from master.
 
