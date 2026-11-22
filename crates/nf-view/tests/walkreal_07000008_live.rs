@@ -2861,7 +2861,11 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // (t28732). Lever 1000/60 [L the sweep on this tree with the secure-room fight: 1000/60 end
     // health 41.9, five rockets; 800/60, 1000/30, 1000/90, 1200/60, 3000/60, 12000/60, 16000/60,
     // 20000/60 red].
-    walker::with_pause(1000, 60, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
+    // kerb-push-16 (the cylinder push rounds toward zero): 1000/60 dies in the cabin fight at
+    // (111.03, 13.09, -179.26), t25340, after four rockets (the fourth missed, no reload in time).
+    // Lever: the 1000/60 stop plus a 30-tick stop at 20000 [L the 24-value sweep: only 20000/30
+    // and 1000/60 + 20000/30 complete; the single early stops all die in the same fight].
+    walker::with_pauses(&[(1000, 60), (20000, 30)], || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same

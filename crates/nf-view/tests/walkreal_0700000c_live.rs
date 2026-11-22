@@ -536,7 +536,12 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
     // drone #1's 34.0 at 6.1 u, then #13's rifle. Lever 2000/60 [L the 8-value sweep: 2000/60,
     // 6000/60, 8000/60 complete; 1000/60, 1500/45 wedge on the deck south, 2500/90, 3000/60,
     // 4000/90 die].
-    walker::walker::with_pause(2000, 60, || walker::with_yard_aimed_stands(|| {
+    // kerb-push-16 (the cylinder push rounds toward zero): 2000/60's deck-sniper stands (the
+    // stand's opening 60-tick strafe, twice) walked Bond off the deck's north edge (z -150.2) onto
+    // the corridor floor y 1.9, so "the deck south" wedged below the deck. Not a step-up fault: the
+    // deck is 3.9 above that floor [L the position trace]. Lever 500/30 [L the 12-value sweep:
+    // 100/30, 500/30 complete; the rest die or fall off the deck the same way].
+    walker::walker::with_pause(500, 30, || walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(2))
     }));
 }

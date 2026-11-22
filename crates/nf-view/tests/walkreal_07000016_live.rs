@@ -708,8 +708,11 @@ fn press_use_until(w: &mut Walker, at: [f32; 3], max: u32, done: impl Fn(&nf_vie
 fn walk_the_chasers_defeat_completes_the_mission() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).unwrap());
+    // A guard's drop the route walks over is picked up; count it as the
+    // arrival test does (kerb-push-16: the path now crosses a dropped 0x1a).
+    let taken = track_drop_takes(&mut w);
     let (chaser, t0) = walk_to_the_chaser_fight(&mut w, false, false);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 chain");
+    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&CHAIN_OWNED, &taken), "the 15 → 16 chain");
     // Dry mid-fight (the 15 carry's Delta Repeater holds 12 rounds here): the player switches to
     // another carried gun with ammo (or, with none, picks up a fallen guard's), then fights on.
     let killed = w.shoot(chaser, "the chaser")
@@ -2320,7 +2323,9 @@ fn clear_the_pit_shooters(w: &mut Walker, chaser: usize, stand_cap: u32) {
 fn the_chasers_punch_lands_the_record_damage() {
     // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): no punch landed on an idle tick on the no-stop run.
     // Lever: 2000/30 [L the 2-value sweep: only 2000/30 completes].
-    walker::with_pause(2000, 30, || walker::with_real_damage_no_return_fire(|| {
+    // kerb-push-16 (the cylinder push rounds toward zero): 2000/30 died t4916 at (14.30,5.77,-81.31)
+    // to #1's 0x1a. Lever 500/30 [L the 12-value sweep: only 500/30 completes].
+    walker::with_pause(500, 30, || walker::with_real_damage_no_return_fire(|| {
         let iso = iso();
         let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
         let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000016.bin", false, Some(&save), 1).unwrap());
@@ -3206,7 +3211,10 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
     walker::set_post_intro_wait(30);
     // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): the no-stop walk died at (-13.41,7.39,-94.81) t6100.
     // Lever: 2000/30 [L the 2-value sweep: only 2000/30 completes].
-    walker::with_pause(2000, 30, || walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(1)));
+    // kerb-push-16 (the cylinder push rounds toward zero): 2000/30 died t16228 at (-12.29,-22.01,
+    // -171.74) to #15's 0x14 at 2.3 u. Lever 3000/60 [L the 12-value sweep: 250/30, 500/30, 1500/45,
+    // 2500/90, 3000/60, 4000/90, 6000/60, 8000/60 complete; 100/30, 1000/60, 2000/30 die].
+    walker::with_pause(3000, 60, || walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(1)));
 }
 
 /// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked

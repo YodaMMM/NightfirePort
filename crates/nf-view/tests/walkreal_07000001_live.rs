@@ -3519,7 +3519,10 @@ fn following_mayhew_down_completes_the_level() {
     // moved and the parked contact was not on the plate when Bond reached it (the AND-touch
     // never fired). Lever: a 30-tick stop at tick 100 [L the 8-value sweep: 100/30, 4000/30
     // and 6000/60 complete; 500/60, 1000/60, 2000/30, 3000/60 and 8000/60 do not].
-    walker::with_pause(2000, 30, following_mayhew_down_completes_the_level_body)
+    // kerb-push-16 (the cylinder push rounds toward zero): 2000/30 left the contact off the plate
+    // (the AND-touch never fired). Lever 1500/45 [L the 12-value sweep: 1000/60, 1500/45, 3000/60,
+    // 4000/90 complete].
+    walker::with_pause(1500, 45, following_mayhew_down_completes_the_level_body)
 }
 
 fn following_mayhew_down_completes_the_level_body() {
@@ -4108,8 +4111,10 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage() {
     // to pocket guard #12 while the pre-stairwell fight held for guard 3. Own lever: 250/30 [L the
     // 9-value sweep: only 250/30 completes; 500/30, 1000/60, 1500/45, 2000/30, 3000/60, 4000/90,
     // 6000/60, 8000/60 do not].
+    // kerb-push-16 (the cylinder push rounds toward zero): 250/30 died t9020 at (-26.99,6.45,15.04)
+    // to pocket guard #12. Lever 1000/60 [L the 12-value sweep: 1000/60, 8000/60 complete].
     walker::with_real_damage(|| {
-        walker::with_pause(250, 30, || walk_from_the_spawn_to_the_exit_with_the_contact_at(1))
+        walker::with_pause(1000, 60, || walk_from_the_spawn_to_the_exit_with_the_contact_at(1))
     });
 }
 
@@ -4150,7 +4155,9 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
     // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 4000/90 died at (-33.44,6.37,-0.33)
     // t7904 to drone #4 at 1.5 u. Lever: 1500/45 [L the 8-value sweep: 500/30, 700/45, 1500/45,
     // 2500/90 complete; 1000/60, 2000/30, 3000/60, 4000/90 do not].
-    walker::with_pause(1500, 45, || {
+    // kerb-push-16 (the cylinder push rounds toward zero): 1500/45 died t11252 at (-22.47,6.47,13.64)
+    // to pocket guard #12. Lever 250/30 [L the 12-value sweep: 100/30, 250/30, 500/30 complete].
+    walker::with_pause(250, 30, || {
         walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(2));
     })
 }
