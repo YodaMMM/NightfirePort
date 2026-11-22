@@ -14610,7 +14610,7 @@ pub struct NetBody {
 /// The trigger touchers of one human body (single-player Bond, or one MP slot): the body
 /// HITTEST segment (or the crouch arm), the measured standing box, the ride's deep reach and the
 /// raw-plate segment, in that order. The reach laws are the ones `Drones::update` documents.
-fn human_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, riding: bool) -> Vec<crate::triggers::Toucher> {
+pub fn human_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, riding: bool) -> Vec<crate::triggers::Toucher> {
     let mut player_touchers = vec![{
         if crouched {
             // The crouch IS a different pick arm in the game, and `body` already carries
@@ -14667,7 +14667,9 @@ fn human_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, r
     // The measured box (feet pos-0.6, top pos+1.26, r 0.55) keeps that reach beside the
     // segment's low reach until the game's upper contact is pinned. // [S] unverified shape
     if !crouched {
-        player_touchers.push(crate::triggers::Toucher { contain: !hanging, ..crate::triggers::Toucher::player([pos[0], pos[1] - 0.6, pos[2]]) });
+        // The box stays off the laser beams (`triggers::BOX_TOUCHER`): there the segment above is
+        // the game's whole standing contact [M 0x194df0 default arm, 0x109da0 raw refine].
+        player_touchers.push(crate::triggers::Toucher { contain: !hanging, skin: crate::triggers::BOX_TOUCHER, ..crate::triggers::Toucher::player([pos[0], pos[1] - 0.6, pos[2]]) });
     }
     // The ride's deep reach (see `riding`): script plates only (the truck's ch 0x70 park plate).
     // A placed plate over a moving floor keeps the box: 0700004a's lift stand must not fire the

@@ -248,6 +248,14 @@ pub const RIDE_TOUCHER: u32 = u32::MAX;
 /// 0x194df0's arms, the port's `Player::body`), read only by `Trigger::raw_plate` plates with the
 /// raw refine `seg_touches_tri_raw` (see there).
 pub const RAW_TOUCHER: u32 = u32::MAX - 1;
+/// The `skin` marker of the standing body's measured box (`Toucher::player` as `drone::human_touchers`
+/// pushes it beside the HITTEST segment). It stays off the laser-beam glists (`Trigger::seg_beam`):
+/// the game's only standing contact there is the walk HITTEST (`Player_Collision` 0x194df0's
+/// default arm, A = pos + 0.275, B = pos + 0.55 − cc, r 0.55 [M]) through the raw refine, so a beam
+/// more than 0.55 over the segment top (floor + 1.91) never catches a standing Bond, while the box
+/// (top pos + 1.26, r 0.55) reached floor + 2.9 and tripped the moving beams of 0700000a, 0700000b
+/// and 07000014 while they swept overhead (touch_mesh_census).
+pub const BOX_TOUCHER: u32 = u32::MAX - 2;
 
 #[derive(Clone, Copy, Debug)]
 /// `contain`: whether the volume-containment contact (see `Trigger::touched_by`) applies to this toucher.
@@ -594,6 +602,7 @@ impl Trigger {
     /// 07000006's LoadPoint #746, an open room-shaped glist [D measured tris]).
     pub fn touched_by(&self, c: &Toucher) -> bool {
         if c.skin == RIDE_TOUCHER && self.script.is_none() { return false; }
+        if c.skin == BOX_TOUCHER && self.seg_beam { return false; }
         if c.skin == RAW_TOUCHER {
             return self.raw_plate && self.tris.iter().zip(&self.planes).any(|(t, (n, d))| seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d));
         }
@@ -628,7 +637,8 @@ impl Trigger {
         // game routes EVERY bit-0x40 glist through it [D 07000011 #235 = 0x50], but the port's raw
         // model over-fired the 0x50 floor plates, so the scope waits on the model matching the
         // game's refine); the box elsewhere, the crouch
-        // body and the drones keep the both-sided capsule every measured pin stands on.
+        // body and the drones keep the both-sided capsule every measured pin stands on. The
+        // standing box itself never reaches a beam (`BOX_TOUCHER`, returned above).
         if c.seg_only || (self.seg_beam && !c.drone && c.r > 0.0) {
             // trigger-hittest-segment: the game's own narrow phase for the capsule touchers
             // (`Intersect_CylGeom` 0x109da0's RAW branch — the trigger cels' glist flags carry
@@ -1043,6 +1053,45 @@ mod tests {
             seg_beam: false,
             raw_plate: false,
             planes: Vec::new(), lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None }
+    }
+
+    /// A closed box volume `lo..hi`, every face wound OUTWARD (the winding planes `set_tris`
+    /// derives then face out, as a beam glist's own records do).
+    fn box_volume(lo: V3, hi: V3, seg_beam: bool) -> Trigger {
+        let v = |i: usize| [if i & 1 != 0 { hi[0] } else { lo[0] }, if i & 2 != 0 { hi[1] } else { lo[1] }, if i & 4 != 0 { hi[2] } else { lo[2] }];
+        // Each face as (a, b, c, d) counter-clockwise seen from outside.
+        let faces = [(0, 4, 6, 2), (1, 3, 7, 5), (0, 1, 5, 4), (2, 6, 7, 3), (0, 2, 3, 1), (4, 5, 7, 6)];
+        let mut tris = Vec::new();
+        for (a, b, c, d) in faces { tris.push([v(a), v(b), v(c)]); tris.push([v(a), v(c), v(d)]); }
+        let mut t = Trigger { seg_beam, ..plate(kind::TOUCH, 0x0d, 8, vec![]) };
+        t.set_tris(tris);
+        t
+    }
+
+    /// touch-mesh-contact: a laser beam (glist flags 0x645, `seg_beam`) is caught only by the walk
+    /// HITTEST (A = pos + 0.275, B = pos + 0.55 − cc, r 0.55 [M Player_Collision 0x194df0 default
+    /// arm]) through the raw refine [M Intersect_CylGeom 0x109da0]: reach floor + 1.91 standing.
+    /// The measured box (top pos + 1.26, r 0.55) used to catch a beam up to floor + 2.9 — the
+    /// moving beams of 0700000b (ch 0x0d, swept up to floor + 2.87 [D touch_mesh_census]) caught
+    /// Bond while overhead.
+    #[test]
+    fn overhead_beam_misses_standing_bond() {
+        let cc = crate::player::ROOT_HEIGHT;
+        let pos = [0.0, 1.086, 0.0]; // standing rest over a floor at y 0 [L player.rs ROOT_HEIGHT doc]
+        let body = ([pos[0], pos[1] + 0.275, pos[2]], [pos[0], pos[1] + 0.55 - cc, pos[2]], 0.55);
+        let touchers = crate::drone::human_touchers(pos, body, false, false, false);
+        let hits = |t: &Trigger| touchers.iter().any(|c| t.touched_by(c));
+        // 0700000a #607's band (floor + 1.49..1.76 [D]) catches a standing Bond.
+        assert!(hits(&box_volume([-3.0, 1.49, -0.14], [3.0, 1.76, 0.14], true)), "a chest-high beam must catch");
+        // A beam swept overhead (floor + 2.2..2.46) does not: 0.29 over the segment's reach.
+        assert!(!hits(&box_volume([-3.0, 2.2, -0.14], [3.0, 2.46, 0.14], true)), "an overhead beam must miss");
+        // Sister (scope): a non-beam volume at that height keeps the measured box's reach.
+        assert!(hits(&box_volume([-3.0, 2.2, -0.14], [3.0, 2.46, 0.14], false)));
+        // Crouched, the chest-high beam passes over (the crouch arm, unchanged).
+        // (the crouch park pos − floor 0.607 [L], case-3 arm with cc 0.55 [M 0x194df0 :228-248]).
+        let low = [pos[0], 0.607, pos[2]];
+        let ct = crate::drone::human_touchers(low, ([low[0], low[1] + 0.1, low[2]], [low[0], low[1] + 0.45 - crate::player::CROUCH_ROOT_HEIGHT, low[2]], 0.55), true, false, false);
+        assert!(!ct.iter().any(|c| box_volume([-3.0, 1.49, -0.14], [3.0, 1.76, 0.14], true).touched_by(c)));
     }
 
     /// A keyed trigger's volume rides its keys [M Trigger_Update 0x1b1a78:60-70]: pose at the
