@@ -14555,10 +14555,38 @@ pub struct NetBody {
     pub dual: bool,
 }
 
-/// The trigger touchers of one human body (single-player Bond, or one MP slot): the body
-/// HITTEST segment (or the crouch arm), the measured standing box, the ride's deep reach and the
-/// raw-plate segment, in that order. The reach laws are the ones `Drones::update` documents.
-fn human_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, riding: bool) -> Vec<crate::triggers::Toucher> {
+/// The trigger touchers of one human body (single-player Bond, or one MP slot): the stand-in set
+/// (`box_touchers`). The game's own on-foot contact is ported as `game_touchers`; it is not the
+/// shipped set yet: switching broke walk and plate pins on 01/02/05/06/07/08/0a/0b/0d/011/4a that
+/// stand on the box's reach (docs/reports/s-touch-ref-point.md).
+pub fn human_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, riding: bool) -> Vec<crate::triggers::Toucher> {
+    box_touchers(pos, body, crouched, hanging, riding)
+}
+
+/// The game's own on-foot trigger contact for one human body.
+///
+/// On foot (standing or crouched) the game has ONE contact: the body's walk HITTEST (`body`, the
+/// pick arm `Player_Collision` 0x194df0 built for this substate — the default arm A = pos + 0.275,
+/// B = pos + 0.55 − cc, or the crouch arm [M :228-248, :315-333]) picking the trigger object and
+/// refined on its glist by `Intersect_CylGeom` 0x109da0 (`triggers::GAME_TOUCHER`,
+/// `triggers::cyl_geom_min`). Triggers arm no HITTEST of their own (`Trigger_Create` 0x1b1720) and
+/// `Trigger_Hit` 0x1b1fc8 reads only that contact list, so there is no box and no containment
+/// contact. The ride's deep reach (script plates while riding) stays beside it. Hanging on a wire
+/// or zipline keeps `box_touchers` (the hanging arms' pick is not ported).
+pub fn game_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, riding: bool) -> Vec<crate::triggers::Toucher> {
+    if hanging { return box_touchers(pos, body, crouched, hanging, riding); }
+    let (a, b, r) = body;
+    let mut out = vec![crate::triggers::Toucher { a, b, r, drone: false, skin: crate::triggers::GAME_TOUCHER, contain: false, seg_only: true }];
+    if riding && !crouched && body.2 == 0.55 {
+        out.push(crate::triggers::Toucher { a: body.1, b: [pos[0], pos[1] + 1.26, pos[2]], r: 0.55, drone: false, skin: crate::triggers::RIDE_TOUCHER, contain: false, seg_only: false });
+    }
+    out
+}
+
+/// The stand-in toucher set (the shipped one, `human_touchers`): the body HITTEST segment (or the
+/// crouch arm), the measured standing box, the ride's deep reach and the raw-plate segment, in
+/// that order. The reach laws are the ones `Drones::update` documents.
+pub fn box_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, riding: bool) -> Vec<crate::triggers::Toucher> {
     let mut player_touchers = vec![{
         if crouched {
             // The crouch IS a different pick arm in the game, and `body` already carries
@@ -14615,7 +14643,9 @@ fn human_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, r
     // The measured box (feet pos-0.6, top pos+1.26, r 0.55) keeps that reach beside the
     // segment's low reach until the game's upper contact is pinned. // [S] unverified shape
     if !crouched {
-        player_touchers.push(crate::triggers::Toucher { contain: !hanging, ..crate::triggers::Toucher::player([pos[0], pos[1] - 0.6, pos[2]]) });
+        // The box stays off the laser beams (`triggers::BOX_TOUCHER`): there the segment above is
+        // the game's whole standing contact [M 0x194df0 default arm, 0x109da0 raw refine].
+        player_touchers.push(crate::triggers::Toucher { contain: !hanging, skin: crate::triggers::BOX_TOUCHER, ..crate::triggers::Toucher::player([pos[0], pos[1] - 0.6, pos[2]]) });
     }
     // The ride's deep reach (see `riding`): script plates only (the truck's ch 0x70 park plate).
     // A placed plate over a moving floor keeps the box: 0700004a's lift stand must not fire the
@@ -22278,12 +22308,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         self.triggers.retain(|t| t.script.is_none_or(|o| live.iter().any(|l| l.0 == o)));
         for (o, kind, params, hash, m) in live {
             let tris: Vec<[V3; 3]> = d.world.shape(hash).map(|s| s.iter().map(|t| t.map(|p| nf_formats::placement::transform(&m, p))).collect()).unwrap_or_default();
+            // The glist's own plane records at the entity's matrix (the walk HITTEST's refine reads
+            // them, `triggers::cyl_geom_min`); a NaN record keeps the winding plane. The raw refine
+            // follows the glist's obj+0xF0 bit 0x40 [M Collide_Intersect 0x1ebaa8:93-99].
+            let records: Vec<([f32; 3], f32)> = d.world.shape_planes(hash).filter(|pl| pl.len() == tris.len())
+                .map(|pl| pl.iter().map(|p| { let w = crate::world::plane_world(&m, [p[0], p[1], p[2]], p[3]); ([w[0], w[1], w[2]], w[3]) }).collect())
+                .unwrap_or_default();
+            let raw = d.world.shape_flags(hash).is_some_and(|f| f & 0x40 != 0);
+            let fill = |t: &mut crate::triggers::Trigger| {
+                for (i, (n, dd)) in records.iter().enumerate() {
+                    if n.iter().all(|x| x.is_finite()) && dd.is_finite() && i < t.planes.len() { t.planes[i] = (*n, *dd); }
+                }
+                t.raw = raw;
+            };
             match self.triggers.iter_mut().find(|t| t.script == Some(o)) {
-                Some(t) => { t.set_tris(tris); t.planes.clear(); }
+                Some(t) => { t.set_tris(tris); fill(t); }
                 None => {
                     let k = if kind == 0xea { crate::triggers::kind::TOUCH_ONCE } else { crate::triggers::kind::TOUCH };
                     let q = |i: u32| params.get(i as usize).copied().unwrap_or(0);
-                    if let Some(mut t) = crate::triggers::Trigger::from_params(usize::MAX - o, k, q, tris) { t.script = Some(o); t.planes.clear(); self.triggers.push(t); }
+                    if let Some(mut t) = crate::triggers::Trigger::from_params(usize::MAX - o, k, q, tris) { t.script = Some(o); fill(&mut t); self.triggers.push(t); }
                 }
             }
         }

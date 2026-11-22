@@ -973,7 +973,7 @@ fn winding_plane(t: &[V3; 3]) -> [f32; 4] {
 /// An object-space plane record (n, d) moved into world space by the rigid placement `m` (rows =
 /// the basis, row 3 = the translation, the `transform` convention): n' = R·n, d' = d − n'·T.
 /// A NaN record (degenerate) stays NaN.
-fn plane_world(m: &[[f32; 4]; 4], n: V3, d: f32) -> [f32; 4] {
+pub fn plane_world(m: &[[f32; 4]; 4], n: V3, d: f32) -> [f32; 4] {
     let mut o = [0f32; 3];
     for k in 0..3 { for c in 0..3 { o[c] += n[k] * m[k][c]; } }
     [o[0], o[1], o[2], d - (o[0] * m[3][0] + o[1] * m[3][1] + o[2] * m[3][2])]
@@ -990,9 +990,15 @@ fn plane_world(m: &[[f32; 4]; 4], n: V3, d: f32) -> [f32; 4] {
 ///   on v1→v0 (t > 1 falls through to v0); 3: v0; 4: closest on v2→v1 (t > 1 falls through to
 ///   v1); 5: v2. Each segment arm clamps t < 0 to its start, |e|² ≤ 1e-20 → its start.
 /// - returns |q − p|.
-fn game_dist2tri(p: V3, t: &[V3; 3], pl: [f32; 4]) -> (f32, V3, u16) {
+pub fn game_dist2tri(p: V3, t: &[V3; 3], pl: [f32; 4]) -> (f32, V3, u16) {
+    let s = dot([pl[0], pl[1], pl[2]], p) + pl[3];
+    game_dist2tri_s(p, t, pl, s)
+}
+
+/// `game_dist2tri` with the signed plane distance `s` of `p` given by the caller (the trigger
+/// refine passes 0 for a point it placed ON the plane, see `triggers::cyl_geom_min`).
+pub fn game_dist2tri_s(p: V3, t: &[V3; 3], pl: [f32; 4], s: f32) -> (f32, V3, u16) {
     let n = [pl[0], pl[1], pl[2]];
-    let s = dot(n, p) + pl[3];
     if s < 0.0 { return (s, p, 99); }
     let mut flags: u16 = 0;
     for k in 0..3 {
@@ -1808,6 +1814,12 @@ impl CollisionWorld {
     pub fn shape(&self, hash: u32) -> Option<&[[V3; 3]]> { self.shapes.get(&hash).map(Vec::as_slice) }
     /// The surface bytes of `shape(hash)`'s triangles, in the same order (HITDATA+0x50's source).
     pub fn shape_materials(&self, hash: u32) -> Option<&[u8]> { self.shape_mats.get(&hash).map(Vec::as_slice) }
+    /// The glist's own plane records of `shape(hash)`'s triangles, in the same order (object space,
+    /// `Collision::triangles_with_planes`; a NaN record marks a degenerate one).
+    pub fn shape_planes(&self, hash: u32) -> Option<&[[f32; 4]]> { self.shape_planes.get(&hash).map(Vec::as_slice) }
+    /// The glist object flags of `shape(hash)` (bit 0x40 = obj+0xF0 bit 0x40, the raw refine of
+    /// `Collide_Intersect` 0x1ebaa8:93-99).
+    pub fn shape_flags(&self, hash: u32) -> Option<u32> { self.shape_flags.get(&hash).copied() }
 
     /// Whether glist object `hash` has collision geometry.
     pub fn has_shape(&self, hash: u32) -> bool { self.shapes.contains_key(&hash) }

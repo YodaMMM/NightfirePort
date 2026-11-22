@@ -157,6 +157,10 @@ pub struct Trigger {
     /// 07000006's arrival pair #495/#766 and tunnel plate #524 sit between the two. Bit-0x40 glists
     /// that are not flat (other than the 0x645 beams, `seg_beam`) keep the box. // [S] scope
     pub raw_plate: bool,
+    /// The glist object's flags bit 0x40 (obj+0xF0 bit 0x40): `Collide_Intersect` 0x1ebaa8:93-99
+    /// sets HITDATA+0x51 |= 2, so `Intersect_CylGeom` 0x109da0 takes the raw branch (asm
+    /// 0x10a530-0x10a538) for every triangle of this volume. `GAME_TOUCHER` reads it.
+    pub raw: bool,
     pub lo: V3,
     pub hi: V3,
     /// TouchOnce removed itself (its channel was on).
@@ -248,6 +252,20 @@ pub const RIDE_TOUCHER: u32 = u32::MAX;
 /// 0x194df0's arms, the port's `Player::body`), read only by `Trigger::raw_plate` plates with the
 /// raw refine `seg_touches_tri_raw` (see there).
 pub const RAW_TOUCHER: u32 = u32::MAX - 1;
+/// The `skin` marker of the standing body's measured box (`Toucher::player` as `drone::human_touchers`
+/// pushes it beside the HITTEST segment). It stays off the laser-beam glists (`Trigger::seg_beam`):
+/// the game's only standing contact there is the walk HITTEST (`Player_Collision` 0x194df0's
+/// default arm, A = pos + 0.275, B = pos + 0.55 − cc, r 0.55 [M]) through the raw refine, so a beam
+/// more than 0.55 over the segment top (floor + 1.91) never catches a standing Bond, while the box
+/// (top pos + 1.26, r 0.55) reached floor + 2.9 and tripped the moving beams of 0700000a, 0700000b
+/// and 07000014 while they swept overhead (touch_mesh_census).
+pub const BOX_TOUCHER: u32 = u32::MAX - 2;
+/// The `skin` marker of Bond's walk HITTEST under the game's whole contact model: the pick arm's
+/// segment (`Player_Collision` 0x194df0, the default or the crouch arm) against the trigger's glist
+/// through `Intersect_CylGeom` 0x109da0's two branches (`cyl_geom_min`), the raw refine for a glist
+/// with obj+0xF0 bit 0x40 (`Trigger::raw`) and the reference-point law for any other. No box, no
+/// containment: `Trigger_Hit` 0x1b1fc8 reads only the contact list the pick builds.
+pub const GAME_TOUCHER: u32 = u32::MAX - 3;
 
 #[derive(Clone, Copy, Debug)]
 /// `contain`: whether the volume-containment contact (see `Trigger::touched_by`) applies to this toucher.
@@ -483,6 +501,93 @@ fn winding_plane(t: &[V3; 3]) -> ([f32; 3], f32) {
     (n, -dot(n, t[0]))
 }
 
+/// `Intersect_CylGeom` 0x109da0 over one object's glist, as the trigger pick runs it: the walk
+/// HITTEST segment `a` (HITTEST+0x20) → `b` (+0x30), radius `r` (+0x8C), against `tris` with their
+/// own plane records `planes` (the winding plane where a record is missing). Returns the tracked
+/// HITDATA distance (+0xC), `None` for the 1e8 miss (:587) that `Collide_Update` 0x1ea398:118-136
+/// frees. Per triangle, in glist order [M, asm cited]:
+///
+/// 1. the query point: with |n·(B−A)| > 0.0002 (0x3951B717, asm 0x10a1c4-0x10a200) the plane
+///    crossing f = clamp(−(n·A + d)/(n·(B−A)), 0, 1), skipped when `(n·(B−A) > 0.999 && f > 0.5) ||
+///    (n·(B−A) < −0.999 && f < 0.5)` (0x3f7fbe77, asm 0x10a278-0x10a2e8); else the triangle centroid
+///    projected onto the segment (asm 0x10a3f0-0x10a4fc);
+/// 2. `ASH_vecutil_Dist2Tri` 0x109770 (`world::game_dist2tri`): code 99 when the point is behind the
+///    record plane (a crossing point inside the segment counts as ON the plane, see the body);
+///    the closest triangle point goes to HITTEST+0x50 (`t2 = s1 + 0x50`, asm 0x10a2fc / 0x10a4f0);
+/// 3. on the crossing arm, an edge or vertex code (not 0, not 99) moves the query point to the
+///    segment point closest to HITTEST+0x50 (asm 0x10a344-0x10a3ec); the distance stays the first
+///    query's;
+/// 4. `dist < 0` or code 99 → next triangle (asm 0x10a508-0x10a528);
+/// 5. RAW (`raw`, HITDATA+0x51 & 6, asm 0x10a530-0x10a538): the distance is tracked as is;
+/// 6. the REFERENCE-POINT law (any other glist): v = P − HITTEST+0x50 must lie on the record's
+///    front, `n·v > 0` (asm 0x10a540-0x10a570), the distance becomes |v| and must be `< r` (asm
+///    0x10a5c0-0x10a5d0); the segment is then pushed out along v̂ by r − |v| before the next
+///    triangle (asm 0x10a5d8-0x10a638, the HITTEST copy's +0x20/+0x30), and the distance is tracked;
+/// 7. tracking keeps the minimum, seeded AT the radius (:524 `if (fVar30 < fVar19)`): a distance
+///    of exactly r is never a contact.
+///
+/// The walk HITTEST's +0x9A gate bit 0x10 is clear (`Player_Collision` 0x194df0:88 [L ee_start_05
+/// +0x9A = 0]), so the `Collide_Filter` early exit (:533-540) never runs. The box-tree prefilter
+/// (:147-190, :245-268) only drops triangles farther than r + 0.1 from the segment's bounds and
+/// cannot change the answer.
+pub fn cyl_geom_min(a: V3, b: V3, r: f32, tris: &[[V3; 3]], planes: &[([f32; 3], f32)], raw: bool) -> Option<f32> {
+    let (mut a, mut b) = (a, b);
+    let mut best = r;
+    let mut hit = false;
+    for (i, t) in tris.iter().enumerate() {
+        let (n, d) = match planes.get(i) {
+            Some(&(n, d)) if n.iter().all(|x| x.is_finite()) && d.is_finite() => (n, d),
+            _ => winding_plane(t),
+        };
+        // A degenerate winding fallback has no plane (the disc's records always carry one).
+        if dot(n, n) < 1e-12 { continue; }
+        let pl = [n[0], n[1], n[2], d];
+        let ab = sub(b, a);
+        let denom = dot(n, ab);
+        let (p, dist, q, code) = if denom.abs() > 0.0002 {
+            let f = -(dot(n, a) + d) / denom;
+            let f = if f >= 0.0 { if f <= 1.0 { f } else { 1.0 } } else { 0.0 };
+            if (denom > 0.999 && f > 0.5) || (denom < -0.999 && f < 0.5) { continue; }
+            let p0 = lerp(a, b, f);
+            // A crossing strictly inside the segment puts P on the plane: its signed distance is 0
+            // (Dist2Tri's `s < 0` test then passes). Recomputed in f32 it comes out ±1e-7 and
+            // would decide the one-sided test by rounding; the VU0's own rounding is not
+            // reproducible here, so the exact value stands in. [S]
+            let s0 = if f > 0.0 && f < 1.0 { 0.0 } else { dot(n, p0) + d };
+            let (dist, q, code) = crate::world::game_dist2tri_s(p0, t, pl, s0);
+            let p = if code != 0 && code != 99 {
+                let l2 = dot(ab, ab);
+                if l2.abs() > 1e-20 {
+                    let u = dot(sub(q, a), ab) / l2;
+                    if u > 1.0 { b } else if u < 0.0 { a } else { lerp(a, b, u) }
+                } else { a }
+            } else { p0 };
+            (p, dist, q, code)
+        } else {
+            let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) * 0.333_333_34);
+            let l2 = dot(ab, ab);
+            let p = if l2.abs() > 1e-20 {
+                let u = dot(sub(c, a), ab) / l2;
+                if u > 1.0 { b } else if u >= 0.0 { lerp(a, b, u) } else { a }
+            } else { a };
+            let (dist, q, code) = crate::world::game_dist2tri(p, t, pl);
+            (p, dist, q, code)
+        };
+        if !(dist >= 0.0) || code == 99 { continue; }
+        let dist = if raw { dist } else {
+            let v = sub(p, q);
+            if dot(v, n) <= 0.0 { continue; }
+            let len = dot(v, v).sqrt();
+            if len >= r { continue; }
+            let push = if len > 0.0 { let s = (r - len) / len; [v[0] * s, v[1] * s, v[2] * s] } else { [0.0; 3] };
+            for k in 0..3 { a[k] += push[k]; b[k] += push[k]; }
+            len
+        };
+        if dist < best { best = dist; hit = true; }
+    }
+    hit.then_some(best)
+}
+
 fn segment_hits_triangle(a: V3, b: V3, t: &[V3; 3]) -> bool {
     let d = sub(b, a);
     let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
@@ -535,7 +640,7 @@ impl Trigger {
         let mask = if mask == 0 { 2 } else { mask };
         if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) && out_ch == 0x7d { return None; }
         let filter_gate = if matches!(kind, kind::TOUCH | kind::TOUCH_ONCE) { list.get(4).copied().unwrap_or(0) as u8 } else { 0 };
-        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), seg_beam: false, raw_plate: false, planes: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
+        let mut t = Trigger { placement, kind, out: out_ch as u8, mask, list, lock: lock as u8, hide, glist_0x10: true, filter_gate, tris: Vec::new(), seg_beam: false, raw_plate: false, raw: false, planes: Vec::new(), lo: [0.0; 3], hi: [0.0; 3], gone: false, script: None, next_level, gate, key_gate, success, fallback, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None };
         if kind == kind::MOVIE { t.movie_code = out_ch; }
         t.set_tris(tris);
         Some(t)
@@ -592,8 +697,20 @@ impl Trigger {
     /// within reach). The port's triangle tests cover the plate/quad cases; the containment branch
     /// here covers the volume case (a toucher capsule fully inside the trigger's bounds — e.g.
     /// 07000006's LoadPoint #746, an open room-shaped glist [D measured tris]).
+    /// The game's contact distance for a walk HITTEST segment `a`..`b`, radius `r` (`GAME_TOUCHER`):
+    /// `cyl_geom_min` over this volume's triangles and plane records, raw or reference-point by
+    /// `raw`. `None` = no contact node survives.
+    pub fn game_contact(&self, a: V3, b: V3, r: f32) -> Option<f32> {
+        if self.tris.is_empty() { return None; }
+        let pad = r + 0.1;
+        if (0..3).any(|k| a[k].max(b[k]) + pad < self.lo[k] || a[k].min(b[k]) - pad > self.hi[k]) { return None; }
+        cyl_geom_min(a, b, r, &self.tris, &self.planes, self.raw)
+    }
+
     pub fn touched_by(&self, c: &Toucher) -> bool {
         if c.skin == RIDE_TOUCHER && self.script.is_none() { return false; }
+        if c.skin == GAME_TOUCHER { return self.game_contact(c.a, c.b, c.r).is_some(); }
+        if c.skin == BOX_TOUCHER && self.seg_beam { return false; }
         if c.skin == RAW_TOUCHER {
             return self.raw_plate && self.tris.iter().zip(&self.planes).any(|(t, (n, d))| seg_touches_tri_raw(c.a, c.b, c.r, t, n, *d));
         }
@@ -628,7 +745,8 @@ impl Trigger {
         // game routes EVERY bit-0x40 glist through it [D 07000011 #235 = 0x50], but the port's raw
         // model over-fired the 0x50 floor plates, so the scope waits on the model matching the
         // game's refine); the box elsewhere, the crouch
-        // body and the drones keep the both-sided capsule every measured pin stands on.
+        // body and the drones keep the both-sided capsule every measured pin stands on. The
+        // standing box itself never reaches a beam (`BOX_TOUCHER`, returned above).
         if c.seg_only || (self.seg_beam && !c.drone && c.r > 0.0) {
             // trigger-hittest-segment: the game's own narrow phase for the capsule touchers
             // (`Intersect_CylGeom` 0x109da0's RAW branch — the trigger cels' glist flags carry
@@ -956,6 +1074,7 @@ pub fn build(level: &Level) -> Vec<Trigger> {
             }
             t.seg_beam = target.is_some_and(|(om, oi)| level.maps[om].objects[oi].flags == 0x645);
             t.raw_plate = t.lo[1] == t.hi[1] && !t.tris.is_empty() && target.is_some_and(|(om, oi)| level.maps[om].objects[oi].flags & 0x40 != 0);
+            t.raw = target.is_some_and(|(om, oi)| level.maps[om].objects[oi].flags & 0x40 != 0);
             t.motion = motion; t
         }) {
             Some(mut t) if raw_dc => {
@@ -1041,8 +1160,104 @@ mod tests {
         Trigger { placement: 0, kind, out, mask, list, lock: 0, hide: false, glist_0x10: true, filter_gate: 0, tris: vec![[a, c, b], [a, d, c]],
             // not a laser-beam glist (flags 0x645) — the test plates keep master's contact.
             seg_beam: false,
-            raw_plate: false,
+            raw_plate: false, raw: false,
             planes: Vec::new(), lo: [-1.0, 0.0, -1.0], hi: [1.0, 0.0, 1.0], gone: false, script: None, next_level: 0, gate: 0, key_gate: 0, success: 0, fallback: 0, movie_code: 0, movie_fired: false, lock_msg_timer: 0, lock_msg: false, motion: None }
+    }
+
+    /// A closed box volume `lo..hi`, every face wound OUTWARD (the winding planes `set_tris`
+    /// derives then face out, as a beam glist's own records do).
+    fn box_volume(lo: V3, hi: V3, seg_beam: bool) -> Trigger {
+        let v = |i: usize| [if i & 1 != 0 { hi[0] } else { lo[0] }, if i & 2 != 0 { hi[1] } else { lo[1] }, if i & 4 != 0 { hi[2] } else { lo[2] }];
+        // Each face as (a, b, c, d) counter-clockwise seen from outside.
+        let faces = [(0, 4, 6, 2), (1, 3, 7, 5), (0, 1, 5, 4), (2, 6, 7, 3), (0, 2, 3, 1), (4, 5, 7, 6)];
+        let mut tris = Vec::new();
+        for (a, b, c, d) in faces { tris.push([v(a), v(b), v(c)]); tris.push([v(a), v(c), v(d)]); }
+        // A beam glist (0x645) carries obj+0xF0 bit 0x40: the raw refine [D 0700000a #607].
+        let mut t = Trigger { seg_beam, raw: seg_beam, ..plate(kind::TOUCH, 0x0d, 8, vec![]) };
+        t.set_tris(tris);
+        t
+    }
+
+    /// touch-mesh-contact: a laser beam (glist flags 0x645, `seg_beam`) is caught only by the walk
+    /// HITTEST (A = pos + 0.275, B = pos + 0.55 − cc, r 0.55 [M Player_Collision 0x194df0 default
+    /// arm]) through the raw refine [M Intersect_CylGeom 0x109da0]: reach floor + 1.91 standing.
+    /// The measured box (top pos + 1.26, r 0.55) used to catch a beam up to floor + 2.9 — the
+    /// moving beams of 0700000b (ch 0x0d, swept up to floor + 2.87 [D touch_mesh_census]) caught
+    /// Bond while overhead.
+    #[test]
+    fn overhead_beam_misses_standing_bond() {
+        let cc = crate::player::ROOT_HEIGHT;
+        let pos = [0.0, 1.086, 0.0]; // standing rest over a floor at y 0 [L player.rs ROOT_HEIGHT doc]
+        let body = ([pos[0], pos[1] + 0.275, pos[2]], [pos[0], pos[1] + 0.55 - cc, pos[2]], 0.55);
+        let touchers = crate::drone::human_touchers(pos, body, false, false, false);
+        let hits = |t: &Trigger| touchers.iter().any(|c| t.touched_by(c));
+        // 0700000a #607's band (floor + 1.49..1.76 [D]) catches a standing Bond.
+        assert!(hits(&box_volume([-3.0, 1.49, -0.14], [3.0, 1.76, 0.14], true)), "a chest-high beam must catch");
+        // A beam swept overhead (floor + 2.2..2.46) does not: 0.29 over the segment's reach.
+        assert!(!hits(&box_volume([-3.0, 2.2, -0.14], [3.0, 2.46, 0.14], true)), "an overhead beam must miss");
+        // Sister (scope): a non-beam volume at that height keeps the measured box's reach.
+        assert!(hits(&box_volume([-3.0, 2.2, -0.14], [3.0, 2.46, 0.14], false)));
+        // touch-ref-point: the game's own contact (`drone::game_touchers`) misses it, the
+        // reference-point law on the same segment.
+        let game = crate::drone::game_touchers(pos, body, false, false, false);
+        assert!(!game.iter().any(|c| box_volume([-3.0, 2.2, -0.14], [3.0, 2.46, 0.14], false).touched_by(c)));
+        assert!(!game.iter().any(|c| box_volume([-3.0, 2.2, -0.14], [3.0, 2.46, 0.14], true).touched_by(c)));
+        assert!(game.iter().any(|c| box_volume([-3.0, 1.49, -0.14], [3.0, 1.76, 0.14], true).touched_by(c)));
+        // Crouched, the chest-high beam passes over (the crouch arm, unchanged).
+        // (the crouch park pos − floor 0.607 [L], case-3 arm with cc 0.55 [M 0x194df0 :228-248]).
+        let low = [pos[0], 0.607, pos[2]];
+        let ct = crate::drone::human_touchers(low, ([low[0], low[1] + 0.1, low[2]], [low[0], low[1] + 0.45 - crate::player::CROUCH_ROOT_HEIGHT, low[2]], 0.55), true, false, false);
+        assert!(!ct.iter().any(|c| box_volume([-3.0, 1.49, -0.14], [3.0, 1.76, 0.14], true).touched_by(c)));
+    }
+
+    /// touch-ref-point: `drone::game_touchers`, the two branches of `Intersect_CylGeom` 0x109da0 on
+    /// Bond's standing walk HITTEST (A = pos + 0.275, B = pos + 0.55 − cc, r 0.55 [M Player_Collision 0x194df0 default
+    /// arm]).
+    /// - A flat plate at waist height whose edge stands 0.3 beside the segment: the crossing point
+    ///   lies on the plane outside the face, `Dist2Tri` returns the edge at 0.3 (code ≠ 0), the
+    ///   re-anchor keeps the same point [M asm 0x10a344-0x10a3ec]. RAW (obj+0xF0 bit 0x40): 0.3 <
+    ///   0.55 → contact [M 0x10a530-0x10a538 → 0x10a738]. Reference-point law: v = P − closest is
+    ///   horizontal, n·v = 0 → no contact [M 0x10a540-0x10a570]. The old both-sided capsule fired
+    ///   both.
+    /// - A closed room-sized volume around Bond with no face within 0.55: no contact (no triangle
+    ///   is tracked, the node stays 1e8 [M :587] and `Collide_Update` 0x1ea398:118-136 frees it);
+    ///   the old containment contact fired it.
+    #[test]
+    fn game_touchers_take_the_game_refine_on_every_volume() {
+        let cc = crate::player::ROOT_HEIGHT;
+        let pos = [0.0, 1.086, 0.0];
+        let body = ([pos[0], pos[1] + 0.275, pos[2]], [pos[0], pos[1] + 0.55 - cc, pos[2]], 0.55);
+        let new = crate::drone::game_touchers(pos, body, false, false, false);
+        let old = crate::drone::human_touchers(pos, body, false, false, false);
+        let fires = |set: &[Toucher], t: &Trigger| set.iter().any(|c| t.touched_by(c));
+        let y = pos[1];
+        let quad = |raw: bool| {
+            let (a, b, c, d) = ([0.3, y, -1.0], [2.0, y, -1.0], [2.0, y, 1.0], [0.3, y, 1.0]);
+            let mut t = plate(kind::TOUCH, 0x0d, 8, vec![]);
+            t.set_tris(vec![[a, c, b], [a, d, c]]); // wound with the normal up
+            t.raw = raw;
+            assert!(t.planes.iter().all(|(n, _)| n[1] > 0.99));
+            t
+        };
+        assert!(fires(&new, &quad(true)), "raw: the edge distance 0.3 is a contact");
+        assert!(!fires(&new, &quad(false)), "reference-point law: n·v = 0 is no contact");
+        assert!(fires(&old, &quad(false)), "sister: the shipped stand-in fires it");
+        let room = box_volume([-2.0, -1.0, -2.0], [2.0, 3.0, 2.0], false);
+        assert!(!fires(&new, &room), "no face within the radius: no contact");
+        assert!(fires(&old, &room), "sister: the shipped containment fires it");
+        // A raw plate the segment pierces (waist height, over the footprint): the crossing point
+        // lies ON the plane, Dist2Tri's interior distance 0 < r [M 0x109770, 0x10a530].
+        let pierce = {
+            let (a, b, c, d) = ([-1.0, y, -1.0], [1.0, y, -1.0], [1.0, y, 1.0], [-1.0, y, 1.0]);
+            let mut t = plate(kind::TOUCH, 0x0d, 8, vec![]);
+            t.set_tris(vec![[a, c, b], [a, d, c]]);
+            t.raw = true;
+            t
+        };
+        assert!(fires(&new, &pierce));
+        // A face within reach still fires: the room's wall 0.3 beside the segment, Bond outside it.
+        let wall = box_volume([0.3, -1.0, -2.0], [2.0, 3.0, 2.0], false);
+        assert!(fires(&new, &wall));
     }
 
     /// A keyed trigger's volume rides its keys [M Trigger_Update 0x1b1a78:60-70]: pose at the
