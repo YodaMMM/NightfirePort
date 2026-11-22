@@ -119,3 +119,15 @@
 Session context: the driver's task window (2026-11-22 11:19 UTC sandbox start; this report
 written ~12:21 UTC). Token/credit figures: not visible to me — the environment shows no
 input/output token or cost counters to this worker; the session's own tooling exposes none.
+
+## ntfy failed
+
+All three required fallbacks timed out (the same environment as rounds 5-20):
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`.
+2. `python3 -c "... urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', ...), timeout=20)"`
+   → killed at the tool timeout with no response (the connection never opened).
+3. `timeout 25 wget -q -O /tmp/ntfy21.resp --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 124 (the 25-s timeout), `/tmp/ntfy21.resp` empty — the connection never opened.
+The report on the branch (d2c08da34) is the completion record.
+
