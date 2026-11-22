@@ -10712,8 +10712,9 @@ impl Drone {
             // ENTER (case 1): the door-prop drones (props 0x14/0x15/0x16 — behaviour_util_getProperty
             // on Drone+0x4D8) walk the node and play the door anim 0x4e, whose event 6 sends msg 0x20;
             // the rest the stand/alert idle by alertness (+0x50C < 1.0 → 0x24 else 0x21). Both then
-            // call `NDrone2_OpenDoor` once (the outbox below) and arm timer C at now + 2 ticks
-            // [M case 1 tail + LAB_001683ac: +0xCC0 = 1, +0xCC4 = GameState + 2·FRAME_RATE_INT].
+            // call `NDrone2_OpenDoor` once (the outbox below) and arm timer C at now + 2 s = 120 ticks
+            // [M case 1 tail + LAB_001683ac: +0xCC0 = 1, +0xCC4 = GameState + 2·FRAME_RATE_INT;
+            // disasm 0x1683a4-c8 lw FRAME_RATE_INT (0x30d0cc), sll 1]. FRAME_RATE_INT is 60 in play.
             // (The game's kind == 0 gate on the 0x4e branch is not reproducible at ENTER — the port
             // resolves the door index just after the state machine; the anim choice drops that gate.)
             // The game's ENTER (case 1) first runs `NDrone2_MoveTo_RouteNode(vars, 1, +0x854)` (the
@@ -10749,7 +10750,7 @@ impl Drone {
                     self.call_anim(d, anim_state::ALERT_IDLE, 0, 0);
                 }
                 self.door_attempt = true;
-                self.timer_c = Some(frame + 2);
+                self.timer_c = Some(frame + 2 * 60); // 2·FRAME_RATE_INT [M 0x1681f8 LAB_001683ac]
                 true
             }
             // UPDATE (case 3): open → the saved return state +0x5A6; closed → stay (the route creep
@@ -10759,10 +10760,10 @@ impl Drone {
                 if self.hit_door_open { self.set_state(self.door_return); }
                 true
             }
-            // Timer C (case 0xC): re-activate the door and re-arm the 2-tick retry.
+            // Timer C (case 0xC): re-activate the door and re-arm the 2 s retry.
             (state::OPEN_DOOR, msg::TIMER_C) => {
                 self.door_attempt = true;
-                self.timer_c = Some(frame + 2);
+                self.timer_c = Some(frame + 2 * 60); // 2·FRAME_RATE_INT [M 0x1681f8 case 0xc]
                 true
             }
             // Msg 0x20 (case 0x20, from the door anim's event 6): another activation attempt. The
@@ -10777,17 +10778,19 @@ impl Drone {
             // `NDrone2_DSTATE_KickObject` (0x1684c0) — state 0x82 [M 0x153358:146]. ENTER (case 1):
             // the kick anim 0x4e; the ENTER also sets the sight bit (modelled in vision_on below).
             // [was: "bit not modelled" — the 139-writer census puts 0x1684c0:15 on the list]
+            // The ENTER arms NO timer: case 1 falls into case 0's `return 1` [M 0x1684c0:15-18],
+            // and the state change itself cleared the arm byte +0xCC0 [M 0x171df8:185], so the
+            // kick lands on the anim's msg 0x20 below.
             (state::KICK_OBJECT, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1684c0:15]
                 self.call_anim(d, 0x4e, 0, 0);
-                self.timer_c = Some(frame + 2); // [M 0x1684c0 case 0xc tail: +2·FRAME_RATE]
                 true
             }
-            // Timer C (case 0xc): kick the bound object again, re-arm at +2. The unpausing itself
+            // Timer C (case 0xc): kick the bound object again, re-arm at +2 s. The unpausing itself
             // runs in `Drones::tick` (the ScriptPlayers live there) via the `kick_attempt` outbox.
             (state::KICK_OBJECT, msg::TIMER_C) => {
                 self.kick_attempt = true;
-                self.timer_c = Some(frame + 2);
+                self.timer_c = Some(frame + 2 * 60); // 2·FRAME_RATE_INT [M 0x1684c0 case 0xc; disasm 0x168540-64]
                 true
             }
             // Msg 0x20 (case 0x20, the kick anim's event 6): the kick grunt (`NDrone2_PlaySFX`
@@ -10817,14 +10820,15 @@ impl Drone {
             (state::ACTION_ANIM, msg::ANIM_DONE) => { self.deaf = false; self.set_state(state::AIM_CROUCH); true }
             // Msg 0x20 (case 0x20): back to the saved state `+0x5A6`.
             (state::ACTION_ANIM, msg::DOOR) => { self.set_state(self.door_return); true }
-            // Timer C (case 0xc): re-arm at +2 (nothing else).
-            (state::ACTION_ANIM, msg::TIMER_C) => { self.timer_c = Some(frame + 2); true }
+            // Timer C (case 0xc): re-arm at +2 s (nothing else) [M 0x168628 case 0xc: 2·FRAME_RATE_INT;
+            // disasm 0x1686c0-e0 lw FRAME_RATE_INT, sll 1].
+            (state::ACTION_ANIM, msg::TIMER_C) => { self.timer_c = Some(frame + 2 * 60); true }
             // `NDrone2_DSTATE_StandFiddle` (0x1687c0) — state 0x84 [M 0x153358:101]. ENTER (case 1):
-            // the fiddle anim 0x23 and timer C at +5·FRAME_RATE.
+            // the fiddle anim 0x23 and timer C at +5·FRAME_RATE_INT = 300 ticks.
             (state::STAND_FIDDLE, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1687c0:17]
                 self.call_anim(d, 0x23, 0, 0);
-                self.timer_c = Some(frame + 5);
+                self.timer_c = Some(frame + 5 * 60); // [M 0x1687c0 case 1; disasm 0x168830-58 lw FRAME_RATE_INT, ·5]
                 true
             }
             // Timer C (case 0xc) and msg 0x20: back to the saved state `+0x5A6` [M cases 0xc/0x20].
@@ -27506,5 +27510,99 @@ mod combat_move_tests {
             assert_eq!(m, 0, "the empty list takes the default arm [M 0x150c18:329-330]");
             assert_eq!(rng.draws - before, 2, "Rand_Rand(15) and Rand_Rand(0) both step the stream [M 0x1e3738]");
         }
+    }
+}
+
+#[cfg(test)]
+mod timer_units_tests {
+    //! Timer-C arms whose game deadline is `GameState+0x34 + k·FRAME_RATE_INT` (or `k·FRAME_RATE_DIV`)
+    //! [M each arm below]. FRAME_RATE_INT is 60 and FRAME_RATE_DIV 1.0 in play, so k seconds is
+    //! 60·k ticks. Each assertion failed on the code that armed `frame + k` raw (or a halved rate).
+    use super::tests::drone_at;
+    use super::*;
+
+    macro_rules! empty_data {
+        ($level:expr, $keep:ident, $dname:ident) => {
+            let $keep = (
+                CollisionWorld::empty(),
+                nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() },
+                nf_formats::drone::PropertyTables { descs: Vec::new(), masks: Vec::new(), types: Vec::new() },
+                std::collections::HashMap::<u32, nf_formats::anim::Script>::new(),
+                nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() },
+                nf_formats::tuning::Tuning::default(),
+                std::collections::HashMap::<u32, nf_formats::anim::Sequence>::new(),
+                std::collections::HashMap::<u32, nf_formats::character::Skin>::new(),
+                std::collections::HashMap::<u8, nf_formats::character::Skeleton>::new(),
+                crate::nav::Network::default(),
+                Vec::<crate::cover::CoverNode>::new(),
+                nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() },
+                Vec::<crate::aivolume::AiVolume>::new(),
+                std::collections::HashMap::<u32, crate::pickup::Model>::new(),
+                Vec::<crate::aipoint::AiPoint>::new(),
+            );
+            let $dname = Data { tables: &$keep.1, props: &$keep.2, scripts: &$keep.3, weapons: &$keep.4, world: &$keep.0, level: $level,
+                sequences: &$keep.6, skins: &$keep.7, skeletons: &$keep.8, nav: &$keep.9, covers: &$keep.10, tuning: &$keep.5,
+                hitboxes: &$keep.11, volumes: &$keep.12, sfx: None, models: &$keep.13, surfaces: None, voices: None,
+                difficulty: 2, ai_points: &$keep.14 };
+        };
+    }
+
+    const NOW: u32 = 1000;
+
+    fn in_state(s: u8) -> Drone {
+        let mut dr = drone_at([0.0, 0.0, 0.0]);
+        dr.state = s;
+        dr.timer_c = None;
+        dr
+    }
+
+    /// `NDrone2_DSTATE_KickObject` 0x1684c0: ENTER arms nothing (case 1 falls into case 0)
+    /// [M 0x1684c0:15-18]; case 0xc re-arms `+ FRAME_RATE_INT·2` [M case 0xc; disasm 0x168540-64].
+    #[test]
+    fn kick_object_enter_arms_nothing_and_timer_rearms_two_seconds() {
+        empty_data!(0x0700_0012, k, d);
+        let mut rng = Rng::new(1);
+        let mut dr = in_state(state::KICK_OBJECT);
+        dr.send(&d, &mut rng, NOW, msg::ENTER);
+        assert_eq!(dr.timer_c, None, "KickObject's ENTER arms no timer [M 0x1684c0:15-18]");
+        dr.send(&d, &mut rng, NOW, msg::TIMER_C);
+        assert_eq!(dr.timer_c, Some(NOW + 120), "2·FRAME_RATE_INT [M 0x1684c0 case 0xc]");
+        assert!(dr.kick_attempt);
+    }
+
+    /// `NDrone2_DSTATE_ActionAnim` 0x168628 case 0xc: `+ FRAME_RATE_INT·2` [M; disasm 0x1686c0-e0].
+    #[test]
+    fn action_anim_timer_rearms_two_seconds() {
+        empty_data!(0x0700_0012, k, d);
+        let mut rng = Rng::new(1);
+        let mut dr = in_state(state::ACTION_ANIM);
+        dr.send(&d, &mut rng, NOW, msg::TIMER_C);
+        assert_eq!(dr.timer_c, Some(NOW + 120));
+        assert_eq!(dr.state, state::ACTION_ANIM);
+    }
+
+    /// `NDrone2_DSTATE_OpenDoor` 0x1681f8: ENTER on a shut door and case 0xc both reach
+    /// LAB_001683ac, `+ FRAME_RATE_INT·2` [M; disasm 0x1683a4-c8].
+    #[test]
+    fn open_door_enter_and_retry_are_two_seconds() {
+        empty_data!(0x0700_0012, k, d);
+        let mut rng = Rng::new(1);
+        let mut dr = in_state(state::OPEN_DOOR);
+        dr.hit_door_open = false;
+        dr.send(&d, &mut rng, NOW, msg::ENTER);
+        assert_eq!(dr.state, state::OPEN_DOOR);
+        assert_eq!(dr.timer_c, Some(NOW + 120), "ENTER on a shut door [M 0x1681f8 case 1 → LAB_001683ac]");
+        dr.send(&d, &mut rng, NOW + 120, msg::TIMER_C);
+        assert_eq!(dr.timer_c, Some(NOW + 240), "the retry [M 0x1681f8 case 0xc]");
+    }
+
+    /// `NDrone2_DSTATE_StandFiddle` 0x1687c0 ENTER: `+ FRAME_RATE_INT·5` [M case 1; disasm 0x168830-58].
+    #[test]
+    fn stand_fiddle_enter_is_five_seconds() {
+        empty_data!(0x0700_0012, k, d);
+        let mut rng = Rng::new(1);
+        let mut dr = in_state(state::STAND_FIDDLE);
+        dr.send(&d, &mut rng, NOW, msg::ENTER);
+        assert_eq!(dr.timer_c, Some(NOW + 300));
     }
 }
