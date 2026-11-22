@@ -120,3 +120,18 @@
 
 not visible to me — this environment shows no token, credit, context-window or cost
 figures for the session.
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-22 ~19:41-19:43 UTC), in order:
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (exit 28, `-m 20`).
+2. python3 urllib: no output, the process hung past its 20 s urlopen timeout and was
+   killed by the 60 s shell cap.
+3. wget: exit 124 (`timeout 25 wget -q -O- --post-data "retune-nb-08-22: …"
+   https://ntfy.sh/nightfire-yoda-8k3x` — the 25 s cap killed it, no response bytes).
+
+The message text all three carried: "retune-nb-08-22: round 22 cont. — the excursion
+pre-leg stop shipped (pit 24->12, entry 49.0 best, death t21154->t25843 deepest, killed
+by ONE kind-44 reply blast -45.00; anchor-shift lever tried and reverted: it kills the
+dive launch; whole binary 6/0/1; report+ledger pushed)".
