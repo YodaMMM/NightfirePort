@@ -7743,7 +7743,11 @@ pub fn run() -> Result<()> {
     // 0x7000048 and opens the P_START page on it [M bootup 0x1c7e78 + ResetMap_Load 0x1d6360].
     // A lone positional that names an existing file is the image, not a level (`nf-view <iso>` boots the
     // front end too).
-    let lone_iso = matches!(pos.as_slice(), [p] if std::path::Path::new(p.as_str()).is_file());
+    let is_data_source = |p: &str| {
+        let path = std::path::Path::new(p);
+        path.is_file() || (path.is_dir() && path.join("FILES_INDEX.tsv").is_file())
+    };
+    let lone_iso = matches!(pos.as_slice(), [p] if is_data_source(p.as_str()));
     let (iso, level) = match pos.as_slice() {
         [iso, level] => (iso.to_string(), level.to_string()),
         [iso] if lone_iso => (iso.to_string(), "07000048".to_string()),

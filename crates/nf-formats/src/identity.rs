@@ -146,8 +146,24 @@ pub fn check<R: Read + Seek>(iso: &IsoImage<R>, exp: &Expected) -> Result<DiscIn
     Ok(DiscInfo { volume_id, serial: serial_of(&boot), vmode, version, sectors: iso.sector_count() })
 }
 
-/// Opens `path` and checks it. A missing file and a non-ISO file get their own errors.
+/// Opens `path` and checks it. Accepts either an ISO disc image or a carved asset folder
+/// (`FILES_INDEX.tsv` + `ACTION.ELF`, verified by SHA-1).
 pub fn check_path(path: &Path, exp: &Expected) -> Result<DiscInfo, IdentityError> {
+    if path.is_dir() && path.join("FILES_INDEX.tsv").is_file() {
+        let exe_name = exp.exe.0.trim_start_matches('/');
+        let exe_path = path.join(exe_name);
+        let bytes = std::fs::read(&exe_path).map_err(|_| IdentityError::Missing(exe_name.to_string()))?;
+        if hex(&sha1(&bytes)) != exp.exe.1.to_ascii_lowercase() {
+            return Err(IdentityError::Modified(exe_name.to_string()));
+        }
+        return Ok(DiscInfo {
+            volume_id: exp.volume_id.to_string(),
+            serial: serial_of(exp.boot_file),
+            vmode: exp.vmode.to_string(),
+            version: "carved".to_string(),
+            sectors: 0,
+        });
+    }
     if !path.is_file() {
         return Err(IdentityError::Unreadable(if path.exists() { "not a file".into() } else { "file not found".into() }));
     }
