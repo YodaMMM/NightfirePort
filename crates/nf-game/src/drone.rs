@@ -10204,6 +10204,11 @@ impl Drone {
             // CivilianPatrol (0x15d610): walk the patrol path (`CallAnim(0x37)`); armed person within 6 (0x40c00000)
             // → CivilianScared (the voice-0x10 team switch and the female scream 0x48 are not ported).
             (CIVILIAN_PATROL, msg::ENTER) => {
+                // `+0x9F2 == 0` (no route nodes; the port's `route` slot is None exactly then —
+                // InvalidateRoute drops it): straight to Idle 4, no vision bit, no walk anim
+                // [M 0x15d610:20-25]. The 09/0A stun resume (`tower_impact_stamp`) and
+                // ReturnToPatrolPath's GoToGoal return reach here without a route.
+                if self.route.is_none() { self.set_state(IDLE); return true; }
                 self.vision_on = true;
                 self.request_anim(d, anim_state::WALK);
                 true
@@ -20140,7 +20145,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let mut cursors: Vec<usize> = (0..n).map(|i| self.list[i].opp_cursor).collect();
         for i in 0..n {
             let dr = &self.list[i];
-            if !dr.present || dr.team != 2 { continue; }
+            // `NDrone2_ControlSTANDARD` 0x1490f0:140-143 returns before `FindOpponent` (:167)
+            // while `+0x4F8 & 0x100` is clear: a disabled ally keeps its stale pick and spends
+            // no probe.
+            if !dr.present || dr.team != 2 || !dr.enabled { continue; }
             // The held re-validation probes FIRST (the CanSeeObject at 0x1424e0:152 precedes the
             // alive filter :161-172 — order matters for the shared LOS budget), then the alive
             // filter on a drone-class opponent [M :161-172; the same test as the scan's minus the
@@ -21050,7 +21058,10 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // live (the `opp_target` fold is SetOpponentAimPos', not this function's).
                 if dr.enabled { dr.opponent_info(player); dr.set_opponent_aim_pos(player, view_bones.as_ref()); } else { dr.opp_target = player.target; }
                 dr.light = light; dr.player_pos = player.pos; if vision_open { dr.seen = false; } dr.bond_armed = armed; dr.stat_ok = stat_ok;
-                if dr.team == 2 {
+                // A disabled team-2 drone ran no `FindOpponent` (ControlSTANDARD 0x1490f0:140-143)
+                // and no `GetOpponentInfo` (0x138f68:16-18): pick, cursor, distance and bearing
+                // all keep their last values.
+                if dr.team == 2 && dr.enabled {
                     // Apply the pick: the guard feeds the opponent-derived fields; no pick is
                     // `SetOpponent(0)` — the aim offset zeroes (the aim position degenerates to
                     // the drone's own position [M 0x1422d0:25-29]) while `+0xf0`/`+0x1d4` keep
@@ -21255,8 +21266,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let snapshot = self.los_probes;
         // `ProcessDroneSight`'s eligibility [M 0x176a28:76-84/:155-166 + :167-168]: the drone alive
         // (0x600 clear, 0x100 set, health > 0, not class 0x11, not dying), the vision bit 0x10000
-        // and the opponent pointer +0x170.
-        let eligible = |x: &Drone| x.present && !x.corpse && x.vision_on && x.opp_ptr();
+        // and the opponent pointer +0x170. The live half is the same gate `find_opponent_alive`
+        // folds (0x143098-0x1430f8): a disabled guard (`NDrone2_Enable(0)` clears 0x100 and leaves
+        // 0x10000 standing [M 0x149dd0 mask 0xffe7fe5f]) has no sight in any of the three loops
+        // (:81, :165, :188) whatever its vision bit.
+        let live = |x: &Drone| x.present && x.find_opponent_alive();
+        let eligible = |x: &Drone| live(x) && x.vision_on && x.opp_ptr();
         if vision_open {
             for i in 0..self.list.len() {
                 let (before, rest) = self.list.split_at_mut(i);
@@ -21317,14 +21332,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // (class 3 with record health <= 0 :111-114 / class 0x12 :116-118 — the port's single
             // `bond_alive` health fold covers both death arms). No sight test on the path. Team 2
             // never takes the player (:101) — its pointer is the scan pick in `opp_drone`.
-            dr.opp_bond = dr.team != 2 && dr.stat_ok && dr.bond_alive;
+            // `ControlSTANDARD` 0x1490f0:140-143 returns before its `FindOpponent` call (:167)
+            // while `+0x4F8 & 0x100` is clear: a disabled drone keeps its last pointer.
+            if dr.enabled { dr.opp_bond = dr.team != 2 && dr.stat_ok && dr.bond_alive; }
             if dr.team == 2 { continue; } // the team-2 sight state is the opponent fold below
             if !vision_open { continue; } // the 15-frame wait [M 0x176a28:56-57]
+            // The third loop's gate [M 0x176a28:184-196]: a drone failing the live test (disabled,
+            // dead, deleted) or without the vision bit takes the lost arm whatever its stale
+            // `+0x228 & 2` LOS flag says.
+            let gated = live(dr) && dr.vision_on;
             // The game's visible branch requires the opponent pointer too: `(+0x170 == 0) ||
             // (flags & 2) == 0` falls to the lost-sight arm [M 0x176a28:222-231] — a pointerless
             // tick (Bond dead) counts as unseen even with a clear ray, so `HaveOpponentSight`
             // never re-stamps and the +0x238 grace expires [M 0x175ef0:30-32].
-            if dr.los && dr.opp_ptr() {
+            if gated && dr.los && dr.opp_ptr() {
                 dr.seen_ticks += 1;
                 // fix-guard-first-shot2: `ProcessDroneSight` 0x176a28:216-223 resets the unseen
                 // counter (+0x274) to 0 on EVERY opponent-visible tick — BEFORE the
@@ -21425,7 +21446,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // safety fold, the frozen-counter case].
         for dr in &mut self.list {
             if !vision_open || !dr.present || dr.team != 2 { continue; }
-            if dr.opp_drone.is_some() {
+            // The same third-loop gate [M 0x176a28:184-196]: a disabled or dead ally takes the
+            // lost arm even with a held pick.
+            if live(dr) && dr.vision_on && dr.opp_drone.is_some() {
                 dr.seen_ticks += 1;
                 dr.unseen_ticks = 0;
                 dr.lost_sight = false;
@@ -21434,6 +21457,12 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     dr.ever_seen = true;
                     dr.opp_have_frame = frame;
                 }
+            } else if dr.opp_drone.is_some() {
+                // The held pick on a gated-out ally: the lost arm, `+0x270 = 0` and `+0x274 += 1`
+                // [M 0x176a28:198-202].
+                dr.seen_ticks = 0;
+                dr.seen = false;
+                dr.unseen_ticks = dr.unseen_ticks.saturating_add(1);
             } else {
                 dr.seen_ticks = 0;
                 dr.seen = false;
