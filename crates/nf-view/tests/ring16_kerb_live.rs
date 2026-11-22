@@ -15,9 +15,12 @@
 //! the kerb foot at: from the wall rest the game's Bond arrived at z −74.9568 and climbed the kerb
 //! at x 11.45 (the s/collide-push-2 run), while from z −74.96214 it never does [L].
 //!
-//! The port settles 0.006 lower and 0.002 further south (6.87464, −74.96404) and then drifts
-//! south and down about 0.0003 a tick once x passes 11.2, where the slope's second triangle set
-//! starts: the port pushes Bond out of a contact the game leaves unpushed.
+//! The rest sits on the knife edge |v| ≈ r of `Intersect_CylGeom` 0x109da0's push arm, and the
+//! pick bit that sets the feet flag lives inside that arm [M :447-513]. With round-to-nearest
+//! floats the port's sub-ulp pushes crept the root up one ulp a tick until |v| reached r, the
+//! contact dropped, one gravity tick fell, and the slope's push walked Bond south and down
+//! (6.8567, −74.9925 by x 6.5). The game's VU/FPU steps round toward zero [M ps2float]: the
+//! tiny push no longer moves the root and the contact holds every tick.
 
 #[path = "common/walker.rs"]
 mod walker;
@@ -28,7 +31,6 @@ use walker::Walker;
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
-#[ignore = "the port pushes Bond off the kerb foot where the game's push is zero; not fixed (push model)"]
 fn the_kerb_foot_walk_holds_the_games_line() {
     let mut w = Walker::new(nf_view::load(&iso(), "07000016.bin", false).unwrap());
     w.wait_enabled(3000, "load");

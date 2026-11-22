@@ -4,6 +4,7 @@
 
 use nf_formats::level::{Instance, Level};
 use nf_formats::placement::transform;
+use nf_formats::ps2float as pf;
 use std::collections::HashMap;
 
 pub type V3 = [f32; 3];
@@ -975,21 +976,21 @@ fn plane_world(m: &[[f32; 4]; 4], n: V3, d: f32) -> [f32; 4] {
 /// - returns |q − p|.
 fn game_dist2tri(p: V3, t: &[V3; 3], pl: [f32; 4]) -> (f32, V3, u16) {
     let n = [pl[0], pl[1], pl[2]];
-    let s = dot(n, p) + pl[3];
+    let s = pf::add(vdot(n, p), pl[3]);
     if s < 0.0 { return (s, p, 99); }
     let mut flags: u16 = 0;
     for k in 0..3 {
-        let e = sub(t[k], t[(k + 2) % 3]);
-        let c = cross(e, n);
-        if dot(sub(p, t[k]), c) > 0.0 { flags |= 1 << k; }
+        let e = vsub(t[k], t[(k + 2) % 3]);
+        let c = vcross(e, n);
+        if vdot(vsub(p, t[k]), c) > 0.0 { flags |= 1 << k; }
         if k < 2 && flags >= 2 { break; }
     }
     let seg = |from: V3, to: V3, past: V3| -> V3 {
-        let e = sub(to, from);
-        let l2 = dot(e, e);
+        let e = vsub(to, from);
+        let l2 = vdot(e, e);
         if l2.abs() <= 1e-20 { return from; }
-        let u = dot(e, sub(p, from)) / l2;
-        if u > 1.0 { past } else if u < 0.0 { from } else { [from[0] + e[0] * u, from[1] + e[1] * u, from[2] + e[2] * u] }
+        let u = pf::div(vdot(e, vsub(p, from)), l2);
+        if u > 1.0 { past } else if u < 0.0 { from } else { vadd(from, vscale(e, u)) }
     };
     let q = match flags {
         1 => seg(t[0], t[2], t[2]),
@@ -998,10 +999,10 @@ fn game_dist2tri(p: V3, t: &[V3; 3], pl: [f32; 4]) -> (f32, V3, u16) {
         4 => seg(t[2], t[1], t[1]),
         5 => t[2],
         6 => t[1],
-        _ => [p[0] - n[0] * s, p[1] - n[1] * s, p[2] - n[2] * s],
+        _ => vadd(p, vscale(n, -s)),
     };
-    let v = sub(q, p);
-    (dot(v, v).sqrt(), q, flags)
+    let v = vsub(q, p);
+    (pf::sqrt(vdot(v, v)), q, flags)
 }
 
 /// The game's per-triangle cylinder push, [M Intersect_CylGeom 0x109da0] read with the
@@ -1028,38 +1029,62 @@ fn game_dist2tri(p: V3, t: &[V3; 3], pl: [f32; 4]) -> (f32, V3, u16) {
 #[allow(clippy::too_many_arguments)]
 fn cyl_game_contact(t: &[V3; 3], pl: [f32; 4], a: &mut V3, b: &mut V3, r: f32, total: &mut V3, walkable: &mut bool, pick: &mut bool, nopush: bool) -> bool {
     let n = [pl[0], pl[1], pl[2]];
-    let ab = sub(*b, *a);
-    let denom = dot(n, ab);
+    let ab = vsub(*b, *a);
+    let denom = vdot(n, ab);
     let (p, dist, q, flags) = if denom.abs() > 0.0002 {
-        let s = dot(n, *a) + pl[3];
-        let f = -s / denom;
+        let s = pf::add(vdot(n, *a), pl[3]);
+        let f = pf::div(-s, denom);
         let f = if f >= 0.0 { if f <= 1.0 { f } else { 1.0 } } else { 0.0 };
         if (denom > 0.999 && f > 0.5) || (denom < -0.999 && f < 0.5) { return false; }
-        let p0 = [a[0] + ab[0] * f, a[1] + ab[1] * f, a[2] + ab[2] * f];
+        let p0 = vadd(*a, vscale(ab, f));
         let (dist, q, flags) = game_dist2tri(p0, t, pl);
-        let p = if flags != 0 && flags != 99 { closest_on_segment(*a, *b, q) } else { p0 };
+        let p = if flags != 0 && flags != 99 { vu_closest_on_segment(*a, *b, q) } else { p0 };
         (p, dist, q, flags)
     } else {
-        let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) * 0.333_333_34);
-        let p = closest_on_segment(*a, *b, c);
+        let c = [0, 1, 2].map(|k| pf::mul(pf::add(pf::add(t[0][k], t[1][k]), t[2][k]), 0.333_333_34));
+        let p = vu_closest_on_segment(*a, *b, c);
         let (dist, q, flags) = game_dist2tri(p, t, pl);
         (p, dist, q, flags)
     };
     if !(dist >= 0.0) || flags == 99 || nopush { return false; }
-    let v = sub(p, q);
-    if dot(v, n) <= 0.0 { return false; }
-    let dist = dot(v, v).sqrt();
+    let v = vsub(p, q);
+    if vdot(v, n) <= 0.0 { return false; }
+    let dist = pf::sqrt(vdot(v, v));
     if dist >= r { return false; }
-    let push = if dist > 0.0 { let s = (r - dist) / dist; [v[0] * s, v[1] * s, v[2] * s] } else { [0.0; 3] };
+    // v̂ = v·(1/|v|) (the FPU reciprocal, then the VU scale), the magnitude r − |v| (FPU sub) [M
+    // 0x109da0:436-456]; every VU/FPU step rounds toward zero (ps2float).
+    let push = if dist > 0.0 { vscale(vscale(v, pf::div(1.0, dist)), pf::sub(r, dist)) } else { [0.0; 3] };
     if caps_log() {
         eprintln!("[cap] GAME cent=({:.3},{:.3},{:.3}) q=({:.4},{:.4},{:.4}) p=({:.4},{:.4},{:.4}) d={dist:.4} push=({:.4},{:.4},{:.4}) n=({:.3},{:.3},{:.3}) flags={flags}",
             (t[0][0]+t[1][0]+t[2][0])/3.0, (t[0][1]+t[1][1]+t[2][1])/3.0, (t[0][2]+t[1][2]+t[2][2])/3.0,
             q[0], q[1], q[2], p[0], p[1], p[2], push[0], push[1], push[2], n[0], n[1], n[2]);
     }
-    for k in 0..3 { a[k] += push[k]; b[k] += push[k]; total[k] += push[k]; }
+    *a = vadd(*a, push);
+    *b = vadd(*b, push);
+    *total = vadd(*total, push);
     if n[1] > 0.7 && q[1] < b[1] { *walkable = true; }
     if n[1] > 0.7 { *pick = true; }
     true
+}
+
+/// The VU0 vector ops the cylinder test runs, each lane rounded toward zero (ps2float): the
+/// lane-wise add/sub/scale and the `vmul` + two `vaddbc` dot ((x + y) + z).
+fn vadd(a: V3, b: V3) -> V3 { [pf::add(a[0], b[0]), pf::add(a[1], b[1]), pf::add(a[2], b[2])] }
+fn vsub(a: V3, b: V3) -> V3 { [pf::sub(a[0], b[0]), pf::sub(a[1], b[1]), pf::sub(a[2], b[2])] }
+fn vscale(a: V3, s: f32) -> V3 { [pf::mul(a[0], s), pf::mul(a[1], s), pf::mul(a[2], s)] }
+fn vdot(a: V3, b: V3) -> f32 { pf::add(pf::add(pf::mul(a[0], b[0]), pf::mul(a[1], b[1])), pf::mul(a[2], b[2])) }
+/// `cross(e, n)` as the `vopmula`/`vopmsub` pair computes it.
+fn vcross(a: V3, b: V3) -> V3 {
+    [pf::sub(pf::mul(a[1], b[2]), pf::mul(a[2], b[1])), pf::sub(pf::mul(a[2], b[0]), pf::mul(a[0], b[2])), pf::sub(pf::mul(a[0], b[1]), pf::mul(a[1], b[0]))]
+}
+/// The spine re-projection [M 0x109da0:333-360]: t = (q − A)·(B − A) / |B − A|², |B − A|² ≤ 1e-20
+/// → A, t > 1 → B, t < 0 → A.
+fn vu_closest_on_segment(a: V3, b: V3, q: V3) -> V3 {
+    let e = vsub(b, a);
+    let l2 = vdot(e, e);
+    if !(l2.abs() > 1e-20) { return a; }
+    let u = pf::div(vdot(e, vsub(q, a)), l2);
+    if u > 1.0 { b } else if u < 0.0 { a } else { vadd(a, vscale(e, u)) }
 }
 
 #[allow(clippy::too_many_arguments)]

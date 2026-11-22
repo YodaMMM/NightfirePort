@@ -2335,7 +2335,8 @@ impl Bond {
         // hittest from the integrated obj+0x30 [M 0x194df0:361]; the +0x750 push lands in the
         // handler 0x1949a8:136-140, after the refine) — see the `pre_collide` field doc.
         self.pre_collide = self.pos;
-        for k in 0..3 { self.pos[k] += push[k]; }
+        // obj+0x30 += BLData+0x750 is one VU `vadd`, rounded toward zero [M 0x1949a8:136-140].
+        for k in 0..3 { self.pos[k] = nf_formats::ps2float::add(self.pos[k], push[k]); }
         self.grounded_history = (self.grounded_history >> 1) | if self.grounded { 8 } else { 0 };
         // Fall damage [M Player_CollisionHandler 0x1949a8:108-131]: with no ground in the last 4
         // ticks (BL+0x940 == 0) BL+0x928 counts FRAME_RATE_MUL per falling tick and resets to 0
