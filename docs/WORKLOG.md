@@ -428,3 +428,18 @@ t25783 (+9411), the walk reaches the d3 machine-fight anchor. A first variant (t
 pick most-hits-first) measured byte-identical no-op and was reverted. Whole 08 binary 6/0/1
 on every push. Next: the fall 23.0, the secure-room #6 re-deal range gate, the machine fight
 from the anchor. Report: docs/reports/retune-nb-08-20.md.
+retune-nb-08-21: 08 whole-mission 00 Agent real-damage walk green again, round 21.
+Round 21 (2026-11-22): branch from master 9fff71e1c with 08-20 merged (08-20 was not on
+master; clean merge). Setup from scratch (sandbox reset; freed 5.6 GB of pre-seeded caches
+to fit the four-crate target tree). THE MERGED-TREE BASELINE FIRST: death t25783
+byte-identical to round 20 (48 hits for 77.0 + other 23.0, 17 fights) — and THE DEATH READ
+IN FULL: the machine's own rocket blast (kind 44, d 3.5, radius 8.0) after the high-phase
+salvos drained the 50.0 armour; health 2.0 since t5020, the armour carried ~20000 ticks.
+Levers: the fall CLOSED as accepted stream cost (no game ladder at the rail; the d1/d2
+sisters run the same jump and pass — the game's own player pays the 23.0); the secure-room
+#6 re-deal TRIED TWO WAYS and DEAD (the aperture-align +0.45 stand kept the same -15.0, the
+lane covers the walkway; the line-break -0.45 stand went blind and left #6 advancing — the
+resuming walk died t5260 at d 4.9). Both reverted. Whole 08 binary 6/0/1 on the final tree.
+Next: the machine fight from the anchor at health 2.0 + armour 50.0 (the salvos are the
+wall), fed by the upstream banks (the deck fight's 60.0). Report:
+docs/reports/retune-nb-08-21.md.

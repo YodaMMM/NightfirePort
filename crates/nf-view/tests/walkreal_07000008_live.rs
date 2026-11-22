@@ -4008,6 +4008,36 @@ launch, the ride-free path also skips the chain.
 // (3) the machine fight from the anchor at ~2.0 health + ~50 armour: the 08-19 anchor shape
 // (the pre-fight crouch, the dive-launch band) re-pinned on the batch-3 stream; the
 // world-row death (live wire / blast) at the anchor is the first read.
+// retune-nb-08-21 (2026-11-22, still red — the walk RE-MEASURED on the merged tree (master
+// 9fff71e1c + 08-20) FIRST, as the rounds' law requires: death t25783 BYTE-IDENTICAL to
+// round 20 — 48 hits for 77.0 + other 23.0, 17 fights [L the NF_DMG_TRACE run]). THE DEATH
+// READ IN FULL for the first time: the anchor death is the machine's OWN rocket blast (kind
+// 44 at (110.4,14.1,-181.3), d 3.5, radius 8.0, the 100.0 explosion) — the high-phase salvos
+// drained the 50.0 armour (armour 50 at t24000 -> 0 at the death) and the fatal blast's
+// residue took the last 2.0 health; health had been 2.0 since t5020 (the secure-room #6
+// exchange close), the armour carried the last ~20000 ticks. THE FALL LEVER (round 20's (1))
+// CLOSED as accepted stream cost: the walk-off is dead by geometry [L round 20], the
+// step-split landing saves ~4 by the sqrt descent law [S], there is NO game ladder at the
+// rail (the "stuck ladder" mentions are the walker's own stuck-mitigation sidesteps, not
+// ladder objects [M the test's own comments]), and the d1/d2 sisters run the SAME running
+// jump (the jump call fires for them at the walkway-head leg) and PASS — the game's own
+// player pays the 23.0 [L the round-20 whole-binary 6/0/1]. THE SECURE-ROOM #6 LEVER
+// (round 20's (2)) TRIED TWO WAYS, BOTH DEAD on their own real runs: (a) the aperture-align
+// stand (+0.45 south via an additive gun-ray probe from the aim yaw): the five -3.00 rows
+// kept coming (t4886-5085, the same -15.0 — the burst rifle's lane covers the whole walkway;
+// the fight only ran ~30 ticks longer) and the stream re-dealt +2351 deeper (t28134, 15
+// fights) — re-deal noise, not a fix; (b) the line-break stand (-0.45 north, the blocked-ray
+// probe): WORSE — the stand went blind, the 60-tick unseen abort left #6 ALIVE, he ADVANCED
+// (state 0x5e, (158.7,43.0,-121.2)) and shot the resuming walk at d 4.9: death t5260 [L].
+// Both reverted; the exchange itself is WON (killed true) — the cost is #6's burst cadence
+// over the ~200-tick exchange and no nearby stand beats it. NEXT LEVERS (priority): (1) the
+// machine fight from the anchor (round 20's (3)): the high-phase survival at health 2.0 +
+// armour 50.0 is the wall — the anchor gates read riding true (the boarding gate OPENS) but
+// the salvos close the walk first; re-pin the 08-19 anchor shape on the batch-3 stream with
+// the death law above as the first read; (2) the upstream banks that feed it: the deck
+// fight's 60.0 (the pre-t3000 bleed, 15 hits — the biggest single bucket; the fight-order
+// pick measured byte-identical there [L round 20]) and the #6 15.0 (measured unfixable by
+// stand geometry this round).
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
