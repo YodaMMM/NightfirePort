@@ -411,3 +411,9 @@ ticks past the death). Lever (2) the #25 sub-fire TRIED and REVERTED (two varian
 KILLED #25 but the rotated yaw flipped the dodge's side pick and a salvo blast closed the
 walk 271 ticks earlier — ledger material. Whole binary 6/1, 167.46 s [L]. Next levers in
 the ignore message. Report: docs/reports/retune-nb-08-19.md.
+## retune-nb-08-20
+Branch start: cloned fresh (sandbox reset), merged origin/s/retune-nb-08-19 into
+origin/master tip (stream batch 3, b60b1ff79) as instructed. Round 20 goal: the
+whole-mission 00 Agent real-damage walk green again. Re-measure the baseline on the
+merged tree first (stream batch 3 moved guard aim/body boxes), then take the next
+untried lever from the ignore message, skipping measured-dead rows.
