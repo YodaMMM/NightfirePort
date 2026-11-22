@@ -440,6 +440,18 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // west-roof sweep's own kill shot woke him mid-phase: he landed the killing 10.0 at 4312.
         // Take him before the sweep's shots (the box also catches the d2 deck sniper #20 if #17
         // has moved). Log-only.
+        if difficulty == 2 && real_damage {
+            // walks-1121-0d-13 (the sniper cover fire on the game's gates [M 0x16a610]): the south-roof
+            // cover snipers #9/#16 (x 180-187, y 21.2) now hold their post to timer C's shot and
+            // landed 28.0 + 28.0 + 6.0 during the #17 act (which picked the deck guard #20 at d 29.5
+            // and never landed). Sweep the roof line first.
+            for _ in 0..3 {
+                let live = w.scene.sim.as_ref().unwrap().drones.list.iter().any(|d| d.present && !d.corpse && d.health > 0.0
+                    && d.pos[1] > 18.0 && (d.pos[0] - 186.0).abs() < 14.0 && (d.pos[2] + 272.0).abs() < 10.0);
+                if !live { break; }
+                let _ = kill_guard_at_present(&mut w, [186.0, -272.0], [14.0, 10.0], "the south-roof cover snipers first (from the ladder top)", 500);
+            }
+        }
         if difficulty >= 2 {
             let _ = kill_guard_at_present(&mut w, [192.3, -267.4], [8.0, 8.0], "the d2 south-roof sniper #17 (the ladder-top shot, before the band guns)", 500);
             {
@@ -1254,7 +1266,9 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // kind-3 pickup at (192.82, 10.79, -272.03), 8.5 u north of the annex landing [D the
     // placed pickups, every 0xF0 placement]. The Agent walk passed it by and lost the yard
     // landing burst with no armour (death t20311) [L the 2026-11-21 runs].
-    if real_damage && difficulty == 2 {
+    // walks-1121-0d-13: the Operative real-damage walk takes it too (it boarded the ride at 44.0
+    // and lost the same landing burst, death t19329).
+    if real_damage && difficulty <= 2 {
         let a0 = w.scene.sim.as_ref().unwrap().drones.health.armour;
         let t0 = w.total_ticks;
         // The touch is the radius + 1.1 sphere [M Pickup_Update 0x18e148:203-214]: a 1.3 arrival
@@ -1383,7 +1397,8 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     if real_damage {
         for _ in 0..2350u32 {
             let ox = w.scene.sim.as_ref().unwrap().drones.scripts.entity_matrix((0x0600_09ef, 1)).map_or(0.0, |m| m[3][0]);
-            if ox > 174.5 { break; }
+            // batch 3: 172.0 (was 174.5) for the deck's east-side route below, ~100 ticks longer.
+            if ox > 172.0 { break; }
             w.tick(nf_game::player::Input::default(), false);
         }
     }
@@ -1402,6 +1417,11 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         }
         eprintln!("[0d] the claw pre-armed: in hand {:#x} at {:?}", w.scene.sim.as_ref().unwrap().gun.weapon, bond_pos(&w));
     }
+    // batch 3 (the game's one-sided cylinder push, s/collide-push-3): the straight diagonal
+    // from the E-plate stalled at (187.5, -290.9) and the walker's detour stepped off the deck's
+    // south rim to the yard floor (y 5.02). Down the deck's east side first, then west.
+    w.walk_to(Wp::new(188.7, 11.4, -292.6).r(0.5), "the deck east side");
+    w.walk_to(Wp::new(188.6, 11.4, -294.3).r(0.5), "the deck south-east corner");
     w.walk_to(Wp::new(185.3, 11.4, -294.8).r(1.2), "the deck in the pulley's icon arm");
     assert_eq!(w.scene.sim.as_ref().unwrap().bond.icon_ctx, 2, "Bond stands in a type-2 icon's arm [D]");
     let held_gun = w.scene.sim.as_ref().unwrap().gun.weapon;
@@ -1431,7 +1451,10 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // (The crouch-timing levers were measured and reverted: the crouched E-plate park wait
     // is inside the west band's sight (#0/#1, 25.8 of chips — the standing wait is quiet)
     // and the crouched rim dwell doubles the exposure time; both dead on their own runs.)
-    if real_damage {
+    // batch 3: container roll only. On the batch-3 stream the d1 corner crouch hung Bond 1.5 u
+    // east of the plain twin's spot and dropped him onto the trolley's raised side (y 15.42), not
+    // the aboard plate (y 14.59): ch 0x67 never fired. Standing, the d1 walk boards and completes.
+    if container_drop {
         for _ in 0..5 {
             w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { crouch: true, ..Default::default() }, false, false, false);
             w.total_ticks += 1;
@@ -2411,14 +2434,18 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
 /// pinned against). The real-damage-gated route legs are marked level-0d-operative-walk in
 /// the body; the plain master replay (top-ups on) runs byte-identical to its pre-gate tree.
 #[test]
-#[ignore = "stream batch 1121b: Bond dies at (198.0, 10.6, -278.9) at about t11200 (the roof guards' cover snipes, s-g028-cover-walks); no stop of 37 swept completes it; also red on s/g028-cover-walks and s/auto-aim alone"]
 fn walk_arrival_to_the_c5_door_real_damage() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the ground
     // sniper #15 landed three 16.0 rounds on the gantry ride (one on master) and Bond died at the
     // yard landing (t19123). Lever: a 15-tick stop at tick 17200 (the east park, before the
     // ride) re-times the ride against #15's sight cadence [L 24 grid + 71 random stops and the
     // tap knobs all died; the 12-value ride-window grid: 17200/15 completes].
-    walker::with_pause(17200, 15, || walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(1, true)));
+    // walks-1121-0d-13 (the sniper cover fire on the game's gates [M 0x16a610]): the west-roof
+    // cover sniper #27 drained the ladder top and Bond died on the deck (t10837); GREEN with the
+    // annex body armour taken (as the Agent walk does) and three stops [L the stop grids on this
+    // tree: a first stop at 1500/90 reaches the yard (alone it dies t25278 in the yard fight);
+    // a third stop 18000/15, 18000/45, 19000/15, 19000/45 or 20000/90 completes].
+    walker::with_pauses(&[(1500, 90), (17200, 15), (19000, 15)], || walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(1, true)));
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-0c-0d): the same walked
@@ -2446,9 +2473,13 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 // Stream batch 1121: Bond died at the yard landing (t20311) with no armour. GREEN with the
 // annex floor's own body armour (192.82, 10.79, -272.03) taken after the annex drop [L the
 // 2026-11-21 run: armour 0 -> 50 at 54.8 health, five yard kills, the walk completes].
-#[ignore = "stream batch 1121b: Bond dies at (213.1, 17.4, -234.5) at about t4900 to the roof guard's 63 u rounds (s-g028-cover-walks); no stop of 37 swept completes it; also red on s/g028-cover-walks and s/auto-aim alone"]
+// walks-1121-0d-13 (the sniper cover fire on the game's gates [M 0x16a610]): GREEN with the
+// south-roof cover snipers swept first from the ladder top (the d2 real-damage block) and a
+// 45-tick stop at tick 11000 [L the 30-value stop grid: 11000/45, 13000/45 and 16500/90
+// complete; the rest die at the yard landing t20561-22031].
+#[ignore = "batch 3 (stream batch 1121d), 40 measured runs: with the committed 11000/45 stop Bond dies t4397 at the ladder #435 top (213.06, 17.37, -234.51) to the south-roof rifles (#19/#31/#20 28.0 each); 25 single stops 200-3500 die there or on the deck (t11427-13241), the corner crouch hangs him off the aboard plate (ch 0x67 never fires), and 3000/60 plus 18 second stops 5000-19500 all reach the yard landing and die there (137.59, 4.63, -296.21) t19334-20492, the 00 Agent sister's floor-fight wall"]
 fn walk_arrival_to_the_c5_door_real_damage_agent() {
-    walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true));
+    walker::with_pause(11000, 45, || walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true)));
 }
 
 /// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister. GREEN

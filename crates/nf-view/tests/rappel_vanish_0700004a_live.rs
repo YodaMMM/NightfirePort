@@ -161,17 +161,42 @@ fn a_shot_rope_guard_falls_instead_of_vanishing() {
             deleted_at = Some(t);
         }
     }
+    // The room gate (`View_AddCels` 0x1e6ba0 + `Vision_InView` 0x1e89e0, the game's drawn rule on
+    // every level) keeps a tracked corpse drawn the whole way down: he relinks cel by cel down the
+    // shaft (cels 59 -> 47 over 400 ticks) and the shaft's cels stay portal-visible from the car,
+    // so a crosshair held on him refreshes obj+0xFC every tick, as the game's pair would. (The old
+    // bullet-ray stand-in lost him on the shaft's ledge lines, which is what ended the fall inside
+    // the 400 ticks before.) Then look away: straight up the shaft puts him out of the frustum, and
+    // the soft delete must follow on the 3rd undrawn control pass [M 0x169b28:41-46].
+    if deleted_at.is_none() {
+        undrawn_run = 0;
+        for t in (kt + 401)..=(kt + 460) {
+            let sim = scene.sim.as_mut().unwrap();
+            sim.drones.health.health = 100.0;
+            sim.bond.pitch = 1.0;
+            sim.step_bond(Input::default(), false, false, false);
+            let sim = scene.sim.as_ref().unwrap();
+            let Some(i) = sim.drones.list.iter().position(|d| d.mode == 0x1c) else { continue };
+            let d = &sim.drones.list[i];
+            if d.present {
+                if d.drawn { undrawn_run = 0; } else { undrawn_run += 1; }
+                assert!(undrawn_run <= 2, "the corpse is deleted on the 3rd undrawn control pass, never earlier [M 0x169b28:41-46], run {undrawn_run} at t{t}");
+                assert!(d.state == state::ABSEIL_DEATH, "the corpse stays in AbseilDeath until the soft delete [M 0x169b28 case 3]");
+            } else {
+                assert!(undrawn_run >= 2, "the delete follows the drawn-grace expiry, not a drawn tick [M 0x169b28:41-46]");
+                deleted_at = Some(t);
+                break;
+            }
+        }
+    }
     let deleted_at = deleted_at.expect("the corpse is soft-deleted once the drawn-grace is out [M 0x169b28:45-46]");
     assert!(deleted_at - kt > 60, "the corpse fell for {}/60 s while drawn before the delete — not the kill-tick vanish", deleted_at - kt);
     // The fall's LENGTH is the drawn-grace's expiry point — obj+0xFC is refreshed by the game's
-    // View draw pass, which the port stands in for with the frustum + five bullet-ray probe
-    // (`visible_to`, drone.rs — the documented [S] stand-in for the cel/portal cull, no
-    // decompilable shape on the AI side). How far the corpse falls before three undrawn control
-    // passes therefore rides the stand-in's occlusion (the shaft's ledge/rope lines), not a
+    // View draw pass (the room gate, see above). How far the corpse falls before three undrawn
+    // control passes rides how long the crosshair stays on him, a choreography choice, not a
     // decompile fact: the game-cited mechanics above (the exact integration, no landing, the
-    // 3rd-undrawn delete, the kill-tick presence) are the hard pins. [S] unverified: the
-    // distance observation only.
-    eprintln!("[4a] the corpse fell {:.1} units below the kill point before the drawn-grace delete ([S] the drawn window rides the port's ray stand-in)", ky - lowest);
+    // 3rd-undrawn delete, the kill-tick presence) are the hard pins. The distance is logged only.
+    eprintln!("[4a] the corpse fell {:.1} units below the kill point before the drawn-grace delete (the tracked window plus the look-away)", ky - lowest);
     assert!(lowest < ky, "the corpse fell below the kill point [M 0x140968:185-191]");
 }
 

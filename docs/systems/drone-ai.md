@@ -168,7 +168,8 @@ Full node/usability/anim tables: docs/systems/drone-cover.md. The selection chai
 `DroneWeap_FireWeapon` → `DoBulletAccuracy` (hit roll; misses aim at a deterministic wobble) → `Bullet_init`
 (projectile from the muzzle = weapon datum id + 1; cone ±0.0014·spread) → `Bullet_update` (speed per tick, first step
 (0.5 + FRand 0.5)·speed; collision ray from the old position for max(step, 1) units; dies past the range) →
-`Collide_Update` (nearest hit; Bond via 16 bone boxes — *deviation*: a cylinder r 0.25, 1.8 tall) →
+`Collide_Update` (nearest hit; Bond via his 16 `HumanCollisionBones` boxes, `Collide_Jointy` 0x1ec180, posed in the SP
+stance script 0x6000a00 / crouched 0x60009ff: `drone::bond_hit_boxes`, test bond_hit_boxes_live) →
 `Player_HandlePain`: damage `weapon_data+0x0C` × `Drone+0x100` (×2 under 4 units) × the level's player damage factor
 (07000005–08: 0.6 / 0.7 / 1.0 by difficulty), armour first, health from 100. Drone bullets draw `GUN_BULLET_TRAIL`
 (0x02000123) stretched by their speed. [L] each SG5 hit on Bond in 07000005 costs exactly 1.65 (= 2.75 × 0.6); a

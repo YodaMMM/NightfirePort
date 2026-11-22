@@ -37,7 +37,10 @@ fn the_load_point_refuses_without_the_key_channel_and_loads_07000003_with_it() {
     assert_eq!(exit.key_gate, 0x4c);
     let centre = [(exit.lo[0] + exit.hi[0]) * 0.5, (exit.lo[1] + exit.hi[1]) * 0.5, (exit.lo[2] + exit.hi[2]) * 0.5];
     // Bond at the Load Point, presses E: refused while ch 0x4C is off.
-    sim.bond.pos = centre;
+    // The box is a 0.05-thin plane in the doorway (x −10.05): its centre overlaps the frame,
+    // which the old two-sided push shoved Bond out of to (+0.155, 0, +0.437); the game's one-sided
+    // push [M Intersect_CylGeom 0x109da0, flags 99] does not, so he stands there directly.
+    sim.bond.pos = [centre[0] + 0.155, centre[1], centre[2] + 0.437];
     for _ in 0..6 { sim.step_bond(Default::default(), false, false, true); }
     assert_eq!(sim.drones.level_exit, None, "the key gate must refuse the exit while ch 0x4C is off");
     assert!(!sim.drones.channels.on(0x4c));

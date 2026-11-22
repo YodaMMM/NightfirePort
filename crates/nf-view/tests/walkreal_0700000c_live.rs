@@ -40,7 +40,9 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff() {
     // AimStandFire boxes are exposed from the landing (head +5, torso +4/+53, world clear [L the
     // probe map]) and the real fire path lands — the 10-hp guard dies to the shot, and the
     // straight -3 diagonals walk clean to the #282 grab.
-    walker::with_strip_p2k_shot(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1));
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): the no-stop walk stalled on the yard ladder at y 10.59
+    // under climb_top 12.139. Lever: 1000/60 [L the 2-value sweep: 1000/60 and 2000/30 complete].
+    walker::walker::with_pause(1000, 60, || walker::with_strip_p2k_shot(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1)));
 }
 
 /// The difficulty-parameterized body (real-health-agent-0c-0d): 1 is the byte-identical
@@ -466,6 +468,10 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(difficulty: u32) {
 /// choreography.
 #[test]
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
+    // walks-1121-0d-13 (the sniper cover fire on the game's gates [M 0x16a610]): 3000/60 missed
+    // the wire #284 grab at t9960; lever 2500/90 [L the 21-value sweep on this tree: 1500/45,
+    // 1500/90, 2000/60, 2500/30, 2500/90, 3000/30, 3000/200, 3500/60, 4000/90, 4000/200, 5000/30,
+    // 5000/90, 6000/60, 8000/60, 9000/30 complete].
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 3000/60 [L the
     // 10-value sweep on the joined tree: 1500/45, 2500/90, 3000/60, 4000/90, 6000/60, 8000/60 complete].
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): Bond died at
@@ -475,7 +481,11 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
     walker::with_yard_aimed_stands(|| {
         walker::with_far_sniper_stands(|| {
             walker::with_strip_rd_post_ride(|| {
-                walker::walker::with_pause(3000, 60, || walker::walker::with_real_damage(walk_the_whole_mission_from_the_start_to_the_0d_handoff))
+                // s/bond-hitboxes-2: the plain walk's own body (its 1000/60 lever would override this one).
+                // Batch 3 (stream batch 1121d): 3000/60 died t10510 on the west ledge (#20/#39 rifle
+                // rounds); lever 2000/60 [L the 8-value sweep: 2000/60, 2500/90, 4000/90, 1500/45,
+                // 6000/60, 8000/60 complete; 1000/60, 3000/200 die].
+                walker::walker::with_pause(2000, 60, || walker::walker::with_real_damage(|| walker::with_strip_p2k_shot(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1))))
             })
         })
     });
@@ -522,9 +532,13 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
 /// UN-IGNORED 2026-11-13: green on master 0fdee8319 - the warehouse-plate crossfire death no
 /// longer reproduces on the current guard rules.
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
-    walker::with_yard_aimed_stands(|| {
+    // Batch 3 (stream batch 1121d): with no stop Bond died t22610 at (5.20, 12.14, -207.78) to
+    // drone #1's 34.0 at 6.1 u, then #13's rifle. Lever 2000/60 [L the 8-value sweep: 2000/60,
+    // 6000/60, 8000/60 complete; 1000/60, 1500/45 wedge on the deck south, 2500/90, 3000/60,
+    // 4000/90 die].
+    walker::walker::with_pause(2000, 60, || walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(2))
-    });
+    }));
 }
 
 /// 00 Agent (difficulty 3) real damage: the same walk as the Agent sister.
@@ -532,9 +546,14 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
 /// UN-IGNORED 2026-11-21 (walks-1121-08-0c): green on master 7283c8a76 with no change — the
 /// t35413 death at (94.20,8.92,-232.05) no longer reproduces [L the run on this branch].
 fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_00agent() {
-    walker::with_yard_aimed_stands(|| {
+    // Batch 3 (stream batch 1121d): with no stop Bond died t4207 at (13.06, 12.37, -123.44) to
+    // the display-ground pair #24/#27 (0xA, 4.8 a hit at 12 u). Lever 600/90 [L the 40-value sweep
+    // 100-4100 ticks x 30-200: only 600/90 completes; most die at the display ground t2982-4798,
+    // the rest at the warehouse plates or the west ledge, and 150/60, 300/60, 400/30, 500/30,
+    // 1000/60, 1000/200, 1100/45, 2400/60 wedge on the deck south].
+    walker::walker::with_pause(600, 90, || walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(3))
-    });
+    }));
 }
 
 

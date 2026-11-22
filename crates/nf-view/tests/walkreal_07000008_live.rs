@@ -454,6 +454,38 @@ fn walkway_pair_holds(w: &Walker) -> bool {
         && ((d.pos[0] - 148.4f32).powi(2) + (d.pos[2] - -121.2f32).powi(2)).sqrt() < 3.0 && (d.pos[1] - 43.0).abs() < 1.5)
 }
 
+/// The running jump off the station hall's balcony over its rail onto the great-hall deck below.
+/// The balcony (floor 49.0, x 136.5-141) is closed east by the rail (the 0.5 step at x ~141.5 and
+/// its face at x 141.956 [D the static triangles, read by the cylinder push]); the deck floor is
+/// 45.0. A jump pressed against the rail does not clear it: the rail top's edge reads as walkable
+/// ground inside the cylinder (n.y 1.0, q.y 49.50 under the spine), which lands the jump at once
+/// (apex y 50.27). Pressed 1.1-2.1 u before the rail with forward held, the jump is airborne
+/// when it reaches the rail and clears it (apex 50.9-51.1, the drop lands on the deck). The
+/// walk's earlier rail crossing came from the stuck ladder's in-place jump, which only cleared
+/// under the old two-sided push. [S] walk robustness: the hall's crossing line is the route's.
+fn running_jump_off_the_balcony(w: &mut Walker) {
+    if w.scene.sim.as_ref().unwrap().bond.pos[1] < 49.6 { return; }
+    w.walk_to(Wp::new(138.6, 49.5, -92.5).r(0.4), "the balcony run-up");
+    let face = |w: &Walker| { let p = w.scene.sim.as_ref().unwrap().bond.pos; (143.5f32 - p[0]).atan2(-92.5 - p[2]) };
+    for _ in 0..120 {
+        let err = walker::wrap_pi(face(w) - w.scene.sim.as_ref().unwrap().bond.yaw);
+        if err.abs() < 0.03 { break; }
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let mut jumped = false;
+    for _ in 0..240 {
+        let (p, grounded, yaw) = { let b = &w.scene.sim.as_ref().unwrap().bond; (b.pos, b.grounded, b.yaw) };
+        if jumped && grounded && p[1] < 47.0 { break; }
+        let jump = !jumped && grounded && p[0] >= 139.8;
+        if jump { jumped = true; }
+        let err = walker::wrap_pi(face(w) - yaw);
+        w.tick(nf_game::player::Input { forward: 1.0, turn: err.clamp(-0.08, 0.08), jump, ..Default::default() }, false);
+    }
+    let b = &w.scene.sim.as_ref().unwrap().bond;
+    eprintln!("[walk] the balcony running jump: landed at {:?} grounded {}", b.pos, b.grounded);
+    assert!(b.pos[1] < 47.0 && b.pos[0] > 141.6, "the running jump clears the balcony rail onto the deck, got {:?}", b.pos);
+}
+
 #[test]
 fn walk_the_whole_mission_on_real_input() { walk_the_whole_mission_on_real_input_at(1) }
 
@@ -583,6 +615,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the lower landing", [150.0, 43.5, -116.0]),
     ] {
         if name == "the east deck head" && difficulty < 3 { continue; }
+        if name != "the station hall" { running_jump_off_the_balcony(&mut w); }
         // real-health-00agent-08-bleed-3 (d3): the landing nav from the deck-line approach
         // wedges ON the stair lip (146.34, 44.99, −115.69) grounded=false [L the 2026-11-14
         // run-lever3 log] — take the approach chain's own stair-head waypoint instead (the
@@ -836,6 +869,13 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // position, then step through into the room (the safe wall's face is east).
     w.walk_to(Wp { at: [154.6, 42.5, -121.0], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the secure room door");
     w.walk_nav_to([158.0, 43.0, -119.0], "into the secure room", 1.4);
+    // batch3-walks-05-08 (Agent real damage): the doorway rifleman #5 (skin 0x5000013, weapon 0x15)
+    // can survive the door's return fire on 3 health and stand at (156.5, 43.0, -117.6), 3 u behind
+    // the bolt stand: on the batch head he landed 25 hits for 79 while Bond held the laser on the
+    // bolts, death t10012 [L the run]. A player clears the room he just walked into before turning
+    // his back on it. A no-op when the room is empty. Agent-gated: the other sisters keep their
+    // timelines.
+    if difficulty == 2 && !w.tops_up() { fight_close_guards(&mut w, "the secure room", 4200); }
     // The bolts sit at (162.24, 43.88/42.70, −117.14) [D #207/#208] — inside, on the safe face.
     w.walk_nav_to([160.0, 43.4, -117.0], "before the safe", 1.2);
     let bolts = [[162.24f32, 43.88, -117.14], [162.24, 42.70, -117.14]];
@@ -1299,8 +1339,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // reaches the ride on 19.6 health: the faster machine's passes put an own-rocket blast at
     // 1.4 u (kind 44, owner -1 [L the NF_DMG_TRACE run]) with no margin left. A player on
     // a fifth of his health picks up the armour lying 3 u away before the fight.
+    // s/collide-push-3: the leg ends BESIDE the box's west face, not on its centre. The touch takes
+    // it from there (the sphere centre within radius + 1.1 of Bond's position, then a clear line
+    // [M Pickup_Update 0x18e148:203-214; the port's pickup.rs touches()]). Aimed at the centre,
+    // the walk pressed the box's 1.0 side under the game's one-sided wall push, the stuck ladder
+    // jumped Bond onto its top, and the nav back off it dropped him off the ledge (y 27.88 →
+    // 17.6 at (110.07, −126.25)).
     if difficulty >= 2 || !w.tops_up() {
-        w.walk_nav_to([109.6, 27.0, -129.2], "the ledge armour", 0.6);
+        eprintln!("[08] before the ledge armour: armour {}", w.scene.sim.as_ref().unwrap().drones.health.armour);
+        w.walk_nav_to([108.5, 27.0, -129.4], "the ledge armour", 0.15);
+        for _ in 0..30 { if w.scene.sim.as_ref().unwrap().drones.health.armour >= 50.0 { break; } w.tick(Input::default(), false); }
         eprintln!("[08] the ledge armour: armour {}", w.scene.sim.as_ref().unwrap().drones.health.armour);
         // Back to the ledge spot the boarding leg starts from (the route's own arrival at
         // "the west ledge at the cabin", (109.62, 27.88, −125.14) [L the run log]): from 2 u
@@ -2310,11 +2358,44 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // kind 0x2c]; with it the same three rockets land and the death moves t30165 -> t32039). With the cannon-free dodge: three
         // rockets land, the Hind 100.7 -> 287.7 of 598 (the fight ends sooner - death t34720 ->
         // t30165 to the Hind missile blasts). Loose gates alone (with the cannon dodge): t28440.
+        // batch3-walks-05-08 (Operative real damage): the ridden round's CONTACT SPHERE. Since the
+        // rocket-hit-size join the ridden round blows on any admitted triangle within 0.1 of its
+        // centre from its second update [M Bullet_update 0x12e7b0:218-234, Collide_SphereIntersect
+        // 0x1ec940 r 0.1 filter 0xa0a]; the rays above are zero-width, so a launch that grazes a
+        // pane frame passes them and detonates beside Bond. The measured red run: rocket 3 left at
+        // fight t1154 from (113.04, 14.26, -177.58) toward the machine at (136.1, 16.5, -209.5)
+        // and blew 1.2 u out at (113.8, 14.3, -178.5), -26.67 to Bond (kind 44, owner -1) [L the
+        // NF_DMG_TRACE run]; the Hind gun bled the rest. A player holds the shot until the lane
+        // clears the frame by a little more than the round's own size: the first 2.2 u from the
+        // eye and both gun stand-ins toward the machine, sampled every 0.05 u with a 0.12 sphere.
+        // Measured band [L this walk, one run each]: r 0.11-0.13 x 2.0-2.2 u green (3 launches,
+        // 3 land, the Hind down, end health 34.4); 1.5-1.8 u lets a launch through that blows
+        // 2.3 u out (death t25525); 2.5 u and longer starve the fight (1-2 launches, death
+        // t26490-t26744); r 0.15 x 4 u: 1 launch. GATED to the Operative real-damage walk
+        // (sight gates on, difficulty < 2): the Agent / 00 Agent sisters and the topped-up walk
+        // keep their timelines.
+        let sphere_lane_clear = !(sight_gates && difficulty < 2) || {
+            let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+            let right = [cy, 0.0, -fy];
+            [eye,
+             [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+             [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]]
+                .iter()
+                .all(|from| {
+                    let d = [cp[0] - from[0], cp[1] - from[1], cp[2] - from[2]];
+                    let dl = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
+                    (1..=44).all(|k| {
+                        let s = k as f32 * 0.05;
+                        let p = [from[0] + d[0] / dl * s, from[1] + d[1] / dl * s, from[2] + d[2] / dl * s];
+                        !sim.world.sphere_hits(p, 0.12, 0xa0a)
+                    })
+                })
+        };
         let loose08 = difficulty >= 3;
         let ready = rocket.is_none() && sim.missile_cam.is_none() && dodge_hold == 0
             && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
-            && l >= 10.0 && slit_clear && (loose08 || (corridor_clear
+            && l >= 10.0 && slit_clear && sphere_lane_clear && (loose08 || (corridor_clear
             && effective_corridor_clear)) && eye_sees && machine_lane_clear
             && (loose08 || machine_lane_fore_clear)
             // 00 Agent: no launch while the Hind is SOUTH-WEST of the car (x < 105, z < -165).
@@ -2772,6 +2853,14 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // moved and the Hind's rockets (world hits 53.4 + 27.0) killed Bond at t33118 on the
     // launcher stand. Lever: a 60-tick stop at tick 3000 re-rolls the mission [L the 9-value
     // sweep: 3000/60, 8000/60 and 22000/60 complete; 500, 15000, 28000-32000 die].
+    // s/collide-push-3 (the game's one-sided wall push): 1000/60 dies in the cabin fight at
+    // (111.05, 13.09, −179.28), t28490. Lever 500/60 [L the 8-value sweep on this tree: 500/60
+    // end health 60.1, 1000/30, 1000/90, 2000/60, 3000/60, 5000/30 complete; 1000/120, 1500/45 red].
+    // Batch 3 (the nine stream-moving branches joined at 5e9460adb): 500/60 dies at the bolt stand
+    // (t10012, #5 above) or, with the secure-room fight, in the cabin fight with four rockets in
+    // (t28732). Lever 1000/60 [L the sweep on this tree with the secure-room fight: 1000/60 end
+    // health 41.9, five rockets; 800/60, 1000/30, 1000/90, 1200/60, 3000/60, 12000/60, 16000/60,
+    // 20000/60 red].
     walker::with_pause(1000, 60, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
 }
 

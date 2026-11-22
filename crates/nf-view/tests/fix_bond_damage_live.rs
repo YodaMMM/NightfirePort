@@ -45,12 +45,16 @@ fn load_at(pos: [f32; 3]) -> nf_view::scene::Scene {
     scene
 }
 
-/// Stages a guard bullet two units in front of Bond's EYE (yaw 0 → +Z ahead; the standing eye rides
-/// 0.7 above the feet — BL+0x908 [L bldata.md, M 0x18f5d8:117-128]) and steps once.
+/// Stages a guard bullet two units in front of Bond's CHEST (yaw 0 → +Z ahead) and steps once.
+/// The rounds test Bond's 16 body boxes (`Collide_Jointy` 0x1ec180 over `HumanCollisionBones`
+/// [M]); the torso box (bone 4) sits 0.28 over obj+0x30, 0.05 to his right, half height 0.25
+/// [L the 0700000a palette, bond_hit_boxes_live]. The old eye-height shot (+0.7) passes over
+/// the right shoulder: the head box (bone 5) sits 0.12 to the side and tops out at +0.685 on
+/// that line.
 fn shoot_from_front(scene: &mut nf_view::scene::Scene, damage: f32, weapon: u16) {
     let p = scene.sim.as_ref().unwrap().bond.pos;
     scene.sim.as_mut().unwrap().drones.bullets.push(Bullet {
-        pos: [p[0], p[1] + 0.7, p[2] + 2.0],
+        pos: [p[0], p[1] + 0.3, p[2] + 2.0],
         dir: [0.0, 0.0, -1.0],
         speed: 15.0, travelled: 0.0, range: 100.0,
         damage, owner: usize::MAX, state: 0, weapon, flyby: false, bounces: 0, ..Bullet::TAIL

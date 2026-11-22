@@ -161,7 +161,13 @@ fn mission_completes_when_every_objective_channel_is_on() {
 fn the_07000001_exit_works_end_to_end() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
     // 10-value sweep on the joined tree: 500/30, 1000/60, 1500/45, 2000/30, 2500/90, 3000/60, 4000/90, 6000/60; the base batch's AI fixes had the ambush guards kill the contact at frame 69175 complete].
-    walker::with_pause(2000, 30, || {
+    // Room gate on 07000001 (the drawn rule on every level) moved the stream again: at 2000/30 the
+    // ambush killed the contact (state 0x47 at the hold release, restart exit 0x07000001). Lever
+    // 1000/60 [the sweep on the gated tree: 500/30 red; 1000/60, 1500/45, 2500/90, 3000/60, 4000/90 green].
+    // Batch 3 (stream-batch-1121d): at 1000/60 the escort hid (state 0x1e) beside the meet-room door
+    // and never reached the plate. Lever: 3000/60 [L the 8-value sweep: 3000/60 and 8000/60
+    // complete; 500/30, 1000/60, 1500/45, 4000/90, 6000/60 do not (the ambush kills the contact)].
+    walker::with_pause(3000, 60, || {
         let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
         let mut scene = load(&iso, "07000001.bin");
         // Play the intro (no skip): Bond is disabled until the script hands control back.

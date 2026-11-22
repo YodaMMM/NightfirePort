@@ -128,10 +128,23 @@ fault the longer runs expose is not settled. Widening the radius to every caller
 ## Sniper cover (0x97/0x98) [M] (WORKLOG 0079)
 
 `UnderCoverFire` ENTER (0x16a3e0) branches to `UnderCoverSniperFire` (0x97) when the drone's anim set `+0xDA == 0x13`
-(sniper) AND `level < 0x0700000E` (the test level 07000005 qualifies). On later levels the sniper fires through
-`UnderCoverFire` directly. State 0x97: timer C at +1 s (fires), timer D at +6 s (returns to 0x99); clip empty → 0x98
-(reload anim 0x52, refill `+0xBBC = +0xBBE`, back to 0x97). `OpponentIsAimingAtMe(7.5)` + `BondIsFacingMe(45)` +
-`Rand(3) == 0` → duck to 0x99. Ported in `drone.rs::handle_cover`.
+(sniper) AND the level is 0x0700000C or 0x0700000D: the test is the unsigned `GameState+0xC + 0xf8fffff4 < 2`
+[M 0x16a3e0 case 1]. On every other level (05's three sniper-set guards included) the sniper fires through
+`UnderCoverFire` directly. Per level (`nf_view::load` over `dev::LEVELS`): sniper-set drones on 02 (1), 03 (1),
+05 (3), 06 (7), 0c (20), 0d (19), none elsewhere.
+
+State 0x97 [M 0x16a610]:
+- ENTER: `+0x4F8 |= 0x10000`, AttackTalk, `+0x2E`, timer C at +1 s, timer D at +6 s, then the fire request
+  `+0x3B = 0` and the shot flag `+0x40 = 0` (no round before timer C).
+- UPDATE: a round fired (`+0x40`, set by `DroneWeap_FireWeapon` 0x178f68:260) with the clip empty → 0x98. Otherwise
+  nothing unless the danim class `+0x568 == 2` and `+0x3B` stands. Then `CoverNodeOK(node, type & 3, 0)` (no sight
+  need): failed → a corner node with a lean type returns (0x99), any other leaves now (0x9C). Passed, and only with
+  the burst done (`+0x3C`): the armed opponent's aim latch `+0x2A` (`DroneWeap_OpponentIsAimingAtMe` 0x17a500; its
+  7.5 is the MP-only facing angle, no distance) → 0x99; else `BondIsFacingMe(45)` and `Rand(3) == 0` → 0x99.
+- Timer C: `DroneWeap_Fire(1)`. Timer D: 0x99.
+
+State 0x98 [M 0x16a8b0]: ENTER `AlertStatusSet(1)`, `+0x3B = 0`, the reload anim 0x52 back to 0x97, the clip refill
+`+0xBBC = +0xBBE`. Ported in `drone.rs::handle_cover`.
 
 ## Ambush (0x37/0x38) [M] (WORKLOG 0079)
 

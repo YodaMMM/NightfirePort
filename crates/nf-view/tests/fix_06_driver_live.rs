@@ -185,6 +185,13 @@ fn the_scared_cower_keeps_him_in_place_on_the_floor() {
     tick_idle(sim, 180);
     assert_eq!(sim.drones.list[di].state, state::TRUCK_DRIVER_IDLE,
         "armed Bond within 6 does not scare the idle driver: his normal block has no prop 0x51 [D; M 0x178678]");
+    // The cower is measured from where he stands when the scare starts. Armed Bond 4 u ahead draws
+    // him (the room gate: a portal-visible cel and a sphere in the frustum [M View_AddObjects 0x1e62d8]),
+    // so the route walk's outgoing script fades over its blend after the arrival and carries him
+    // ~0.3 u on during the idle ticks above (the drawn arm of the blend; an undrawn drone drops its
+    // outgoing scripts at the switch [M DroneAnim_SetHTAnim 0x13b1c8 / NDrone2_DoAnimation 0x149f88]).
+    // That run-out is the arrival, not the cower.
+    let before = sim.drones.list[di].pos;
     // The scare chain (entered as his bullet/scream/alarm triggers enter it): CivilianScared → Hiding.
     sim.drones.list[di].set_state(state::CIVILIAN_SCARED);
     tick_idle(sim, 180);

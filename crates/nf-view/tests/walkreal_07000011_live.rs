@@ -760,6 +760,10 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         w2.dmg.lane_floor_drops = true;
         w2.dmg.back_off = Some(3.0);
         if difficulty >= 2 { tower2::EAST_WING_WEST_SIDE.with(|c| c.set(true)); }
+        // batch 3 (the game's one-sided cylinder push): the d1 543 diagonal's stuck sidestep dug
+        // into the wall's east dead-end (10.62, -15.73) and held the 6000-tick cap. The 12 walk's
+        // own d1 answer: the sidestep decays (walkreal_07000012_live's d1 setter).
+        if difficulty == 1 { w2.sidestep_decays = true; }
     }
     w2.wait_enabled(3000, "07000012's intro");
     w2.wait(90);
@@ -848,10 +852,13 @@ fn walk_spawn_to_the_lower_floor_load_point() {
 /// NDrone2_HitDamage 0x145558 × DroneDamage_Head]). One head hit drops a 12-health guard.
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
-    walker::with_real_damage_head_hunting(||
+    // Batch 3 (stream batch 1121d): with the 543 sidestep decay on 12's legs (see the w2 kit) the
+    // no-stop walk died t5720 on 12's lower floor. Lever 3000/60 [L the 8-value sweep: 2000/60,
+    // 3000/60, 4000/60 complete; 1/60, 1/90, 100/60, 1/200, 1/400 die].
+    walker::with_pause(3000, 60, || walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
-                walk_spawn_to_the_lower_floor_load_point_at(1))))
+                walk_spawn_to_the_lower_floor_load_point_at(1)))))
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-00agent-11): the same walked
@@ -866,10 +873,15 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
 /// only other difference.
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
-    walker::with_real_damage_head_hunting(||
+    // Batch 3 (stream batch 1121d): with no stop the spawn fight's guard #5 shot the civilian
+    // (placement 131, team 3) at t217 and the mission failed "Killed Civilians" (0x4000034, the
+    // game's any-killer arm for a prop-0x53 civilian [M DroneFunc_OnInitDeath 0x145bd0]) before
+    // the armour take. A 90-tick stand after the intro re-rolls the fight [L the 8-value sweep:
+    // 1/60, 1/90, 100/60, 1/400 complete; 1/30, 50/30 die t41498, 1/200 misses the 545 E, 1/700 wedges].
+    walker::with_pause(1, 90, || walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
-                walk_spawn_to_the_lower_floor_load_point_at(2))))
+                walk_spawn_to_the_lower_floor_load_point_at(2)))))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage_agent`: the same walked route at the menu's

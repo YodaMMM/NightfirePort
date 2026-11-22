@@ -673,7 +673,11 @@ fn the_07000008_safe_chain_works_in_play() {
     };
     {   // settle on the floor near the box, then close inside the Laser's 4.0 range [L +0x1C].
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [wire_pos[0] + 1.2, wire_pos[1] - 1.0, wire_pos[2]];
+        // At the standing rest over the floor (`Bond::stand_at`'s +1.1): placed lower, the spine
+        // drops through the floor, which the game's one-sided push [M Intersect_CylGeom 0x109da0,
+        // flags 99] never lifts, and the floor's edge contacts shove him off the spot.
+        let (x, y, z) = (wire_pos[0] + 1.2, wire_pos[1] - 1.0, wire_pos[2]);
+        sim.bond.pos = [x, sim.world.floor_below([x, y + 1.0, z], 10.0).map_or(y, |f| f + 1.1), z];
         for _ in 0..60 { sim.step_bond(Input::default(), false, false, false); }
         for _ in 0..4 {
             let head = sim.bond.head();

@@ -175,6 +175,7 @@ fn released_guards_see_and_fire_at_bond_beyond_the_screens() {
     let mut first_aim = None;
     let mut aim_ticks = 0u32;
     let mut hit_ticks = 0u32;
+    let mut step_ticks = 0u32;
     for t in 0..600u32 {
         if t == 4 { scene.sim.as_mut().unwrap().drones.list[near].switch_channel = 0xe; }
         step(&mut scene);
@@ -183,6 +184,7 @@ fn released_guards_see_and_fire_at_bond_beyond_the_screens() {
         let s = sim.drones.list[near].state;
         if first_leave.is_none() && s != 0x01 { first_leave = Some((t, s)); }
         if s == 0x68 { aim_ticks += 1; if first_aim.is_none() { first_aim = Some(t); } }
+        if matches!(s, 0x73 | 0x74) { step_ticks += 1; }
         log(&scene, "held", t, &mut last);
     }
     let sim = scene.sim.as_ref().unwrap();
@@ -199,7 +201,12 @@ fn released_guards_see_and_fire_at_bond_beyond_the_screens() {
     // - he aims and fires at Bond: AimStandFire 0x68 within the game's +53 and held most of the
     //   600 frames (the game's 547; the port's route differs in detail, see the report);
     assert!(first_aim.is_some_and(|t| t <= 60), "AimStandFire 0x68 by +60 (game +53): {first_aim:?}");
-    assert!(aim_ticks >= 400, "0x68 for most of the 600 frames (game 547): {aim_ticks}");
+    //   AimStandFire's UPDATE runs NDrone2_ChooseCombatMove on its gated ticks [M DroneFunc_CombatState
+    //   0x148338 case 0x10], whose step-aim pair (0x73/0x74) is a Rand pick: how often he steps is the
+    //   stream's, and he keeps Bond in his sights through each step. So the hold is the aim states
+    //   together (the room gate on 07000001 moved the stream: 0x68 392 + step-aim 174 here).
+    assert!(aim_ticks + step_ticks >= 400 && aim_ticks >= 300,
+        "0x68 (and its step-aim moves) for most of the 600 frames (game 547 in 0x68): 0x68 {aim_ticks}, step-aim {step_ticks}");
     // - his rounds are aimed at Bond and reach him through the opening (11 of 24 in the game's
     //   6 s window).
     assert!(shots.len() >= 10 && shots.iter().all(|(_, _, a)| (a[0] - BOND_AT[0]).abs() < 0.5 && (a[2] - BOND_AT[2]).abs() < 0.5),

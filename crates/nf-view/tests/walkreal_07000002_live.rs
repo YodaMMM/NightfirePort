@@ -642,7 +642,12 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
 /// door (10.3 u, the ≤12-u band) answers him — the d3 shape, d1-gated so the d2 RNG is
 /// untouched. Green in 20.8 s; the whole binary 4/1 (the 00agent sister is the open item).
 #[test]
-fn walk_the_castle_all_objectives_real_health() { walk_the_castle_all_objectives_real_health_at(1) }
+fn walk_the_castle_all_objectives_real_health() {
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): the no-stop walk never crossed the
+    // doorway sensor (ch 0x81). Lever: 2000/30 [L the 4-value sweep: 2000/30 and 3000/60 complete;
+    // 1000/60 does not].
+    walker::with_pause(2000, 30, || walk_the_castle_all_objectives_real_health_at(1))
+}
 
 /// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
 /// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
@@ -2150,6 +2155,11 @@ fn sim_view(w: &Walker) -> &nf_view::scene::Sim { w.scene.sim.as_ref().unwrap() 
 fn walk_the_castle_all_objectives_real_health_agent() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 3000/60 [L the
     // 10-value sweep on the joined tree: 1500/45, 2500/90, 3000/60, 4000/90 complete].
+    // s/bond-hitboxes-2: 3000/60 no longer enabled geisha 2's group. Lever: 2000/30 [L the
+    // 4-value sweep: only 2000/30 completes; 1000/60, 3000/60, 4000/90 do not].
+    // Batch 3 (stream-batch-1121d): 2000/30 died in the bunker ambush (shotgun guard #13 at 4.3 u)
+    // and missed the ch-0x19 plate. Lever: 3000/60 [L the 8-value sweep: 250/30, 500/30, 1500/45,
+    // 3000/60, 4000/90, 6000/60, 8000/60 complete; 2000/30 does not].
     walker::with_pause(3000, 60, || {
         walk_the_castle_all_objectives_real_health_at(2);
     })
@@ -2200,7 +2210,13 @@ fn walk_the_castle_all_objectives_real_health_agent() {
 fn walk_the_castle_all_objectives_real_health_00agent() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 4500/30 [L the
     // 10-value sweep on the joined tree: 4500/30 the one pass of 37 values complete].
-    walker::with_pause(4500, 30, || {
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 4500/30 lost a captor kill (two of the three
+    // param-12 deaths). Lever: 5500/30 [L the 22-value sweep: only 5500/30 completes].
+    // Batch 3 (stream-batch-1121d): 5500/30 died at (-45.55,5.85,11.22) t17795 on the west-wing
+    // armour detour (captain #5 and guard #6 at the geisha-1 room). Lever: 2000/30 plus a 45-tick
+    // stop at 13500 [L the 32-value sweep: 2000/30 with 13500/45, with 13000/90, or with 14000/45
+    // and 43000/30 complete; every single stop 250-8000 and the other second stops do not].
+    walker::with_pauses(&[(2000, 30), (13500, 45)], || {
         walk_the_castle_all_objectives_real_health_at(3);
     })
 }

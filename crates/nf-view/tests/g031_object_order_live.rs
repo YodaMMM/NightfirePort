@@ -32,7 +32,9 @@ fn bond_rides_the_0700004a_lift_on_the_same_tick() {
     let mut scene = nf_view::load(&iso, "0700004a.bin", false).expect("load 0700004a");
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [3.0, -7.0, -3.4], 0.0);
+        // (3.74, −3.07) on the car floor: the old (3.0, −3.4) overlaps the car's rail, which the
+        // old two-sided push shoved him out of; the game's one-sided push [M 0x109da0] does not.
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [3.74, -7.0, -3.07], 0.0);
     }
     let mut rest: Option<f32> = None;
     let mut worst: f32 = 0.0;

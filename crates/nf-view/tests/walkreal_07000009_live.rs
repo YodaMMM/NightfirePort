@@ -281,22 +281,27 @@ fn the_alarm_switch_fails_objective_1() {
         w.top_up_health = true;
         w.wait(10);
         // An alarm switch: the 0x29 Switch objects on ch 124 (0x7C) [D placements #78/251/252/253/
-        // 262/263/264]. Take the first, WALK to it (level-09-alarm-switch-walk: the spawn -> the
-        // stair base -> across the lobby, the walked legs of walk_tower_a_start_to_finish), aim,
-        // and pulse E. No teleport.
+        // 262/263/264]. Take the ungated one nearest the stair base on its floor, WALK to it (the
+        // spawn -> the stair base, the first walked leg of walk_tower_a_start_to_finish), aim, and
+        // pulse E. No teleport. Batch 3 re-tune: the old target (the first switch, up the stairs
+        // and across the lobby) failed on the joined stream: a darted guard lay in the doorway on
+        // that leg, Bond pressed on his body for 4000 ticks and a woken racer pressed the alarm
+        // first; 16 pause variants of that route all failed [port runs at 5e9460adb].
+        let base = [19.79f32, -376.68, 30.37];
         let spot = {
             let sim = w.scene.sim.as_ref().unwrap();
             for (i, s) in sim.drones.useobjs.switches.iter().enumerate() {
                 if s.ch == 124 { eprintln!("[09-alarm] switch[{i}] gate {} at {:?}", s.gate, s.pos); }
             }
-            let s = sim.drones.useobjs.switches.iter().find(|s| s.ch == 124 && s.gate == 0)
-                .expect("an alarmswitchplayer on ch 124 with no gate [D]");
+            let s = sim.drones.useobjs.switches.iter()
+                .filter(|s| s.ch == 124 && s.gate == 0 && (s.pos[1] - base[1]).abs() < 2.0)
+                .min_by(|a, b| dxz(a.pos, base).total_cmp(&dxz(b.pos, base)))
+                .expect("an alarmswitchplayer on ch 124 with no gate on the stair base's floor [D]");
             s.pos
         };
         assert!(cycle_to_lethal(&mut w), "the P2K (0x2, 7+41) is in Bond's 09 owned set — the K5 darts the load opens on damage nothing [M 0x13fff0:269-306]");
         assert!(cycle_to_darts(&mut w), "the K5 darts cycle back — the stealth legs run silent (the P2K's shots noise-pull civilian guards into the alarm run [L the 2026-11-05 trace])");
-        walk_nav_clearing(&mut w, [19.79, -376.68, 30.37], "the stair base", 1.4);
-        walk_nav_clearing(&mut w, [-18.4, -368.8, 27.5], "up the stairs and across the lobby", 1.2);
+        walk_nav_clearing(&mut w, base, "the stair base", 1.4);
         {
             let sim = w.scene.sim.as_ref().unwrap();
             assert!(!sim.drones.channels.on(0x61) && !sim.drones.channels.on(0x7c) && !sim.drones.channels.on(0x7d),
