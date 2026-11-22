@@ -313,24 +313,13 @@ fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, radius: f32, d
                 eprintln!("[08 guards] {label}: {name} at tick {} bond {:?} — pick #{di} visible {vis} (health {:.1})",
                     w.total_ticks, w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().drones.health.health);
                 if vis { opened_at = Some(k); break; }
-                // retune-nb-08-22 lever (the round-22 ledger's item (3)), the excursion legs'
-                // STOP DISCIPLINE: a 6-tick stand between the descent legs. The pit pair's
-                // rolls during these legs paid only the moving multiplier x0.75 (the round-22
-                // re-dealt stream: #15 + #16 cost 24.0 on the walk legs while both stands
-                // KILLED [L the 2026-11-22 lever run]) — a continuously-walking chain never
-                // re-arms the guards' first-moved latch [M DroneWeap_DoOpponentTargetting
-                // 0x179a48:44-58: the not-moving branch clears +0x1DD/+0x1DE; the moving
-                // branch re-arms +0x1DD only when the +0x1DC/+0x1DD pair is still zero, so a
-                // walker that never stops expires the DroneFiring_TargetFirstMoved_TimeToHit
-                // 0x40000000 = 2.0 s window [M 0x1d3a80] once and stays at x0.75 forever]. The
-                // 6 no-input ticks zero the eased lane exactly (0.0375*0.8^6 < 0.01, the
-                // dead-zone [M Player_Move 0x191dd0:111-141]), so the NEXT leg's first move
-                // tick re-latches x0.25 on every live pit shooter: the legs pay
-                // 0.25 * 0.75 = x0.1875 of the standing roll, the same law the shipped
-                // fight-stands weave runs (the deck fight 60.0 -> 16.0 [L the round-22 run]).
-                // d3-only by construction (every fight_guards_wide call site is d3-gated);
-                // judged on its own real run.
-                w.wait(6);
+                // (the between-leg stops came out with variant 2: their ~100-tick pace shift
+                // re-rolled the boarding ledge's unseen pair — #27 burst 28.0 where the shipped
+                // stream paid ZERO [L the 2026-11-22 variant-2 run] — and the 120-tick
+                // first-moved window expires INSIDE the crawl legs anyway [M
+                // DroneFiring_TargetFirstMoved_TimeToHit 0x40000000, 0x1d3a80], so the extra
+                // stops bought nothing the pre-leg stop does not). The minimal-shift play is
+                // the PRE-LEG stop alone: bank leg 1's latch, keep the stream shift at 6 ticks.
             }
             let mut killed = false;
             if opened_at.is_some() {
@@ -344,20 +333,13 @@ fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, radius: f32, d
             if let Some(k) = opened_at {
                 for (name, at) in excursion[..k].iter().rev() {
                     w.walk_nav_to(*at, &format!("{label} back {name}"), 1.2);
-                    // the same stop discipline on the RETURN legs (the remaining shooter's
-                    // lane covers them; the re-latch law above).
-                    w.wait(6);
                 }
             } else {
                 for (name, at) in excursion.iter().rev() {
                     w.walk_nav_to(*at, &format!("{label} back {name}"), 1.2);
-                    w.wait(6);
                 }
             }
             w.walk_nav_to([154.35, 43.41, -119.67], &format!("{label} back to the burn spot"), 1.0);
-            // the burn-spot leg's own stop: the fight stood Bond (the weave's last leg is a
-            // stop half), but the re-latch must hold for whatever walk follows under fire.
-            w.wait(6);
             if !killed { break; } // one failed excursion — walk on (the caller's leg continues)
             continue;
         }
