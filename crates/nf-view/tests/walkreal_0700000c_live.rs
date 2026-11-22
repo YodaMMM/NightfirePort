@@ -536,7 +536,11 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
     // drone #1's 34.0 at 6.1 u, then #13's rifle. Lever 2000/60 [L the 8-value sweep: 2000/60,
     // 6000/60, 8000/60 complete; 1000/60, 1500/45 wedge on the deck south, 2500/90, 3000/60,
     // 4000/90 die].
-    walker::walker::with_pause(2000, 60, || walker::with_yard_aimed_stands(|| {
+    // Stream batch 1122 (ChooseCombatMove no longer returns 0x5E on the scan's bit 2 [M
+    // 0x150c18: no +0x31C read]): 2000/60 wedges on the deck south (51.17,1.73,-162.12). Lever
+    // 5000/60 [L the 12-value sweep: 5000/60, 7000/60, 10000/60 complete; 1000/60, 1500/45,
+    // 2000/30, 2000/60, 2600/45, 3000/60, 4000/45, 6000/60, 8000/60 wedge or die].
+    walker::walker::with_pause(5000, 60, || walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(2))
     }));
 }
