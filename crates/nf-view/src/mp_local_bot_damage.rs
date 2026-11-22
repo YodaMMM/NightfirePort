@@ -31,7 +31,10 @@ fn press_until(h: &mut HeadlessApp, a: MA, want: Page, n: usize) {
 }
 
 /// Boot and walk the real menus into a local Arena Deathmatch on 0x07000024 with one bot.
-fn local_bot_match(iso: &str) -> HeadlessApp {
+fn local_bot_match(iso: &str) -> HeadlessApp { local_bot_match_hp(iso, 50) }
+
+/// [`local_bot_match`] with the bot's Hit points row set to `hp` (one of the page's values).
+fn local_bot_match_hp(iso: &str, hp: i32) -> HeadlessApp {
     let mut h = HeadlessApp::boot(iso);
     assert!(h.pump(60.0, |a| a.fe.as_ref().is_some_and(|fe| fe.page == Page::Start && !fe.intro_playing)), "title");
     h.key(KeyCode::Enter);
@@ -54,7 +57,7 @@ fn local_bot_match(iso: &str) -> HeadlessApp {
     press_until(&mut h, MA::Confirm, Page::MpBotChoose, 2);
     press_until(&mut h, MA::Confirm, Page::MpBotSetup, 2);
     // The bot setup rows by real Down/Right presses: Speed 0, Skill Poor (8), Hit points 50.
-    for (row, want) in [(1usize, 0i32), (4, 8), (5, 50)] {
+    for (row, want) in [(1usize, 0i32), (4, 8), (5, hp)] {
         while h.app.fe.as_ref().unwrap().cursor < row { press(&mut h, MA::Down); }
         for _ in 0..10 {
             let b = &h.app.fe.as_ref().unwrap().mp_bots[0];
@@ -63,7 +66,7 @@ fn local_bot_match(iso: &str) -> HeadlessApp {
             press(&mut h, MA::Right);
         }
     }
-    assert_eq!(h.app.fe.as_ref().unwrap().mp_bots[0].hit_points, 50);
+    assert_eq!(h.app.fe.as_ref().unwrap().mp_bots[0].hit_points, hp);
     press_until(&mut h, MA::Confirm, Page::MpBots, 2);
     assert_eq!(h.app.fe.as_ref().unwrap().mp_bot_count(), 1);
     while h.app.fe.as_ref().unwrap().mp_bots_row > 0 { press(&mut h, MA::Up); }
@@ -242,4 +245,125 @@ fn local_match_player_round_on_the_bot_puffs_and_barks() {
         h.app.capture_png(std::path::Path::new(&out)).expect("capture");
         eprintln!("[bot-fx] saved {}", std::path::Path::new(&out).display());
     }
+}
+
+/// mp-bot-weapon-gate: launcher shots at the bot through the real trigger with record `w` (owned
+/// with rounds, then the switch request) until `n` of them hurt it. One press when lined up
+/// within 14 units, then up to 150 ticks for the rocket; a kill waits out the respawn. The test
+/// holds the player's health (the bot's fire and a near blast must not drop the launcher) and
+/// keeps the bot's armour pool empty (a picked-up vest would absorb part of a hit). Returns the
+/// bot's health loss on each tick it dropped.
+fn launcher_hits(h: &mut HeadlessApp, w: u8, n: usize) -> Vec<f32> {
+    {
+        let sim = h.app.scene.sim.as_mut().unwrap();
+        let wd = sim.weapons.clone();
+        let rounds = wd.clip_size(w as usize).max(1) * 4;
+        let took = sim.drones.inventory.equip_weapon(&wd, w as usize, rounds, true);
+        assert!(took || sim.drones.inventory.owned.get(w as usize).copied().unwrap_or(false), "equip {w:#x}");
+        sim.gun.switch_request = w;
+    }
+    h.app.trigger = false;
+    for _ in 0..240 {
+        h.frame(1.0 / 60.0);
+        if h.app.scene.sim.as_ref().unwrap().gun.weapon == w { break; }
+    }
+    assert_eq!(h.app.scene.sim.as_ref().unwrap().gun.weapon, w, "never drew {w:#x}");
+    let mut walking = false;
+    let mut wait = 0u32;
+    let mut out = Vec::new();
+    let mut presses = 0u32;
+    let mut since_line = 0u32;
+    let mut trail: Vec<[f32; 3]> = Vec::new();
+    for t in 0..12000u32 {
+        {
+            let sim = h.app.scene.sim.as_mut().unwrap();
+            if sim.drones.health.health > 0.0 { sim.drones.health.health = sim.drones.health.health.max(100.0); }
+            let l = sim.mp_local_slot;
+            if sim.mp_hp[l] > 0.0 { sim.mp_hp[l] = sim.mp_hp[l].max(100.0); }
+            if let Some(m) = sim.mp.as_mut() { m.bots[0].brain.vars.arsenal.armour = 0; }
+        }
+        let (hp, dead) = { let b = &h.app.scene.sim.as_ref().unwrap().mp.as_ref().unwrap().bots[0]; (b.health, b.dead) };
+        if t % 600 == 0 {
+            let sim = h.app.scene.sim.as_ref().unwrap();
+            let b = sim.mp.as_ref().unwrap().bots[0].brain.pos;
+            let d = ((b[0] - sim.bond.pos[0]).powi(2) + (b[2] - sim.bond.pos[2]).powi(2)).sqrt();
+            eprintln!("[bot-gate] {w:#x} t{t}: holding {:#x} clip {} bot health {hp} dist {d:.1} presses {presses}", sim.gun.weapon, sim.gun.clip);
+        }
+        // Positioning aid (the shot itself stays the real trigger): the hunt has no route finding,
+        // so after 300 ticks without a clear line the player is set down where the bot stood
+        // 60..240 ticks before (floor the bot walked) at 7..13 units with a clear line of sight.
+        {
+            let sim = h.app.scene.sim.as_ref().unwrap();
+            let local = sim.mp_local_slot;
+            if let Some(b) = sim.mp_combat_bodies(local).into_iter().find(|b| b.slot == sim.mp.as_ref().unwrap().bots[0].slot) {
+                trail.push(b.pos);
+            }
+        }
+        if !dead && since_line > 300 {
+            let sim = h.app.scene.sim.as_mut().unwrap();
+            let eye = sim.mp.as_ref().unwrap().bots[0].brain.pos;
+            let n = trail.len();
+            let pick = (60..240.min(n)).rev().map(|k| trail[n - 1 - k]).find(|p| {
+                let dx = p[0] - eye[0];
+                let dz = p[2] - eye[2];
+                let d = (dx * dx + dz * dz).sqrt();
+                let head = [p[0], p[1] + 1.6, p[2]];
+                (7.0..13.0).contains(&d) && sim.world.segment(head, eye).is_none()
+            });
+            if let Some(p) = pick {
+                sim.bond.pos = p;
+                sim.bond.vel = [0.0; 3];
+                since_line = 0;
+            }
+        }
+        let lined = hunt_tick(h, t, &mut walking);
+        if lined { since_line = 0; } else { since_line += 1; }
+        let d = {
+            let sim = h.app.scene.sim.as_ref().unwrap();
+            let b = sim.mp.as_ref().unwrap().bots[0].brain.pos;
+            ((b[0] - sim.bond.pos[0]).powi(2) + (b[2] - sim.bond.pos[2]).powi(2)).sqrt()
+        };
+        // One press per shot: only when lined up, close, and no shot in flight.
+        h.app.trigger = !dead && lined && wait == 0 && d < 14.0;
+        if h.app.trigger { wait = 150; presses += 1; } else if wait > 0 { wait -= 1; }
+        h.frame(1.0 / 60.0);
+        let (now, dead_now) = { let b = &h.app.scene.sim.as_ref().unwrap().mp.as_ref().unwrap().bots[0]; (b.health, b.dead) };
+        if !dead && now < hp {
+            assert_eq!(h.app.scene.sim.as_ref().unwrap().gun.weapon, w, "the hit came while holding another weapon");
+            eprintln!("[bot-gate] {w:#x} t{t}: bot health {hp} -> {now} (dead {dead_now})");
+            out.push(hp - now);
+            if out.len() >= n { break; }
+        }
+    }
+    h.app.trigger = false;
+    if walking { let _ = h.app.app_key(KeyCode::KeyW, winit::event::ElementState::Released, false); }
+    assert!(out.len() >= n, "only {} of {n} {w:#x} shots reached the bot", out.len());
+    out
+}
+
+/// mp-bot-weapon-gate: `NDrone2_DealWithObjHit` 0x13fff0 case 5 returns before any damage for
+/// the launcher 0x2f's round [M :153-173], so a bot takes only the rocket's blast
+/// (`Explode_Propagate`'s drone arm [M 0x17c518 case 2]); the AT-420's twin 0x2d, the same flight
+/// (+0x6C 0x1a200, damage 100, radius 8 [D weapon_data]) but off the list, takes the contact
+/// damage AND the blast. Real fire in a local bot match (Hit points 300) through the menus.
+/// Before the fix a 0x2f rocket on the body killed the 300-point bot outright (the contact × the
+/// arm multiplier + the blast); after it no 0x2f hit takes more than the blast's 100.
+#[test]
+fn local_match_listed_launcher_rounds_hurt_bots_by_their_blast_only() {
+    let Ok(iso) = std::env::var("NF_ISO") else { return };
+    let mut h = local_bot_match_hp(&iso, 300);
+    let rules = {
+        let sim = h.app.scene.sim.as_ref().unwrap();
+        let s = &sim.mp.as_ref().unwrap().settings;
+        nf_game::mp::combat::PainRules::new(&sim.tuning, s.location_damage != 0, s.capture_reward != 0)
+    };
+    let cap = nf_game::mp::botweap::bot_pain(100.0, &rules, nf_game::mp::combat::part::NONE, 0, 0).0;
+    // The off-list twin: at least one of three hits carries the contact on top of the blast.
+    let ctl = launcher_hits(&mut h, 0x2d, 3);
+    eprintln!("[bot-gate] 0x2d losses {ctl:?} (blast cap {cap})");
+    assert!(ctl.iter().any(|&l| l > cap + 1.0), "no AT-420 twin hit hurt beyond its blast: {ctl:?}");
+    // The listed launcher: no hit beyond the blast.
+    let gated = launcher_hits(&mut h, 0x2f, 3);
+    eprintln!("[bot-gate] 0x2f losses {gated:?} (blast cap {cap})");
+    assert!(gated.iter().all(|&l| l <= cap + 0.01), "a 0x2f rocket hurt a bot beyond its blast: {gated:?}");
 }

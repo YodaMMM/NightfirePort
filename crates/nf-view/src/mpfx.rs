@@ -505,7 +505,7 @@ impl Sim {
 pub fn bot_flesh_puff(gas: &mut nf_game::gas::GasPool, rng: &mut Rng, weapon: u16, rec: Option<&[u8]>, at: V3) -> Option<u32> {
     let damage = rec.filter(|r| r.len() >= 0x10).map_or(0.0, |r| rec_f32(r, 0x0c));
     let (s0, s1, mesh) = match weapon {
-        0x1b | 0x2a | 0x2b | 0x2e..=0x31 | 0x34..=0x37 | 0x3a | 0x46 | 0x48 | 0x49 | 0x4e | 0x50 | 0x51 | 0x5f => return None,
+        w if nf_game::mp::combat::drone_ignores_round(w) => return None,
         0x32 | 0x33 => (1.0, 16.0, 0x0200_026e),
         _ if damage > 0.0 => (3.0, 6.0, 0x0200_08bc),
         _ => return None,

@@ -96,6 +96,18 @@ pub struct Body {
     pub alive: bool,
 }
 
+/// mp-bot-weapon-gate: the records whose round a drone (an MP bot) ignores on contact.
+/// `NDrone2_DealWithObjHit` 0x13fff0 case 5 returns on the round's record id before the team
+/// gate, the puff, the push and the hit message [M :153-173 → :355], so the contact neither
+/// registers the shooter nor hurts. A contact-blast record's blast still reaches the bot through
+/// `Explode_Propagate`'s drone arm, which reads no record [M 0x17c518 case 2 → Drone_ExplosiveHit].
+/// The ids with a round in the port: the AIMS grenade side 0x1b, the launchers 0x2e..0x31 (their
+/// contact damage; the blast stays), and the zero-damage 0x46, 0x4e, 0x50, 0x51 [D weapon_data].
+/// The grenade family (0x2a, 0x2b, 0x34..0x37, 0x3a) only ever blasts; 0x48/0x49/0x5f are empty.
+pub fn drone_ignores_round(weapon: u16) -> bool {
+    matches!(weapon, 0x1b | 0x2a | 0x2b | 0x2e..=0x31 | 0x34..=0x37 | 0x3a | 0x46 | 0x48 | 0x49 | 0x4e | 0x50 | 0x51 | 0x5f)
+}
+
 /// The player object's world-sphere radius (`M_CONTROL+0x8C` = 1.0576 [L ee_start_05.bin
 /// 0x16cb8a0+0x8C], `Control_BuildWorldSph` 0x133070) — `Explode_Propagate`'s per-object `+0x8C`.
 pub const BODY_SPHERE_R: f32 = 1.0576;
@@ -879,6 +891,17 @@ impl MpCombat {
 
 #[cfg(test)]
 mod tests {
+    /// mp-bot-weapon-gate: the case-5 early-return list exactly [M NDrone2_DealWithObjHit
+    /// 0x13fff0:153-173]; the off-list launchers (0x2c/0x2d), the plasma pair 0x32/0x33 (their gas
+    /// arm :251-255) and the ordinary guns hurt by contact.
+    #[test]
+    fn drone_round_list_matches_case_5() {
+        let listed = [0x1bu16, 0x2a, 0x2b, 0x2e, 0x2f, 0x30, 0x31, 0x34, 0x35, 0x36, 0x37, 0x3a, 0x46, 0x48, 0x49, 0x4e, 0x50, 0x51, 0x5f];
+        for w in 0u16..0x73 {
+            assert_eq!(drone_ignores_round(w), listed.contains(&w), "record {w:#x}");
+        }
+    }
+
     use super::*;
 
     fn rules(location: bool, professional: bool) -> PainRules {
