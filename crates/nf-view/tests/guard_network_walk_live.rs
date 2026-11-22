@@ -74,6 +74,14 @@ fn sweep(iso: &str, lv: &str) -> Option<(Vec<String>, Vec<String>)> {
     let n = sim.drones.list.len();
     let mut stall = vec![([0.0f32; 3], 0u32); n];
     let mut step = vec![([0.0f32; 3], 0u32, 0u8); n];
+    // master-reds-1121: `blocked_reach` is written only by the mover (`move_by`), so on the tick
+    // a guard ENTERS a mover state it still holds the last value of the state before. On the
+    // batch-3 stream 05's #3 entered CombatOutOfRange 0x5a at t2577 from CombatWait 0x5e with
+    // the 0x5e ticks' 0.0142 still in the field; his first 0x5a move cleared it at t2581
+    // [measured this branch: 0x5a ticks 2577-2580 carry it, no 0x5a move ran until t2581]. The
+    // value a guard carries INTO a mover state is held aside; a reject counts once the field has
+    // been rewritten (it differs from that carried value).
+    let mut carried = vec![f32::NAN; n];
     let (mut stalls, mut steps) = (Vec::new(), Vec::new());
     let (mut moving, mut blocked, mut stepping) = (0u32, 0u32, 0u32);
     for t in 1..3600u32 {
@@ -106,7 +114,10 @@ fn sweep(iso: &str, lv: &str) -> Option<(Vec<String>, Vec<String>)> {
             if live && stepper(d.state) { stepping += 1; }
             let dist = |a: [f32; 3]| ((d.pos[0] - a[0]).powi(2) + (d.pos[2] - a[2]).powi(2)).sqrt();
             // The mover rejected this tick's step with no shut door near: scenery held him.
-            if live && mover(d.state) && d.blocked_reach != 0.0 && !near_door(d.pos) {
+            if !(live && mover(d.state)) { carried[i] = d.blocked_reach; }
+            else if d.blocked_reach != carried[i] { carried[i] = f32::NAN; }
+            let stale = live && mover(d.state) && d.blocked_reach == carried[i];
+            if live && mover(d.state) && !stale && d.blocked_reach != 0.0 && !near_door(d.pos) {
                 if stall[i].1 == 0 || dist(stall[i].0) >= 1.0 {
                     stalls.push(format!("#{i} st {:#x} at ({:.2},{:.2},{:.2})", d.state, d.pos[0], d.pos[1], d.pos[2]));
                     stall[i] = (d.pos, t);
