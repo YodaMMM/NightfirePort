@@ -1223,6 +1223,20 @@ pub fn bot_player_body(x: &nf_game::drone::Drone) -> ([f32; 3], [f32; 3], f32) {
     ([x.pos[0], x.pos[1] + r, x.pos[2]], [x.pos[0], x.pos[1] + r - x.hip_anim, x.pos[2]], r)
 }
 
+/// retune-nb-0d-10: the NEXT trigger tick's shot line, predicted READ-ONLY (`Sim::planned_shot`):
+/// the spawn the port performs per [M Player_WeaponInitBullet 0x1a4bf0:226-245] — `from` is the
+/// head, or the head↔datum-0 midpoint for a first-person-model record with +0x68 & 0x10000 (not
+/// excluded, not zoomed-scope), `dir` the unit direction toward the SNAPPED aim point, `aim` the
+/// snap's own answer (the crosshair ray's first hit, or the raw camera + dir·256 point when
+/// nothing is hit). The stand sweep's bullet-line gate fires only when this line crosses the
+/// aimed box; nothing in Sim mutates and no draw is taken.
+#[derive(Clone, Copy, Debug)]
+pub struct PlannedShot {
+    pub from: [f32; 3],
+    pub dir: [f32; 3],
+    pub aim: [f32; 3],
+}
+
 impl Sim {
 
     /// fix-laser-beam: stop every LOOPED op-1 sound of `weapon`'s fire + release scripts (the
@@ -7143,6 +7157,71 @@ impl Sim {
         if let Some(r) = local.first_mut() { r.0 = [0.0; 3]; }
         let world = anim::world_pose(&local, skin);
         Some(anim::mul(&anim::mul(&anim::quat_trans_to_mat(dt.q, dt.t), world.get(dt.bone as usize)?), &self.gun_matrix()))
+    }
+
+    /// retune-nb-0d-10: predict the NEXT trigger tick's shot READ-ONLY (see `PlannedShot`).
+    /// `aiming` must be the aim flag the caller's next input will carry (the spawn's free_aim
+    /// branch is `aiming && input.aiming` [M run's gate at scene.rs:2760]; the caller's aim-bit
+    /// inputs are `aiming: true`, so the branch is the caller's flag). Replicates the fire-path
+    /// `dir` construction (the cursor-offset composition with its one-step aim_offset ease —
+    /// exact for a trigger tick whose input carries turn: 0, look: 0, which the gated caller
+    /// sends) and the spawn arm exactly ([M Player_WeaponInitBullet 0x1a4bf0:226-245]: the head
+    /// → aim·256 ray snapped by `Collide_RayIntersect` mask 0x20a/0x208, the head↔datum-0
+    /// midpoint per the record bits, `dir = Normalise(aim − start)`). Returns None when the next
+    /// shot would leave the auto-aim branch (the caller holds fire — a prediction it cannot
+    /// verify is not a fire permission).
+    pub fn planned_shot(&self, aiming: bool) -> Option<PlannedShot> {
+        let w = self.weapons.records.get(self.gun.weapon as usize)?;
+        let d = nf_game::drone::Data { tables: &self.tables, props: &self.props, scripts: &self.scripts, weapons: &self.weapons, world: &self.world, level: self.level, sequences: &self.seqs, skins: &self.skins, skeletons: &self.skeletons, nav: &self.nav, covers: &self.covers, tuning: &self.tuning, hitboxes: &self.hitboxes, volumes: &self.volumes, sfx: self.sfx.as_ref(), models: &self.models, surfaces: self.surfaces.as_ref(), voices: self.voices.as_deref(), difficulty: self.drones.difficulty,
+            ai_points: &self.ai_points };
+        let camera = self.bond.head();
+        let look = self.bond.look();
+        let dir = if self.auto_aim && !aiming {
+            // The auto-aim branch reads the lock/offset state the planner does not model;
+            // a fire permission here would be a guess.
+            return None;
+        } else if aiming {
+            // run's free_aim branch (scene.rs's dir construction): the cursor offsets with the
+            // one-step aim_offset ease — computed read-only (the live code assigns the eased
+            // value back; the prediction includes exactly that one step, which is what the
+            // spawn on a turn-0/look-0 trigger tick uses). The branch is the INPUT's aim flag
+            // (`self.free_aim = aiming && input.aiming` — the caller's aim-bit inputs are
+            // `aiming: true`), not the gated bit.
+            let (ox, oy) = (-self.cursor[0] * 0.76966, self.cursor[1] * 0.57724);
+            let off = self.drones.aim_offset;
+            let off2 = [off[0] + (ox - off[0]) * 0.5, off[1] + (oy - off[1]) * 0.5];
+            let (y0, p0) = (look[0].atan2(look[2]), look[1].clamp(-1.0, 1.0).asin());
+            let (y2, p2) = (y0 + off2[0], p0 + off2[1]);
+            [p2.cos() * y2.sin(), p2.sin(), p2.cos() * y2.cos()]
+        } else {
+            // The crosshair ray (run's `aim` construction, scene.rs:3752-3760).
+            let (yaw, p) = (self.bond.yaw, self.bond.pitch * std::f32::consts::FRAC_PI_2);
+            let right = [-yaw.cos(), 0.0, yaw.sin()];
+            let up = [-p.sin() * yaw.sin(), p.cos(), -p.sin() * yaw.cos()];
+            let (tx, ty) = (0.76966 * self.cross[0], 0.57724 * self.cross[1]);
+            let dv = [look[0] + tx * right[0] + ty * up[0], look[1] + tx * right[1] + ty * up[1], look[2] + tx * right[2] + ty * up[2]];
+            let dl = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
+            [dv[0] / dl, dv[1] / dl, dv[2] / dl]
+        };
+        // The spawn arm, exactly as `spawn_shot` performs it.
+        let flags68 = u32::from_le_bytes(w[0x68..0x6c].try_into().ok()?);
+        let fp_model = u32::from_le_bytes(w[0xdc..0xe0].try_into().ok()?) != 0;
+        let rbase = u16::from_le_bytes([w[2], w[3]]);
+        let excluded = matches!(rbase, 1 | 0x52 | 0x54 | 0x58 | 0x59 | 0x5b);
+        let zoomed_scope = self.aiming && flags68 & 0x40 != 0;
+        let aim_raw = [camera[0] + dir[0] * 256.0, camera[1] + dir[1] * 256.0, camera[2] + dir[2] * 256.0];
+        let flags6c = u32::from_le_bytes(w[0x6c..0x70].try_into().ok()?);
+        let aim = self.drones.aim_snap(&d, camera, aim_raw, flags6c & 0x800 == 0);
+        let (from, dir_final) = match (fp_model && !excluded && !zoomed_scope && flags68 & 0x10000 != 0).then(|| self.view_datum(0)).flatten() {
+            Some(d0) => {
+                let o = [(camera[0] + d0[0]) * 0.5, (camera[1] + d0[1]) * 0.5, (camera[2] + d0[2]) * 0.5];
+                let v = [aim[0] - o[0], aim[1] - o[1], aim[2] - o[2]];
+                let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+                (o, [v[0] / l, v[1] / l, v[2] / l])
+            }
+            None => (camera, dir),
+        };
+        Some(PlannedShot { from, dir: dir_final, aim })
     }
 
     pub fn view_frame(&self, skeleton: u8) -> Option<(usize, u32)> {
