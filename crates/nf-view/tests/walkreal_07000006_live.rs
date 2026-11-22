@@ -354,6 +354,7 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
         }
         w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
     };
+    
     w.dmg.aimed_fights = prev;
     // Level the view back (the fights' own idiom) so the next nav leg steers from level pitch.
     for _ in 0..90 {
@@ -487,6 +488,14 @@ fn duel_target(w: &mut Walker, label: &str, cap: u32, fixed: Option<usize>) {
     w.dmg.aimed_fights = true;
     eprintln!("[06] the muzzle-flash duel ({label}): open");
     let mut last_tap = 0u32;
+    let mut why = "cap";
+    let mut hp_watch = f32::MAX;
+    let mut taps = 0u32;
+    // A player finishes the guard he is fighting: once locked, the duel stays on him until he
+    // drops (the lean-window stream pauses do not break the lock), then re-picks the next
+    // recent hitter. Measured without the lock: the duel exited mid-grind at hp 0.2 and the
+    // unanswered tower post #11 poured 72.5 [L this branch's run].
+    let mut locked: Option<usize> = None;
     for t in 0..cap {
         let (input, fire, reload) = {
             let sim = w.scene.sim.as_ref().unwrap();
@@ -499,32 +508,48 @@ fn duel_target(w: &mut Walker, label: &str, cap: u32, fixed: Option<usize>) {
             let b = sim.bond.pos;
             // The nearest live hostile that hit Bond inside the last 600 frames, within 45 u —
             // stand_shooters_down's pick minus the strict-ray gate.
+            // The ACTIVE shooter first: the most recent hitter alive (a player turns to the
+            // muzzle flashes' owner, not the nearest gun). Measured with the nearest pick: the
+            // tower post #11's full-auto (122.5 across armour+health in ~90 ticks) hosed the
+            // duel's pool while it ground the nearer #20 [L this branch's run t7211].
             let mut pick: Option<(usize, [f32; 3])> = None;
-            let mut best_d = f32::MAX;
-            for i in 0..sim.drones.list.len() {
+            for h in sim.drones.player_hits.iter().rev() {
+                if now.saturating_sub(h.0) > 2400 { break; }
+                let i = h.1;
+                if i >= sim.drones.list.len() { continue; }
                 let d = &sim.drones.list[i];
                 if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
-                let hitting = sim.drones.player_hits.iter().rev()
-                    .take_while(|h| now.saturating_sub(h.0) <= 600)
-                    .any(|h| h.1 == i);
-                if !hitting { continue; }
                 let dd = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
-                if dd > 45.0 || dd >= best_d { continue; }
-                best_d = dd;
+                if dd > 45.0 { continue; }
                 pick = Some((i, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]));
+                break;
             }
+            locked = locked.filter(|&di| {
+                let d = &sim.drones.list[di];
+                d.present && !d.corpse && d.health > 0.0
+            });
             let di = fixed.filter(|&di| {
                 let d = &sim.drones.list[di];
                 d.present && d.enabled && !d.corpse && d.health > 0.0
-            }).or_else(|| pick.map(|(di, _)| di));
-            let Some(di) = di else { break };
+            }).or(locked).or_else(|| pick.map(|(di, _)| di));
+            let Some(di) = di else { why = "no recent hitter"; break };
+            locked = Some(di);
             // The aim: the HEAD box (part 5) centre, fresh every tick — the part the guard's own
             // fire leans out over the cover with, so the same windows carry the answer; one head
             // tap kills a 20-hp guard [M NDrone2_HitDamage × DroneDamage_Head]. The torso aim
             // (pos+0.3) measured LOST the duel (9 landed vs 38 taken in 1500 — the rounds meet
             // the cover wall the guard peeks over) [L this branch's run]. Fallback: upper chest.
+            let dd_target = ((sim.drones.list[di].pos[0] - b[0]).powi(2)
+                + (sim.drones.list[di].pos[2] - b[2]).powi(2)).sqrt();
             let at = {
                 let d = &sim.drones.list[di];
+                if dd_target > 6.0 {
+                    // Torso beyond 6 u: the game's own spread covers the 0.2 u head box past 6 u
+                    // [M walker.rs prefer_head's 6 u window]; the 1 u torso box takes the rounds
+                    // (measured: #11 hp 20 -> 17.8 on the torso line vs 21 head taps 0 damage
+                    // [L this branch's duel diagnostics]).
+                    [d.pos[0], d.pos[1] + 0.3, d.pos[2]]
+                } else {
                 let data = nf_game::drone::Data {
                     tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
                     world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
@@ -535,6 +560,7 @@ fn duel_target(w: &mut Walker, label: &str, cap: u32, fixed: Option<usize>) {
                 };
                 d.hit_boxes(&data).into_iter().find(|b| b.part == 5).map(|b| [b.m[3][0], b.m[3][1], b.m[3][2]])
                     .unwrap_or([d.pos[0], d.pos[1] + 1.5, d.pos[2]])
+                }
             };
             let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
             let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
@@ -557,6 +583,8 @@ fn duel_target(w: &mut Walker, label: &str, cap: u32, fixed: Option<usize>) {
             let reload = sim.gun.clip == 0;
             let fire = sim.aiming && !reload && err.abs() < 0.01 && perr.abs() < 0.01
                 && t.saturating_sub(last_tap) >= 8;
+            let dhp = sim.drones.list[di].health;
+            if dhp < hp_watch { eprintln!("[06] duel ({label}): #{di} hp {hp_watch:.1} -> {dhp:.1} at +{t}"); hp_watch = dhp; }
             (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
         };
         if reload {
@@ -566,11 +594,13 @@ fn duel_target(w: &mut Walker, label: &str, cap: u32, fixed: Option<usize>) {
             for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
         } else if fire {
             last_tap = t;
+            taps += 1;
             w.tick_fire(input);
         } else {
             w.tick(input, false);
         }
     }
+    eprintln!("[06] duel ({}): exit {} taps {} (cap {})", label, why, taps, cap);
     w.dmg.aimed_fights = prev;
     // Level the view back (the fights' own idiom) so the next nav leg steers from level pitch.
     for _ in 0..90 {
@@ -1303,7 +1333,7 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool)
         // walk then completes with 25.8 health; a no-stop push through to the step's foot
         // completed with 6.5).
         let p25 = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
-            && d.health > 0.0 && d.team == 1 && dxz(d.pos, [27.0, 42.0, -34.1]) < 4.0) };
+            && d.health > 0.0 && d.team == 1 && dxz(d.pos, [27.0, 42.0, -34.1]) < 6.0) };
         if let Some(di) = p25 { let _ = aimed_stand(w, di, "the east post #25 from the corner", 1500); }
         if difficulty >= 3 && !w.tops_up() {
             duel_target(w, "the south-east corner", 1200, p25);
