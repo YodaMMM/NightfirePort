@@ -376,3 +376,34 @@ runner killed by the sandbox between tool calls, the 5.5 GB four-crate wall hit 
 three non-view crates TOTAL 2153 passed / 71 failed / 11 ignored (the slim-ISO permitted
 misses, the dump/probe tools, and the driving_* set pre-existing on the merged master). The
 report: docs/reports/retune-nb-0d-16.md.
+
+## retune-nb-0d-17 (2026-11-22, sandbox1)
+
+Task: round 17 of the 0d arrival-to-C5-door Agent real-damage walk
+`walk_arrival_to_the_c5_door_real_damage_agent`. Branched from origin/master 7562f1e70 and
+merged origin/s/retune-nb-0d-16 (181f7c942) in first — the merge conflicts resolved: README.md
+and sfx.rs and the gadget census take master's newer state (the credit line stays dropped, the
+line_ledger field and the SkyBridge break stay), walkreal_0700000d_live.rs takes the 0d-16 side
+(it is master's content plus the round-15/16 lever work; master's file is byte-identical to
+6691acd8c which 0d-16 built on). This entry started; lever work follows.
+The round: 12 measured runs. 17-0 the committed shape reproduced 16-5 exactly (t20142, 34 hits
+70.6 + 29.4 falls); 17-1 the DMG_TRACE new fact — the pool dies at the LADDER TOP (62.0 of the
+run's 70.6: #22 t2694, #20 t3874 the climb, #15 t4728 mid-#17-act), zero hits t4728..t19587. The
+ignore levers judged on their own runs: (a) the hop grid 8/12/13/14/20/24 all DEAD (the girder
+slot fall ~30 inherent); the d2 ladder-top crouch DEAD (t5574 — the crouch drops the walk's own
+uphill act rays into the slab edge, 0.947); the pair-first reorder DEAD (t5750 — the ray is
+order-dependent); (b) the d3 acts UNREACHABLE on the committed shape (17-3, the exact baseline
+death, the acts never fired); (c) the committed 18.0 post-act floor sat BELOW the arrival pool
+and never fired (17-5), the 40 pre-act floor preserves the pool (17-6: the re-open at 18.0 vs
+2.25) but the re-open sweep burned 18→0 in ~344 ticks (t19798) — the re-open's own floor added.
+COMMITTED (d2-gated, byte-identical elsewhere): the NF_0D_PREACT_FLOOR pre-act floors (landing +
+re-open, default 40) + the (b) acts ON for d2 (self-cancel when the targets are down). The
+committed shape passes THE PLATE (ch 0x1d, the assert green) and dies t20234 in the photograph
+leg at (137.69,-313.38) — the deepest any round has reached, still RED. The dead knobs stay
+default OFF (NF_0D_LADDER_CROUCH, NF_0D_PAIR_FIRST). Whole binaries: walkreal_0700000d_live
+2/1/2 in 67.5s (the plain + d1 GREEN, the byte-identity holds; the 00agent failure is the
+pre-existing batch-3 regression t3995 = 16-0's signature), interactables_0700000d_live 11/0 in
+31s. The suite did not fit the window (the background-kill signature, the 12 runs + the report
+first); the per-binary substitute per the 0d-16 precedent — the diff touches only the 0d
+walkreal test file, so the other three crates' suites are unaffected by construction. The
+report: docs/reports/retune-nb-0d-17.md.

@@ -543,6 +543,23 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // d2 block)
     let mut act_proof_live = false;
     if difficulty >= 2 {
+        // retune-nb-0d-17, THE D2 LADDER-TOP CROUCH — measured DEAD, knob kept for the
+        // ledger: default OFF. The round-17 run (the crouch ON, one roll): death t5574 at
+        // the ladder top, 6 hits for 100.0 — #15 landed 84.0 in 3 hits while the pair act's
+        // uphill ray went 0.947-blocked (the crouch's 0.45-lower eye drops the ray into the
+        // mid-band slab edge — the height-asymmetric law bites the walk's OWN act lines;
+        // the standing pair act killed at +39, the crouched one stalled 400 + 203). The
+        // trace's 62.0 ladder-top bill (#20 t3874 + #15 t4728) stays unclaimed by this
+        // lever. NF_0D_LADDER_CROUCH=1 re-arms it for a one-roll re-measure.
+        let ladder_crouch = difficulty == 2 && real_damage
+            && std::env::var("NF_0D_LADDER_CROUCH").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0
+            && !w.scene.sim.as_ref().unwrap().bond.crouched;
+        if ladder_crouch {
+            w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+            for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
+            eprintln!("[0d] the d2 ladder-top crouch: pressed at the roof acts (health {})",
+                w.scene.sim.as_ref().unwrap().drones.health.health);
+        }
         // THE D2 SOUTH-ROOF SNIPER #17 FIRST (dart-tase-stamps-check + the t4312 ledger): ANY
         // ladder-area gunshot wakes him — his fire spot (192.3,19.6,−267.4) is d 39 from the
         // ladder top, INSIDE the P2K shot's hearing radius 40 [L] — and in the t4312 run the
@@ -559,6 +576,28 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                     && d.pos[1] > 18.0 && (d.pos[0] - 186.0).abs() < 14.0 && (d.pos[2] + 272.0).abs() < 10.0);
                 if !live { break; }
                 let _ = kill_guard_at_present(&mut w, [186.0, -272.0], [14.0, 10.0], "the south-roof cover snipers first (from the ladder top)", 500);
+            }
+        }
+        // retune-nb-0d-17, THE PAIR-FIRST REORDER (the round-17 trace's lever): #15's 28.0
+        // (t4728, frame 4687) lands in the #17 act's 452-tick stand — the pair act's own
+        // +39 kill (measured, the standing uphill ray CLEAR: the baseline's first pair pass
+        // killed her at +39 where the crouched eye's ray died 0.947) sits AFTER it in the
+        // order and cannot cover her firing window. Run the pair act FIRST — right after
+        // the cover sweep, whose shots have already woken #17 (the wake law is spent) — so
+        // #15 dies ~430 ticks before her measured shot. The prior pair-first measurement
+        // (3 x 28.0 from #11) predates the 0d-13 cover sweep that now runs ahead of it;
+        // this roll re-measures the order on the current tree. [L the NF_DMG_TRACE run
+        // 17-1]. Gated d2 real damage; NF_0D_PAIR_FIRST=0 measures the committed order.
+        // MEASURED DEAD (the round-17 run 17-4): death t5750 at the ladder top, 6 hits for
+        // 100.0 — at THIS order position the pair act's uphill ray reads 0.947-blocked (the
+        // act burned 400 + 61) and the stall fed the snipers; the baseline's +39 kill is
+        // order-dependent (the ray state differs at the #17-act position). Default OFF;
+        // =1 re-arms it for a re-measure.
+        let pair_first = difficulty == 2 && real_damage
+            && std::env::var("NF_0D_PAIR_FIRST").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+        if pair_first {
+            for _ in 0..2 {
+                let _ = kill_guard_head_present_fast(&mut w, [169.6, -271.5], [5.0, 3.0], "the south-roof pair (the pair-first reorder)", 400);
             }
         }
         if difficulty >= 2 {
@@ -722,6 +761,15 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // measured.
         let _ = if !act_proof { kill_guard_head_present(&mut w, [198.9, -260.4], [6.0, 4.0], "the deck guard #16 (the box act — his fire anims pose the boxes low [M 0x140e90:91-121])", 600) } else { false };
         // (the act-proof gate reaches the ALL-difficulty sweeps below)
+        // retune-nb-0d-17: the stand press back — the descent legs (the catwalk, the roof
+        // east walk) run the standing gait (the 0d-9 law: the crouched gait is the slow
+        // one), and the deck walk / the ride boarding below need the stand.
+        if ladder_crouch && w.scene.sim.as_ref().unwrap().bond.crouched {
+            w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+            for _ in 0..20 { w.tick(nf_game::player::Input::default(), false); }
+            eprintln!("[0d] the d2 ladder-top phase: stood again after the crouched roof acts (health {})",
+                w.scene.sim.as_ref().unwrap().drones.health.health);
+        }
         act_proof_live = act_proof;
     } else {
         // (the ladder crouch rides from the base — the press block above; the whole phase runs
@@ -2958,6 +3006,28 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                 best
             };
             let Some((_, di)) = pick else { break };
+            // retune-nb-0d-17, LEVER (c) THE PRE-ACT FLOOR (the d3 stand sweep's own law,
+            // the `yard_run` pre-act check above): the committed POST-act floor check burns
+            // the whole act before breaking — the round-17 trace: the pass-1 act cost the
+            // landing pool 10 -> 6.5, and the re-open walk lost 4.75 more (health 10 ->
+            // 2.25 [L 17-0]) — the re-open stand arrived at 2.25, dead before its own first
+            // act could converge. The pre-act check hands over to the re-open with the pool
+            // the landing ARRIVED at (no act burned). The arrival pool measures ~20 (health
+            // ~13.5 + armour — the 18.0 post-act floor sat BELOW it and never fired [L
+            // 17-5: the timeline byte-identical to 17-0]); the pre-act floor rides 40 so
+            // the sweep refuses every pass from a starved pool. Gated d2 real damage;
+            // NF_0D_PREACT_FLOOR=0 disables the check (the committed post-act-only shape).
+            let preact_floor: f32 = if difficulty == 2 && real_damage {
+                std::env::var("NF_0D_PREACT_FLOOR").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(40.0)
+            } else { 0.0 };
+            if preact_floor > 0.0 {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let pool = sim.drones.health.health + sim.drones.health.armour;
+                if pool < preact_floor {
+                    eprintln!("[0d] the d2 landing sweep: the pre-act pool floor {preact_floor:.0} refuses the pass at pool {pool:.1} (no act burned) — the stand re-open takes over");
+                    break;
+                }
+            }
             shoot_far_box(&mut w, di, "the drop-then-sweep (the nearest first)", if skip_env { 200 } else { 400 });
             if skip_env { let d = &w.scene.sim.as_ref().unwrap().drones.list[di]; if !d.corpse && d.health > 0.0 { failed.push(di); } }
             // retune-nb-0d-16, THE POOL FLOOR (the yard_run sweep_floor law, the stand-sweep
@@ -3034,6 +3104,25 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                 };
                 let Some((_, di)) = pick else { break };
                 if w.scene.sim.as_ref().unwrap().gun.clip == 0 && w.scene.sim.as_ref().unwrap().gun.spare > 0 { w.reload_full(); }
+                // retune-nb-0d-17, the re-open's own pre-act floor (the lever (c) value, the
+                // same knob): the 17-6 run measured the re-open sweep BURN the pool 18.0 ->
+                // 0 in ~344 ticks from the stand (the walk arrived 8.6 health + 9.4 armour
+                // [L]) — at a starved pool the re-open's 200-tick stands are the exposure,
+                // not the cure; the objectives need no guard kill [L the 0d-10 ledger].
+                // When the pool is below the floor the re-open hands straight to the yard
+                // legs (skip_return_fire already set; the (b) acts at yard-south-1 fire
+                // there — NF_0D_NW_KILL/NORTH_S1).
+                let reopen_floor: f32 = if difficulty == 2 && real_damage {
+                    std::env::var("NF_0D_PREACT_FLOOR").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(40.0)
+                } else { 0.0 };
+                if reopen_floor > 0.0 {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let pool = sim.drones.health.health + sim.drones.health.armour;
+                    if pool < reopen_floor {
+                        eprintln!("[0d] the d2 stand re-open: the pool floor {reopen_floor:.0} refuses the sweep at pool {pool:.1} — the yard legs take over");
+                        break;
+                    }
+                }
                 shoot_far_box(&mut w, di, "the d2 stand re-open sweep (the nearest first)", 200);
                 let d = &w.scene.sim.as_ref().unwrap().drones.list[di];
                 if !d.corpse && d.health > 0.0 { failed.push(di); }
@@ -3080,7 +3169,12 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // timeline byte-identical). NF_0D_NW_KILL=1 arms it (the run variant only; unset =
     // byte-identical). NF_0D_NW_KILL=1 arms the fixed-box acts; =2 arms the INDEX-tracking
     // acts (kill_guard_index_certain — the mover catch; the same three stands).
-    let nw_kill: u32 = if yard_run { std::env::var("NF_0D_NW_KILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(cd(1)) } else { 0 };
+    // retune-nb-0d-17 (the ignore message's lever (b)): the gate widened to the d2 real-
+    // damage walk and the acts committed ON for it — the 17-7 run measured them firing at
+    // the yard-south-1 leg after the (c) floors preserved the pool (both targets already
+    // down: zero ticks, the run 14-f self-cancel law — byte-identical when the boxes are
+    // empty). d1/d3/plain byte-identical (cd(1) = 0 off-container).
+    let nw_kill: u32 = if yard_run || (difficulty == 2 && real_damage) { std::env::var("NF_0D_NW_KILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(if difficulty == 2 && real_damage { 1 } else { cd(1) }) } else { 0 };
     // retune-nb-0d-15, THE NORTH ACT FROM THE YARD-SOUTH-1 STAND (the round-15 lever (b), the
     // round-14 ledger): the 13-c #6 north act measured UNECONOMICAL from the wire-dodge stand
     // (142, -291.5) — the door-corner COVER killed the line (cd(snap) 5.367 at d ~16.5); the
@@ -3090,8 +3184,11 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // 14-e plate act's own). NF_0D_NORTH_S1=1 fires the same certain box act there, BEFORE the
     // plate leg (the #6 corner is the return leg's top chipper: 14.4 in 8 hits in run 15-a).
     // Gated to the container roll + the run variant (unset = byte-identical).
-    let north_s1 = container_drop && yard_run
-        && std::env::var("NF_0D_NORTH_S1").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(cd(1)) > 0;
+    // retune-nb-0d-17 (the ignore message's lever (b)): the #6 corner act gated to the d2
+    // real-damage walk too and committed ON for it (the same 17-7 evidence: the act fired
+    // at the open-line stand, the target already down, zero cost). Inert elsewhere.
+    let north_s1 = (container_drop && yard_run || (difficulty == 2 && real_damage))
+        && std::env::var("NF_0D_NORTH_S1").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(if difficulty == 2 && real_damage { 1 } else { cd(1) }) > 0;
     // retune-nb-0d-15, THE #4 EARLY HEAD ACT knob (the runs 15-a..15-e ledger): see the act
     // comment inside the yard legs below. Gated to the container roll + the run variant
     // (unset = byte-identical).
@@ -3516,7 +3613,7 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 // container route at d2 (the 00 Agent hop) boards only standing at the corner, and its hop then
 // misses the container top (hold 36: the yard floor at x 138.9; holds 8/14 stay on the girder,
 // 20 the floor, 26 the top at health 0).
-#[ignore = "retune-nb-0d-16 (the batch-3 merged tree, master 6691acd8c + 0d-15), 8 measured runs: the committed 11000/45 stop dies t4397 at the ladder top (213.06,17.37,-234.51) to the south-roof rifles #19/#31/#20 (28.0 each, 6 hits for 100.0) — reproduced [L 16-1]; the 00agent sister's 0d-15 green is ALSO broken by stream batch 3 on the merged tree (t3995 at the same ladder top, 4 hits for 100.0 [L 16-0]); the ledger's best shape (3000/60 + a second stop 11000/45) reaches the yard landing and dies t19710/t19740 at (137.59,-296.21) — THE NEW FACT: the death is INSIDE the landing sweep's own pass-3 act, Bond standing the 200-tick cap while the unpicked chippers (#2 (143.3,-299.8) d 6.7 / #7 (160.8,-288.4) d 24.5, both box-aims blocked from the landing spot) finish him, '0 return-fire fights' — the fight answer never engages and the walk never starts [L 16-2..16-4]; the round-16 lever set (the d1-proven sweep discipline — the 200-caps + the failed blacklist + the standing posture — then the pool floor 18 break, the skip-return-fire, the fast stand re-open to (142,-291.5) + the second nearest-first sweep, all d2-gated, d1/d3/plain byte-identical) EXECUTED end-to-end: the floor broke at pool 6.5 (the three sweep passes cost ~30 through the armour), the stand walk fast-arrived +64, the re-open sweep ran — the death moved +402 deeper (t20142) with 34 hits for 70.6 + 29.4 other, the pool the wall (health 2.25 armour 0 at the stand [L 16-5]; 29.4 = the falls, raw 42 x the d2 Normal 0.7 [M 0x1949a8 x 0x1902c8]). NEXT LEVERS: (a) the hop/fall re-tune at this shape — the NF_0D_HOP_HOLD grid re-rolled (hold 13 measured 10.2 fall damage green on the old shape [L s/hard-walks-a]; the 3000/60 re-roll now takes 29.4 — a re-hop or a longer slot fall), (b) the 0d-15-proven d3 acts gated to d2 (NORTH_S1 the #6 corner act from yard-south-1 d ~15.6, NW_KILL the #4 early catch at the park band), (c) the pool floor value + the re-open sweep's pass cap re-tune"]
+#[ignore = "retune-nb-0d-17 (master 7562f1e70 + 0d-16 merged), 12 measured runs: the committed shape REPRODUCED 16-5 exactly (t20142, 34 hits 70.6 + 29.4 falls, 0 return-fire fights [L 17-0]) — the walk file is the 0d-16 content (master's copy byte-identical to 6691acd8c); THE NEW FACT (NF_DMG_TRACE 17-1): the pool dies at the LADDER TOP — #22 6.0 t2694, #20 28.0 t3874 (the climb's tail, the base act cannot converge on the crane [M the 512 comment]), #15 28.0 t4728 (in the #17 act's 452-tick stand) = 62.0 of the run's 70.6, then ZERO printed hits t4728..t19587; the annex armour grab +50 armour at 26.8 health holds; LEVERS MEASURED DEAD THIS ROUND: (a) the NF_0D_HOP_HOLD grid 8/12/13/14/20/24 all red (t19752-20322, the falls 27.3-32.2 — the girder slot fall is inherently ~30 at d2, no hold saves it); the d2 ladder-top CROUCH (t5574, #15 landed 84.0 — the crouch's 0.45-lower eye [M Player_GetHeadPos 0x195aa0] drops the walk's OWN uphill act rays into the mid-band slab edge, 0.947-blocked, the act stalls 400+203; knob NF_0D_LADDER_CROUCH stays default OFF); the PAIR-FIRST reorder (t5750 — the pair ray is ORDER-dependent: 0.947-blocked at that position where the committed order killed at +39; knob default OFF); (b) the 0d-15 d3 acts UNREACHABLE on the committed shape (17-3: the exact baseline death, the acts never fired — the sites sit in the yard legs the death precedes) — then COMMITTED with (c) below; (c) the PRE-ACT pool floor (NF_0D_PREACT_FLOOR, default 40, the d3 sweep's own law): the committed 18.0 post-act check sat BELOW the arrival pool (~19-20) and never fired [L 17-5 byte-identical]; the 40 pre-act check preserves the pool (17-6: the re-open walk arrived 8.6 health + 9.4 armour = pool 18.0 vs the committed 2.25) but the re-open sweep ITSELF burned 18 -> 0 in ~344 ticks (dead t19798) — the re-open's own pre-act floor added (the same knob), it hands to the yard legs. THE COMMITTED SHAPE (17-7/17-8b, byte-identical no-env): both floors refuse, the yard legs run at pool ~13-15, the (b) acts fire at yard-south-1 with the targets already down (zero ticks, the 14-f self-cancel), the walk PASSES THE PLATE (ch 0x1d fired, the assert green) and dies t20234 at (137.69,5.11,-313.38) in the PHOTOGRAPH leg — the deepest point any round has reached (+92 ticks and ~21 u past 16-5's t20142). THE WALL: the pool equation — 100 - 62 (the ladder top) - ~11 (the mid-run chips/falls) - ~29 (the falls) + 50 (the annex armour) = ~19 at the yard; the plate + photograph legs consumed it. Whole binary: 2 passed / 1 failed / 2 ignored (the plain + d1 GREEN, the byte-identity holds; the 00agent failure is the pre-existing batch-3 regression, t3995 = 16-0's signature). NEXT LEVERS: (a) the deck_crouch extension to d2 (the d1 measured law: the ride starts 63.6 vs 28.6 crouched — but the d2 mid-run bill is only ~2-3, MARGINAL); (b) the photograph/trench legs' posture work (NF_0D_PHOTO_CROUCH exists at the photograph leg, d3-gated); (c) the ladder-top bill's 62.0: a HEAD act (kill_guard_head_present) on #15 BEFORE the #17 act — the head lines clear where the chest rays die (the height law's own class), untried; (d) the climb's 28.0 (#20): the act from the ladder BASE cannot converge (the crane kills the up-hill ray 0.040 [M the 512 comment]) — a head act or a re-positioned stand from the deck-eye law (the deck eye y ~15.5 dies on the roof slab — measured) needs a NEW stand"]
 fn walk_arrival_to_the_c5_door_real_damage_agent() {
     // retune-nb-0d-16 round: the ledger's best-known shape (3000/60 + a mid second stop) to
     // reproduce the deep yard-landing wall on the merged tree before lever work.
