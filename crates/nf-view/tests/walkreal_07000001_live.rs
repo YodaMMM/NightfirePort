@@ -99,6 +99,16 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
     // 00 Agent: the pop fight at x1.2 pain is long; a player tops up the gun before he trips it
     // (the fight opened on clip 2 / spare 14 and ran dry against the 24-health captain).
     if difficulty >= 3 {
+        // s/hard-walks-a: draw the fullest gun and reload it BEFORE the held-gun pool test below.
+        // The test read the held shotgun dry and sent Bond on a 21-leg detour back across the hall
+        // to an empty box spot (clip 4 spare 4 after it), and the stance walk then wedged 6000
+        // ticks [L the runs on this branch].
+        {
+            d3_switch_to_deepest_gun(w, "pre-ambush re-arm (first)");
+            w.reload_full();
+            let g = &w.scene.sim.as_ref().unwrap().gun;
+            eprintln!("[01] pre-ambush reload: weapon {:#x} clip {} spare {}", g.weapon, g.clip, g.spare);
+        }
         let sim = w.scene.sim.as_ref().unwrap();
         if sim.gun.clip + sim.gun.spare < 30 { let _ = sim; w.resupply("pre-ambush ammo"); }
         // walks-1121: the pool test above reads the HELD gun only — the walk arrived holding the
@@ -1461,7 +1471,12 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
             };
             let ka = if wa == 0x1c { 0 } else { 1 };
             let kb = if wb == 0x1c { 0 } else { 1 };
-            ka.cmp(&kb).then(zb.partial_cmp(&za).unwrap_or(std::cmp::Ordering::Equal))
+            // s/hard-walks-a (stream batch 1121d): the MOUTH shotgunner first. Deep-first pressed the
+            // captain #7 dead at 57.4 and then stood in the mouth #6's lane at 4.1 u: 25.2 in one
+            // volley, plus #5 and #11, 55.2 in 12 ticks (death t16043). Mouth-first kills #6 on the
+            // press and #7 in the lane fight after it, the hall phase at zero cost (57.4 through
+            // the AND) [L the runs on this branch].
+            ka.cmp(&kb).then(za.partial_cmp(&zb).unwrap_or(std::cmp::Ordering::Equal))
         });
     }
     // [01-hall-3, d3 only, READ-ONLY]: the door-phase flight-lane grid — for each virtual
@@ -2375,7 +2390,14 @@ fn walk_to_the_exit_at(iso: &str, stop_at_fire: bool, difficulty: u32) -> Walker
                 // The pocket rule (the ambush block): a guard parked west of x -27 is shot
                 // from where Bond stands — the approach never walks into the pocket corner.
                 if walker::dxz(gpos, bpos) > 9.0 && gpos[0] > -27.0 {
+                    // s/hard-walks-a: stop the approach the moment the guard is in sight and shoot from
+                    // there. The full approach walked on while #15 fought the contact; Bond's return
+                    // fire killed #15 four ticks after his 40.0 head round killed the contact (by_drone
+                    // 15 [L NF_HEALTH_TRACE on this branch]) and the mission failed.
+                    let sight_stop = difficulty >= 3;
+                    if sight_stop { w.leg_abort_on_sight = Some(g2); }
                     w.walk_nav_to(gpos, &format!("route pre-clear approach guard {g2}"), 8.0);
+                    if sight_stop { w.leg_abort_on_sight = None; }
                 }
                 if !w.shoot(g2, &format!("route pre-clear guard {g2}")) {
                     if w.resupply("route pre-clear ammo") { w.shoot(g2, &format!("route pre-clear guard {g2} retry")); }
@@ -4282,7 +4304,17 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// lane fights with captain #7 and shotgun guard #6 drain 50+ health between t9100 and t15600),
 /// the early stops at the meet-room door (7.08,9.62) by t6700 [L the 41 runs on this branch].
 /// The hall fight needs a new plan (range or cover from #6), not a re-roll.
-#[ignore = "00 Agent hall fight: 41 pause variants die to captain #7 / shotgun #6 (batch 3 sweep)"]
+/// s/hard-walks-a (2026-11-22 [L the runs on this branch]): the hall is beaten. Mouth-first
+/// order (#6 on the press, #7 in the lane fight after) takes the hall at zero cost and Bond
+/// reaches the AND at 57.4; the sight stop on the route pre-clear keeps the contact alive (#15
+/// had killed him with a 40.0 head round, by_drone 15); the pre-ambush re-arm + reload skips
+/// the dry-gun detour. NEW WALL, the ch-0xF pocket: #12 (12 hp SMG) does not step out after
+/// the back-off on this stream (a 600 and a 1500-tick hold at x -19 saw nothing, poppers #2/#12),
+/// he parks at (-30.7, 6.3, 13.8) and from the lane mouth (-30.4, 16.5) lands 3.6 rounds from
+/// 2-4 u (57.4 in 30-38 hits) while the walk's crouched eye reads no exposed part on him for
+/// 540 ticks and the flank goes to 1.6-2.1 u. Next lever: a lane stand that opens #12's boxes
+/// (standing, or a stand east of the contact), or fighting #12 before the slab pops him.
+#[ignore = "00 Agent: hall now clean (57.4 at the AND); dies in the ch-0xF pocket to #12 at 2-4 u, no exposed part from the lane mouth (s/hard-walks-a)"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }

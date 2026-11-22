@@ -961,7 +961,7 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
                 // d3: (19.3, -93.6) - the old peek (19.0, -92.2) wedged its 3000-tick cap 2.1 u short while the
                 // pocket bled 72 -> 4.7; from here the cycles clear the gallery at 61.5 [L the 11-13 sweep:
                 // (19.6, -93.0) t2841, (20.2, -93.2) t2723, (19.3, -93.6) 61.5 at the fight's end].
-                let peek = if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 { [19.3f32, 0.9, -93.6] } else { [19.0f32, 0.9, -92.2] };
+                let peek = if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 { [19.3f32, 0.9, -93.6] } else { [19.0f32, 0.9, -92.2] };
                 // nb-scan-all (the d3 ledger, the 3093 death): with the spacing scan live the d3
                 // gallery phase ends with the EAST ring guard alive at the ring east (skin 0x50000b1,
                 // 0x1a, strafed to (14.1, 6.4, -79.8) — x > 0, so the west-only alive filter below
@@ -1029,7 +1029,7 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
                 // t3972. Fight them here before the back-out, the 0x50000b2 man first (#5 hit for 14 a
                 // round; nearest-first left 26.5 after the pair, #5-first keeps all 61.5 and reaches the
                 // hand-back at 37.0 with the AR loaded - death t12054 -> t12518 in the chaser fight).
-                if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+                if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
                     // nb-scan-all (the d3 ledger, the 3093 death): the close-pair stand measured
                     // exposed FALSE from the pocket ("shooting drone 0 ... exposed false" — the
                     // scan's strafes park the pair behind the pocket lip) and the whole fight
@@ -1439,7 +1439,7 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
     // stage's one live flip at +3185) is 7 u north of the route. Return fire stays off for the
     // legs (the room loot hop's dash idiom), and the spot is skipped when any live volume
     // claims it (the loot-hop probe, the standing capsule feet→feet+1.8 r 0.55 [M hurt.rs]).
-    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 && !w.tops_up() {
         let spot = {
             let sim = w.scene.sim.as_ref().unwrap();
             sim.drones.pickups.iter().find(|p| !p.gone && p.kind == 3 && {
@@ -1537,7 +1537,7 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
             };
             if members.is_empty() {
                 None
-            } else if sim.drones.difficulty >= 3 && !w.tops_up() {
+            } else if sim.drones.difficulty >= 2 && !w.tops_up() {
                 let mut waited = 0u32;
                 loop {
                     let sim = w.scene.sim.as_ref().unwrap();
@@ -1638,7 +1638,7 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
             // (−13.4,−172.1) ~685 ticks after the spawn and fired from d 1.2, #14 (−10.7,−167.1)
             // at d 4.9), where the close stands above answer them. The wait is the slice's own
             // 300-tick budget; the member itself is shot the moment it is close or exposed.
-            if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+            if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 && !w.tops_up() {
                 let chase = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let d = &sim.drones.list[i];
@@ -3246,7 +3246,13 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 /// answer him from the first slice. Measured green run: the squad audit clean (21 hits, every
 /// delta within the game's chain), ch 0xbf/0xc0/0x82, the button, MissionState 6.
 #[test]
-#[ignore = "s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): dies in the pocket fight near (19.1,1.5,-97.4) about t3400-8700, or past it near (-13,-22,-171) about t14900-22100 (the pit-room guards at about 1 u); no stop of 38 single and multi-stop values completes it [L]; re-tune and un-ignore"]
+/// UN-IGNORED (s/hard-walks-a, 2026-11-22 [L the runs on this branch]): the ignored run died in
+/// the pocket at t5005 because the old d2 peek (19.0, -92.2) sits up a step the nav reaches only
+/// by a detour south to (19.1, -97.4), in the gallery's and the south-lane hunter's lines (76.9
+/// -> 10.1 before the first kill). The Agent walk now runs the 00 Agent plan: the (19.3, -93.6)
+/// peek (gallery fight ends at 37.4), the close pair fought from the peek before the back-out,
+/// the east armour #649 after the kill loop and the squad stage's exposed-member pick with no
+/// chase across the pit. The stop below is unchanged.
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1500/45 [L the
     // 10-value sweep on the joined tree: 1500/45 only complete].
