@@ -944,7 +944,7 @@ impl WorldFx {
                         pitch = def.pitch_base + def.pitch_var * crate::effect::frand_half(rng, 1.0);
                         speed = def.speed_base + def.speed_var * crate::effect::frand_half(rng, 1.0);
                         life = def.life_base + def.life_var * crate::effect::frand_half(rng, 1.0);
-                        if std::env::var_os("NF_RNGLOG").is_some() {
+                        if crate::env_flag!("NF_RNGLOG") {
                             eprintln!("[rnglog] emitter_burst +4 (draw #{})", rng.draws);
                         }
                     } else {

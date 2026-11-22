@@ -459,7 +459,7 @@ impl Pickup {
         let los = world.segment_take_scoped(cel, body, c).map_or(true, |t| t >= 1.0 - 1e-3);
         // `NF_PICKUPLOG=1`: every take test — Bond's position, the pickup centre, the distance against
         // radius + 1.1, the LOS ray, and the state (fix-player2's drop diagnostics).
-        if std::env::var_os("NF_PICKUPLOG").is_some() {
+        if crate::env_flag!("NF_PICKUPLOG") {
             eprintln!("[take-test] weapon {:#x} kind {} state {}: bond ({:.3}, {:.3}, {:.3}) centre ({:.3}, {:.3}, {:.3}) dist {:.3} vs r {:.3} los {}",
                 self.weapon, self.kind, self.state, pos[0], pos[1], pos[2], c[0], c[1], c[2], d2.sqrt(), r, los);
         }

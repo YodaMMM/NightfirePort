@@ -1331,15 +1331,18 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
 /// land nothing at that range (the "rounds die on the corridor corners" shape the 07000013
 /// chain measured) — the squad must be pulled closer or the stands moved south first.
 #[test]
-#[ignore = "walks-1121-14 (stream batch 1121b): deepest run dies on Rook's wake legs, t65108 at (−15.11,1.12,−22.83) with 28.4 health after the hand-back hold [L 2026-11-21]; fixed this round: the 1.72-landing arrival mid-step (fell under the band guard #6, death t5849), the band guard's body east of the 33.4-line band (overhang wedge), the scans' strafe-off-line fights (stand_fire: #16 killed in 18 ticks, #20 in 66, was 300-tick zero-land windows into a wall), guard grenades walked onto (round_dodge steps away; #33's 0x34 blast 42.5 → 11.6); the budget is the problem: 45 lost in the descent corridor (t5000-8300, 12 guards converge), ~25 on the south loop nodes 36-63, the 0x1a squad on the wake route (#43 7.0 a round inside 3 u); both route-side armours ((−27.29,0.87,30.96), (−41.29,1.53,36.48)) measured unreachable (behind doors that never open); NEXT: the descent corridor tax, then the wake legs' node-by-node answers"]
+#[ignore = "hard-walks-c (2026-11-22, the stream batch 3 head): the 1121b stops died at t6223 in the descent corridor (#5/#8/#3, 0x14 inside 3 u, every round lands [M DroneWeap_DoBulletAccuracy 0x179740: dist < 3.0]); the re-measured stops (D3_PAUSES) carry the walk back to Rook's wake legs: death t51196 at (-0.79,1.03,-22.98), into the wake legs on 19.8 health; the node-26 fight ran the clip dry and the 0x1a squad (#40 skin 0x50000b2 at 1.5 u, 7.0 a round; #39/#55) finished him. Checked against the decompile, no port bug: hit chance, TooClose x2 [M Drone_ModBulletDamage 0x139f50], burst size and delay [M DroneWeap_NextBulletTime 0x179d40, DroneWeap_BurstDelay 0x179ba8], Plr_DMod_Hard 1.0 on 14-16 [M ReadTuningVars 0x1d3a80]. Route facts: Door_Slide_14A/B (#437/#438) carry p11 = 1 (never player-opened) and open only on keypad lock #1102's ch 0x3C, create-unlocked on Operative only [M 0x1ae1f8:67-69]; on 00 Agent the lock needs the laser burn, so armour #1020 behind it is shut and the resupply/nav legs that route through the pair wedge (6000-tick caps at (-41.93,1.13,29.33)); armour #1019 wedges the resupply 1.82 u short (2 x 6000 ticks at (-29.10,0.68,30.96), a solid face 0.64 u east). NEXT: the health budget into the wake legs. Earlier: walks-1121-14 (stream batch 1121b): deepest run dies on Rook's wake legs, t65108 at (−15.11,1.12,−22.83) with 28.4 health after the hand-back hold [L 2026-11-21]; fixed this round: the 1.72-landing arrival mid-step (fell under the band guard #6, death t5849), the band guard's body east of the 33.4-line band (overhang wedge), the scans' strafe-off-line fights (stand_fire: #16 killed in 18 ticks, #20 in 66, was 300-tick zero-land windows into a wall), guard grenades walked onto (round_dodge steps away; #33's 0x34 blast 42.5 → 11.6); the budget is the problem: 45 lost in the descent corridor (t5000-8300, 12 guards converge), ~25 on the south loop nodes 36-63, the 0x1a squad on the wake route (#43 7.0 a round inside 3 u); both route-side armours ((−27.29,0.87,30.96), (−41.29,1.53,36.48)) measured unreachable (behind doors that never open); NEXT: the descent corridor tax, then the wake legs' node-by-node answers"]
 fn walk_the_infiltration_to_the_delta_exit_real_damage_00agent() {
     walker::with_real_damage_head_hunting(|| with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(3)));
 }
 
 /// The 00 Agent walk's stand-stills (tick, idle ticks), in tick order: shared-stream re-rolls
-/// a player who stopped for a moment makes, measured on this stream [L walks-1121-14: 4400/90
-/// kept 55 health past the descent (none: 15); 39500/60 and 55000/60 the deepest of ~40 sweeps].
-const D3_PAUSES: &[(u32, u32)] = &[(4400, 90), (39500, 60), (55000, 60)];
+/// a player who stopped for a moment makes. Re-measured on the stream batch 3 head (the
+/// 1121b stops 4400/90, 39500/60, 55000/60 died at t6223 in the descent corridor): a greedy
+/// chain over ~70 sweep runs [L hard-walks-c]: 3500/30 alone t41616 (28 first-stop candidates
+/// t2500-4480 x 30-150, the rest t4684-33119), + 12000/60 t49582 (27 candidates t8000-40000),
+/// + 47500/60 t51196 (21 candidates t30000-47500), the deepest.
+const D3_PAUSES: &[(u32, u32)] = &[(3500, 30), (12000, 60), (47500, 60)];
 
 fn walk_the_infiltration_to_the_delta_exit_at(difficulty: u32) {
     let iso = iso();
