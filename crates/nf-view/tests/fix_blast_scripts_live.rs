@@ -242,6 +242,19 @@ fn the_destroyable_smash_plays_its_type_script() {
 /// range. The 0x12bc50 law itself stays pinned by the type-1 leg above (the same `if (cVar4 != 0)`
 /// branch decides both); this re-opens when a type-0 destroyable with a real box turns up on a
 /// reachable floor.
+///
+/// blast-type0: the point box is the disc's, not a decode miss. Placement #470 (index 91,
+/// no hashcode) sits at translation (0,0,0) with every param 0, and its target object 91
+/// "bigdoor01" in map 49 is an EMPTY glist on the disc: min (9999999)³ > max (-9999999)³ (the
+/// empty-bounds sentinel), centre (0,0,0), radius 0.0001, 0 collision triangles, 0 draw leaves
+/// [D]. The game's bullet pick is the segment vs the world sphere (matrix · glist centre,
+/// glist radius) [M Collide_PickObj 0x1eae80:92-141, Control_BuildWorldSph 0x133070], so the
+/// game's own target is a 0.0001-radius sphere at the origin: the port's origin point matches
+/// its place. All-level census (Level::parse over dev::LEVELS): 189 0xE1 leaves, 2 point boxes,
+/// both at the origin, both bigdoor01 (#93 and #470 on 0700000d). #93 sits at (133.1, 5.67,
+/// -269.4), so the game's sphere is there, not at the port's origin; it stays unhittable either
+/// way (r 0.0001 for bullets; its mask ~0x10 carries 0x20, so a blast never smashes it
+/// [M Explode_Propagate 0x17c518 case 0x21]).
 #[test]
 #[ignore = "type-0 leg geometry-dead on real input: destroy[10] is the point box (0,0,0)±0.1 [M breakable.rs lo==hi]; no floor within 56 u and no LOS from any real floor inside the P2K's 50-u range [L ee_snapshot 0x2bf368: +0x1C 50.0, +0x24 0.0]; the 0x12bc50 no-script law stays pinned by the type-1 leg"]
 fn the_type0_destroyable_smash_plays_no_script() {
