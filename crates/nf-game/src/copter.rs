@@ -22,18 +22,18 @@
 //! - `Copter_Update` (0x17dbb8) head: a set gate whose channel is off returns; the first ON tick
 //!   unhides the SP (`SP_HideObj(*(rec+0x2c), 0)`) and zeroes +0x70 [M :91-97]; then the +0x76
 //!   countdown writes the +0x74 channel when it reaches 0 [M :98-103]; then the parts[6] recharge
-//!   (gun B's +0xF4 counter → its +0xF0 bit 0x10, [M :104-113] — the port keeps no part objects;
-//!   not modelled). The state machine at obj+0xF4:
+//!   (gun B's +0xF4 counter → its +0xF0 bit 0x10, [M :104-113]: gun B is shown for two ticks after
+//!   each `Copter_FireGun` shot, which re-arms the counter and clears the hide bit [M 0x17d828:94-95]
+//!   — a draw-side flash; the sim keeps only `gun_counters[1]`). The state machine at obj+0xF4:
 //!   - case 0 (the first post-gate tick): walk `CopterPaths` for the record's own group
 //!     (`+0x12 == my path's +0x12`): kind 2 → `rec+0x58` (the arrival path), every other match
 //!     counts into `rec+0x78`; then state 1 [M :115-137].
 //!   - case 1 (fly): `Copter_Move`, then the spot check (the 240/DiffMod timer, the 1000-unit
 //!     cone/LOS test, `attackmode_159 = Rand_Rand(10)`, all behind `rec+0x74 != 100` — the
-//!     Mayhew latch, [M :138-187]) — NOT ported (no cone/LOS wiring here yet): the port's
-//!     copters stay in state 1 and never draw RNG.
+//!     Mayhew latch, [M :138-187]) — ported in `update` (`spotted`, the 240/DiffMod gate, the
+//!     `Rand_Rand(10)` attack-mode draw).
 //!   - case 2 (attack): `Music_Event(2,1)`, the missile/gun pick, the bail timers [M :188-243] —
-//!     unreachable while the spot check is not ported; `Copter_FireGun`'s cadence stays ported
-//!     as `fire_gun_tick`.
+//!     ported in `update`; `Copter_FireGun`'s cadence is `fire_gun_tick`.
 //!   - case 4 (crash/arrive): `Copter_Move`; while it returns 0 the state stays; when it returns
 //!     1 the record adopts `rec+0x58` with t = 0, writes the arrival channel `+0x72` and goes to
 //!     state 5 [M :244-254].
@@ -208,8 +208,7 @@ pub struct Copter {
     pub group_paths: u16,
     /// `obj+0xF4`: the state (0 scan, 1 fly, 4 crash/arrive, 5 arrived, 6 explode) [M 0x17dbb8].
     pub state: u16,
-    /// `obj+0xF6`: the spot/attack timer [M 0x17dbb8:141]. Never moves while the spot check is
-    /// not ported.
+    /// `obj+0xF6`: the spot/attack timer [M 0x17dbb8:141 (state 1), :192 (state 2)].
     pub timer: i16,
     /// `rec+0x64`: the accumulated damage [M 0x17dbb8:306 — the part walk sums every counted
     /// hit × the slot's Bits scale into it].
@@ -232,8 +231,7 @@ pub struct Copter {
     /// [1] = gun B (rec+0x48).
     pub gun_counters: [u16; 2],
     /// `rec+0x6c`: the attack accumulator — the same walk feeds it beside rec+0x64 [M
-    /// 0x17dbb8:307]; case 2's bail gate reads it against 100.0 [M :205]. Unported state 2
-    /// reads nothing yet; the field exists because the game writes it on every counted hit.
+    /// 0x17dbb8:307]; case 2's bail gate reads it against 100.0 [M :205/:239].
     pub attack_acc: f32,
     /// This tick's bullet contacts on the part objects (`update_player_bullets` feeds them;
     /// the game's collide pass fills each part's obj+0xD0 chain and `Collide_Update` clears
@@ -544,8 +542,8 @@ impl Copter {
             self.countdown -= 1;
             if self.countdown == 0 && self.arrival != 0 { ch.set(self.arrival as u32, 1, frame); }
         }
-        // The parts[6] recharge (gun B's +0xF4 → its +0xF0 bit 0x10) [M :104-113] — the port
-        // keeps no part objects; not modelled.
+        // The parts[6] recharge (gun B's +0xF4 → its +0xF0 bit 0x10) [M :104-113]: the gun-B
+        // part's show/hide after a shot — draw-side, no sim reader.
         let mut posed = false;
         let mut events: Vec<CopterEvent> = Vec::new();
         match self.state {

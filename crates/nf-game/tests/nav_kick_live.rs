@@ -122,7 +122,7 @@ fn kick_node_pair_enters_kick_object_and_unpauses_the_scripted_prop() {
     let nodes = d.nav.target_nodes(&l.world, pi, goal_probe, 0.0);
     let (_, route) = nf_game::nav::Route::to_position(&d.nav, &l.world, Some(pi), start, goal_probe, &nodes, &[], &|_, _| false).expect("a route through the kick corridor exists");
     let (a, b) = (144u16, 248u16);
-    eprintln!("route nodes {:?} (kick nodes are {a} and {b})", route.nodes.iter().collect::<Vec<_>>());
+    eprintln!("route nodes {:?} (kick nodes are {a} and {b}) dest {:?}", route.nodes.iter().collect::<Vec<_>>(), route.dest);
     let ai = route.nodes.iter().position(|&n| n == a).expect("route passes the first kick node");
     assert_eq!(route.nodes.get(ai + 1), Some(&b), "the route visits the kick pair consecutively");
 
@@ -133,6 +133,12 @@ fn kick_node_pair_enters_kick_object_and_unpauses_the_scripted_prop() {
         let g = &mut sim.list[gi];
         g.return_state = state::ATTACK;
         g.goal = Some(far);
+        // The goal stands past the corridor's AI boundary, so the route is a fallback-goal one and
+        // `AlterDestFor_DROUTE_Nearest` 0x156088 pulls its destination back to ~0.65 (just past
+        // n248) [M 0x15afe0:33-35]. Under the DefaultInit 2.0 arrival the guard would arrive before
+        // n144; the cover-goal 0.5 radius (`SetupGoalPosition(0.5, ..)` [M 0x152548:174-181])
+        // carries it through both kick nodes.
+        g.goal_arrival = 0.5;
         g.state = state::GO_TO_GOAL;
         g.next_state = None;
     }
@@ -262,7 +268,7 @@ const L05: u32 = 0x0700_0005;
 /// 07000005 guards on one line, Bond beyond them (both see him → Attack → the rear guard's combat
 /// move runs the anim choice with the front guard as the obstacle).
 #[test]
-#[ignore = "the +0x31C scan is root-caused and fixed (fix-nav-remainder2: the game's +0x314 obstacle is drone-only — EvaluateObstacle 0x14e6f0:58-65 writes it only for param_2 != 0, the player call passes 0 at 0x14eba8:98-99, the 0xb fallback 0x14eba8:180-214 loops drones; the old scan's player term was the death-drop regression) but HELD INERT behind NB_SCAN_LIVE=false in drone.rs: with the scan live every named regression is green (a_death_draws_its_drop, dropped_guns_dim, this drive test, ai_traces_live 4/4) EXCEPT walkreal_07000001_live — the west mezzanine guard outlives the test's fixed 12-round budget and the contact parks in LEAD_HIDE. Flip NB_SCAN_LIVE and un-ignore this together after that re-pin (run-verified green here on 2026-10-14)"]
+#[ignore = "the premise is not the game's: the game enters 0x5E only from DroneAnim_SetCombatMoveAnim's bit-2 check [M 0x13cfb0:35-39], which DroneFunc_CombatState reaches only from 0x5C (unseen, +0x274 > 0xf) [M 0x148338 case 4]; the 0x5A arm reads bit 2 first and plays anim 0x21 [M 0x148338 case 2] and ChooseCombatMove has no +0x31C read [M 0x150c18]. This setup keeps Bond in view 6 u away, so the rear guard fights from the fire states and has no 0x5E path in the decompile while he stays seen. It passed only through the port's old bit-2 return in choose_combat_move (removed on s/nb-scan-live). A 0x5C-staged twin is the open rewrite"]
 fn drone_directly_ahead_parks_the_mover_in_0x5e() {
     let Some(l) = LevelX::load(L05) else { eprintln!("skip: NF_ISO not set"); return };
     let d = l.data(L05);

@@ -1402,8 +1402,12 @@ fn walk_the_castle_interior_to_the_party_real_damage_agent() {
     // s/collide-push-3: on the game's one-sided wall push the 30-tick stand dies at the balcony
     // (15.12, 46.22, −23.44), t8104. Of 0/30/60/90/150/200/300/450/700 swept, 150 (end health
     // 88.4) and 700 (15.9) passed.
+    // Stream batch 1122 (the combat move choice without the 0x5E arm, fallback-goal routes pulled
+    // back from the AI boundary, and the other joined guard rules):
+    // the 150 stand alone died at (24.17,41.83,-40.14) t18154 to drone #24. Lever: the 150 stand
+    // plus a 30-tick stop at tick 250 [L the sweep: 100/30 does not; 250/30 completes].
     walker::set_post_intro_wait(150);
-    walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(2));
+    walker::with_pause(250, 30, || walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(2)));
 }
 
 /// 00-Agent sister of `..._real_damage` (real-health-00agent-06): the same walked truck-spawn →

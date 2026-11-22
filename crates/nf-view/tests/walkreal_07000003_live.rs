@@ -2523,7 +2523,11 @@ fn walk_the_full_route_and_complete_every_objective_at(difficulty: u32) {
 fn walk_the_full_route_and_complete_every_objective_real_damage() {
     // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): the no-stop walk died at (1.50,5.96,-33.68) t92659
     // to drone #16. Lever: 1000/60 [L the sweep: 1000/60 completes].
-    walker::with_pause(1000, 60, || walker::with_real_damage_glass_fights(walk_the_full_route_and_complete_every_objective));
+    // Stream batch 1122 (the combat move choice without the 0x5E arm, fallback-goal routes pulled
+    // back from the AI boundary, and the other joined guard rules):
+    // 1000/60 wedged at the lane doors south (lane 2, the 6000-tick cap). Lever: 100/30 [L the
+    // first value swept completes].
+    walker::with_pause(100, 30, || walker::with_real_damage_glass_fights(walk_the_full_route_and_complete_every_objective));
 }
 
 /// Sister of the full walk's key gate: one objective's channel alone never opens the gate —
@@ -2682,7 +2686,13 @@ fn walk_the_full_route_and_complete_every_objective_real_damage_00agent() {
     // (38.18,6.37,-2.08) t23920 to shotgun guard #18. Lever: 250/30 plus a 90-tick stop at 20000
     // [L the 24-value sweep: 250/30 with 18000/45, 20000/90 or 21500/30 complete; 250/30 alone,
     // with 12000/30, 15000/60, 22500/60, 23300/30, and the single stops 500-10000 do not].
-    walker::with_pauses(&[(250, 30), (20000, 90)], || {
+    // Stream batch 1122 (the combat move choice without the 0x5E arm, fallback-goal routes pulled
+    // back from the AI boundary, and the other joined guard rules): 250/30 + 20000/90 died at
+    // (12.48,6.46,-21.86) t4366 to #10/#11 at the lane. Lever: 150/30 + 20000/90 [L the sweep: 15
+    // single stops 100-12000, 20 two/three-stop sets from 2500/90 to 12000/30 (the furthest,
+    // 2500/90 + 22000/30, died at t90391 on the west lawn) and 150/60, 150/90, 400/30-90,
+    // 700/30-90, 1200/30 with 20000/90 do not; 150/30 + 20000/90 completes].
+    walker::with_pauses(&[(150, 30), (20000, 90)], || {
         walker::with_real_damage(|| walk_the_full_route_and_complete_every_objective_at(3));
     })
 }

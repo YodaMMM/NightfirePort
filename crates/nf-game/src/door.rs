@@ -190,7 +190,8 @@ pub struct Door {
     /// `+0x68` (p3): the lock channel — off and not closed, activation only plays the hit sound; its rising
     /// edge unlocks the door for good (the door clears the field).
     pub ch_lock: u16,
-    /// `obj+0xFD bit 3` (p4): link to a collision portal (block 0x21 — not ported).
+    /// `obj+0xFD bit 3` (p4): link to a collision portal (`Door_Link2Portal` 0x136788; the block-0x21
+    /// links are built by nf-view's `build_LinkDoors2Portals` 0x1c8ac8 port).
     pub straddle: bool,
     /// `+0x60` (p5): entering state 8. `+0x62` (p6): entering 0x10. `+0x64` (p7): the locked/hit feedback.
     pub snd_open: u16, pub snd_close: u16, pub snd_hit: u16,
@@ -344,10 +345,9 @@ pub type DoorActor = (V3, f32, bool);
 /// [L ee_start_07000001.bin / ee_start_05.bin]. The port does not resolve the player model's celglist word
 /// (the game finds it through the entity-gfx hashtable, `hashtable_celglist_to_hashcode` on entity+4), so
 /// the pinned per-level boot values stand in: SET on 07000001, the 07000005 model (CLEAR) everywhere else —
-/// only 01 and 05 are evidenced. // [S] unverified: every other level's player glist word. Runtime writers
-/// NOT ported (the bit's later life): `Player_Disable(…,0)` 0x195f70:17 sets it (script event 4
-/// [M 0x1d94c0:119], the NIS handler [M 0x205f10:105], Monitor_Activate [M 0x1b0058:46]);
-/// `Player_Enable` 0x195498:53,77 and `Player_ChangeSubState` 0x190630:35-40 clear it.
+/// only 01 and 05 are evidenced. // [S] unverified: every other level's player glist word. The runtime
+/// writers (`Player_Disable` 0x195f70:17 sets it, `Player_Enable` 0x195498:53,77 and
+/// `Player_ChangeSubState` 0x190630:35-40 clear it) ride `Drones::bond_door_skip` (drone.rs).
 pub fn player_door_skip(level: u32) -> bool { level == 0x0700_0001 }
 
 /// The scan's candidates: every actor the `obj+0xF0 & 0x10` filter lets through [M 0x136678-0x136684].
@@ -698,8 +698,8 @@ impl Doors {
         }
         // Motion. `Door_ReactToHit` (0x135980) is the COLLIDE function (control_funcs[0x1C*0xC+4]), called
         // from `Collide_Update` (0x1ea398:59-64) via the proxy list (obj+0xD0) — NOT from `Door_Update`.
-        // The port's proxy-list path (U-041) is not ported; until then, the anti-crush does not fire from
-        // `update` — matching the disassembly's call structure. (A-11b: removed the `react_to_hit` call that
+        // The anti-crush runs from the collide step (`collide_step`, below) — never from `update`,
+        // matching the disassembly's call structure. (A-11b: removed the `react_to_hit` call that
         // was reversing CLOSING→OPENING when Bond stood near the hinge, preventing the close.)
         if self.list[i].state & 0x18 != 0 {
             // NF_DOORTRACE=1 per-tick diagnostic (level-0b-waiting-room-doors): a moving door's
