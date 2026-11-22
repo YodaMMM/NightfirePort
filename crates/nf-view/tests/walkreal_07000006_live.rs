@@ -354,6 +354,7 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
         }
         w.scene.sim.as_ref().unwrap().drones.list[di].health <= 0.0
     };
+    
     w.dmg.aimed_fights = prev;
     // Level the view back (the fights' own idiom) so the next nav leg steers from level pitch.
     for _ in 0..90 {
@@ -452,6 +453,183 @@ fn stand_shooters_down(w: &mut Walker, label: &str, radius: f32) {
         let Some(di) = di_opt else { break };
         aimed_stand(w, di, label, 2400);
     }
+}
+
+/// The fair muzzle-flash duel (walk-06-00agent lever 2, judged on its own real run). The strip's
+/// poster (#20-class) shoots Bond through geometry the strict ray pick reads blocked — his
+/// measured duel: 67.5 in 15 hits at d 11.5 while the aimed stands bail UNSEEN [L this branch's
+/// runs: t8175 at (6.09,42.04,−33.33), hp 18 surviving]. The game's own hit model is symmetric
+/// (the ignore ledger's own finding: the dealers hold a clear world line, not a wall shot), so a
+/// player aims at the muzzle flashes' owner and fires — the game's own bullet path and accuracy
+/// decide for BOTH sides. The pick is stand_shooters_down's recent-hitter list WITHOUT the
+/// exposure gate; the aim is the measured chest, fresh every tick (a charger tracks); the tap is
+/// the aimed_stand convergence discipline (cursor_for + aim offsets, 8-tick spacing).
+fn duel_the_muzzle_flashes(w: &mut Walker, label: &str, cap: u32) {
+    duel_target(w, label, cap, None)
+}
+
+/// The duel on a FIXED drone (the lean-window survivor the position finder already holds):
+/// the recent-hitter window misses between a poster's bursts, so a named target aims regardless.
+fn duel_target(w: &mut Walker, label: &str, cap: u32, fixed: Option<usize>) {
+    // Settle: no input until the switch anim is done, then the raise loop (the 0c idiom).
+    for _ in 0..90 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.gun.switch_state == 0 && !sim.gun.fire_state { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+    }
+    for _ in 0..240 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        if sim.aiming { break; }
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input { aiming: true, ..Default::default() }, false, false, false);
+        w.total_ticks += 1;
+    }
+    let prev = w.dmg.aimed_fights;
+    w.dmg.aimed_fights = true;
+    eprintln!("[06] the muzzle-flash duel ({label}): open");
+    let mut last_tap = 0u32;
+    let mut why = "cap";
+    let mut hp_watch = f32::MAX;
+    let mut taps = 0u32;
+    // A player finishes the guard he is fighting: once locked, the duel stays on him until he
+    // drops (the lean-window stream pauses do not break the lock), then re-picks the next
+    // recent hitter. Measured without the lock: the duel exited mid-grind at hp 0.2 and the
+    // unanswered tower post #11 poured 72.5 [L this branch's run].
+    let mut locked: Option<usize> = None;
+    for t in 0..cap {
+        let (input, fire, reload) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.disabled { break; }
+            if sim.gun.clip == 0 && sim.gun.spare == 0 {
+                eprintln!("[06] the muzzle-flash duel ({label}): bailed DRY at +{t}");
+                break;
+            }
+            let now = sim.drones.frame;
+            let b = sim.bond.pos;
+            // The nearest live hostile that hit Bond inside the last 600 frames, within 45 u —
+            // stand_shooters_down's pick minus the strict-ray gate.
+            // The ACTIVE shooter first: the most recent hitter alive (a player turns to the
+            // muzzle flashes' owner, not the nearest gun). Measured with the nearest pick: the
+            // tower post #11's full-auto (122.5 across armour+health in ~90 ticks) hosed the
+            // duel's pool while it ground the nearer #20 [L this branch's run t7211].
+            let mut pick: Option<(usize, [f32; 3])> = None;
+            let mut best_y = f32::MIN;
+            for h in sim.drones.player_hits.iter().rev() {
+                if now.saturating_sub(h.0) > 2400 { break; }
+                let i = h.1;
+                if i >= sim.drones.list.len() { continue; }
+                let d = &sim.drones.list[i];
+                if !(d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                let dd = ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt();
+                if dd > 45.0 { continue; }
+                // The high posts first (walk-06-00agent, this branch's measured ledger): the
+                // tower post #11's y-55.5 full-auto emptied the whole pool (50 armour + 72.5
+                // health) in ~90 ticks while the duel ground the nearer ground pair — his dps
+                // is the pool drain; a player snaps UP to the parapet first. The mouth stands'
+                // own +43 kill proves his lines carry from the plaza band.
+                if d.pos[1] > best_y {
+                    best_y = d.pos[1];
+                    pick = Some((i, [d.pos[0], d.pos[1] + 0.3, d.pos[2]]));
+                }
+            }
+            locked = locked.filter(|&di| {
+                let d = &sim.drones.list[di];
+                d.present && !d.corpse && d.health > 0.0
+            });
+            // The high-post swap: a y>44 shooter out-ranks a locked GROUND target (a player
+            // snaps up to the parapet mid-fight). Without the swap the lock held the ground
+            // pair while the tower's full-auto emptied the pool [L t7211 this branch].
+            if let (Some(li), Some((hi, _))) = (locked, pick) {
+                if sim.drones.list[li].pos[1] < 44.0 && sim.drones.list[hi].pos[1] > 44.0 {
+                    locked = Some(hi);
+                }
+            }
+            let di = fixed.filter(|&di| {
+                let d = &sim.drones.list[di];
+                d.present && d.enabled && !d.corpse && d.health > 0.0
+            }).or(locked).or_else(|| pick.map(|(di, _)| di));
+            let Some(di) = di else { why = "no recent hitter"; break };
+            locked = Some(di);
+            // The aim: the HEAD box (part 5) centre, fresh every tick — the part the guard's own
+            // fire leans out over the cover with, so the same windows carry the answer; one head
+            // tap kills a 20-hp guard [M NDrone2_HitDamage × DroneDamage_Head]. The torso aim
+            // (pos+0.3) measured LOST the duel (9 landed vs 38 taken in 1500 — the rounds meet
+            // the cover wall the guard peeks over) [L this branch's run]. Fallback: upper chest.
+            let dd_target = ((sim.drones.list[di].pos[0] - b[0]).powi(2)
+                + (sim.drones.list[di].pos[2] - b[2]).powi(2)).sqrt();
+            let at = {
+                let d = &sim.drones.list[di];
+                if dd_target > 6.0 {
+                    // Torso beyond 6 u: the game's own spread covers the 0.2 u head box past 6 u
+                    // [M walker.rs prefer_head's 6 u window]; the 1 u torso box takes the rounds
+                    // (measured: #11 hp 20 -> 17.8 on the torso line vs 21 head taps 0 damage
+                    // [L this branch's duel diagnostics]).
+                    [d.pos[0], d.pos[1] + 0.3, d.pos[2]]
+                } else {
+                let data = nf_game::drone::Data {
+                    tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+                    world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+                    skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+                    hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+                    surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+                    ai_points: &sim.ai_points,
+                };
+                d.hit_boxes(&data).into_iter().find(|b| b.part == 5).map(|b| [b.m[3][0], b.m[3][1], b.m[3][2]])
+                    .unwrap_or([d.pos[0], d.pos[1] + 1.5, d.pos[2]])
+                }
+            };
+            let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+            let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+            let h = (dx * dx + dz * dz).sqrt().max(0.5);
+            let desired_yaw = dx.atan2(dz);
+            let desired_pitch = (dy / h).atan();
+            let yaw_err = { let mut a = desired_yaw - sim.bond.yaw;
+                while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+            let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
+            let [cx_want_raw, cy_want_raw] = sim.cursor_for(at).unwrap_or([-yaw_err / 0.76966, pitch_err / 0.57724]);
+            let cur = sim.cursor;
+            let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
+            let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
+            let aoff = sim.aim_offset_angles();
+            let err = { let mut a = yaw_err - aoff[0];
+                while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
+                while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
+            let perr = pitch_err - aoff[1];
+            let reload = sim.gun.clip == 0;
+            // The 4-tick spacing (walk-06-00agent): every duel tap lands on the torso line
+            // (9/9 on #20, 5/5 on #11 [L this branch's grind]) — the game's own fire-state
+            // rate gates anything faster, so the tighter request only removes idle spacing.
+            let fire = sim.aiming && !reload && err.abs() < 0.01 && perr.abs() < 0.01
+                && t.saturating_sub(last_tap) >= 4;
+            let dhp = sim.drones.list[di].health;
+            if dhp < hp_watch { eprintln!("[06] duel ({label}): #{di} hp {hp_watch:.1} -> {dhp:.1} at +{t}"); hp_watch = dhp; }
+            (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
+        };
+        if reload {
+            w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, true, false);
+            w.total_ticks += 1;
+            w.after_step();
+            for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        } else if fire {
+            last_tap = t;
+            taps += 1;
+            w.tick_fire(input);
+        } else {
+            w.tick(input, false);
+        }
+    }
+    eprintln!("[06] duel ({}): exit {} taps {} (cap {})", label, why, taps, cap);
+    w.dmg.aimed_fights = prev;
+    // Level the view back (the fights' own idiom) so the next nav leg steers from level pitch.
+    for _ in 0..90 {
+        let p = w.scene.sim.as_ref().unwrap().bond.pitch;
+        if p.abs() < 0.01 { break; }
+        w.tick(nf_game::player::Input { look: (-p).clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[06] the muzzle-flash duel ({label}): closed at +{}, health {:.1} armour {:.1}",
+        cap, sim.drones.health.health, sim.drones.health.armour);
 }
 
 /// The walk from the spawn to the searchlight courtyard's tunnel-door approach (the point where
@@ -669,6 +847,71 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
     // pilaster lane's mouth step.
     if difficulty >= 2 {
         clear_the_spot(w, 13.0, difficulty >= 3);
+    }
+    // 00-Agent real-damage lever (walk-06-00agent, judged on its own real run on this branch):
+    // the measured death is the strip approach at ~20 health — the ch-55 pair #20 deals 44.0
+    // in 8 hits and the tower post #11 28.5 in 6, on top of the court's ~27.5 the 100 pool
+    // cannot carry [L this tree's baseline run: death t7109, armour 0.0]. The guardroom's own
+    // BodyArmour #755 (36.06, 40.67, −22.21 [D census]) stands ~2 u east of the ammo boxes the
+    // d≥3 loot leg already visits; kind-armour sets the pool flat 50.0 and refuses only at
+    // pool >= 50 [M Pickup_Handler 0x18e650:220-224], and the level's live test proves the
+    // walk-over take (interact_07000006_live::walking_over_the_body_armour_takes_it). A player
+    // loots the spare armour on the way to the pilaster lane, so the 50 pool meets the strip
+    // fight first. Skipped when a live Hurt volume claims the spot (the loot-hop probe), and
+    // return fire stays off for the legs (the room loot hop's dash idiom — the 16 walk's
+    // lever-(a) shape).
+    if difficulty >= 3 && !w.tops_up() {
+        let spot = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.pickups.iter().find(|p| !p.gone && {
+                let s = [p.m[3][0], p.m[3][1], p.m[3][2]];
+                (s[0] - 36.06).abs() < 3.0 && (s[2] - -22.21).abs() < 3.0 && (s[1] - 40.67).abs() < 3.0
+            }).map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+        };
+        if let Some(s) = spot {
+            let (claimed, health0, armour0) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let head = [s[0], s[1] + 1.8, s[2]];
+                (sim.hurts.iter().any(|h| !h.disabled && h.contains(s, head, 0.55)),
+                 sim.drones.health.health, sim.drones.health.armour)
+            };
+            eprintln!("[06] the guardroom's BodyArmour #755 fetch: spot {s:?}, health {health0:.1}, armour {armour0:.1}, claimed {claimed}");
+            if !claimed {
+                let rf = w.dmg.return_fire;
+                w.dmg.return_fire = false;
+                // Arrive INSIDE the take-ray band but short of the pickup's own prop collision:
+                // the first measured fetch wedged at d 1.75 on the 0.6 arrive (the prop blocks the
+                // capsule) — the take itself fired from that band, so 1.8 stops the leg there.
+                w.walk_nav_to([s[0], 40.5, s[2]], "the guardroom's BodyArmour #755 [D]", 1.8);
+                {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    if sim.drones.health.armour <= 0.0 {
+                        // Nudge into the take ray: 90 bounded ticks of forward walk at the spot.
+                        for _ in 0..90 {
+                            let sim = w.scene.sim.as_ref().unwrap();
+                            if sim.drones.health.armour > 0.0 { break; }
+                            let b = sim.bond.pos;
+                            let (dx, dz) = (s[0] - b[0], s[2] - b[2]);
+                            let h = (dx * dx + dz * dz).sqrt().max(0.001);
+                            let input = nf_game::player::Input {
+                                forward: 0.6,
+                                turn: ((dx / h).atan2(dz / h) - sim.bond.yaw).clamp(-0.3, 0.3),
+                                ..Default::default()
+                            };
+                            w.tick(input, false);
+                        }
+                    }
+                }
+                w.dmg.return_fire = rf;
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[06] the guardroom's BodyArmour #755 fetch done: health {:.1} armour {:.1} (was {:.1}/{:.1}), at {:?}",
+                    sim.drones.health.health, sim.drones.health.armour, health0, armour0, sim.bond.pos);
+            } else {
+                eprintln!("[06] the BodyArmour #755 SKIPPED: a live volume claims the spot");
+            }
+        } else {
+            eprintln!("[06] the BodyArmour #755 not found on the floor");
+        }
     }
     // West out of the guardroom through the auto-closing door #59 Door_Top_I2 (27.88, 40.00, −23.00).
     if difficulty >= 2 {
@@ -901,17 +1144,46 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         // over their posts (the deck y 48, 06-2's lever 1) out-ranges their sight.
         if difficulty >= 3 {
             w.walk_nav_to([6.0, 42.0, -26.0], "the strip lane's sight edge", 1.2);
-            aimed_stand_the_mouth(w);
+            // walk-06-00agent lever 2's own run: the strict-ray stand HERE stands Bond in the
+            // pair's stream for its cap while the muzzle-flash duel answers the same shooters
+            // without the exposure gate (the pair's rays open only inside their 12 u sight
+            // [L runs 10-12]; the duel trades 9-for-38 standing, head-aim 1-tap windows)
+            // — the real-damage 00 walk walks the edge and lets the strip duel answer.
+            if !(difficulty >= 3 && !w.tops_up()) {
+                aimed_stand_the_mouth(w);
+            }
         }
         w.walk_nav_to([6.0, 42.0, -34.0], "the courtyard's strip approach", 1.6);
-        aimed_stand_the_mouth(w);
+        if !(difficulty >= 3 && !w.tops_up()) {
+            aimed_stand_the_mouth(w);
+        }
+        // walk-06-00agent lever 2 (its own real run): #20's measured duel — 67.5 in 15 at
+        // d 11.5, the strict-ray stands UNSEEN from every floor spot [L this branch] — is
+        // answered the player's way: aim at the muzzle flashes' owner, fire, the game's own
+        // symmetric hit model decides. The pick needs a recent hit (the muzzle-flash evidence);
+        // a mop-up pass after the 8-u fight answers a stream that resumes.
+        if difficulty >= 3 && !w.tops_up() {
+            duel_the_muzzle_flashes(w, "the strip approach", 1500);
+        }
         fight_through(w);
+        if difficulty >= 3 && !w.tops_up() {
+            duel_the_muzzle_flashes(w, "the strip approach, the mop-up", 900);
+        }
     }
     w.walk_nav_to([4.4, 42.0, -48.5], "down the searchlight courtyard", 1.6);
     if real_tactics {
         aimed_stand_the_mouth(w);
+        // walk-06-00agent lever 2 extended: the descent's own shooters (#24/#25-class, measured
+        // 34.5 in 7 from d 18.4 with #24 left at hp 2 [L this branch's run]) — the same
+        // muzzle-flash answer while their stream is hot.
+        if difficulty >= 3 && !w.tops_up() {
+            duel_the_muzzle_flashes(w, "the searchlight descent", 1200);
+        }
     }
     fight_through(w);
+    if difficulty >= 3 && !w.tops_up() {
+        duel_the_muzzle_flashes(w, "the searchlight descent, the mop-up", 900);
+    }
 }
 
 /// The tunnel climb and the upper gallery: door #71 → the two-ramp switchback (see the header's
@@ -1054,6 +1326,12 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool)
             w.dmg.return_fire = rf;
             let k = aimed_stand(w, di, "the east post #24 from his solo spot", 1500);
             eprintln!("[06] east post #24 killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
+            // walk-06-00agent lever 2 extended: the strict-ray stand leaves the lean-window
+            // survivors (the measured run left #24 at hp 2 still dealing [L this branch]) — the
+            // muzzle-flash duel finishes whatever shot Bond inside the last 600 frames.
+            if difficulty >= 3 && !w.tops_up() {
+                duel_the_muzzle_flashes(w, "the #24 solo spot", 1200);
+            }
         }
     }
     if difficulty >= 3 {
@@ -1074,8 +1352,11 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool)
         // walk then completes with 25.8 health; a no-stop push through to the step's foot
         // completed with 6.5).
         let p25 = { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
-            && d.health > 0.0 && d.team == 1 && dxz(d.pos, [27.0, 42.0, -34.1]) < 4.0) };
+            && d.health > 0.0 && d.team == 1 && dxz(d.pos, [27.0, 42.0, -34.1]) < 6.0) };
         if let Some(di) = p25 { let _ = aimed_stand(w, di, "the east post #25 from the corner", 1500); }
+        if difficulty >= 3 && !w.tops_up() {
+            duel_target(w, "the south-east corner", 1200, p25);
+        }
     }
     if difficulty >= 3 {
         clear_the_spot(w, 8.0, false);
@@ -1419,7 +1700,7 @@ fn walk_the_castle_interior_to_the_party_real_damage_agent() {
 /// [M 0x1ae1f8:67-69]. Real input only — the
 /// load path is the only difference; no health, ammo or channel writes, no teleports.
 #[test]
-#[ignore = "stream batch 1121b: Bond dies near (32.4, 39.1, -6.2) at about t2900 on the joined stream; no stop of 37 swept (50-10000 ticks, 30-200 long, single and double) completes it; also red on s/auto-aim alone. walks-1121-06-16: 330 more stop sets (first stop 100-2600 x 15-700, second/third 3000-14000) never complete; the runs that pass the guardhouse court all die at the strip approach (5.97, 42.03, -32.77) at about 20 health to the tower post #11 and the pair #19/#20; the court dealers #3/#4 have a clear world line (window/doorway), not a wall shot"]
+#[ignore = "stream batch 1121b: Bond dies near (32.4, 39.1, -6.2) at about t2900 on the joined stream; no stop of 37 swept (50-10000 ticks, 30-200 long, single and double) completes it; also red on s/auto-aim alone. walks-1121-06-16: 330 more stop sets (first stop 100-2600 x 15-700, second/third 3000-14000) never complete; the runs that pass the guardhouse court all die at the strip approach (5.97, 42.03, -32.77) at about 20 health to the tower post #11 and the pair #19/#20; the court dealers #3/#4 have a clear world line (window/doorway), not a wall shot walk-06-00agent round 1 (this branch, every lever judged on its own real run): the stop/timing space stays dead (the 1121b + walks-1121-06-16 sweeps above). LANDED levers, all gated difficulty>=3 && !tops_up() in this file: (1) the guardroom's BodyArmour #755 fetch (36.06,40.67,-22.21) — the 50 pool is PROVEN the strip phase's margin (the dealer sums: 150 incoming vs 122.5 pool without it); (2) the muzzle-flash duel duel_the_muzzle_flashes — the strict-ray stands cannot take the pair fairly (their rays open only inside the 12 u sight, runs 10-12 below), so the duel aims at the measured chest, fires through the game's symmetric hit model, LOCKS the target until he drops and SWAPS to a y>44 shooter mid-fight; the torso grind measures 2.2 a tap every 8 ticks (game fire-state gated — 4-tick requests change nothing), head boxes only carry <=6 u (the 6 u spread fact; 21 head taps 0 damage at d 26); (3) the strip-arrival + sight-edge strict-ray stands are SKIPPED at 00 real damage (they stood Bond in the stream: 9 landed vs 38 taken standing); (4) duel passes added at the descent and the ledge legs (#24's solo-spot stand then VANISHED him at +99). MEASURED STATE: the duel grinds #20 20->13 and SWAPS to #11 13->2 — Bond dies t7212 at (5.97,42.04,-32.77) ONE TO TWO TAPS short, pool 0 against #11 40.0 + #20 32.5 + the court's 27.5 (the whole 150). NEXT LEVERS: (a) answer the tower #11-class BEFORE the strip (a fixed-target duel at the sight-edge stop — his lines are proven open from the plaza band, the mouth stand killed him at +43), (b) hunt the mouth/balcony phases' un-answered stream that ate ~45 armour before the strip duel in the pre-swap shapes, (c) the corner #25 fixed-target duel (the finder widened to 6.0 for his patrol) and the tunnel/gallery phases beyond"]
 fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the
     // guardhouse pair #3 / #4 fired from the balcony as Bond reached door #47 (80.8 -> 9.2,
