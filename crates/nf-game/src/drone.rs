@@ -718,19 +718,40 @@ pub const BOND_STAND_SCRIPT: u32 = 0x0600_0a00;
 pub const BOND_CROUCH_SCRIPT: u32 = 0x0600_09ff;
 
 /// Bond's 16 hit boxes now: `AnimGetCollData` 0x1c4ac8 over `HumanCollisionBones` 0x2c6be8 on the
-/// player's skin (`player::player_skin_hash`) posed in the stance script (`BOND_STAND_SCRIPT` /
-/// `BOND_CROUCH_SCRIPT`, crouched = substate 4), root translation zeroed, placed at obj+0x30 with
-/// the facing yaw obj+0x54. The standing set equals the live palette's boxes [L ee_start_05.bin /
-/// ee_start_0700000a.bin, the player's AnimObject +0xB8 palette, test bond_hit_boxes_live].
-/// *Not modelled*: the stance-change blend (`AnimSetAppend`'s 0.37 / 0.5 arguments), any aim pitch
-/// on the upper body, and the other substates' own scripts (climb, wire, swim take the stand pose).
+/// player's skin (`player::player_skin_hash`), built from the anim object's CURRENT frame
+/// (`psiBuildMatrixPalette` 0x111498 on `anim+0x70` at the top of `AnimGetCollData` [M :28]), root
+/// translation zeroed, placed at obj+0x30 with the facing yaw obj+0x54. The frame is Bond's own
+/// script list (`pose`: the caller's `Sim::bond_anim` resolve, the machine `AnimSetUpdate` 0x1c0938
+/// and `Player_ChangeSubState` 0x190630 drive): the stance set's idle / walk layers, and on a
+/// stance change the transition script that replaces them (`PlayerAnimStand2Crouch` 0x190198 →
+/// 0x60001dc, `PlayerAnimCrouch2Stand` 0x190068 → 0x60001dd in single player, `AnimScriptAdd` at
+/// speed 4 [M]) until the hold rebuilds the new stance's set. The standing set equals the live
+/// palette's boxes [L ee_start_05.bin / ee_start_0700000a.bin, the player's AnimObject +0xB8
+/// palette, test bond_hit_boxes_live]. `pose` None (the dev paths, MP, the substates the port
+/// does not pose) takes the stance script's frame 1 (`BOND_STAND_SCRIPT` / `BOND_CROUCH_SCRIPT`,
+/// crouched = substate 4). *Not modelled*: any aim pitch on the upper body (single player Bond
+/// has no `AnimObjectSetAiming` call), and the climb / wire / swim substates, whose
+/// `Player_ChangeSubState` arm deletes every script without adding one (`AnimSetDeleteAll`
+/// [M 0x190630:16-17, the switch has no arm for them]) so the palette keeps whatever frame the
+/// anim object last resolved; the port gives them the stand pose (unproven).
 /// Empty when the level carries no skin or script for him (the caller falls back to the cylinder).
 pub fn bond_hit_boxes(d: &Data, player: &Player) -> Vec<crate::damage::HitBox> {
+    bond_hit_boxes_posed(d, player, None)
+}
+
+/// `bond_hit_boxes` on a given local pose (Bond's resolved script list; `None`: the stance script).
+pub fn bond_hit_boxes_posed(d: &Data, player: &Player, pose: Option<&crate::anim::Pose>) -> Vec<crate::damage::HitBox> {
     let hash = crate::player::player_skin_hash(d.level);
     let Some(skin) = d.skins.get(&hash) else { return Vec::new() };
-    let Some(skel) = d.skeletons.get(&skin.skeleton) else { return Vec::new() };
-    let script = if player.crouched { BOND_CROUCH_SCRIPT } else { BOND_STAND_SCRIPT };
-    let Some(mut local) = crate::anim::script_pose_drone(d.scripts, d.sequences, skel, skin, script, 1.0) else { return Vec::new() };
+    let mut local = match pose {
+        Some(p) => p.clone(),
+        _ => {
+            let Some(skel) = d.skeletons.get(&skin.skeleton) else { return Vec::new() };
+            let script = if player.crouched { BOND_CROUCH_SCRIPT } else { BOND_STAND_SCRIPT };
+            let Some(local) = crate::anim::script_pose_drone(d.scripts, d.sequences, skel, skin, script, 1.0) else { return Vec::new() };
+            local
+        }
+    };
     let obj = nf_formats::placement::object_matrix([0.0, player.yaw, 0.0], player.pos);
     let pal = crate::damage::palette(&mut local, skin, &obj);
     crate::damage::boxes(d.hitboxes.for_skin(hash), &pal, skin)
@@ -13984,6 +14005,10 @@ pub struct Drones {
     /// `tick`. `None` (no posed body: the dev paths, the hanging/climbing/swimming substates the
     /// port does not pose) keeps the port's single `Player::target` point.
     pub bond_view_bones: Option<[V3; 7]>,
+    /// Bond's third-person local pose this tick (his anim object's resolved script list, root as
+    /// the pose carries it), set by the caller before `tick` beside `bond_view_bones`: the frame
+    /// his hit boxes are built from (`bond_hit_boxes_posed`). `None` = the stance script's frame 1.
+    pub bond_pose: Option<crate::anim::Pose>,
     /// `DAT_00298FBC`: the frame `Drone_EnableAll(1)` re-enabled the drones (0x1383e8:28). The
     /// whole `DroneVision_ProcessDroneSight` pass waits 15 frames after it and after the post-load
     /// frame `DAT_00298FB8` [M 0x176a28:56-57]; the port's drone frame starts at 0 on the load.
@@ -14809,7 +14834,7 @@ impl Drones {
             if let Some(g) = &mut dr.body_glow { g.owner = i; }
         }
         let llist = (0..list.len()).collect();
-        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, spawn_pristine: HashMap::new(), spawn_bodies: None, spawn_bound: Vec::new(), rng, lights: Default::default(), player_pos: [0.0; 3], player_sph: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), player_contacts: Vec::new(), drone_round_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
+        let mut drones = Drones { list, frame: 0, los_cursor: 0, llist, spawn_pristine: HashMap::new(), spawn_bodies: None, spawn_bound: Vec::new(), rng, lights: Default::default(), player_pos: [0.0; 3], player_sph: [0.0; 3], bullets: Vec::new(), grenades: Vec::new(), explosions: Vec::new(), shake: 0.0, bond_crouched: false, bond_view_bones: None, bond_pose: None, player_move_local: None, vision_enable_frame: 0, player_spread: None, health: Default::default(), player_hits: Vec::new(), player_contacts: Vec::new(), drone_round_hits: Vec::new(), impacts: Vec::new(), target: PlayerTarget::default(), used: Vec::new(), link_flags: Vec::new(), locked_door_nodes: Default::default(), channels: Default::default(), triggers: Vec::new(), spawners: Vec::new(), stats_table: Default::default(), cover_rt: Vec::new(), sounds: Vec::new(), cover_cursor: 0, cover_counter: 0, player_bullets: Vec::new(), net_no_self_hurt: false, player_impacts: Vec::new(), last_flinch: None, bond_aiming: false, level_exit: None, mission_end: None, bond_weapon: 2, env: None, sun_vector: [0.0; 3], env_pending: None, mp_master: 0, fill_rng: Rng::new(0x5eed), last_alarm: None, alarm_sent: false, party_loud: false, iop_section: 0, hud_frozen: false, aim_target: None, aim_offset: [0.0; 2],
             // The game's `DAT_00299092` (the shared LOS-probe counter; see the field) — zeroed
             // here as `Drone_LevelReset`'s memset zeroes it at level reset [M 0x13a5bc-cc].
             los_probes: 0,
@@ -24174,7 +24199,7 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         // player [L ee_start_05/0700000a/07000001: obj+0xFA = 8, the anim palette live +200 & 3])
         // on his posed skeleton (`bond_hit_boxes`). The cylinder below is only the fallback for
         // fixtures without Bond's skin or stance scripts.
-        let bond_boxes = if self.bullets.is_empty() { Vec::new() } else { bond_hit_boxes(d, player) };
+        let bond_boxes = if self.bullets.is_empty() { Vec::new() } else { bond_hit_boxes_posed(d, player, self.bond_pose.as_ref()) };
         let feet_y = player.pos[1] - 1.03;
         let eye_y = if player.eye == [0.0; 3] { player.pos[1] + 0.7 } else { player.eye[1] }; // fixtures without an eye
         let vol = crate::bullet::PlayerVolume { feet: [player.pos[0], feet_y, player.pos[2]], height: (eye_y + 0.17 - feet_y).max(0.5), radius: 0.25 };
