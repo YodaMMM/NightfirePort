@@ -1790,8 +1790,8 @@ impl Bond {
     /// drains at 5/s from 100 and the underwater fade `+0x8C4` rises; above it (any cel — the −500
     /// default is far below every head) the air refills at 20/s. At `air < 1.0` every 30 ticks (`GameState % (FRAME_RATE·0.5) == 0`):
     /// `Player_HandlePain(0x40000000 = 2.0, type 7)` [M 0x191a70:136-143, disasm 0x191d9c] — the drown
-    /// damage the caller applies. The breath loop sounds (0x60c surfaced / the underwater loop on
-    /// `+0x89C`) and the HUD air pane are not ported this pass.
+    /// damage the caller applies. The breath loop sounds (the dive loop on `+0x89C`, the 0x60c
+    /// surface gasp) play view-side (nf-view scene.rs); the HUD air pane is draw-side.
     fn monitor_air(&mut self, ctx: &LadderCtx) {
         // The game's refill branch runs for ANY cel (including the −500 default) when the head is above
         // `cel+0x90` [M 0x191a70:98-111] — air refills on dry land too. The head is the standing eye
