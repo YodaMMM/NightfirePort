@@ -3124,6 +3124,18 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && l >= 10.0 && slit_clear && sphere_lane_clear && (loose08 || (corridor_clear
             && effective_corridor_clear)) && eye_sees && machine_lane_clear
+            // retune-nb-08-23 (the merged-tree killer, judged on its own real run): the 00 Agent
+            // baseline died to Bond's OWN round — the t227 launch at l 44.7 (the machine's west
+            // circuit, line_ok momentary) blew on the wall band at (111.0,14.1,-182.1), 3.7 u
+            // from Bond, owner -1 kind 0x2c (the documented self-blast signature [L the 08-15
+            // note]), -14.00 at fight t250 after the armour drained — the 174-tick cruise of a
+            // far launch curves the guided chase into the band the eye ray cleared for one tick.
+            // The measured landings all fired INTO the machine's own reach (the low passes
+            // dist 17.6-28.9, rarely beyond 16 u [L the round-4 flight logs]); cap the d3 launch
+            // to that band (l <= 20) so a far bearing is held for a low pass instead of burning
+            // the scarce rounds (ammo type 0xe caps at 4) on a wall. D3-GATED: the sisters'
+            // l >= 10.0 is unchanged.
+            && (difficulty < 3 || l <= 20.0)
             && (loose08 || machine_lane_fore_clear)
             // 00 Agent: no launch while the Hind is SOUTH-WEST of the car (x < 105, z < -165).
             // A held-health map of the whole fight [L the analysis run: ten launches] showed
@@ -3265,6 +3277,19 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                     input.crouch = true;
                 }
             }
+        }
+        // retune-nb-08-23 lever (the round-22 ledger item (1), the dive-stand weave): the
+        // scripted dive-stance holds Bond STANDING in the machine's fire for hundreds of ticks
+        // and the guards' perfect-shot roll reads a standing target at full p (#22's 0x15
+        // rounds cost 21.0 in 24 hits through the held window [L the merged-tree lever run]).
+        // A player under fire weaves: the +-0.5 strafe with 6-tick stops (the round-22
+        // fight_weave pattern, real input) re-arms the first-moved latch and reads moving
+        // x0.1875 [M DroneWeap_DoBulletAccuracy 0x179740:52-54,71-73; the latch law
+        // 0x179a48:44-58]. The weave yields to the dodge drive (its strafe owns the axis) and
+        // holds off on a launch tick (the muzzle-cast gates read the pre-strafe stance).
+        // D3-GATED: the sisters' timelines byte-exact.
+        if difficulty >= 3 && !dodge_drive && !ready && rocket.is_none() {
+            input.strafe = match t % 104 { 0..=45 => 0.5, 46..=51 => 0.0, 52..=97 => -0.5, _ => 0.0 };
         }
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
         if t % 100 == 0 {
@@ -4193,6 +4218,29 @@ launch, the ride-free path also skips the chain.
 // — this deal drained the armour 50 → 0 during the boarding chunk while the shipped deal kept
 // 50: the ledge armour box timing (round 8's item (3)) decides whether the reply's residue
 // meets armour instead of health.
+// retune-nb-08-23 round 1 (2026-11-22, still red — the merged tree = master 7562f1e70 + the
+// rounds 20-22 line; the stream re-dealt): the merged-tree BASELINE died t21550 to Bond's OWN
+// round — the t227 launch at l 44.7 (line_ok momentary) blew on the wall band at
+// (111.0,14.1,-182.1), 3.7 u out, owner -1 kind 0x2c (the documented self-blast signature),
+// -14.00 after the armour drained; fight entry was health 21.0 / armour 23.0 on this deal
+// [L the merged-tree NF_DMG_TRACE baseline]. TWO LEVERS SHIPPED, each judged on its own real
+// run: (1) THE LAUNCH DISTANCE CAP (l <= 20.0, d3-gated — the far launch's 174-tick cruise
+// curves the guided chase into the band the eye ray cleared for one tick; the measured
+// landings all fired into the machine's own reach): the launch held, the self-blast row is
+// GONE, death t21708 (+158) — and the held window exposed the next binder, #22's 0x15 sniper
+// grind on the standing dive-stance (21.0 in 24 hits, full-p rolls on the scripted shape).
+// (2) THE DIVE-STAND WEAVE (the round-22 ledger item (1), the fight loop's held window now
+// holds the round-22 +-0.5/6-tick strafe pattern when no dodge drives and no launch is ready;
+// the roll reads moving x0.1875 [M 0x179740:52-54,71-73; 0x179a48:44-58]): #22's grind fell
+// out of the damage tail (the rows -1.83/-3.00 sparse), death t22500 (+950 over the baseline,
+// the deepest on this tree) [L the lever runs]. The remaining killer: the volume's
+// machine-proximity rows (13.2 in 9 hits — the w62 wall-band detonation pairs -2.00 x2 at
+// f22135/f22142 class) + #22's residual rows at the crouched anchor. NEXT LEVERS: (1) the
+// salvo dodge's close band vs the 6.3-miss wall-band detonations (the 4.0 band leaves them
+// undodged; the drive's own NW-corner death class is the measured risk); (2) the upstream
+// nav-stand weave (the deck/hall return-fire stands paid #13/#6/#3 32.0 standing — the weave
+// does not cover walk_nav_to's return-fire stands; a shared-helper opt-in, all walkreal
+// binaries re-run); (3) the armour entry (this deal drained 50 -> 23 in the boarding chunk).
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair

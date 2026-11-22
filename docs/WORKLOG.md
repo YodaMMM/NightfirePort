@@ -473,3 +473,12 @@ the launch is self-defeating). Whole walkreal_07000008_live binary on the final 
 refreshed ledger + the next levers (the kind-44 reply answer that keeps the launch, the
 crawl legs' in-walk stop discipline, the armour-entry timing) are in the ignore-message
 comments. Report: docs/reports/retune-nb-08-22.md.
+
+## retune-nb-08-23 (2026-11-22)
+
+Task: 08 whole-mission 00 Agent real-damage walk green, round 23. Branch = master 7562f1e70 + s/retune-nb-08-22 merged (mirrored files took master, the 08 test took the rounds line + master re-times).
+
+Progress:
+- merged-tree baseline: death t21550, killer = Bond own rocket self-blast (owner -1 kind 0x2c, 3.7 u, -14.00) after the l 44.7 far launch; fight entry 21.0/23.0 armour.
+- SHIPPED: the launch distance cap (l<=20, d3) -> t21708; the dive-stand weave (the round-22 strafe pattern in the fight loop held window) -> t22500 (+950, deepest on this tree).
+- next levers in the ignore ledger: the salvo close band vs the 6.3-miss wall-band pairs, the nav-stand weave (shared helper), the armour entry.
