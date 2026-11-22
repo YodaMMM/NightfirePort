@@ -8950,6 +8950,8 @@ mod flow_audit;
 #[cfg(test)]
 mod hitch_probe;
 #[cfg(test)]
+mod mp_local_bot_damage;
+#[cfg(test)]
 mod headless_app_harness {
     use super::*;
     use winit::keyboard::KeyCode;

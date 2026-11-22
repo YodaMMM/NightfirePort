@@ -5975,6 +5975,17 @@ impl Sim {
         } else {
             None
         };
+        // mp-local-bot-damage: offline the local pipeline's player rounds and blasts see the
+        // match's bots (the game's bots are drone objects on the one collide pass [M
+        // NDrone2_DealWithObjHit 0x13fff0 case 5]); online the shared combat owns them.
+        self.drones.mp_bot_bodies = if self.mp.as_ref().is_some_and(|m| !m.bots.is_empty()) && self.net_rng.is_none() && self.net_rng_shared.is_none() {
+            let local = self.mp_local_slot;
+            let bots: Vec<usize> = self.mp.as_ref().map_or(Vec::new(), |m| m.bots.iter().map(|b| b.slot).collect());
+            self.mp_combat_bodies(local).into_iter().filter(|b| bots.contains(&b.slot)).collect()
+        } else {
+            Vec::new()
+        };
+        self.drones.mp_bot_hurts.clear();
         let mp_death_was_active = self.drones.death.active;
         self.drones.spawn_bodies = Some(self.free_spawn_bodies());
         // level-0a-civilian-slide-cels: the sim's drawn gate runs the game's own room rule — the
@@ -6027,6 +6038,26 @@ impl Sim {
                         self.drones.pending_blasts.push((pos, radius, damage, usize::MAX - 1, 0, 0x0600_004f, 5.0, 0));
                     }
                 }
+            }
+        }
+        // mp-local-bot-damage: the player's round contacts and blasts on the bots this tick go
+        // through the match's pain path, the one the online combat drives (`mp_hurt`: the
+        // friendly-fire gate `MP_RegisterBulletHit` 0x1857c0, `BOT_handlePain` 0x125ed8 through
+        // `bot_pain`, `MP_PlayerKilled` 0x188f70 with the player as the killer) [M the case-5 MP
+        // arm 0x13fff0:208-233 → `NDrone2_HitDamage` 0x145558:15-17]. Offline only (the list is
+        // empty online).
+        {
+            let hurts = std::mem::take(&mut self.drones.mp_bot_hurts);
+            self.drones.mp_bot_bodies.clear();
+            let local = self.mp_local_slot;
+            for h in hurts {
+                use nf_game::mp::combat::Hurt;
+                let h = match h {
+                    Hurt::Bullet { victim, amount, part, weapon, dir, at, .. } => Hurt::Bullet { victim, attacker: local, amount, part, weapon, dir, at },
+                    Hurt::Blast { victim, amount, weapon, at, .. } => Hurt::Blast { victim, attacker: local, amount, weapon, at },
+                    other => other,
+                };
+                self.mp_hurt(h, local);
             }
         }
         // death-blood-pane: `Player_CheckForDeath` runs `Player_WeaponNone` 0x1a9858 on the death
