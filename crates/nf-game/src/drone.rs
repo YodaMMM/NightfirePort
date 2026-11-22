@@ -13766,6 +13766,19 @@ pub struct Drones {
     /// head; the driver drains it after the tick, the blasts BEFORE the bullet sum (the game's
     /// frame order — the blast fires mid-frame, the MP update reads the chain at the frame's end).
     pub site_blast_hits: Vec<(f32, usize)>,
+    /// mp-local-bot-damage: the match's bots as the local pipeline's player rounds and blasts see
+    /// them, on an OFFLINE match only (the driver sets it before the tick; online the shared
+    /// combat owns every body and these stay empty). The game's bots are drone objects the
+    /// player's round contacts through the one collide pass: `NDrone2_DealWithObjHit` 0x13fff0
+    /// case 5's MP arm admits a class-2/3 shooter (the same-team gate unless friendly fire
+    /// [M :208-233]) and the message reaches `NDrone2_HitDamage` 0x145558, whose MP arm is
+    /// `BOT_handlePain` [M :15-17]; `Explode_Propagate`'s drone arm sends the blast the same way.
+    /// The body volume is the shared combat's (`mp::combat::Body`), the one the online rounds use.
+    pub mp_bot_bodies: Vec<crate::mp::combat::Body>,
+    /// mp-local-bot-damage: this tick's player round contacts and blasts on `mp_bot_bodies`, in
+    /// order, with `attacker = usize::MAX` (the player key; the driver maps it to the local slot
+    /// and drains them through the match's pain path after the tick).
+    pub mp_bot_hurts: Vec<crate::mp::combat::Hurt>,
     /// The enemy rounds' `SP_GetHitDamage` contacts `(player, damage)`, carried into the next
     /// tick's gather.
     pub sp_enemy_damage: Vec<(usize, f32)>,
@@ -14623,6 +14636,8 @@ impl Drones {
             site_sphere: None,
             site_bullet_damage: 0.0,
             site_blast_hits: Vec::new(),
+            mp_bot_bodies: Vec::new(),
+            mp_bot_hurts: Vec::new(),
             sp_enemy_damage: Vec::new(),
             gas: Default::default(),
             swooshes: Vec::new(),
@@ -16235,6 +16250,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             let a = crate::mp::combat::blast_falloff(pos, radius, damage, c, r);
             if a > 0.0 { self.site_blast_hits.push((a, owner)); }
         }
+        // mp-local-bot-damage: the player's blast reaches the offline match's bots (the drone arm
+        // of `Explode_Propagate` 0x17c518, the falloff the shared exact form [M :82-85]).
+        if owner == usize::MAX && !self.mp_bot_bodies.is_empty() {
+            let bl = crate::mp::combat::Blast { pos, radius, damage, owner, weapon: weapon_type };
+            for body in self.mp_bot_bodies.iter().filter(|b| b.alive) {
+                let a = body.blast_amount(&bl);
+                if a > 0.0 { self.mp_bot_hurts.push(crate::mp::combat::Hurt::Blast { victim: body.slot, attacker: usize::MAX, amount: a, weapon: weapon_type, at: pos }); }
+            }
+        }
         let destroys: Vec<(usize, V3, f32, bool, u16)> = self.props.destroy.iter().enumerate()
             .filter(|(_, x)| !x.dead)
             .map(|(i, x)| {
@@ -17600,7 +17624,39 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // The first solid node wins the round [M 0x1ea398:216-229 + 0x12cff0-4]: a scenery
             // contact taken above (contact.is_some) kills the walk — nothing farther applies.
             // A round that died on the copter body reaches neither a guard nor the world behind it.
-            let (best, tw) = if copter_stop { (None, None) } else { (best, tw) };
+            // mp-local-bot-damage: an offline match's bot is a node of the same sorted list (the
+            // game's bots are drone objects [M NDrone2_DealWithObjHit 0x13fff0 case 5]): the
+            // nearest body contact ahead of every other node takes the round, which dies on it
+            // [M Bullet_CollisionHandler 0x12ce80 — state 2 on the first sorted contact].
+            let mut bot_stop = false;
+            if !copter_stop && !b.dead && !self.mp_bot_bodies.is_empty() {
+                let near = self.mp_bot_bodies.iter().filter(|x| x.alive)
+                    .filter_map(|x| x.segment_hit(b.pos, end).map(|t| (t, x)))
+                    .min_by(|p, q| p.0.total_cmp(&q.0));
+                if let Some((t, body)) = near {
+                    if best.is_none_or(|(_, _, bt)| t < bt) && tw.is_none_or(|w| t <= w) && contact.is_none_or(|(ct, _)| t < ct)
+                        && mine_t.is_none_or(|mt| t < mt) && gadget_t.is_none_or(|gt| t < gt) {
+                        let p = at(t);
+                        self.mp_bot_hurts.push(crate::mp::combat::Hurt::Bullet { victim: body.slot, attacker: usize::MAX, amount: b.damage,
+                            part: body.part_at(p), weapon: b.weapon, dir: b.dir, at: p });
+                        // The contact blast arms run on object contacts too [M 0x12ce80 —
+                        // 0x12d068-0x12d188], as the drone arm below.
+                        let flags70h = d.weapons.records.get(b.weapon as usize)
+                            .map_or(0u32, |r| u32::from_le_bytes(r[0x70..0x74].try_into().unwrap()));
+                        if b.bounces == 0 && flags70h & (0x4 | 0x100000 | 0x200000) != 0 {
+                            let rec = d.weapons.records.get(b.weapon as usize);
+                            let radius = rec.map_or(0.0, |r| f32::from_le_bytes(r[0x08..0x0c].try_into().unwrap()));
+                            let damage = rec.map_or(0.0, |r| f32::from_le_bytes(r[0x0c..0x10].try_into().unwrap()));
+                            let script = if flags70h & 4 != 0 { 0x0600_0052 } else { 0x0600_07c4 };
+                            let scale = if flags70h & 4 != 0 { radius } else { 1.0 };
+                            self.pending_blasts.push((p, radius, damage, usize::MAX, b.weapon, script, scale, 0));
+                        }
+                        b.dead = true;
+                        bot_stop = true;
+                    }
+                }
+            }
+            let (best, tw) = if copter_stop || bot_stop { (None, None) } else { (best, tw) };
             match (best, tw) {
                 // mine-shield-by-guard: the guard is the SAME sorted list's node — a nearer mine
                 // or stuck gadget takes the round first (the mine/gadget arms above win the tie).
