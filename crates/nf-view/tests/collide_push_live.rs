@@ -141,3 +141,13 @@ fn every_leaf_runs_its_triangles_in_vertex0_x_order() {
     }
     assert!(leaves > 20_000 && tris > 2_000_000, "the disc-wide census ran ({leaves} leaves, {tris} triangles)");
 }
+
+/// 0700000a, the corner south of the west office door (the door closed): placed at (−17.87, 1.12,
+/// 4.87) facing yaw 2.987 and held forward 60 frames, the game slides the corner and stops at
+/// (−17.9715, 1.1159, −0.4162) [L 2026-10-26 fresh boot, the walkreal corner test's numbers].
+#[test]
+fn the_corner_line_matches_the_game() {
+    let p = hold("0700000a.bin", [-17.87, 1.12, 4.87], 2.987, 20, 0, 0, 60);
+    assert!((p[0] - (-17.9715)).abs() < 5e-3 && (p[1] - 1.1159).abs() < 5e-3 && (p[2] - (-0.4162)).abs() < 5e-3,
+        "the corner line ends where the game's does ((−17.9715, 1.1159, −0.4162) [L]), got {p:?}");
+}
