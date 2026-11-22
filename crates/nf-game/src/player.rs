@@ -945,6 +945,7 @@ impl Bond {
         if self.enter_water(ctx) { return; }
         self.physics_tick(world, ctx, input, false, false);
         self.ladder_grab(ctx);
+        self.wire_walk_grab(ctx);
     }
 
     /// `Player_SSGrapple` 0x192860 through `gadget::grapple_tick`: the reel toward the grapple
@@ -1047,6 +1048,38 @@ impl Bond {
         // The grab scan runs from the swim substate too — `Player_CollLadder` excludes only substates 1
         // and 2, and `Player_CollisionHandler`'s grab dispatch follows every substate update [M 0x196118].
         self.ladder_grab(ctx);
+        self.wire_walk_grab(ctx);
+    }
+
+    /// The walk-in wire grab: `Player_CollisionHandler` 0x1949a8 walks the player's hit list every
+    /// non-climb tick and `Player_DealWithObjHit` 0x194458:104-107 hands a class-0x2C hit to
+    /// `Player_CollWire` 0x197130 (`grab_wire`). The hit exists when the tick's HITTEST capsule
+    /// (`pick_arm`, built at the integrated spot before the push-out — `pre_collide`) passes
+    /// `Wire::pick_hit` (the ×1.5 sphere pick, then the strict capsule-vs-collision-triangle refine).
+    /// Pick scoping [M Collide_Pick 0x1eb320]: a ForcedList wire (`forced`, its sphere spans ≥2 cels)
+    /// is picked from every spot; any other only while the player straddles its own cel. The pick
+    /// needs no input: E plays no part (`Player_Activate` 0x1a5170 has no class-0x2C arm). Runs after
+    /// the ladder grab; a tick that just grabbed a ladder skips it [S — the game walks the hit list
+    /// in distance order and `Player_CollWire` would still run on a climbing player; whether any
+    /// shipped ladder sits within reach of a wire mesh is unmeasured]. The wire/zipline riders skip
+    /// it [S — the riding HITTEST excludes only the ridden wire (BLData+0x7B8 = +0x884 [M
+    /// Player_Collision 0x194df0 case 5])].
+    fn wire_walk_grab(&mut self, ctx: &LadderCtx) {
+        if matches!(self.substate, SS_CLIMB | SS_WIRE | SS_ZIPLINE) || self.regrab != 0 { return; }
+        let (ao, bo, r) = pick_arm(self.substate, self.crouched, self.cc);
+        let pick = self.pre_collide;
+        for (i, w) in ctx.wires.iter().enumerate() {
+            if !w.forced && !ctx.straddle.is_empty() {
+                match w.cell {
+                    Some(c) if ctx.straddle.contains(&(c as usize)) => {}
+                    _ => continue,
+                }
+            }
+            if !w.pick_hit(pick, ao, bo, r) { continue; }
+            let before = self.substate;
+            self.grab_wire(i, ctx);
+            if self.substate != before { break; }
+        }
     }
 
     /// `Player_CollLadder` 0x196118, fed by the `Player_DealWithObjHit` 0x194458 class-0x2D dispatch over

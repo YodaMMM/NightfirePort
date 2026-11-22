@@ -129,3 +129,28 @@ fn the_latch_follows_every_committed_draw_not_just_the_switch() {
     assert!(!s.gun.laser_on, "the 0x16 draw commit re-read the bitless record");
     assert!(s.laser_sight().is_none());
 }
+
+/// The beam's flicker byte obj+0x106 [M Player_LaserPointer 0x1a65d8:157-171]: every frame the
+/// sight runs, `+= Rand_Rand(9) − 4` clamped to 0x10..0x30, a draw off the shared seed pair. With
+/// the sight lit the byte wanders inside that band; the draw advances the shared stream.
+#[test]
+fn the_sight_flickers_its_beam_byte_off_the_shared_stream() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = scene_with_sg5(&iso);
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let mut input = Input::default();
+        input.mode_switch = true;
+        sim.step_bond(input, false, false, false);
+    }
+    for _ in 0..200 { scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false); }
+    assert!(scene.sim.as_ref().unwrap().laser_sight().is_some(), "semi: the sight is on");
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..120 {
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+        let a = scene.sim.as_ref().unwrap().laser_alpha;
+        assert!((0x10..=0x30).contains(&a), "the byte stays in 0x10..0x30: {a:#x}");
+        seen.insert(a);
+    }
+    assert!(seen.len() > 3, "the byte wanders frame to frame: {seen:?}");
+}

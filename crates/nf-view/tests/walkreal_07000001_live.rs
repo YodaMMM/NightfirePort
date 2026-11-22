@@ -158,13 +158,21 @@ if !(difficulty >= 2) || w.scene.sim.as_ref().unwrap().drones.channels.on(0xf) {
     if difficulty >= 3 {
         d3_switch_to_deepest_gun(w, "the pocket lane re-arm");
         let prev_head = w.prefer_head;
-        w.prefer_head = true;
+        // s/hard-walks-d: the torso, not the head. With the head pick the P2K's spread put every
+        // tap of the 600-tick stand on #12 into the lane's east jamb (z ~13.1, y ~6.8; the round's
+        // world stop at t 0.68-0.92 of its segment while the eye-to-box ray read clear) and Bond
+        // died at the mouth t26760; the torso pick leaves the pocket at 57.4 [measured on this
+        // branch, both with the box shield below].
+        w.prefer_head = false;
         let prev_fh = w.flank_hold_x;
         w.flank_hold_x = Some(-33.0);
-        // The plain cylinder shield in the lane: the contact settles IN it, between Bond and the
-        // captain — never a tap through him.
+        // s/hard-walks-d: the hit-box shield in the lane. The contact settles IN it at (-30.24,
+        // 13.99), and the plain cylinder (reach 0.9 + 0.05·d) covered every line to #12 behind him
+        // for the whole stand (shield_block on every tick) while #12 stepped out beside him and
+        // landed 57.4 [L this branch's shield trace]. The box cone (the spread's reach) still
+        // refuses a tap through him.
         let lane_boxes = w.shield_boxes;
-        w.shield_boxes = false;
+        w.shield_boxes = true;
         w.keep_off = None;
         w.dmg.back_off = None;
         w.walk_nav_to([-30.4, 6.4, 16.5], "the pocket lane mouth (d3)", 0.5);
@@ -4314,7 +4322,7 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_agent() {
 /// 2-4 u (57.4 in 30-38 hits) while the walk's crouched eye reads no exposed part on him for
 /// 540 ticks and the flank goes to 1.6-2.1 u. Next lever: a lane stand that opens #12's boxes
 /// (standing, or a stand east of the contact), or fighting #12 before the slab pops him.
-#[ignore = "00 Agent: hall now clean (57.4 at the AND); dies in the ch-0xF pocket to #12 at 2-4 u, no exposed part from the lane mouth (s/hard-walks-a)"]
+#[ignore = "00 Agent (s/hard-walks-d): Bond now leaves the ch-0xF pocket at 57.4 (the hit-box shield + torso aim in the lane: the old death was the cylinder shield holding every tap while #12 stepped out beside the contact, not sight), but the lane stand kills only #17; #12 and the captain #3 outlast it behind the contact, the mouth rounds then hold 16 rounds on the walled stairwell #2 (y 10.2) and the contact dies in the pocket at t50960 (mission fail). Route: the contact's settle spot in the 1-u lane blocks every jamb-free line"]
 fn walk_from_the_spawn_to_the_exit_with_the_contact_real_damage_00agent() {
     walker::with_real_damage(|| walk_from_the_spawn_to_the_exit_with_the_contact_at(3));
 }
