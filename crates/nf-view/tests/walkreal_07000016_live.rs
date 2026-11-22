@@ -1060,19 +1060,16 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // ticks on a hunting guard 17-27 u out (12 rounds, zero damage) while the ring
         // guards emptied him (the 1988 death).
         for (label, wp) in APPROACH {
-            // retune-nb-16-7 (the shooters window, d3 only, per-leg): the level-phase legs run
-            // the wide 40 u window so the reactive pick answers the 20-40 u pourers where the
-            // level gate allows it (the y 6.7 gallery is in the ±2 band at ring level — the
-            // ledger's "clear at level" principle); the ground/lane/ramp legs keep the
-            // default 20 u window and keep MOVING (the run-7 lesson above).
-            if re_arm && station_armour
-                && w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
-                w.dmg.shooters_window = if *label == "the ring east"
-                    || matches!(*label, "the ring 1" | "the ring 2" | "the ring 3" | "the ring 4")
-                    || label.starts_with("the station") || label.starts_with("the return") {
-                    Some((40.0, 7.5))
-                } else { None };
-            }
+            // retune-nb-16-7 MEASURED (run 10, after runs 8/9): the per-leg shooters window is
+            // REMOVED. The wide window's reactive fights at the ring east chained (the #5 kill
+            // for 14.0 measured good — then the machinery re-picked the strafed-north riflemen
+            // and the #3 fight stood under the multi-guard pour, 44.0 -> 0 in 130 ticks [L run
+            // 8/9 t1469-1598]). Run 1's own ring phase (the default 20 u window, the legs
+            // MOVING) cost only ~4-6 hits (~25-30) across the whole phase — the far pourers'
+            // lines are answered by the walk's own westward progress (they close inside 20 u
+            // by the ring 3/station legs and the default fights + the clears take them there
+            // at close range where the trades are cheap). A player keeps walking; he does not
+            // stand-fight a rifleman 25 u out while his friends shoot.
             if wp.at[1] > 5.5 {
                 // retune-nb-16-6 (the batch-3 run-6 ledger, d3 only): the ring-east pre-clear
                 // stood Bond ON RAMP 3 (y 4.74) fighting the whole y 6.7 gallery 20-34 u out —
@@ -1328,6 +1325,10 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
                 if *label == "the lane south" {
                     stand_off_the_south_gallery_16(w, label, -10.0);
                 }
+                // retune-nb-16-7 MEASURED (run 11): the ramp-2 re-stand (the cheap hp-10 kills)
+                // shifted the stream and died EARLIER (t1428 at the ramp 1 arrival) — the ramp
+                // legs keep MOVING (the run-7 lesson repeats). The lane stand stays the only
+                // approach stand (run 10's composition: the node arrival 58.0 vs run 1's 47.5).
                 // retune-nb-16-7 MEASURED (runs 8 vs 5/6): the RING-LEVEL stands are the death
                 // magnet, not the answer. Run 8's wide-window reactive fight killed the
                 // gallery brute #5 mid-nav for 14.0 (the cheapest answer this stream has
@@ -3524,7 +3525,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// 2 hits (every delta within the game's chain [D record 99; M 0x1d4424/0x139fac]), ch 0xbf
 /// at +8428, the lift-out hand-back at +9490, the button, end health 17.0 (the pool spent,
 /// 37 hits for 83.0 across the whole walk).
-#[ignore = "stream batch 3 re-tune (retune-nb-16-6, 2026-11-22), still red at the furthest measured point (t1229, (-2.83,6.75,-78.60) ON the ring between ring 1 and ring 2, 18 hits for 100.0, 1 return-fire fight). The batch-3 re-measure killed the pocket excursion's premise: the 'pocket' is a shallow cut (Bond y 0.80-0.99 in it [L the NF_WALK_TRACE run]) and with body aim [M master c229c7780] the standing dash bled 100 -> 26.5 and the pocket died in 80 ticks to the descended ground closer #0 over the 0.1 u lip (his line + the −40.5 finisher at d 6.2; death t1473); the crouched dash improved the entry to 40.5 but the pocket still died (t1304); the switch_to_armed there is a 61-tick no-op (a loaded gun qualifies in iteration 1). The landed lever on THIS tree (d3 && !tops_up, file-local): the batch-3 fight-through — the pocket excursion is SKIPPED, the walk runs the d1 law set (finish_fights, back_off 3.5, hurting_first, level_fights) and the ring-east pre-clear is gated until Bond is at ring level. Measured furthest: the lane crossed in ~90 ticks/leg, the ramp climbed, the ring REACHED (never before on batch 3 — every excursion run died in the pocket phase), death on the ring at t1229. The measured WORSE pair, do not retry: level_fights OFF at d3 (the reactive stands fight the y 6.7 gallery brutes from the floor and lose: t896 at the ramp foot, #2 65.0 in 10, 2 fights); the ring-east pre-clear un-gated (Bond stands on ramp 3 y 4.74 vs the gallery 20-34 u out: t973, #2 47.5 in 7). NEXT LEVER: the ring-phase bleed — Bond reaches the ring with the lane/ramp bleed already sunk (the south-gallery brute pair #2 (9.5,6.7,-110.6) hp 20 and #5 (-4.7,6.7,-111.0) hp 20 dealt 77.0 of the 100 from 32-34 u THROUGH the whole approach and are STILL alive on the ring), so the ring clears (clear_hostiles_16 40 u / 900 cap at ring 1..4) must finish the gallery BEFORE he drains: the ring-1..4 bounded stands need the south brutes on their fight list (the visible-gated ring-1 rifleman lever at the ring 1 leg runs only for the punch walk — extend it to the defeat walk d3-gated and cover ring 2..4), or the walk answers #2/#5 from the ring east leg itself where they are 29-31 u and at -0.8 level"]
+#[ignore = "stream batch 3 re-tune round 7 (retune-nb-16-7, 2026-11-22), still red at the ring phase (t1620, (10.70,6.75,-77.94) ~10 u past the ring east arrival onto the ring; the merged tree moved the -6 ledger's t1229 — master 48bfea13f's per-tick tables shifted the stream, the re-measure died t1027 AT the ring east arrival, the pair #2/#5 dealt 86.0). The landed levers on THIS tree (d3 && !tops_up, file-local to the test): (1) the Delta->P2K switch at the route head — the switch is 61 ticks a try [M the holster/draw cycle] and everything downstream stands need the P2K (the run-2 probe: gun 0x11 clip 2 spare 9 at the ring node, the P2K 48 rounds unfired, death inside the cycling); (2) the lane south dealer stand, dealer-first by the walk's own player_hits audit, via the no-displacement peek stand: the #2 kill at 27 u took 335 ticks (the P2K's 2.1-a-round body taps x10 [L run 5]) for ~10.5 net — the node arrival 47.5 -> 58.0 [L run 10 vs run 1]. The measured WORSE set, do not retry: the ring-level stands (the node stands bled 44.0 -> 0 in 130 ticks under the strafed-north rifleman pair's combined pour [L runs 8/9 t1469-1598] — ANY stand at ring level eats 0.35-0.67/tick from 3-5 pourers); the ramp-foot/ramp-2 stands (the NE ring guard #0's 13.6 u line poured 10 free hits [L run 7 t1239-1363]; the ramp-2 re-stand shifted the stream and died t1428 [L run 11]); the walk-wide shooters_window 40 (it opened ground-leg reactive fights on the ground hunter and shifted the whole stream, the #2 burst t335 -> t586 [L run 7]); the blocked-branch sidesteps (a +-1.0 strafe, 90-tick windows, walked Bond 16 u west off the lane into the trench rim, death y -6.68 [L run 6] — the no-displacement peek stand replaced shoot_bounded in the lane stand); the flank nav on the lane stand (the 540-tick flank walked Bond east to the pocket rim, death y -4.99 [L run 5]). MEASURED GOOD but not sufficient: the wide-window reactive fight killed the gallery brute #5 mid-nav for 14.0 (the cheapest answer this stream has measured [L run 8]) — but the fight CHAIN then re-picked the far riflemen and stood under the multi-pour (the death). The ring phase's own pour (the legs MOVING, the default 20 u window) is ~30-58 health for the phase [L runs 1/10] and the node arrives with 58. NEXT LEVER: the ring phase must net-cost <= ~40 from a ~58 node arrival — (a) the fights' SPEED at the ring: the dropped 0x1a SMGs deal 7.0 a round vs the P2K's 2.1 [L the guards' rounds on Bond], and the ring clears' own loot walk already fetches close drops — a d3 arm should prefer the owned 0x1a after the loot (the clear's switch_to_a_deep_firearm keeps the P2K because its 36 rounds pass the >=10 check), making every hp-10 fight 3 rounds instead of 5-12; (b) the fights' TRADE DISCIPLINE: abort_on_wound (the fight's own opt-in) breaks each fight after a volley so the legs move between the cheap kills — the run-8 chain (fight, fight, fight while standing) is the exposure that killed; (c) the approach cut pushed further: a #5-then-#3 batch in the lane stand loop (his 44 + #3's 24.5 measured [L run 10]) — each marginal, judge the batch on its own run"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles; the ninja's
     // NinjaStand start): the pocket's close four took 72 -> 12.5 and Bond reached the blast

@@ -105,3 +105,14 @@ P2K because its 36 rounds pass the >=10 check — a d3 arm should prefer the 0x1
 exceeds any stand longer than ~100 ticks from the node's ~58 health; the fights need to break
 off after one kill (the determined pass + finish_fights re-stand is the exposure that killed
 run 9).
+
+retune-nb-16-7 final (2026-11-22): the ramp-2 re-stand measured WORSE (run 11: death t1428 at
+the ramp 1 arrival, the stream shift again — the run-7 lesson repeats); reverted. The final
+composition (runs 10 = 12 byte-identical, the determinism check): the early P2K switch + the
+lane south dealer stand + the peek stand + the default machinery — death t1620 at (10.70, 6.75,
+-77.94) ~10 u past the ring east arrival onto the ring, the node arrival improved 47.5 -> 58.0.
+The refreshed ledger + the next levers (the 0x1a speed arm in the clears, abort_on_wound trade
+discipline, the #5/#3 lane batch) are in the ignore message. Whole walkreal_07000016_live
+binary at the final tree: 18 passed / 0 failed / 1 ignored (140.1 s, --test-threads=1) — the
+d3 walk is the 1 ignored, the sisters' streams gated untouched by construction (no crates/*/src/
+and no crates/nf-view/tests/common/ files changed; the diff is the walk test file + docs).
