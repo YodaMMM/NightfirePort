@@ -389,3 +389,8 @@ launcher cannot fight a guard) — 12 un-gone 0x44 dart pickups at 1.6-2.8 u fro
 are the next cheap lever. Whole binary 6/1, 162.00 s [L]. The next levers (the fight-order
 common/ savings, the dart scoop-and-arm, the dive-cadence read) are in the ignore message.
 Report: docs/reports/retune-nb-08-18.md.
+## retune-nb-08-19
+Branch start: sandbox reset, redoing setup. 08-18 not on master: merged it first
+(fast-forward, master had not moved). Round 19 targets: the machine fight cannot be won
+from the current anchor (round-18 finding) — try a different place or approach for that
+fight; levers from the ignore message, skipping measured-dead rows.
