@@ -21,3 +21,8 @@ say so in the report. Never weaken a decompile-backed test to make code pass.
 
 ---
 claimed-by: sandbox4 at 2026-11-22T19:45Z
+
+---
+## Report (done, 2026-11-22T20:58Z)
+
+Closed by the driver: the report is on `s/walk-06-00agent` (docs/reports/walk-06-00agent.md); the worker didn't run finish.sh.
