@@ -2477,6 +2477,17 @@ fn walk_arrival_to_the_c5_door_real_damage() {
 // south-roof cover snipers swept first from the ladder top (the d2 real-damage block) and a
 // 45-tick stop at tick 11000 [L the 30-value stop grid: 11000/45, 13000/45 and 16500/90
 // complete; the rest die at the yard landing t20561-22031].
+// s/hard-walks-a (2026-11-22 [L the runs on this branch]): the ladder-top acts stand DRY. The
+// south-roof sweep spends the rifle's clip (clip 0 spare 30 at the #17 act) and the act never
+// reloads: the reload key is refused while the sniper's fire script plays (the view state 9 gate
+// [M Player_WeaponFiring 0x1a5460]) and nothing presses it after. A reload between the passes
+// (held until it starts, 269 ticks) fills the clip but the stand is then long enough for #19/#15
+// to land 2 x 28.0 (death t4729 with 11000/45, t4856 with 3000/60). With 3000/60 and no reload
+// Bond reaches the beam at 26.8 + 50 armour, the west-apex drop costs 18.2 (fall), and the
+// crouched landing sweep kills three before #7/#0/#4 chip him out at 23-28 u (t20146). The
+// container route at d2 (the 00 Agent hop) boards only standing at the corner, and its hop then
+// misses the container top (hold 36: the yard floor at x 138.9; holds 8/14 stay on the girder,
+// 20 the floor, 26 the top at health 0).
 #[ignore = "batch 3 (stream batch 1121d), 40 measured runs: with the committed 11000/45 stop Bond dies t4397 at the ladder #435 top (213.06, 17.37, -234.51) to the south-roof rifles (#19/#31/#20 28.0 each); 25 single stops 200-3500 die there or on the deck (t11427-13241), the corner crouch hangs him off the aboard plate (ch 0x67 never fires), and 3000/60 plus 18 second stops 5000-19500 all reach the yard landing and die there (137.59, 4.63, -296.21) t19334-20492, the 00 Agent sister's floor-fight wall"]
 fn walk_arrival_to_the_c5_door_real_damage_agent() {
     walker::with_pause(11000, 45, || walker::with_real_damage(|| walk_arrival_to_the_c5_door_at(2, true)));
