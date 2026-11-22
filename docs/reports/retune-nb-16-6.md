@@ -100,3 +100,25 @@ three smaller crates and this binary covers the task-touched crate: see the WORK
 ## Usage
 
 not visible to me
+
+## The full suite (final note)
+
+`tools/test/suite.py` was started in the background twice (19:47, 21:27); both processes were
+killed by the sandbox between tool calls before producing a line (suite.out empty, no build
+progress). The sandbox was reset this session, so the four-crate release build would start from
+zero (~15-25 min of compile alone) and did not fit the remaining window after setup; the
+background kill makes it unrunnable here. What ran, on the final tree:
+
+- **The whole `walkreal_07000016_live` binary** (the task-touched crate's affected set — the
+  diff touches ONLY this test file): **18 passed / 0 failed / 1 ignored**, 136.8 s,
+  `--test-threads=1` (the 1 ignored = the ledgered d3 walk).
+- No `crates/*/src/` or `crates/nf-view/tests/common/` files changed, so no other crate's or
+  level's binary set can move (rule 10's affected set is this one binary; rule 7 does not
+  trigger).
+
+## ntfy
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds`.
+2. python urllib: exited 0 twice with no error (urlopen raises on failure — a raise would exit
+   nonzero), no response body captured — treated as delivered.
+3. wget: exit 124 (killed by the 25 s timeout, empty output file).
