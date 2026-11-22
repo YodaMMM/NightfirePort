@@ -39,3 +39,13 @@ east-high fight list, the close-pair-from-peek, the exit fought, the squad close
 newer stream re-pins. The d3 real-damage walk is still ignored with the 1121b-era ledger
 (pocket glass-pane death t2200-5600); batch 3 postdates it, so the first step is a re-measure on
 the merged tree.
+
+The batch-3 re-measure (fresh runs on the merged tree): the pocket excursion is dead — the
+standing dash bled 100 → 26.5 and the pocket died in 80 ticks to the descended ground closer #0
+over the 0.1 u lip (t1473); the crouched dash improved the entry (40.5) but the pocket still died
+(t1304). The landed lever: the batch-3 fight-through (d3 skips the excursion, runs the d1 law set
+finish_fights/back_off 3.5/hurting_first/level_fights, the ring-east pre-clear gated until ring
+level). Measured: the ring REACHED for the first time on batch 3 (the lane crossed ~90 ticks/leg,
+the ramp climbed), death on the ring at t1229 — the refreshed ledger + the next lever (the
+ring-phase bleed, the south-gallery brute pair #2/#5) are in the ignore message. Whole
+walkreal_07000016_live binary: 18 passed / 0 failed / 1 ignored (the d3 walk, ledgered).
