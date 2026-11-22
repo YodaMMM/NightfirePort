@@ -233,6 +233,12 @@ fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, radius: f32, d
                 .filter(|(_, d)| ((d.pos[0] - b[0]).powi(2) + (d.pos[2] - b[2]).powi(2)).sqrt() < radius && (d.pos[1] - b[1]).abs() < dy)
                 .map(|(i, _)| i).collect();
             let ring_now_count = ring.len();
+            // retune-nb-08-20 TRIED the most-hits-first pick here (the ledger's round-17 item
+            // (2), the fight-order lever) and it measured BYTE-IDENTICAL on its own real run —
+            // the merged-tree deck fight's newest hitter was already its worst shooter at every
+            // pick (six 0xa shooters at 4.1-11.5 u, symmetric lanes; #13 dead before #2's window
+            // grew), death t16372 unchanged [L the 2026-11-22 lever run]. Reverted; the next
+            // window's levers are in the ignore message.
             // 1. the guard who landed the LAST hit on Bond inside the ring — the hurt bookkeeping
             //    names him (player_hits is frame-ordered; the newest entry with an in-ring live owner).
             let hurt = sim.drones.player_hits.iter().rev()
@@ -3957,6 +3963,40 @@ launch, the ride-free path also skips the chain.
 // (the measured gap: #25's -16 + the pit trickle -8 per ~800 ticks vs the entry 26.0);
 // (3) the second-dive window: the flight log shows the loop's dive ~700-800 ticks past the
 // t29335 death — every lever that banks health above moves the death past it.
+// retune-nb-08-20 (2026-11-22, still red — the walk RE-MEASURED on the merged tree first, as
+// the round's task required): the branch is origin/master b60b1ff79 (stream batch 3: guards'
+// rounds hit Bond's body boxes, guards aim at his body, the one-sided wall push, room walk
+// gate, guided rocket hit size, burst latch) + 08-19 merged. THE MERGED-TREE BASELINE FIRST:
+// the batch-3 running jump (master's d1/d2 balcony crossing, added for the one-sided push)
+// fires before the d3 east-deck-head leg and lands Bond ON the deck — the shipped lip walk +
+// in-place hop then had to climb back UP 4 u and wedged the 6000-tick cap at the lip (bond
+// (142.56,46.13,-91.36) target (141.00,50.10,-92.50) d 1.93, tick 6540, health 77.0 [L the
+// merged-tree NF_DMG_TRACE run]). SHIPPED FIX: the d3 crossing is the running jump itself
+// (the in-place hop is dead under the one-sided push — the hop loop measured Bond parked ON
+// the lip step at (141.406, 50.275, -92.503) for the whole 300 ticks, the running-jump
+// comment's own law; the d1/d2 sisters skip this leg, byte-exact). RE-MEASURED BASELINE: the
+// walk reaches the LOWER LEVEL EAST and dies t16372 at (107.62,28.28,-120.42), health 4.0 —
+// 29 hits for 77.0 + other 23.0, 11 return-fire fights [L the 2026-11-22 run] — 13000 ticks
+// short of the machine fight, so the round-19 machine levers are MOOT on this stream. The
+// merged-tree upstream ledger [L the same run]: the deck fight 52.0 (six 0xa shooters
+// #3/#2/#14/#13/#9/#10 at 4.1-11.5 u, rows t717-1570, every fight KILLED), #6 -3.0, the y33
+// transit -18.0 (#18 skin 0x500002f weapon 0x15: -2/-6/-6 in 8 ticks at t14767-14775 from
+// (115.2,41.5,-101.8) d 21.5 — the 30-tick retarget grid never samples inside the 8-tick
+// burst — plus #16 -4.0), then the lower level east unseen pair: the stand on #23 killed
+// false and the point-blank #19 burst (-4.00 d 0.8) closed the walk. LEVER TRIED this round:
+// the ledger's (2), the fight-order most-hits-first pick (the wide-fight ring pick + the
+// retarget law's VISIBLE filter dropped, opt-in thread-local) — BYTE-IDENTICAL no-op on its
+// own run (the newest hitter was already the worst shooter at every pick; the #18 burst
+// outruns the 30-tick grid). Reverted. NEXT LEVERS (priority): (1) the fall: the "other
+// 23.0" is the running jump's landing [M Player_CollisionHandler 0x1949a8:108-131 — the
+// damage is fall_timer-60 with the apex reset; the jump apexes ~51 over the 46.05 deck] —
+// measure a softer crossing (a walk-off needs the step's east face at x 141.956 cleared; the
+// sliver east of it is ~0.25 u) or pin whether the game's own player pays it (the d1/d2
+// walks pay it and pass); (2) the #18 y33 answer: a pre-transit stand on the upper sniper or
+// a per-tick retarget while a new shooter's 240-frame damage grows (the burst is 8 ticks;
+// the grid is 30); (3) the mid-fight scoop+arm (the 08-2 ledger's armed-vs-dry deck-fight
+// delta 12.0 vs 52.0 — the pre-nav arm is measured dead; a scoop after the first stand's
+// kill is untried); the machine-fight levers return once the upstream survives.
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
