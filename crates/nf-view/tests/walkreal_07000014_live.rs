@@ -2270,7 +2270,11 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     // Batch 3 (5e9460adb): 1000/60 dies on Rook's close (t40510); lever 20000/60 [L the
     // 20-value sweep: 1000/45, 1000/90, 2000-39000/60 complete; 900/60, 1100/60, 500/60 and
     // every 1000/60 two-stop run die].
-    walker::with_pause(20000, 60, || {
+    // s/nb-scan-live (ChooseCombatMove no longer returns 0x5E on the scan's bit 2, the stream
+    // moves): 20000/60 dies t29712 at the escape-touch leg (-34.87,1.07,26.46); lever 15000/60
+    // [L the 9-value sweep: 5000/60 and 15000/60 complete; 1000, 2000, 10000, 25000, 28000 /60
+    // and 20000/30, 20000/90 die].
+    walker::with_pause(15000, 60, || {
         walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
     })
 }
