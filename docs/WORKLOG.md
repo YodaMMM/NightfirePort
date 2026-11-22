@@ -344,3 +344,16 @@ committed defaults are the cd() closure (the green shape for the container roll 
 env override wins; d1/d2/plain byte-identical). Whole binaries on the final tree:
 walkreal_0700000d_live 4 passed / 0 failed / 1 ignored (142.78 s), interactables_0700000d_live
 11 passed / 0 failed (29.72 s). Report: docs/reports/retune-nb-0d-15.md.
+
+## retune-nb-0d-16 (2026-11-22, sandbox1)
+
+Round 16 of the 0d arrival-to-C5-door real-damage walks (Agent and 00 Agent). Branch
+s/retune-nb-0d-16 from current origin/master (6691acd8c, stream batch 3 landed) with
+origin/s/retune-nb-0d-15 merged in first (0d-15 was not on master; the merge was clean).
+Plan: read the round-15 report and the ignore messages on
+walk_arrival_to_the_c5_door_real_damage_agent and _00agent, skip the ledger's measured-dead
+levers, re-measure both walks on the merged tree (Agent first), then take the next untried
+lever from the ignore message. Helpers stay gated to the level and the difficulty; real
+input only, no top-ups, never lower damage or health, never change guard code; each lever
+judged on its own real run. Whole walkreal_0700000d_live before finishing.
+Report: docs/reports/retune-nb-0d-16.md.
