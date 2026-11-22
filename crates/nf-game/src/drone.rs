@@ -1628,6 +1628,11 @@ pub struct Drone {
     /// The port's PLAY_SCRIPT-scoped stand-in for that stamp (ENTER sets `frame + 30` for the
     /// 0x6000168/0x6000169 arms; 0 = no gate — the other script arms never re-bark).
     pub play_script_talk_gate: u32,
+    /// `+0xCD8` as PlayScript 0x15ba68's ENTER stores it: the resume its impact arms pass to
+    /// `DroneFunc_HandleImpact` — 0x56 (Attack) for 0x60005e6/0x60008ae and the default script,
+    /// 0 for 0x6000168/0x6000169/0x60007ac [M 0x15ba68:30-81]; cases 6/8 pass allow 0, the
+    /// 7/9/0x17/0x18/0x19 group allow 1 [M 0x15ba68:161-176].
+    pub script_impact_resume: u8,
     /// `+0x53C`: the facial anim object attached for the current talk line — `AnimFacialAppend`
     /// 0x1c6490's return, stored by `NDrone2_SpeechSFX` 0x141b00's facial arm [M 0x141b00:18-23].
     /// The port holds the attached facial script's hash while the line plays (lip-flap not modelled).
@@ -2376,7 +2381,7 @@ impl Drone {
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep_ops: Vec::new(), body_ops: 0, anim_stops: Vec::new(), drops: Vec::new(),
-            play_script_talk_gate: 0,
+            play_script_talk_gate: 0, script_impact_resume: 0,
             free_root: false, bounded: true, dtype: param(15) as u8, mode_normal: param(16) as u8, mode_alert: param(21) as u8, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None,
             // `DroneFunc_NearPlayerCollision`'s source array:
             dist_to_player: [100000.0; 4],
@@ -3851,6 +3856,14 @@ impl Drone {
 
     /// Each state's `DroneFunc_HandleImpact(msg, resume, allow)` for msg 8: (resume state, 0 = the current one; whether
     /// a flinch is allowed). `None`: the state ignores bullets.
+    /// `impact_args` with the per-drone resumes: PlayScript 0x15ba68's impact arms pass the
+    /// `+0xCD8` its ENTER stored (`script_impact_resume`), allow 0 for cases 6/8 [M
+    /// 0x15ba68:161-176]; the group's allow 1 rides `on_explosion`'s list.
+    fn impact_args_for(&self, s: u8) -> Option<(u8, bool)> {
+        if s == state::PLAY_SCRIPT { return Some((self.script_impact_resume, false)); }
+        Self::impact_args(s)
+    }
+
     fn impact_args(s: u8) -> Option<(u8, bool)> {
         use state::*;
         Some(match s {
@@ -3990,7 +4003,7 @@ impl Drone {
             }
             return true;
         }
-        let resume = Self::impact_args(s).map_or(0, |a| a.0);
+        let resume = self.impact_args_for(s).map_or(0, |a| a.0);
         let u10 = if resume != 0 { resume } else { self.state };
         if u10 != 0 && !(0x53..=0x55).contains(&u10) { self.impact_resume = u10; } // [M 0x1469b8:274-285]
         self.tower_impact_stamp(d); // [M 0x1469b8:283-305]
@@ -4085,12 +4098,13 @@ impl Drone {
             self.explosive_impact(d, rng, frame, 0, true);
             return true;
         }
-        let Some((resume, allow)) = Self::impact_args(s) else { return false };
+        let Some((resume, allow)) = self.impact_args_for(s) else { return false };
         // The case-9 allow is the DSTATE's own arm, not the msg-8 pair: Idle/Alert/Patrol's
         // 7/9/0x17/0x18/0x19 group passes (0x56, 1) while case 8 alone passes (0x56, 0) [M
         // 0x15bf18:100-110 / 0x15c248:68-77 / 0x15c498:65-74] — the surviving guard staggers.
         // The scare-flight family's group arm does the same [M 0x168aa8 / 0x168d18:57-65].
-        let allow = allow || matches!(s, IDLE | ALERT | PATROL | RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT | INTEROGATE
+        // PlayScript's group arm is (+0xCD8, 1) [M 0x15ba68:165-170].
+        let allow = allow || matches!(s, PLAY_SCRIPT | IDLE | ALERT | PATROL | RUN_AWAY_FROM_OBJECT | HIDE_FROM_SCARY_OBJECT | INTEROGATE
             // fix-guard-blast-stagger: CombatOutOfRange / CombatNoSight / AlertToPosition's 7/9/0x17/0x18/0x19
             // group arm passes allow = 1 like the Idle/Alert/Patrol group — the blast staggers them too
             // [M 0x164690:52-72, 0x164838:39-56, 0x165270:78-93]. Their msg-8 alone is (resume, 0).
@@ -4208,7 +4222,7 @@ impl Drone {
             if s == SMOKED_OUT_LOOP { self.timer_c = Some(frame + 5); }
             return true;
         }
-        let Some((resume, _allow)) = Self::impact_args(s) else { return false };
+        let Some((resume, _allow)) = self.impact_args_for(s) else { return false };
         let u10 = if resume != 0 { resume } else { self.state };
         if u10 != 0 && !(0x53..=0x55).contains(&u10) { self.impact_resume = u10; }
         self.tower_impact_stamp(d); // [M 0x1469b8:220-246]
@@ -4271,7 +4285,7 @@ impl Drone {
             return if punch { self.punch_impact(d, rng, frame, 0, false) } else { self.on_bullet_resume(d, rng, frame, 0, false) };
         }
         if !punch && s == state::BULLET_IMPACT { self.bullet_impact(d, rng, frame, 0, false); return true; }
-        let Some((resume, allow)) = Self::impact_args(s) else { return false };
+        let Some((resume, allow)) = self.impact_args_for(s) else { return false };
         if punch { self.on_punch_resume(d, rng, frame, resume, allow) } else { self.on_bullet_resume(d, rng, frame, resume, allow) }
     }
 
@@ -8324,8 +8338,8 @@ impl Drone {
         if let Some(r) = self.handle_astronaut(d, rng, frame, s, m) { return r; }
         match (s, m) {
             // `NDrone2_DSTATE_Global` enter: a drone with a switch channel that is still off waits (WaitSwitch); else its
-            // start state `+0x5A2` (InitPatrol with props 0x24/0x25, else Idle). Modes 0x1E and start scripts
-            // (PlayScript 3) are not ported.
+            // start state `+0x5A2` (InitPatrol with props 0x24/0x25, else Idle); a start script → PlayScript 3
+            // (below). Mode 0x1E (→ 0xc3) is the MP bot class — no SP drone carries it.
             (GLOBAL, msg::ENTER) => {
                 self.return_state = self.start_state(d);
                 if self.switch_channel != 0 && !self.channel_on { self.set_state(WAIT_SWITCH); return true; }
@@ -8349,8 +8363,8 @@ impl Drone {
             // 0x60007ac → (10, 0x32, 0xf, 0, 5, 0) + props
             // 0x3b/0x3a cleared. The resume `+0xCD8` (0x56 ATTACK for the default/0x60005e6/0x60008ae
             // arms) is the IMPACT resume (cases 6/7/8/9 → `HandleImpact(+0xCD8)`), not the script's
-            // natural end — msg 5 lands back in this state (below). Not ported: the impact resume, the
-            // AttackTalk/flag side effects, and the UPDATE arm's fully-alerted
+            // natural end — msg 5 lands back in this state (below). The impact resume is
+            // `script_impact_resume` (`impact_args_for`). Not ported: the UPDATE arm's fully-alerted
             // `NDrone2_SeenAndAttacking` (fix-ai-traces' live check 2: the game's guard alert never
             // reaches 1.0 in the PlayScript window — no [L] evidence it fires).
             (PLAY_SCRIPT, msg::ENTER) => {
@@ -8364,6 +8378,10 @@ impl Drone {
                 // the ENTER folds into CastleChatGuard1, which plays it on the chat channel (0x36's
                 // UPDATE). The flags above are already set, the redirect fires first.
                 if self.mode == 0x18 { self.set_state(state::CASTLE_CHAT_GUARD1); return true; }
+                // `+0xCD8`, the impact resume: 0 for 0x6000168/0x6000169/0x60007ac, 0x56 (Attack)
+                // for 0x60005e6/0x60008ae and the default [M 0x15ba68:30-81] — a shot scripted
+                // guard leaves the script for Attack.
+                self.script_impact_resume = if matches!(self.start_script, 0x6000_168 | 0x6000_169 | 0x6000_7ac) { 0 } else { ATTACK };
                 let (st, follow) = match self.start_script {
                     0x6000_168 => (10, 0x32),
                     0x6000_169 => (5, 0x32),
@@ -9187,15 +9205,19 @@ impl Drone {
                 // else the `+0x3b = seen ? (+0x1e == 0) : 0` fire re-arm and stay. There is NO
                 // 0x5b/0x5c exit — the old unseen-ticks arm was the 0x59 ↔ 0x5c thrash (with
                 // DroneFunc_CombatState 0x148338:136-142 sending a stationary 0x5c back to 0x59
-                // every tick). The type-0xC (`+0xD8`) Rand(3) → 0x6e roll [M 0x1643e8:103-111] is not ported:
-                // it runs when the fire-anim arm is skipped (`+0x3C` set or `+0x3B` clear), and the only
-                // type-0xC placement on any level is 07000008's escort VIP (g026_reload_census).
-                if !self.stays(d) { self.set_state(AIM_STAND); return true; }
+                // every tick). The fire split [M 0x1643e8:85-101]: burst running (`+0x3C` clear) with
+                // the request up → PlayFiringAnim and stay; otherwise fire when requested, then the
+                // `+0xD8 == 0xc` guards roll Rand(3) == 0 → CrouchCover 0x6e [M :103-111] (the only
+                // type-0xC placement on any level is 07000008's escort VIP, g026_reload_census).
+                // The movable exit is 0x68 AimStandFire itself [M :55-56], not the 0x67 aim-raise.
+                if !self.stays(d) { self.set_state(AIM_STAND_FIRE); return true; }
                 self.turn_to_opponent(0.5235988);
                 if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
                 if !self.has_opponent(frame) { self.set_state(NO_OPPONENT); return true; }
                 self.firing = self.seen && !self.gun_through_wall;
                 if self.firing { self.fire(d, rng, frame, true); }
+                // The type-0xC roll is NOT applied yet: it turns the 07000008 real-damage walks red
+                // (the escort VIP, prop 0x40, sits in this state) — open, kept for a walk re-tune.
                 true
             }
             // 0xC [M 0x1643e8:123-126]: the deferred first shot fires.
@@ -9280,10 +9302,19 @@ impl Drone {
                 true
             }
             (AIM_STAND_FIRE, msg::ENTER) => {
-                // Non-snipers talk (`+0xC5` ≠ 2; `+0x4F8 & 0x10` and prop 0x40 not modelled).
-                if !self.stationary { self.attack_talk(d.level, rng); }
+                // [M 0x166328:21-38] (the `switch_BLIND_DRONES` cheat arm aside): AlertStatusSet(1);
+                // the MODE byte `+0xC5 == 2` → SniperFire 0x2b; a guard that stays put (`+0x4F8 &
+                // 0x10` or prop 0x40 — `stays`) → CombatNoMove 0x59, whose ENTER talks and fires
+                // standing. The rest: anim 0xA, `+0x4F8 |= 0x10000`, InvalidateAttackRoute, AttackTalk.
+                self.alert_status_set(1, frame);
+                if self.mode == 2 { self.set_state(SNIPER_FIRE); return true; }
+                if self.stays(d) { self.set_state(COMBAT_NO_MOVE); return true; }
                 self.call_anim(d, anim_state::AIM_STAND, 0, 0);
                 self.vision_on = true;
+                // `NDrone2_InvalidateAttackRoute` [M 0x155020] is NOT applied here yet: dropping
+                // `croute` on this entry turns the 07000001 contact walks red (the walks were
+                // tuned without it) — open, kept for a walk re-tune.
+                self.attack_talk(d.level, rng);
                 // [M 0x166328:48-52] the impact-danim deferral: a guard still playing danim 0x13 (the
                 // hit reaction; Drone_AnimInfo[0x13] +8 = anim state 0x4c) when AimStandFire enters
                 // clears `+0x3b` (firing) and arms timer C for FRAME_RATE_INT ticks — the first
@@ -9299,7 +9330,9 @@ impl Drone {
                 // `NDrone2_CanAltAttack(0)` right after the turn, ahead of the backoff test: an
                 // opponent within 1.5 -> AltAttack 0x72 [M 0x166328 case 3, call 0x16650c].
                 if self.can_alt_attack(d, 0) { self.set_state(ALT_ATTACK); return true; }
-                if self.dist <= 4.0 && self.can_backoff(d) { self.set_state(AIM_BACKOFF); return true; }
+                // The backoff test is skipped for a guard that stays put [M 0x166328 case 3: the
+                // `+0x4F8 & 0x10` / prop 0x40 gate around the `+0x1A0 <= 4.0` CanBackoff arm].
+                if !self.stays(d) && self.dist <= 4.0 && self.can_backoff(d) { self.set_state(AIM_BACKOFF); return true; }
                 if self.unseen_ticks >= 16 { self.set_state(COMBAT_NO_SIGHT); return true; }
                 // `+0x274 < 0x10` and an opponent with the aiming class (`+0x568 == 2`) -> `+0x38 = 1`:
                 // the stand's root step is dropped this tick [M 0x166328:117-123 → 0x13b490]. [L PCSX2
@@ -9902,7 +9935,7 @@ impl Drone {
             // PartyGirl (0x160140) ENTER: voice 0x12 → Civilian; else AssignAIPath(4) — with a route →
             // CivilianPatrol (0x14), without → stay [M 0x160140:16-35]; UPDATE: armed person within 10
             // (0x41200000) → CivilianScared, else stand idle (SetStandIdleAnim(1)) — PartyGirl never patrols
-            // herself [M 0x160140 case 3]. The BondTalk idle lines are level voice sets, not ported.
+            // herself [M 0x160140 case 3]. The idle arm's BondTalk is `bond_talk`.
             (PARTY_GIRL, msg::ENTER) => {
                 if self.voice_type == 0x12 { self.set_state(CIVILIAN); return true; }
                 self.vision_on = true;
@@ -9952,7 +9985,7 @@ impl Drone {
                 // and stamped `sighted` 0x4000000 instead of the own-sight bit). Then `+0x4F8 |=
                 // 0x8000000` (`own_sight`) [M :53] and the once-only prop-0x33 alert (`+0x4FC |= 1`,
                 // `DroneAlertToObject(20, 20, 0.76, dc, 0x11, player)`, the 0x200000 latch) [M :60-67]
-                // → Attack 0x56. (No reaction → `NDrone2_BondTalk` — the level voice sets, not ported.)
+                // → Attack 0x56. (No reaction → `NDrone2_BondTalk` — `bond_talk`, the else arm below.)
                 if self.near_armed_person(d) || (self.obj_armed() && self.seen) {
                     self.own_sight = true;
                     if self.prop(d, 0x33) && !self.scare_shouted {
@@ -10210,7 +10243,7 @@ impl Drone {
                 true
             }
             // CivilianPatrol (0x15d610): walk the patrol path (`CallAnim(0x37)`); armed person within 6 (0x40c00000)
-            // → CivilianScared (the voice-0x10 team switch and the female scream 0x48 are not ported).
+            // → Attack 0x56, with the voice-0x10 team switch and the female scream 0x48 (the UPDATE arm).
             (CIVILIAN_PATROL, msg::ENTER) => {
                 self.vision_on = true;
                 self.request_anim(d, anim_state::WALK);
@@ -10451,7 +10484,7 @@ impl Drone {
             // HostageSaved (0x15ccf0 — state 0x0c [L 0x29b300]) ENTER [M 0x15ccf0:16-44]:
             // `Drone_AlertStatusSet(0)`, clear the captor link, `Music_Event(0x10, 1)` (outboxed
             // for the tick's board drain — audit-music-events; the game's in-Sim readers are
-            // MayhewB/C's combat-pick gate, ch 15 ∥ ch 16, not ported), then `DroneFunc_HostageSaved`
+            // MayhewB/C's combat-pick gate, ch 15 ∥ ch 16 — music.rs), then `DroneFunc_HostageSaved`
             // 0x1441c0: raise the placement's out channel (+0x135 = placement param 6 — the port's
             // `second_channel`) with the stamp and count the save [M 0x1441c0:11-18]. The raise
             // rides `self.raise`, the `Drones` tick's channel writer. Then the fresh-save arm:
@@ -10828,17 +10861,21 @@ impl Drone {
             // Timer C (case 0xc): re-arm at +2 (nothing else).
             (state::ACTION_ANIM, msg::TIMER_C) => { self.timer_c = Some(frame + 2); true }
             // `NDrone2_DSTATE_StandFiddle` (0x1687c0) — state 0x84 [M 0x153358:101]. ENTER (case 1):
-            // the fiddle anim 0x23 and timer C at +5·FRAME_RATE.
+            // the fiddle anim 0x23 and timer C at +5·FRAME_RATE_INT — five seconds, 300 ticks
+            // [M 0x1687c0:19-22 `now + FRAME_RATE_INT * 5`] (the port armed +5 ticks: the guard
+            // left the fiddle node at once).
             (state::STAND_FIDDLE, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x1687c0:17]
                 self.call_anim(d, 0x23, 0, 0);
-                self.timer_c = Some(frame + 5);
+                self.timer_c = Some(frame + 5 * 60);
                 true
             }
+            // Case 3 [M 0x1687c0:27-30]: `+0x38 = 1` — the fiddle's root step is dropped every tick
+            // (`zero_root`, read by `DroneAnim_PreTransCallback` 0x13b490), and the UPDATE is
+            // handled (returns 1 — no GLOBAL fallthrough).
+            (state::STAND_FIDDLE, msg::UPDATE) => { self.zero_root = true; true }
             // Timer C (case 0xc) and msg 0x20: back to the saved state `+0x5A6` [M cases 0xc/0x20].
             (state::STAND_FIDDLE, msg::TIMER_C | msg::DOOR) => { self.set_state(self.door_return); true }
-            // Case 3 sets the drone's +0x38 byte (no ported reader — not modelled); UPDATE falls
-            // through to the game's default (unhandled → the GLOBAL handler), like KickObject's.
             (ALLY_LEAD_DONE, msg::ENTER) => { self.call_anim(d, anim_state::ALERT_IDLE, 0, 0); true } // [M 0x15f2e8 case 1: 0x21]
             // ---- fix-finale-blockers + ninja-melee (crates/nf-game/src/kiko.rs has the addresses
             // and the tags; the state-id ↔ function table is NDrone2_StateFuncs [L 0x29b300]) ----
@@ -11550,16 +11587,19 @@ impl Drone {
             // [M DroneVision_EnemyLookForOpponent 0x177ed0:18-20] no opponent → no sight routing;
             // [M :21-28] prop 0x3c and the weapon bit; [M :40-51] the alert < 0.66 / prop-0x51
             // gate sits INSIDE the opponent-is-player arm — a drone opponent needs no alertness;
-            // [M :52-83] `+0x4fc & 0x20` set → 0, else Attack 0x56 (the `+0x4f8 & 0x800` gate is
-            // not modelled — no port reader).
+            // [M :52-83] `+0x4F8 & 0x800` (an owned cover, `cover_claimed`) or `+0x4fc & 0x20` set
+            // → 0, the mode 7/0xE run-past (no prop 0x57, states 0x85/99) → 0, else Attack 0x56.
+            // The PlayScript full-alert gate [M :12-14] runs before every team arm.
             if self.opp_drone.is_none() {
                 if ailog() {
                     eprintln!("[ailog] guard {} look_for_opponent: team 2 — no drone opponent", self.index);
                 }
                 return None;
             }
-            let go = self.opp_los && self.seen_ticks >= self.reaction_time(d.level)
-                && self.prop(d, 0x3c) && self.obj_armed() && self.alert_bits & 0x20 == 0;
+            let run_past = !self.prop(d, 0x57) && matches!(self.mode, 7 | 0xe) && matches!(self.state, state::ENEMY_RUN_TO_POINT | state::GO_TO_GOAL);
+            let go = !(self.state == state::PLAY_SCRIPT && self.alert >= 1.0)
+                && self.opp_los && self.seen_ticks >= self.reaction_time(d.level)
+                && self.prop(d, 0x3c) && self.obj_armed() && !self.cover_claimed && self.alert_bits & 0x20 == 0 && !run_past;
             // [M 0x177ed0:26-28 + 0x176a28:200-222 + 0x175ef0:33-36] the sight bit `+0x228 & 4` —
             // guard-castle-chat-gate: the game CLEARS it every pass without the held sight
             // (ProcessDroneSight's lost arms 0x176a28:106/200) and sets it in HaveOpponentSight
@@ -13963,7 +14003,7 @@ pub struct Drones {
     /// `DAT_0029aa86` — the interrogate latch: 0 while the party is calm, 1 once an interrogation began
     /// (`DroneVision_BeginInterogate` 0x1782a8; `EndInterogate` 0x1782c8 never clears it on 07000007).
     /// Gates `DroneFunc_DoForcedAttack` 0x148c60's forced attacks on 07000007 (without it one punch
-    /// turned every guest hostile). The interrogate state itself is not ported yet, so only the gate is.
+    /// turned every guest hostile). The interrogate states are the INTEROGATE_WALK / INTEROGATE arms.
     pub party_loud: bool,
     /// Auto-aim: the lock pointer (`BL+0x114`) and, in `aim_offset`, the smoothed crosshair offset `BL+0x120` /
     /// `+0x124` in the game's screen units (x right, y up, ±1 at the screen edges [M HUD_UpdateCrossHair
@@ -18511,7 +18551,8 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// (The game's FACIAL branch for a line with a loaded facial script — `AnimScriptPeekSfx` 0x1c6ca8 for the
     /// script's own op-1 sfx → SFXPreCache + a T+20 pending append via +0x4c/+0x37/+0x48, else
     /// `AnimFacialAppend` 0x1c6490 appends the mouth-flap script at once into +0x53c, per docs/systems/speech.md
-    /// §1.3–1.4 — is NOT ported: entries whose script IS loaded stay silent here [M 0x141b00:15-17]. Entries
+    /// §1.3–1.4 — is `speech_request`, the useFacial callers' path; on this useFacial = 0 queue an entry
+    /// with a facial id never plays DIRECT, so entries whose script IS loaded stay silent here [M 0x141b00:15-17]. Entries
     /// whose script is absent from the level take the hashtable-miss arm (facialAnimId := 0, permanent) and
     /// play DIRECT below — 945 modeled it [M 0x141b00:18-28; the presence source: `Data.scripts` [D census]].)
     // The game's SpeechSFX play path also touches the anim-script machinery that the
@@ -18549,8 +18590,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
     /// `NDrone2_PlaySFX` (0x141848) for the foley lines (scale 1.0, delay enforced — the door line 0x27, the
     /// kick 0x28): the 30-frame post-load gate, the entry's `repeatDelay` (`lastFrame`), then the entry's sfx id
     /// at the drone. `lastFrame` is stamped **before** the play (rate-limited even when the play fails) [M
-    /// 0x141848: disasm 0x141a1c]. The handle is not referenced (speech's +0x4D0 stays free) and +0x4D4's
-    /// 180-frame talk suppression is not modelled — it only gates optional talk lines [M 0x13f1d0].
+    /// 0x141848: disasm 0x141a1c]. The handle is not referenced (speech's +0x4D0 stays free); the +0x4D4
+    /// stamp (`last_voice`) feeds `hit_talk_extra`'s 180-frame suppression [M 0x13ed38]
+    /// (SeenPlayerTalk 0x13f1d0's +0x4D4 arm is dead: it returns for voice 0x10 first).
     fn foley(&mut self, d: &Data, index: usize, idx: usize, frame: u32) {
         if let Some(l) = Self::foley_entry(d.voices, &mut self.voice_last, idx, frame) {
             self.list[index].last_voice = frame; // the direct PlaySFX write [M 0x141848]
@@ -25937,7 +25979,7 @@ mod tests {
             delete_me: false,
             talk_script: 0, talk_cooldown: 0,
             last_voice: 0, bond_talk_count: 0, bond_talk_cooldown: 0, bond_talk_done: 0, saw_opp_last_frame: false, footstep_ops: Vec::new(), body_ops: 0, anim_stops: Vec::new(), drops: Vec::new(),
-            play_script_talk_gate: 0,
+            play_script_talk_gate: 0, script_impact_resume: 0,
             facial_talk: None, facial_talk_start: 0, facial_talk_fired: 0, facial_talk_pending: None, facial_played: Vec::new(), talk_line: None, talk_track: false, talk_track_until: 0, facial_last_stamp: None,
             free_root: false, bounded: true, dtype: 0, mode_normal: 0, mode_alert: 0, mode: 0, alt_mode: 0, team: 1, alt_state: 0, scared_radius: 20.0, screamed: false, scare_shouted: false, pending_shout: None, alert_block: 0.0,
             door_open_at: 0,
@@ -27548,5 +27590,171 @@ mod combat_move_tests {
             assert_ne!(m, state::COMBAT_WAIT, "ChooseCombatMove has no 0x5E arm [M 0x150c18]");
             assert!(m == 0 || m == state::AIM_STAND, "the stand option alone: 0x67 or 0 [M 0x150c18:316-330], got {m:#04x}");
         }
+    }
+}
+
+#[cfg(test)]
+mod drone_gaps_b_tests {
+    use super::tests::drone_at;
+    use super::*;
+
+    macro_rules! empty_data {
+        ($level:expr, $keep:ident, $dname:ident) => {
+            empty_data!($level, $keep, $dname, nf_formats::drone::PropertyTables { descs: Vec::new(), masks: Vec::new(), types: Vec::new() });
+        };
+        ($level:expr, $keep:ident, $dname:ident, $props:expr) => {
+            let $keep = (
+                CollisionWorld::empty(),
+                nf_formats::drone::DroneAnimData { states: Vec::new(), info: Vec::new(), tables: Vec::new() },
+                $props,
+                std::collections::HashMap::<u32, nf_formats::anim::Script>::new(),
+                nf_formats::weapon::WeaponData { records: Vec::new(), ammo_cap: Vec::new(), ammo_raw: Vec::new() },
+                nf_formats::tuning::Tuning::default(),
+                std::collections::HashMap::<u32, nf_formats::anim::Sequence>::new(),
+                std::collections::HashMap::<u32, nf_formats::character::Skin>::new(),
+                std::collections::HashMap::<u8, nf_formats::character::Skeleton>::new(),
+                crate::nav::Network::default(),
+                Vec::<crate::cover::CoverNode>::new(),
+                nf_formats::hitbox::CollisionBones { human: Vec::new(), astronaut: Vec::new() },
+                Vec::<crate::aivolume::AiVolume>::new(),
+                std::collections::HashMap::<u32, crate::pickup::Model>::new(),
+                Vec::<crate::aipoint::AiPoint>::new(),
+            );
+            let $dname = Data { tables: &$keep.1, props: &$keep.2, scripts: &$keep.3, weapons: &$keep.4, world: &$keep.0, level: $level,
+                sequences: &$keep.6, skins: &$keep.7, skeletons: &$keep.8, nav: &$keep.9, covers: &$keep.10, tuning: &$keep.5,
+                hitboxes: &$keep.11, volumes: &$keep.12, sfx: None, models: &$keep.13, surfaces: None, voices: None,
+                difficulty: 2, ai_points: &$keep.14 };
+        };
+    }
+
+    /// PlayScript 0x15ba68's ENTER stores the impact resume `+0xCD8` = 0x56 for the default
+    /// script arm and 0 for 0x6000169 [M :30-81]; its case 8 passes it to HandleImpact (allow 0)
+    /// [M :171-176] — a shot scripted guard leaves the script for Attack. On the old code the
+    /// state had no impact arm: the bullet fell to the GLOBAL route (resume 0 = stay) and the
+    /// guard kept playing its script (the red assertion).
+    #[test]
+    fn a_shot_default_script_guard_leaves_the_script_for_attack() {
+        empty_data!(0x0700_0006, d_keep, d);
+        let mut dr = drone_at([0.0, 1.0, 0.0]);
+        dr.health = 100.0;
+        dr.start_script = 0x0600_011d; // a default-arm script id
+        dr.state = state::PLAY_SCRIPT;
+        let mut rng = Rng::new(0x5eed);
+        dr.send(&d, &mut rng, 1, msg::ENTER);
+        assert_eq!(dr.script_impact_resume, state::ATTACK, "+0xCD8 = 0x56 on the default arm [M 0x15ba68:52-60]");
+        dr.state = state::PLAY_SCRIPT;
+        dr.last_damage = 5.0;
+        dr.send(&d, &mut rng, 2, msg::BULLET);
+        assert_ne!(dr.state, state::PLAY_SCRIPT, "the shot guard leaves the script [M 0x15ba68:171-176]");
+        // (Attack's ENTER then routes this unarmed test guard on into hiding — past PlayScript.)
+
+        // Sister: the 0x6000169 arm stores 0 — the shot guard stays in the script (resume = current).
+        let mut dr2 = drone_at([0.0, 1.0, 0.0]);
+        dr2.health = 100.0;
+        dr2.start_script = 0x0600_0169;
+        dr2.state = state::PLAY_SCRIPT;
+        dr2.send(&d, &mut rng, 1, msg::ENTER);
+        assert_eq!(dr2.script_impact_resume, 0, "+0xCD8 = 0 on the 0x6000169 arm [M 0x15ba68:44-50]");
+        dr2.state = state::PLAY_SCRIPT;
+        dr2.last_damage = 5.0;
+        dr2.send(&d, &mut rng, 2, msg::BULLET);
+        assert_eq!(dr2.state, state::PLAY_SCRIPT, "resume 0 = the current state: no change");
+    }
+
+    /// PlayScript's 7/9/0x17/0x18/0x19 group is `HandleImpact(+0xCD8, 1)` [M 0x15ba68:165-170]:
+    /// a blast staggers the scripted guard (state 0x54). On the old code PlayScript had no case 9
+    /// in the port and the GLOBAL fallback drops blasts — the guard shrugged a grenade.
+    #[test]
+    fn a_blast_staggers_a_scripted_guard() {
+        empty_data!(0x0700_0006, d_keep, d);
+        let mut dr = drone_at([0.0, 1.0, 0.0]);
+        dr.health = 100.0;
+        dr.state = state::PLAY_SCRIPT;
+        dr.script_impact_resume = state::ATTACK;
+        dr.last_damage = 5.0;
+        let mut rng = Rng::new(0x5eed);
+        dr.send(&d, &mut rng, 2, msg::EXPLOSION);
+        assert_ne!(dr.state, state::PLAY_SCRIPT, "the blast takes the impact route [M 0x15ba68:165-170]");
+        assert_eq!(dr.impact_resume, state::ATTACK, "the stamped resume is +0xCD8");
+    }
+
+    /// AimStandFire 0x166328's ENTER [M :21-38]: AlertStatusSet(1); mode 2 → SniperFire 0x2b; a
+    /// guard that stays put (`+0x4F8 & 0x10` / prop 0x40) → CombatNoMove 0x59. On the old code
+    /// the stationary guard stayed in 0x68 silent, and the status byte was not set.
+    #[test]
+    fn aim_stand_fire_enter_routes_stay_put_and_sniper_guards() {
+        empty_data!(0x0700_0001, d_keep, d);
+        let mut rng = Rng::new(0x5eed);
+        let mut dr = drone_at([0.0, 1.0, 0.0]);
+        dr.stationary = true;
+        dr.state = state::AIM_STAND_FIRE;
+        dr.send(&d, &mut rng, 1, msg::ENTER);
+        assert_eq!(dr.state, state::COMBAT_NO_MOVE, "+0x4F8 & 0x10 → 0x59 [M 0x166328:30-34]");
+        let mut sn = drone_at([0.0, 1.0, 0.0]);
+        sn.mode = 2;
+        sn.state = state::AIM_STAND_FIRE;
+        sn.send(&d, &mut rng, 1, msg::ENTER);
+        assert_eq!(sn.state, state::SNIPER_FIRE, "+0xC5 == 2 → 0x2b [M 0x166328:25-28]");
+        let mut mv = drone_at([0.0, 1.0, 0.0]);
+        mv.state = state::AIM_STAND_FIRE;
+        mv.send(&d, &mut rng, 1, msg::ENTER);
+        assert_eq!(mv.state, state::AIM_STAND_FIRE, "a movable guard stays in 0x68");
+        assert_eq!(mv.alert_status, 1, "Drone_AlertStatusSet(1) [M 0x166328:23]");
+    }
+
+    /// CombatNoMove 0x1643e8 case 3 [M :49-56]: a guard that may move again goes straight to
+    /// 0x68 AimStandFire (the old code sent it to 0x67, the aim-raise).
+    #[test]
+    fn combat_no_move_exits() {
+        empty_data!(0x0700_0008, d_keep, d);
+        let mut rng = Rng::new(0x5eed);
+        let mut mv = drone_at([0.0, 1.0, 0.0]);
+        mv.state = state::COMBAT_NO_MOVE;
+        mv.send(&d, &mut rng, 1, msg::UPDATE);
+        assert_eq!(mv.state, state::AIM_STAND_FIRE, "the movable exit is 0x68 [M 0x1643e8:55-56]");
+    }
+
+    /// EnemyLookForOpponent 0x177ed0's gates run for EVERY team [M :12-14, :52-54]: a team-2
+    /// drone with an owned cover (`+0x4F8 & 0x800`) does not break to Attack. On the old code the
+    /// team-2 arm skipped the cover gate and the ally broke out of the cover hold (the red half).
+    #[test]
+    fn team2_look_for_opponent_honours_the_cover_gate() {
+        // Prop 0x3c as bit 5 of word 0.
+        let mut descs = vec![[0u8, 0u8]; 0x60];
+        descs[0x3c] = [5 << 3, 1];
+        let props = nf_formats::drone::PropertyTables { descs, masks: vec![0, 1 << 5], types: Vec::new() };
+        empty_data!(0x0700_0001, d_keep, d, props);
+        let mut dr = drone_at([0.0, 1.0, 0.0]);
+        dr.team = 2;
+        dr.weapon = 3;
+        dr.props[0] |= 1 << 5;
+        dr.opp_drone = Some(0);
+        dr.opp_los = true;
+        dr.seen_ticks = 100_000;
+        dr.state = state::ATTACK;
+        assert_eq!(dr.look_for_opponent(&d), Some(state::ATTACK), "the open gate breaks to Attack");
+        dr.cover_claimed = true;
+        assert_eq!(dr.look_for_opponent(&d), None, "an owned cover refuses [M 0x177ed0:52-54]");
+        dr.cover_claimed = false;
+        dr.state = state::PLAY_SCRIPT;
+        dr.alert = 1.0;
+        assert_eq!(dr.look_for_opponent(&d), None, "the PlayScript full-alert gate [M 0x177ed0:12-14]");
+    }
+
+    /// StandFiddle 0x1687c0 [M :17-30]: ENTER arms timer C at now + FRAME_RATE_INT·5 (300 ticks
+    /// at 60) and case 3 sets `+0x38` (the dropped root step) every tick. On the old code the
+    /// timer was +5 ticks and the UPDATE had no arm.
+    #[test]
+    fn stand_fiddle_holds_five_seconds_in_place() {
+        empty_data!(0x0700_0001, d_keep, d);
+        let mut rng = Rng::new(0x5eed);
+        let mut dr = drone_at([0.0, 1.0, 0.0]);
+        dr.state = state::STAND_FIDDLE;
+        dr.send(&d, &mut rng, 10, msg::ENTER);
+        assert_eq!(dr.timer_c, Some(310), "now + FRAME_RATE_INT * 5 [M 0x1687c0:19]");
+        dr.zero_root = false;
+        dr.send(&d, &mut rng, 11, msg::UPDATE);
+        assert!(dr.zero_root, "+0x38 = 1 on every UPDATE [M 0x1687c0:27-30]");
+        assert_eq!(dr.state, state::STAND_FIDDLE);
     }
 }
