@@ -68,3 +68,20 @@ State: death t8566 at the SE corner (12.97, 41.83, -36.04) — 27 hits for 100.0
 #23's ONE grenade (20.75 splash at d 27.4, weapon 0x24). Next levers: the #23 grenade answer, #5's
 blocked line, the tower duel's own 32.5 cost. The d3 walk stays ignored; the ledger is in the
 ignore message.
+
+### walk-06-00agent-2 progress (2026-11-22, round 2, the grenade answer)
+
+Lever (a') ran three placements, each judged on its own real run: the east-floor anchor NEVER RAN
+(the corner phases precede that leg — Bond died at the corner twice); the first corner-fixed
+finder (8.0) matched #22 instead of #23 and displacing the #25 stand let his 0x16 stream deal
+19.2 in 7; the landed order is #25 stand -> the #23 answer (finder tightened to 3.0, matched
+(38.48, 51.0, −32.22) exactly) -> the corner duel — but Bond dies ~10 ticks into the #23 grind:
+the pool is 20.8 at the corner and the grind needs 150+ ticks. The deciding lever is pool-trim
+(the tower duel's 32.5 cost with the armour already 0.5 going in — round-1 lever (b)'s
+un-answered mouth/balcony stream), or answering that stream so the 50 armour carries the grind.
+
+Verification on the final tree: walkreal_07000006_live 8 passed / 0 failed / 1 ignored (the
+ledgered 00 walk); interactables_07000006_live 5 passed / 0 failed. The background suite died
+twice in this sandbox (pids 2265 and 6523 killed between tool calls) — the touched-binary runs
+above are the round-2 verification set (only the one test file changed; no src/, no shared
+helpers).
