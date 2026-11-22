@@ -28,3 +28,14 @@ exit-fight drops 2-6 u off the path; the resupply trail corridor misses them) is
 Binaries at the final tree: walkreal_07000016_live 18 passed / 1 ignored (the d3 walk, ledgered);
 the three smaller crates' full binary sets run in the background at push time (the nf-view binary
 set ENOSPCs this sandbox — the report documents it).
+
+## retune-nb-16-6
+
+Branch `s/retune-nb-16-6`, from origin/master 2bd059afe (stream batch 3 + the 16 pit-squad-aim
+re-tune are on it), merged `origin/s/retune-nb-16` (c25e3d00c) per the task — the merge resolved
+to master's side: master already carries the round-1..5 levers and their measured history (the
+east-high fight list, the close-pair-from-peek, the exit fought, the squad close stands, the
+16-2 wide corpse-hop MEASURED-REVERTED note, the 16-5 east-armour fetch + squad laws), plus the
+newer stream re-pins. The d3 real-damage walk is still ignored with the 1121b-era ledger
+(pocket glass-pane death t2200-5600); batch 3 postdates it, so the first step is a re-measure on
+the merged tree.
