@@ -90,6 +90,17 @@ pub const SS_ZEROG_9: u8 = 9;
 /// `RotMatrix` 0x1e2368 for the zero-g rate vector (x pitch, y yaw, z roll — ZeroG always passes
 /// roll 0 [M 0x192ab0:91 `BL+0x38 = 0`]): the row-major rows of Rx(x)·Ry(y)·Rz(z) in the game's
 /// row-vector basis (rows = right/up/forward, `Bond::look`'s convention). The sine/cosines go
+/// The zero-g view matrix from a heading and a pitch (radians): rows right, up, forward; no roll.
+/// Forward = (sin yaw·cos p, sin p, cos yaw·cos p), the same heading convention `Bond::yaw` reads.
+fn level_look_matrix(yaw: f32, pitch: f32) -> [[f32; 3]; 3] {
+    let (sy, cy) = (crate::trig::sinf(yaw), crate::trig::cosf(yaw));
+    let (sp, cp) = (crate::trig::sinf(pitch), crate::trig::cosf(pitch));
+    let fwd = [sy * cp, sp, cy * cp];
+    let right = [cy, 0.0, -sy];
+    let up = [fwd[1] * right[2] - fwd[2] * right[1], fwd[2] * right[0] - fwd[0] * right[2], fwd[0] * right[1] - fwd[1] * right[0]];
+    [right, up, fwd]
+}
+
 /// through the port's PS2Sinf/PS2Cosf — `RotMatrix` calls PS2Sinf3/PS2Cosf3 [M 0x1e2368:28-40].
 fn rot_matrix(pitch_x: f32, yaw_y: f32, roll_z: f32) -> [[f32; 3]; 3] {
     let (sx, cx) = (crate::trig::sinf(pitch_x), crate::trig::cosf(pitch_x));
@@ -1994,16 +2005,14 @@ impl Bond {
             // BL+0x957 / +0x130 (the weapon-raise re-trigger) / +0x8a8 — the scalar view pitch is
             // dead here (`Bond::look` returns the matrix's forward row instead).
             self.vel = [0.0; 3];
-            // The look rates [M :76-90]: the pitch action → the x angle, the turn action → the y
-            // angle, roll 0 — `RotMatrix` then `Concat(obj, R)`, the BODY frame (a pitched yaw
-            // drifts the up — what the auto-stabiliser repairs).
-            // The port's `turn`/`look` are already per-tick deltas (mouse-direct, pad-ramped,
-            // D-002); the game's own pad constant is 1.2566371·REC_FRAME_RATE rad/tick, `look`
-            // riding in π/2 units.
-            let r = rot_matrix(-input.look * std::f32::consts::FRAC_PI_2, turn, 0.0);
-            // Concat(obj+0x90, R) + Mat_CopyRot back is obj := R·obj [M 0x1e4a90:13-49,
-            // 0x192ab0:162-164]: the look rotation lands in the BODY frame at every heading.
-            self.zero_g_rot = mat3_mul(&r, &self.zero_g_rot);
+            // The look (PC port): the same mouse look as walking, a heading about world up and a
+            // clamped pitch, with no roll. The game composes each tick's look rotation in the body
+            // frame [M :76-90, 0x1e4a90:13-49], which on a stick rolls the view only slowly; at mouse
+            // rates it twisted the horizon and the camera felt off, so the matrix is rebuilt from
+            // the two angles every tick instead. The scalar pitch the game zeroes [M :74] stays
+            // live here as that angle.
+            self.yaw += turn;
+            self.pitch = (self.pitch + input.look).clamp(-1.0, 1.0);
             // The thruster smoothers [M :92-159]: targets strafe = action 1·0.1, forward =
             // action 2·0.1, vertical = (action 7 − action 8)·0.1; each eases
             // `v += (target − v)·FRAME_RATE_MUL·0.04` (FRAME_RATE_MUL = 1.0 at 60 Hz [M .sdata
@@ -2026,26 +2035,16 @@ impl Bond {
             // (fwd·(0,1,0)))` — world up, same heading (the ±0.995 degenerate arms swap in
             // ∓up [M :177-184]) — at Quat_Slerp_Acc t = REC_FRAME_RATE·3.0 = 0.05 per tick [M
             // :196], then `Mat_Normalize` [M :199].
+            // The auto-stabilisers [M :163-199]: the action-0xe read arms BL+0xd0 = FRAME_RATE·1.5
+            // = 90 ticks; while it counts down the attitude slerps toward world up at the same
+            // heading, t = REC_FRAME_RATE·3.0 = 0.05 per tick [M :196]. With no roll left to
+            // repair, that is the pitch easing to level by ×0.95 per tick.
             if input.stabilise { self.stabiliser = 90; }
             if self.stabiliser != 0 {
                 self.stabiliser -= 1;
-                let fwd = self.zero_g_rot[2];
-                let d = fwd[1];
-                let dir = if d > 0.995 {
-                    [-self.zero_g_rot[1][0], -self.zero_g_rot[1][1], -self.zero_g_rot[1][2]]
-                } else if d < -0.995 {
-                    self.zero_g_rot[1]
-                } else {
-                    [fwd[0], fwd[1] - d, fwd[2]]
-                };
-                let target = mat_align_up(dir);
-                let q = crate::anim::slerp(
-                    quat_from_matrix(&self.zero_g_rot),
-                    quat_from_matrix(&target),
-                    0.05,
-                );
-                self.zero_g_rot = mat_normalize(quat_to_matrix(&q));
+                self.pitch *= 0.95;
             }
+            self.zero_g_rot = level_look_matrix(self.yaw, self.pitch * std::f32::consts::FRAC_PI_2);
             // The move [M 0x193600:284-295]: pos += local.x·row0 + local.y·row1 + local.z·row2 —
             // the +0x10 quad's lanes (x strafe, y the vertical thruster, z forward) against the
             // matrix's right/up/forward rows. Pitched forward + forward thrust FLIES along the
@@ -2060,7 +2059,6 @@ impl Bond {
             // (sphere_centre, the death pick) — a port-read mirror: the game leaves obj+0x54 stale
             // in the substate (Player_ZeroG 0x192ab0 stores no +0x54 [M full-file scan]) and only
             // the matrix is authoritative in zero-g.
-            self.yaw = self.zero_g_rot[2][0].atan2(self.zero_g_rot[2][2]);
         } else {
         self.yaw += turn;
         self.pitch = (self.pitch + input.look).clamp(-1.0, 1.0);
@@ -3644,39 +3642,34 @@ mod tests {
         assert!(step2 < step, "decaying: {} < {}", step2, step);
     }
 
-    /// The look rotation lands in the BODY frame at every heading: Player_ZeroG's
-    /// `Concat(obj+0x90, R)` + copy-back is obj := R·obj [M 0x1e4a90:13-49, 0x192ab0:162-164].
-    /// Facing west (−x), one look tick pitches the view by look·π/2 about the body's right row.
-    /// Sister: the world-frame product (m·R) barely tilts it at that heading (only the forward
-    /// row's z lane rotates about world x), so the pin can fail.
+    /// Zero-g look is a level mouse look: pitching at any heading tilts the view by exactly the
+    /// look angle, a turn after a pitch keeps that elevation (world-up heading, not the body's up),
+    /// and circling the mouse leaves no roll (the right row stays level). Sister: the game's
+    /// body-frame product R·obj, which rolls the horizon after the same circle.
     #[test]
-    fn zero_g_look_pitches_about_the_body_right_at_any_heading() {
+    fn zero_g_look_is_level_at_any_heading() {
         let w = room();
         let mut b = Bond::stand_at(&w, [0.0, 0.0, -14.0], -std::f32::consts::FRAC_PI_2);
         b.substate = SS_ZEROG_9;
-        b.tick(&w, &Input::default()); // the entry matrix is live (level, facing −x)
-        let f0 = b.look();
-        assert!(f0[0] < -0.999, "facing west: {:?}", f0);
-        let m0 = b.zero_g_rot;
+        b.tick(&w, &Input::default());
+        assert!(b.look()[0] < -0.999, "facing west: {:?}", b.look());
         b.tick(&w, &Input { look: 0.1, ..Default::default() });
-        let f1 = b.look();
         let want = (0.1f32 * std::f32::consts::FRAC_PI_2).sin();
-        assert!((f1[1] - want).abs() < 1e-3, "body-frame pitch: fwd.y {} vs sin(0.1·π/2) {}", f1[1], want);
-        assert!(f1[2].abs() < 1e-3, "the pitch stays in the heading plane: {:?}", f1);
-        // Sister: the world-frame composition at the same heading.
-        let r = rot_matrix(-0.1 * std::f32::consts::FRAC_PI_2, 0.0, 0.0);
-        let world = mat3_mul(&m0, &r);
-        assert!(world[2][1].abs() < 0.01, "sister: m·R barely tilts a west-facing view ({})", world[2][1]);
-        // A yaw after the pitch turns about the BODY up (the pitched body's up row): the forward
-        // swings toward the level right row, so its elevation shrinks by cos(turn) — a world-up
-        // yaw would keep it exactly.
+        assert!((b.look()[1] - want).abs() < 1e-3, "pitch: fwd.y {} vs {}", b.look()[1], want);
         b.tick(&w, &Input { turn: 0.2, ..Default::default() });
+        assert!((b.look()[1] - want).abs() < 1e-3, "a turn keeps the elevation: {}", b.look()[1]);
+        let mut body = b.zero_g_rot;
+        for k in 0..400 {
+            let a = k as f32 * 0.05;
+            let (turn, look) = (0.03 * a.cos(), 0.02 * a.sin());
+            b.tick(&w, &Input { turn, look, ..Default::default() });
+            body = mat3_mul(&rot_matrix(-look * std::f32::consts::FRAC_PI_2, turn, 0.0), &body);
+        }
         let m = b.zero_g_rot;
+        assert!(m[0][1].abs() < 1e-4, "no roll after circling: right.y {}", m[0][1]);
         let dot = m[1][0] * m[2][0] + m[1][1] * m[2][1] + m[1][2] * m[2][2];
-        assert!(dot.abs() < 1e-3, "the body stays orthonormal: up·fwd {}", dot);
-        let want_y = 0.2f32.cos() * f1[1];
-        assert!((b.look()[1] - want_y).abs() < 2e-4 && (b.look()[1] - f1[1]).abs() > 2e-3,
-            "a body-up yaw scales the elevation by cos(turn): {} vs {} (world-up would keep {})", b.look()[1], want_y, f1[1]);
+        assert!(dot.abs() < 1e-4, "orthonormal: up·fwd {}", dot);
+        assert!(body[0][1].abs() > 1e-3, "sister: the body-frame product rolls ({})", body[0][1]);
     }
 
     /// The camera follows the zero-g aim: `view_pitch` is the elevation of the matrix's forward
@@ -3692,7 +3685,7 @@ mod tests {
         let f = b.look();
         assert!(f[1] > 0.3, "five look ticks pitch the aim up: {f:?}");
         assert!((b.view_pitch().sin() - f[1]).abs() < 1e-5, "camera pitch {} vs aim elevation {}", b.view_pitch(), f[1]);
-        assert_eq!(b.pitch, 0.0, "the scalar pitch stays dead in zero-g [M 0x192ab0:74]");
+        assert!((b.view_pitch() - b.pitch * std::f32::consts::FRAC_PI_2).abs() < 1e-4, "the view pitch is the look angle");
     }
 
     /// The auto-aim basis (`autoaim::view_basis`, the frame `Player_GetAimingPoint` builds from
@@ -3716,8 +3709,8 @@ mod tests {
         let dot = |a: [f32; 3], c: [f32; 3]| a[0] * c[0] + a[1] * c[1] + a[2] * c[2];
         let basis = crate::autoaim::view_basis(b.yaw, b.view_pitch_ps2(), f);
         assert!(dot(basis[1], f).abs() < 1e-3, "up ⟂ forward on view_pitch_ps2: {}", dot(basis[1], f));
-        let old = crate::autoaim::view_basis(b.yaw, nf_formats::ps2float::mul(b.pitch, std::f32::consts::FRAC_PI_2), f);
-        assert!(dot(old[1], f) > 0.3, "sister: the scalar-pitch basis tilts against the aim ({})", dot(old[1], f));
+        let old = crate::autoaim::view_basis(b.yaw, 0.0, f);
+        assert!(dot(old[1], f) > 0.3, "sister: a level basis (the dead pitch) tilts against the aim ({})", dot(old[1], f));
     }
 
     #[test]
