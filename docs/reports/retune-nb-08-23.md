@@ -85,3 +85,11 @@ deal variance).
 ## Usage
 
 not visible to me.
+
+## ntfy
+
+In order, 2026-11-22 ~22:41 UTC:
+
+1. curl: `curl: (28) Connection timed out after 20002 milliseconds` (rc 28).
+2. python3 urllib (timeout=20): **exited 0, no exception** — treated as delivered; the confirmation print was not captured by the shell pipeline. Note: in the previous session (walk-1b-agent, ~21:58 UTC) all three channels timed out from this sandbox, so ntfy.sh reachability here is intermittent; the python attempt is the only one that returned cleanly.
+3. wget: not needed (the python fallback exited 0).
