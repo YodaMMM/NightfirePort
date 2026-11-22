@@ -6369,6 +6369,11 @@ impl Drone {
     fn find_alarm_point(&mut self, d: &Data) -> bool {
         if let Some((yaw, pos, acc)) = self.alarm_point {
             self.alarm_yaw = yaw;
+            // `AINetwork_InvalidateRoute(drone+0x860)` ahead of SetupGoalPosition in BOTH arms
+            // [M 0x153008:20, 48]: `NDrone2_MoveToGoalPosition` 0x1517d8:27-29 rebuilds only an
+            // invalid route, so the alarm run always routes afresh from where the guard stands.
+            // A kept goal route (an earlier 0x63 run) used to be followed to its OLD end.
+            self.croute = None;
             self.goal = Some(pos);
             // the reuse arm re-runs SetupGoalPosition with the SAME point accuracy [M 0x153008:45-48]
             self.goal_arrival = acc;
@@ -6384,6 +6389,7 @@ impl Drone {
         let owner = self.group as i32;
         let path = self.nav_path.flatten();
         let Some(pi) = crate::aipoint::closest(d.ai_points, d.nav, d.world, path, self.pos, 8, owner) else { return false };
+        self.croute = None; // InvalidateRoute(+0x860) [M 0x153008:20], after the point is found
         self.goal = Some(d.ai_points[pi].pos);
         // SetupGoalPosition(point+0x14, …) — the AIPoint's own accuracy [M 0x153008:20-23].
         self.goal_arrival = d.ai_points[pi].accuracy;
@@ -26523,6 +26529,34 @@ mod abseil_tests {
                 hitboxes: &$keep.11, volumes: &$keep.12, sfx: None, models: &$keep.13, surfaces: None, voices: None,
                 difficulty: 2, ai_points: &$keep.14 };
         };
+    }
+
+    /// A kept combat/goal route: the shape `move_to_object` (stamp = the player target's) or
+    /// `move_to_goal` (stamp = u32::MAX) leaves in `croute`.
+    fn kept_route(dest: V3, stamp: u32) -> crate::nav::Route {
+        crate::nav::Route {
+            path: 0, mode: crate::nav::RouteMode::OneWay, nodes: Vec::new(), links: Vec::new(), index: 0,
+            start: [0.0; 3], dest, target: [0.0; 3], remaining: 0.0, radius: 2.0, lookahead: 2.0,
+            creep: crate::nav::Creep { a: [0.0; 3], b: dest, ..Default::default() }, stamp,
+        }
+    }
+
+    /// `NDrone2_FindAlarmPoint` 0x153008 runs `AINetwork_InvalidateRoute(drone+0x860)` before
+    /// `MoveToGoalPosition` in BOTH arms [M :20, :48], and `MoveToGoalPosition` 0x1517d8:27-29
+    /// rebuilds only an invalid route. So a guard holding a valid goal route from an earlier
+    /// run must route to the alarm, not keep walking the old route to its old end.
+    #[test]
+    fn the_alarm_run_drops_a_kept_goal_route() {
+        empty_data!(0x0700_0001, d_keep, d);
+        let mut dr = drone_at([0.0, 0.0, 0.0]);
+        let f = dr.feet();
+        let alarm = [f[0] + 5.0, f[1], f[2]];
+        dr.alarm_point = Some((0.0, alarm, 1.0));
+        dr.croute = Some(kept_route([-30.0, 0.0, 40.0], u32::MAX));
+        assert!(dr.find_alarm_point(&d));
+        let r = dr.croute.as_ref().expect("the alarm run builds a route");
+        assert_eq!(r.dest, alarm, "the route is rebuilt to the alarm point [M 0x153008:48]");
+        assert_eq!(dr.goal, Some(alarm));
     }
 
     /// `NDrone2_ControlSTANDARD` 0x1490f0:82-94: every control pass reads `+0x4D0` through
