@@ -15889,6 +15889,12 @@ impl Sim {
         // A bot.
         if let Some(j) = m.bots.iter().position(|b| b.slot == victim) {
             if m.bots[j].dead { return; }
+            // mp-bot-weapon-gate: the case-5 record list returns before anything else (no
+            // registration, no puff, no hit message) [M NDrone2_DealWithObjHit 0x13fff0:153-173];
+            // the launchers' blasts arrive separately as `Hurt::Blast`.
+            if let Hurt::Bullet { weapon, .. } = h {
+                if cb::drone_ignores_round(weapon) { return; }
+            }
             if located && !m.register_bullet_hit(victim, attacker) { return; }
             // mp-bot-hit-fx: the round's flesh puff. The game's case-5 arm puffs at the contact
             // after its alive and team gates and before the hit message reaches the pain path
