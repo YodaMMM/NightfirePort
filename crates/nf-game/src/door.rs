@@ -830,6 +830,46 @@ impl Doors {
     /// `Collide_Intersect` returns before the refine when the object has no coll data
     /// (`obj+0xd8 == 0` [M 0x1ebaa8 head]), keeping the pick's distance: a door with no shape in
     /// `world` (or no `world`, the unit tests) keeps the sphere-only contact.
+    /// The doors one mover's HITTEST reaches this step (the sphere stage, then the refine) — the
+    /// contact half of `collide_step`, pure. `posed` caches the live-posed shapes per door.
+    pub fn mover_hits(&self, m: &DoorMover, world: Option<&CollisionWorld>, posed: &mut Vec<Option<Option<Vec<[V3; 3]>>>>) -> Vec<usize> {
+        if posed.len() != self.list.len() { *posed = vec![None; self.list.len()]; }
+        let mut out = Vec::new();
+        let ab = [m.b[0] - m.a[0], m.b[1] - m.a[1], m.b[2] - m.a[2]];
+        for i in 0..self.list.len() {
+            let c = transform(&self.list[i].matrix, self.list[i].sph_centre);
+            // 1.5·r_door + r_pick [M 0x1eae80:160,164,166 — the 0x800 arm; r_pick = the mover's
+            // hittest+0x8C capsule radius, carried on the mover].
+            let r = self.list[i].sph.1 * 1.5 + m.radius;
+            let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+            let t = if ab2 > 0.0 {
+                (((c[0] - m.a[0]) * ab[0] + (c[1] - m.a[1]) * ab[1] + (c[2] - m.a[2]) * ab[2]) / ab2).clamp(0.0, 1.0)
+            } else { 0.0 };
+            let dx = m.a[0] + ab[0] * t - c[0];
+            let dy = m.a[1] + ab[1] * t - c[1];
+            let dz = m.a[2] + ab[2] * t - c[2];
+            if dx * dx + dy * dy + dz * dz < r * r {
+                let shape = posed[i].get_or_insert_with(|| {
+                    let d = &self.list[i];
+                    world.and_then(|w| if d.glist != 0 { w.shape(d.glist) } else { None })
+                        .map(|t| t.iter().map(|t| t.map(|p| transform(&d.matrix, p))).collect())
+                });
+                // The refine runs for every mover with mask 0x800: the player's body HITTEST and
+                // the guards' collide HITTEST (`NDrone2_Collision` 0x140e90:91-121 writes +0x464 =
+                // 0x800; `Collide_Intersect` 0x1ebaa8:234-296 picks the `Intersect_CylGeom` arm by
+                // that mask alone).
+                if let Some(tris) = shape {
+                    // The slack is the player's (his movement push resolves him to the radius
+                    // before this test); the guards' capsule is tested as it stands.
+                    let slack = if m.player { CONTACT_SLACK } else { 0.0 };
+                    if !CollisionWorld::capsule_meets_tris(m.body.0, m.body.1, m.body.2 + slack, tris) { continue; }
+                }
+                out.push(i);
+            }
+        }
+        out
+    }
+
     pub fn collide_step(&mut self, movers: &[DoorMover], channels: &mut Channels, frame: u32, world: Option<&CollisionWorld>) -> Vec<SoundEvent> {
         let mut sounds = Vec::new();
         if self.contacts.len() != self.list.len() { self.contacts.resize_with(self.list.len(), Vec::new); }
@@ -837,37 +877,8 @@ impl Doors {
         // The live-posed collision shape per door, built on first need this step.
         let mut posed: Vec<Option<Option<Vec<[V3; 3]>>>> = vec![None; self.list.len()];
         for m in movers {
-            let ab = [m.b[0] - m.a[0], m.b[1] - m.a[1], m.b[2] - m.a[2]];
-            for i in 0..self.list.len() {
-                let c = transform(&self.list[i].matrix, self.list[i].sph_centre);
-                // 1.5·r_door + r_pick [M 0x1eae80:160,164,166 — the 0x800 arm; r_pick = the mover's
-                // hittest+0x8C capsule radius, carried on the mover].
-                let r = self.list[i].sph.1 * 1.5 + m.radius;
-                let ab2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
-                let t = if ab2 > 0.0 {
-                    (((c[0] - m.a[0]) * ab[0] + (c[1] - m.a[1]) * ab[1] + (c[2] - m.a[2]) * ab[2]) / ab2).clamp(0.0, 1.0)
-                } else { 0.0 };
-                let dx = m.a[0] + ab[0] * t - c[0];
-                let dy = m.a[1] + ab[1] * t - c[1];
-                let dz = m.a[2] + ab[2] * t - c[2];
-                if dx * dx + dy * dy + dz * dz < r * r {
-                    let shape = posed[i].get_or_insert_with(|| {
-                        let d = &self.list[i];
-                        world.and_then(|w| if d.glist != 0 { w.shape(d.glist) } else { None })
-                            .map(|t| t.iter().map(|t| t.map(|p| transform(&d.matrix, p))).collect())
-                    });
-                    // The refine runs for every mover with mask 0x800: the player's body HITTEST and
-                    // the guards' collide HITTEST (`NDrone2_Collision` 0x140e90:91-121 writes +0x464 =
-                    // 0x800; `Collide_Intersect` 0x1ebaa8:234-296 picks the `Intersect_CylGeom` arm by
-                    // that mask alone).
-                    if let Some(tris) = shape {
-                        // The slack is the player's (his movement push resolves him to the radius
-                        // before this test); the guards' capsule is tested as it stands.
-                        let slack = if m.player { CONTACT_SLACK } else { 0.0 };
-                        if !CollisionWorld::capsule_meets_tris(m.body.0, m.body.1, m.body.2 + slack, tris) { continue; }
-                    }
-                    self.contacts[i].push(DoorContact { centre: m.centre, player: m.player, valid: m.valid });
-                }
+            for i in self.mover_hits(m, world, &mut posed) {
+                self.contacts[i].push(DoorContact { centre: m.centre, player: m.player, valid: m.valid });
             }
         }
         // The dispatch [M 0x1ea398:59-64]: `control_funcs[class·0xC+4](obj)` — doors run `Door_ReactToHit`.

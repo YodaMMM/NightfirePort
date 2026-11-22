@@ -1027,6 +1027,15 @@ pub fn calc(level: u32, triggers: &mut [Trigger], ch: &mut Channels, touchers: &
     for out in hits { ch.set(out as u32, 1, frame); }
 }
 
+/// Probe (`NF_COLLPROBE`): the Touch / TouchOnce triggers whose `Trigger_Hit` verdict differs
+/// between two toucher sets this tick.
+pub fn hit_diff(triggers: &[Trigger], ch: &Channels, a: &[Toucher], b: &[Toucher], bullets: &[BulletContact]) -> Vec<(usize, bool, bool)> {
+    triggers.iter().enumerate()
+        .filter(|(_, t)| matches!(t.kind, kind::TOUCH | kind::TOUCH_ONCE) && !t.gone && !(t.lock != 0 && ch.on(t.lock as u32)))
+        .filter_map(|(i, t)| { let (x, y) = (t.hit(ch, a, bullets), t.hit(ch, b, bullets)); (x != y).then_some((i, x, y)) })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

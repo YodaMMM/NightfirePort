@@ -7035,6 +7035,22 @@ impl Drone {
         }
     }
 
+    /// `NDrone2_DoCollision` 0x149ec8 read as the collide HITTEST's mask: `NDrone2_Collision`
+    /// 0x140e90 writes +0x464 = 0x800 when it returns 1 and 0 otherwise, and `Collide_Update`
+    /// 0x1ea398:78 skips the pick of a zero-mask HITTEST outright — no trigger, door or object
+    /// contact that tick. The live guard's arms: bit 0x20 (`bounded`) clear → 0; voice 0xC → 1;
+    /// voice 0x13, a player within 2.0, the drawn grace → 1; the anim-info no-physics bit → 0;
+    /// else 1 (`no_physics_now` carries those folds). The corpse (+0x4F8 & 0x200) takes
+    /// `NDrone2_Collision`'s bone arm, which writes 0x800 unconditionally [M 0x140e90 else arm].
+    pub fn hittest_on(&self) -> bool { self.corpse || (self.bounded && !self.no_physics_now()) }
+
+    /// The live guard's collide HITTEST as a segment: (bottom, top, radius) — `capsule` at the
+    /// drone's own hip `+0xA0` [M 0x140e90: +0x3F0 = pos + up·r, +0x400 = pos + up·(r − hip)].
+    pub fn hittest_seg(&self) -> (V3, V3, f32) {
+        let (r, top, bottom) = self.capsule(self.hip());
+        ([self.pos[0], self.pos[1] + bottom, self.pos[2]], [self.pos[0], self.pos[1] + top, self.pos[2]], r)
+    }
+
     /// `NDrone2_Move` (0x14eff8) +0x23 branch, interpreter-verified against the real code (this
     /// task): `velocity += normalise(rope − pos) · (REC_FRAME_RATE · +0x50)` per control tick, the
     /// old velocity kept (it accumulates — the rope slide accelerates at +0x50 u/s²). The VU/EE op
@@ -21868,6 +21884,15 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     if !dr.present || !dr.enabled || dr.corpse { continue; }
                     let dx = dr.pos[0] - centre[0]; let dy = dr.pos[1] - centre[1]; let dz = dr.pos[2] - centre[2];
                     if dx * dx + dy * dy + dz * dz <= r * r { smoke_touch[i] = true; }
+                    if crate::env_flag!("NF_COLLPROBE") {
+                        let (gb, gt, gr) = dr.hittest_seg();
+                        let q = Self::closest_on_segment(gb, gt, centre);
+                        let gd = (q[0] - centre[0]).powi(2) + (q[1] - centre[1]).powi(2) + (q[2] - centre[2]).powi(2);
+                        let game = dr.hittest_on() && gd <= (model.radius + gr).powi(2);
+                        let old = dx * dx + dy * dy + dz * dz <= r * r;
+                        collprobe::count(3, 1);
+                        if old != game { collprobe::count(3, 0); eprintln!("COLLPROBE smoke level {:08x} frame {} drone {} old {} game {}", d.level, frame, i, old, game); }
+                    }
                 }
             }
         }
@@ -21929,6 +21954,33 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
         let touchers: Vec<crate::triggers::Toucher> = player_touchers.into_iter()
             .chain(self.list.iter().filter(|x| x.enabled).map(|x| crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true, seg_only: false }))
             .collect();
+        if crate::env_flag!("NF_COLLPROBE") {
+            let game_toucher = |x: &Drone| {
+                let (a, b, r) = if x.corpse { ([x.pos[0], x.pos[1] - 1.0, x.pos[2]], x.head(), 0.4) } else { x.hittest_seg() };
+                crate::triggers::Toucher { a, b, r, drone: true, skin: x.skin, contain: true, seg_only: false }
+            };
+            let players: Vec<crate::triggers::Toucher> = touchers.iter().filter(|t| !t.drone).cloned().collect();
+            let shape: Vec<crate::triggers::Toucher> = players.iter().cloned().chain(self.list.iter().filter(|x| x.enabled).map(game_toucher)).collect();
+            let game: Vec<crate::triggers::Toucher> = players.iter().cloned().chain(self.list.iter().filter(|x| x.enabled && x.hittest_on()).map(game_toucher)).collect();
+            collprobe::count(0, 1);
+            if frame % 600 == 0 { collprobe::report(d.level, frame); }
+            let ds = crate::triggers::hit_diff(&self.triggers, &self.channels, &touchers, &shape, &self.bullet_contacts_prev);
+            for (i, old, new) in crate::triggers::hit_diff(&self.triggers, &self.channels, &touchers, &game, &self.bullet_contacts_prev) {
+                collprobe::count(0, 0);
+                let t = &self.triggers[i];
+                let shape_only = ds.iter().any(|x| x.0 == i);
+                eprintln!("COLLPROBE trig level {:08x} frame {} trig {} placement {} out {:#x} mask {:#x} old {} game {} shape_diff {}", d.level, frame, i, t.placement, t.out, t.mask, old, new, shape_only);
+                if crate::env_flag!("NF_COLLPROBE_DETAIL") {
+                    eprintln!("COLLPROBE detail lo {:?} hi {:?} tris {} planes {}", t.lo, t.hi, t.tris.len(), t.planes.len());
+                    for (k, x) in self.list.iter().enumerate().filter(|(_, x)| x.enabled) {
+                        let o = crate::triggers::Toucher { a: [x.pos[0], x.pos[1] - 1.0, x.pos[2]], b: x.head(), r: 0.4, drone: true, skin: x.skin, contain: true, seg_only: false };
+                        let g = game_toucher(x);
+                        let (to, tg) = (t.touched_by(&o), t.touched_by(&g));
+                        if to || tg { eprintln!("COLLPROBE detail drone {} skin {:#x} state {:#x} pos {:?} on {} nophys {} grace {} near {} old {} shape {}", k, x.skin, x.state, x.pos, x.hittest_on(), x.anim.info_word & 2 != 0, x.frustum_grace, x.near_player_collision(), to, tg); }
+                    }
+                }
+            }
+        }
         drop(prof_pre);
         { let _p = crate::prof::scope("drones: Trigger_Calc"); crate::triggers::calc(d.level, &mut self.triggers, &mut self.channels, &touchers, &self.bullet_contacts_prev, frame); }
         // level-0c-complete: the deferred use-key trigger half — the game's E press fires at
@@ -23870,6 +23922,20 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                 // finds it before the resolution (`Collide_Jointy` resolves the hit the same pass
                 // recorded [M 0x1ec180:229-281; Collide_Update 0x1ea398:160-215]).
                 let pushed = self.player_contacts.contains(&index);
+                if crate::env_flag!("NF_COLLPROBE") {
+                    let (gb, gt, gr) = dr.hittest_seg();
+                    let mut gp = Self::closest_on_segment(gt, gb, ja);
+                    let gq = Self::closest_on_segment(ja, jb, gp);
+                    gp = Self::closest_on_segment(gt, gb, gq);
+                    let gd = (gp[0] - gq[0]).powi(2) + (gp[1] - gq[1]).powi(2) + (gp[2] - gq[2]).powi(2);
+                    let old = dist_sq < rr * rr || pushed;
+                    let game = dr.hittest_on() && (gd < (pr + gr) * (pr + gr) || pushed);
+                    collprobe::count(1, 1);
+                    if old != game {
+                        collprobe::count(1, 0);
+                        eprintln!("COLLPROBE body level {:08x} frame {} drone {} state {:#x} hip {} on {} old {} game {}", d.level, frame, index, dr.state, dr.hip(), dr.hittest_on(), old, game);
+                    }
+                }
                 if dist_sq < rr * rr || pushed {
                     dr.objhit_latch = true; // [M 0x1405c8]
                     // HITDATA+0x40 stand-in: the midpoint of the two closest points, the world delta
@@ -24141,6 +24207,25 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     player: false,
                     valid: !x.corpse && x.health > 0.0 && x.enabled,
                 });
+            }
+            if crate::env_flag!("NF_COLLPROBE") {
+                let mut posed = Vec::new();
+                for (i, x) in self.list.iter().enumerate() {
+                    if !x.present { continue; }
+                    let (r, top_off, bottom_off) = x.capsule(1.0);
+                    let top = [x.pos[0], x.pos[1] + top_off, x.pos[2]];
+                    let bottom = [x.pos[0], x.pos[1] + bottom_off, x.pos[2]];
+                    let old = crate::door::DoorMover { a: top, b: bottom, radius: r, body: (top, bottom, r), centre: x.pos, player: false, valid: true };
+                    let (gb, gt, gr) = x.hittest_seg();
+                    let game = crate::door::DoorMover { a: gt, b: gb, radius: gr, body: (gt, gb, gr), centre: x.pos, player: false, valid: true };
+                    let ho = self.doors.mover_hits(&old, Some(d.world), &mut posed);
+                    let hg = if x.hittest_on() { self.doors.mover_hits(&game, Some(d.world), &mut posed) } else { Vec::new() };
+                    collprobe::count(2, 1);
+                    if ho != hg {
+                        collprobe::count(2, 0);
+                        eprintln!("COLLPROBE door level {:08x} frame {} drone {} state {:#x} hip {} on {} valid {} old {:?} game {:?}", d.level, frame, i, x.state, x.hip(), x.hittest_on(), !x.corpse && x.health > 0.0 && x.enabled, ho, hg);
+                    }
+                }
             }
             let evs = self.doors.collide_step(&movers, &mut self.channels, frame, Some(d.world));
             for (id, pos) in evs {
@@ -27506,5 +27591,18 @@ mod combat_move_tests {
             assert_eq!(m, 0, "the empty list takes the default arm [M 0x150c18:329-330]");
             assert_eq!(rng.draws - before, 2, "Rand_Rand(15) and Rand_Rand(0) both step the stream [M 0x1e3738]");
         }
+    }
+}
+
+/// `NF_COLLPROBE`: per-kind counts of the guard-collision probes (0 trigger touch, 1 body contact,
+/// 2 door contact, 3 smoke touch): evaluations and verdicts that differ from the game's HITTEST.
+mod collprobe {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: [[AtomicU64; 2]; 4] = [const { [const { AtomicU64::new(0) }, const { AtomicU64::new(0) }] }; 4];
+    pub fn count(kind: usize, eval: usize) { N[kind][eval].fetch_add(1, Ordering::Relaxed); }
+    pub fn report(level: u32, frame: u32) {
+        let g = |k: usize, e: usize| N[k][e].load(Ordering::Relaxed);
+        eprintln!("COLLPROBE sum level {:08x} frame {} trig {}/{} body {}/{} door {}/{} smoke {}/{}", level, frame,
+            g(0, 0), g(0, 1), g(1, 0), g(1, 1), g(2, 0), g(2, 1), g(3, 0), g(3, 1));
     }
 }
