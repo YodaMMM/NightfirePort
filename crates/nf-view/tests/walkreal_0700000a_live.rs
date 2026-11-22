@@ -1733,7 +1733,9 @@ fn the_west_hall_walk_crosses_the_doorway() {
 /// (xz bends) and settles 1.1159 [L 2026-10-26]; what produces the game's walked wall response is
 /// the open live check (BL+0x790 watch through the corner + doorway brush).
 #[test]
-#[ignore = "2026-11-21: the route wedges one leg EARLIER, at the west office door (-20.22, 1.04, 3.93), between the jamb and the opened door leaf; the game wedges there too [L 2026-11-21 PCSX2: opened with the use key from (-20.5, 1.2, 4.3) and held east, Bond rests at (-20.2343, 1.1237, 4.4970), pinned in collide_push_live]. The leg must walk around the opened leaf; the corner line itself is not reached"]
+// s/hard-walks-d: un-ignored. The wedge was the walk's own open door: the leaf of the west
+// office door, opened on the way in, covers the corner (the port's placed hold wedges at
+// (−17.874, 4.872) with it open and crosses with it closed); the walk now lets it auto-close.
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {
@@ -1756,7 +1758,21 @@ fn the_corner_crosses_like_the_game() {
     }
     // The wedge point, then the game's own hold-forward line to (−17.5, 2.5).
     w.walk_to(Wp::new(-17.87, 1.3, 4.87).r(0.4), "the wedge corner");
+    // The game's corner line was measured with the west office door CLOSED (a fresh-boot
+    // placement). The walk opens it on the way in, and the open leaf (pos01 0, swung east) covers
+    // the corner: the port's hold from the same placement with the leaf open pins Bond at
+    // (−17.874, 4.872) (collide_push_live's placement, use key first), with it closed it crosses
+    // to the game's (−17.9715, −0.4162). Step east off the leaf's sphere and let the auto-close
+    // run (FRAME_RATE_INT·6 quiet ticks [M Door_Update 0x1363c8 @0x13660c-0x136700]).
+    w.walk_to(Wp::new(-16.2, 1.3, 5.8).r(0.6), "east of the leaf (the auto-close)");
+    let door_closed = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+        .filter(|d| (d.pos[0] + 19.52).abs() < 0.5 && (d.pos[2] - 4.60).abs() < 0.5)
+        .all(|d| d.state == nf_game::door::CLOSED);
+    for _ in 0..1200 { if door_closed(&w) { break; } w.wait(1); }
+    assert!(door_closed(&w), "the west office door closes on its own once Bond is off the leaf");
+    w.walk_to(Wp::new(-17.87, 1.3, 4.87).r(0.4), "the wedge corner (door closed)");
     let start_ticks = w.total_ticks;
+    let entry_y = w.scene.sim.as_ref().unwrap().bond.pos[1];
     let arrived = w.try_walk_to(Wp::new(-17.5, 1.3, 2.5).r(0.35), "the game's corner line");
     assert!(arrived, "the game walks the corner in ~25 frames [L fresh boot]; the port wedged at {:?}",
         w.scene.sim.as_ref().unwrap().bond.pos);
@@ -1765,7 +1781,11 @@ fn the_corner_crosses_like_the_game() {
     // The game's settled exit y, RE-PINNED [L 2026-10-26 fresh boot: placed (-17.87, 1.12, 4.87),
     // yaw 2.987, 60 frames forward — the xz path bends (a slide), y settles 1.1186 mid-path then
     // 1.1159 at the end (-17.9715, 1.1159, -0.4162); the driver pins the settled values].
-    assert!((p[1] - 1.1159).abs() <= 0.005, "the corner exit y must read the game's settled 1.1159 [L 2026-10-26], got {:.4}", p[1]);
+    // The game entered at its placed 1.12 and left at 1.1159 (−0.0041); the walk enters at
+    // whatever height the door passage left (1.035 here), so the walked pin is the crossing's own
+    // change. The placed-height pin against the game's numbers is collide_push_live's
+    // `the_corner_line_matches_the_game`.
+    assert!((p[1] - entry_y).abs() <= 0.005, "the corner crossing keeps the entry height like the game (1.12 → 1.1159 [L 2026-10-26]), {entry_y:.4} → {:.4}", p[1]);
 }
 
 /// The task's repro (collision-0a-west-doorway-floor): walk the ring's west legs one by one and
