@@ -159,6 +159,8 @@ fn state_digest(sim: &nf_view::scene::Sim) -> u64 {
     h.usz(d.mission_events.len());
     for _e in &d.mission_events { /* the enum carries payloads; the count catches queueing changes */ }
     h.usz(d.player_hits.len());
+    // The moving-object collision set the next tick queries (frame-cost-1122).
+    h.u64v(sim.world.dynamic_digest());
     h.0
 }
 

@@ -513,3 +513,143 @@ fn frame_budgets_hold_through_the_07000006_dressing_cutscene() {
     eprintln!("[cost] dressing scene sim tick: {tick_ms:.3} ms (median of 300)");
     assert_budget("dressing scene sim tick (step_bond)", 1.5, tick_ms);
 }
+
+/// The on-foot story levels the 240 Hz target covers (07000001-0d, 11-16, 1b, 4a).
+const STORY_ON_FOOT: [&str; 21] = [
+    "07000001.bin", "07000002.bin", "07000003.bin", "07000004.bin", "07000005.bin", "07000006.bin",
+    "07000007.bin", "07000008.bin", "07000009.bin", "0700000a.bin", "0700000b.bin", "0700000c.bin",
+    "0700000d.bin", "07000011.bin", "07000012.bin", "07000013.bin", "07000014.bin", "07000015.bin",
+    "07000016.bin", "0700001b.bin", "0700004a.bin",
+];
+
+/// The busiest fight spot a headless run can reach: the live armed drone (present, health, a weapon,
+/// above 0; enabled or not, the approach enables many) with the most other live drones within 20 m. Returns (drone index, neighbour count).
+fn fight_cluster(sim: &nf_view::scene::Sim) -> Option<(usize, usize)> {
+    let live: Vec<(usize, [f32; 3])> = sim.drones.list.iter().enumerate()
+        .filter(|(_, d)| d.present && d.health > 0.0 && d.weapon != 0)
+        .map(|(i, d)| (i, [d.pos[0], d.pos[1], d.pos[2]])).collect();
+    live.iter().map(|&(i, p)| {
+        let n = live.iter().filter(|&&(j, q)| j != i && (p[0] - q[0]).hypot(p[2] - q[2]) < 20.0 && (p[1] - q[1]).abs() < 6.0).count();
+        (i, n)
+    }).max_by_key(|&(i, n)| (n, usize::MAX - i))
+}
+
+/// One level, one spot: the sim tick (median and p90 over `ticks` live ticks driven by `drive`,
+/// Bond's health refilled each tick so the fight keeps going), the tick's top prof scopes, and the
+/// window's per-frame CPU chain at the spot's eye (palette rebuild, cel visibility, skin upload,
+/// lights, HUD, shards, the whole encode). `tickframe` = the frame that also runs a tick, the
+/// worst frame of the 60 Hz logic at 240 Hz. GPU execution is not included (CPU only).
+#[cfg(not(debug_assertions))]
+fn spot_cost(device: &wgpu::Device, queue: &wgpu::Queue, scene: &mut Scene, name: &str, label: &str,
+             eye_of: &dyn Fn(&Scene) -> ([f32; 3], f32), drive: &dyn Fn(u32) -> (nf_game::player::Input, bool), ticks: u32) -> f64 {
+    let _ = nf_game::prof::take_samples();
+    nf_game::prof::capture(true);
+    let mut tv = Vec::new();
+    if let Some(sim) = scene.sim.as_mut() {
+        for i in 0..ticks {
+            let (inp, trig) = drive(i);
+            sim.drones.health.health = 100.0;
+            let t0 = std::time::Instant::now();
+            sim.step_bond(inp, trig, false, false);
+            tv.push(t0.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    nf_game::prof::capture(false);
+    let samples = nf_game::prof::take_samples();
+    tv.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let (tick, tick90) = if tv.is_empty() { (0.0, 0.0) } else { (tv[tv.len() / 2], tv[tv.len() * 9 / 10]) };
+    let mut agg: Vec<(&str, f64)> = Vec::new();
+    for (nm, ns) in &samples { match agg.iter_mut().find(|e| e.0 == *nm) { Some(e) => e.1 += *ns as f64 / 1e6, None => agg.push((nm, *ns as f64 / 1e6)) } }
+    for e in agg.iter_mut() { e.1 /= ticks.max(1) as f64; }
+    agg.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    let top: Vec<String> = agg.iter().take(22).map(|(n, v)| format!("{n}={v:.3}")).collect();
+
+    let (eye, yaw) = eye_of(scene);
+    let vp = view_proj(eye, yaw, 0.0, 16.0 / 9.0);
+    let mut opts = ViewOpts::default();
+    let fw = glam::Vec3::new(yaw.sin(), 0.0, yaw.cos()).normalize();
+    let s = fw.cross(glam::Vec3::Y).normalize();
+    opts.right = s.to_array(); opts.up = s.cross(fw).to_array();
+    let t = 120.0f32;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: None, size: wgpu::Extent3d { width: 1280, height: 720, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+        dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+    let view = target.create_view(&Default::default());
+    let depth = nf_view::gpu::depth_view(device, 1280, 720);
+    let mut r = nf_view::gpu::Renderer::new(device, queue, format, scene, false, false);
+    let (layout, _) = scene.skin_layout();
+    let mut bufs = (Vec::new(), Vec::new());
+    let pal = median_ms(1, 7, || { scene.skin_palette_into(&layout, None, t, opts, None, &mut bufs.0, &mut bufs.1); });
+    let door_closed = scene.sim.as_ref().map(|s| s.drones.doors.closed_flags());
+    let world = scene.sim.as_ref().map(|s| &s.world);
+    let vis = median_ms(2, 7, || { let _ = r.cel_visibility(eye, vp, world, door_closed.as_deref()); });
+    let upl = median_ms(2, 7, || { r.char_light_centre = scene.char_light_centres(); r.upload_skin(queue, &bufs.0, &bufs.1); });
+    let lights = median_ms(2, 7, || { r.lights = scene.frame_lights(); });
+    let hud = median_ms(2, 7, || { std::hint::black_box(nf_view::hud::overlay(scene, 16.0 / 9.0)); });
+    let shards = median_ms(2, 7, || { r.set_shards(queue, &scene.shard_draws()); });
+    let hf = nf_view::hud::overlay(scene, 16.0 / 9.0);
+    let mut encs = Vec::new();
+    let enc = median_ms(2, 7, || { encs.push(r.render(device, queue, &view, &depth, vp, vp, eye, t as u32, &[], &hf, None, None)); });
+    let drawn = r.order_len();
+    for e in encs.drain(..) { queue.submit([e.finish()]); }
+    let frame = vis + upl + lights + hud + shards + enc;
+    let tickf = frame + tick + pal;
+    let tickf90 = frame + tick90 + pal;
+    eprintln!("[spot] {name} {label:<6} draws={drawn:5} | tick {tick:.3} (p90 {tick90:.3}) pal {pal:.3} vis {vis:.3} upl {upl:.3} lights {lights:.3} hud {hud:.3} shards {shards:.3} enc {enc:.3} | frame {frame:.3} tickframe {tickf:.3} (p90 {tickf90:.3}){}",
+        if tickf > 4.167 { "  OVER 4.17" } else { "" });
+    eprintln!("[spot-tick] {name} {label:<6} {}", top.join(" "));
+    drop(r); drop(view); drop(target); drop(depth);
+    let _ = queue.submit([]);
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    tickf
+}
+
+/// frame-cost-1122: every on-foot story level measured at its start and at one busy fight spot
+/// (Bond dropped beside the largest live guard cluster, firing in half-second bursts so the
+/// guards fight). Measurement only, `#[ignore]`: wall-clock numbers on a shared machine are not
+/// a pass/fail signal. `NF_SPOT_LEVELS=07000005,0700000c` restricts the run.
+#[test]
+#[ignore]
+#[cfg(not(debug_assertions))]
+fn frame_cost_at_start_and_fight_spot_per_level() {
+    use nf_game::player::Input;
+    let Some(iso_path) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let instance = nf_view::gpu_instance_headless();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else { eprintln!("no adapter"); return };
+    let want = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+    let desc = wgpu::DeviceDescriptor { required_features: adapter.features() & want, required_limits: adapter.limits(), ..Default::default() };
+    let (device, queue) = pollster::block_on(adapter.request_device(&desc)).expect("device");
+    nf_game::prof::force_enable();
+    let only = std::env::var("NF_SPOT_LEVELS").ok();
+    let mut over = Vec::new();
+    for name in STORY_ON_FOOT {
+        if let Some(o) = &only { if !o.split(',').any(|x| name.starts_with(x.trim())) { continue; } }
+        let mut scene = match nf_view::load(&iso_path, name, false) { Ok(s) => s, Err(e) => { eprintln!("[spot] {name} not loadable: {e}"); continue } };
+        if let Some(sim) = scene.sim.as_mut() { for _ in 0..120 { sim.step_bond(Default::default(), false, false, false); } }
+        let start = scene.start.clone().unwrap_or(([0.0; 3], 0.0));
+        let s_eye = move |_: &Scene| ([start.0[0], start.0[1] + 1.6, start.0[2]], start.1);
+        let a = spot_cost(&device, &queue, &mut scene, name, "start", &s_eye, &|_| (Input::default(), false), 60);
+        let Some(sim) = scene.sim.as_mut() else { continue };
+        let Some((di, n)) = fight_cluster(sim) else { eprintln!("[spot] {name}: no live drones"); continue };
+        let dp = sim.drones.list[di].pos;
+        // Bond on the nav node nearest 8 m from that guard (5-12 m, within 3 m of its height: walkable
+        // ground a fight is fought from), facing the guard; the guard's own spot if no node fits.
+        let node = sim.nav.paths.iter().flat_map(|p| p.nodes.iter().map(|n| n.pos))
+            .filter(|q| { let h = (q[0] - dp[0]).hypot(q[2] - dp[2]); (5.0..12.0).contains(&h) && (q[1] - dp[1]).abs() < 3.0 })
+            .min_by(|a, b| ((a[0] - dp[0]).hypot(a[2] - dp[2]) - 8.0).abs().total_cmp(&((b[0] - dp[0]).hypot(b[2] - dp[2]) - 8.0).abs()));
+        let bp = node.unwrap_or([dp[0], dp[1] + 0.5, dp[2]]);
+        sim.bond.pos = bp;
+        if node.is_some() { sim.bond.yaw = (dp[0] - bp[0]).atan2(dp[2] - bp[2]); }
+        // Fire in bursts (30 ticks on, 30 off) for 4 game-seconds, then measure 120 more ticks.
+        let fire = |i: u32| (Input::default(), (i / 30) % 2 == 0);
+        for i in 0..240 { let (inp, trig) = fire(i); sim.drones.health.health = 100.0; sim.step_bond(inp, trig, false, false); }
+        let alerted = sim.drones.list.iter().filter(|d| d.present && d.enabled && d.health > 0.0 && d.alert_status > 0).count();
+        let hits = sim.drones.player_hits.len();
+        eprintln!("[spot] {name} fight at drone {di} ({n} live within 20 m, Bond {} 8 m node): {alerted} alerted, {hits} hits on Bond so far", if node.is_some() { "on a" } else { "without a" });
+        let f_eye = |sc: &Scene| { let s = sc.sim.as_ref().unwrap(); ([s.bond.pos[0], s.bond.pos[1] + 1.6, s.bond.pos[2]], s.bond.yaw) };
+        let b = spot_cost(&device, &queue, &mut scene, name, "fight", &f_eye, &fire, 120);
+        if a > 4.167 || b > 4.167 { over.push(format!("{name} start {a:.2} fight {b:.2}")); }
+    }
+    eprintln!("[spot-over] {} level(s) over 4.17 ms: {}", over.len(), over.join("; "));
+}
