@@ -75,12 +75,9 @@ fn civilian_patrol_voice10_flips_team() {
 /// The HostageIdle↔HostageHide pair [M 0x15ce60:28-33 / 0x15cfe0:23-29]: a HOSTAGE_IDLE drone
 /// hides when an armed team-1 drone stands within 20.0 and is seen from her head, and returns to
 /// HostageIdle when none is. The old port had no UPDATE arm for either.
-/// IGNORED this round: the poll is landed and gated (HOSTAGE_POLL_LIVE = false in Drones::tick —
-/// the 07000003 rescued captives poll too and the real-damage full-route walks regress 6/6 → 4/6
-/// until their re-tune round). The test is RED on the pre-fix code (verified at 01a1dc901) and
-/// GREEN with the poll live (measured this session); flip the gate and this runs.
+/// The poll is the `armed_drone_near` pre-pass in `Drones::tick` read by the two states' UPDATE
+/// arms; with that flag held false this test is RED (both asserts: she never hides).
 #[test]
-#[ignore = "HOSTAGE_POLL_LIVE is gated off pending the 07000003 walk re-tune"]
 fn hostage_idle_hides_from_armed_team1() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load 07000007");

@@ -9,10 +9,27 @@
 //! CivilianPatrol) glided at the danim speed with no gait while on screen (`NDrone2_DoAnimation`
 //! 0x149f88's not-drawn arm [M]). The gate now runs the game's own room rule.
 //!
-//! Real inputs only: the load's own arrival, then the walker's movement inputs to the vantage
-//! Bond at (4.59, 0.65, 2.43) (cel 29) looking down the security centre's west sightline — the
-//! spot the slide was measured at (about frame 7485 on the walkreal route: arrival plate, out of
-//! the cab, lobby, the crouched west-hall crossing under beam #607). No teleports after the load.
+//! #695 is not on the floor at the load: he is one of the four group-2 templates (#690/#694/#695/
+//! #696) of spawner #692 (AI_DroneSpawner 0xf1: mode 2, max 1, waves 1, start ch 0x84, min
+//! distance 3 [D params]). Ch 0x84 is the drone-zone plates #713/#714 (oDroneTrigger3 at
+//! (−17.0, 0.7, 17.5) / (−26.9, 0.7, 17.5), touch-once, mask 8 [D]) on the west offices' north
+//! corridor. On the plate's tick `DroneSpawner_Control` 0x137e68 latches the start, and
+//! `DroneSpawner_SpawnDrone` 0x137cb0 draws ONE template with `Rand_Rand(4)` over the usable
+//! (unused, at least 3 from Bond) walk, aborting on a spot Bond can see [M]; the one spawn fills
+//! the wave and the single wave ends the spawner [M 0x137e68:126-172]. So exactly one of the four
+//! ever walks, and which one rides the shared stream's phase at the plate. The port's spawner
+//! releases group 2 on the same plate (asserted below); the route's 3-tick stand in the west hall
+//! before the plate puts the draw on #695 (stands of 0/1/2/3 ticks drew #694/#690/#694/#695 on
+//! this route).
+//!
+//! #695's patrol is a loop through the west offices (about x −9..−36, z 2.6..13.5 on this route).
+//! The watch stays at the plate, no teleports anywhere: the load's own arrival, out of the cab,
+//! the lobby, the crouched west-hall crossing under beam #607, the plate. Bond faces south-west
+//! down the west corridor while #695 walks the loop's west end. Each tick the test runs the
+//! room walk itself (`portal_visible_cels_from_cell_doors` from Bond's cel, the five depth-0
+//! planes) and checks: whenever #695's cel is portal-visible and his sphere is in the frustum,
+//! the sim reads him drawn, his walk anim advances and he moves with it. The old bullet-ray gate
+//! read him undrawn there (the corridor's west wall stands between) and slid him.
 
 #[path = "common/walker_b2.rs"]
 mod walker;
@@ -32,135 +49,128 @@ fn turn_to(w: &mut Walker, yaw: f32) {
     panic!("could not turn to yaw {yaw}");
 }
 
-/// The vantage watch: turn Bond to `yaw` at the vantage, then sample #695 for `ticks` while he
-/// patrols. Returns per-sample (pos, danim, ftime, in_frustum, drawn).
-fn watch(w: &mut Walker, yaw: f32, ticks: u32, gi: usize) -> Vec<([f32; 3], u16, f32, bool, bool)> {
+/// The game's room rule for one drone this tick: his linked cel sits in the VisCelList the
+/// portal walk from Bond's cel builds (`View_AddCels` 0x1e6ba0 over `Vision_Portal_Recurse`
+/// 0x1e86e8 + `Vision_Recurse` 0x1e82e0, the doors leg on this tick's closed flags [M]).
+fn cel_visible(sim: &nf_view::scene::Sim, gi: usize) -> bool {
+    let d = &sim.drones.list[gi];
+    let (Some(start), Some(his)) = (sim.bond.cel, d.obj_cel) else { return false };
+    let doors = sim.drones.doors.closed_flags();
+    let sides = nf_game::drone::frustum_sides(sim.bond.look());
+    let eye = sim.bond.head();
+    let mut depth0: [[f32; 4]; 5] = [[0.0; 4]; 5];
+    for (k, n) in sides.iter().enumerate() {
+        depth0[k] = [n[0], n[1], n[2], -(n[0] * eye[0] + n[1] * eye[1] + n[2] * eye[2])];
+    }
+    let fw = sim.bond.look();
+    let l = (fw[0] * fw[0] + fw[1] * fw[1] + fw[2] * fw[2]).sqrt();
+    let fe = fw[0] / l * eye[0] + fw[1] / l * eye[1] + fw[2] / l * eye[2];
+    depth0[4] = [-fw[0] / l, -fw[1] / l, -fw[2] / l, fe + 200.0];
+    nf_view::scene::portal_visible_cels_from_cell_doors(&sim.cel_graph, start, eye, &depth0, Some(&doors))
+        .is_some_and(|vis| vis.get(his).copied().unwrap_or(false))
+}
+
+struct Sample { pos: [f32; 3], danim: u16, ftime: f32, in_frustum: bool, cel_vis: bool, drawn: bool }
+
+/// Turn Bond to `yaw` where he stands, then sample #695 for `ticks` while he patrols.
+fn watch(w: &mut Walker, yaw: f32, ticks: u32, gi: usize) -> Vec<Sample> {
     turn_to(w, yaw);
     let mut out = Vec::new();
     for _ in 0..ticks {
-        let (p0, f0) = { let sim = w.scene.sim.as_ref().unwrap(); let d = &sim.drones.list[gi]; (d.pos, d.anim.ftime) };
         w.tick(Input::default(), false);
         let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.level_exit.is_none(), "the mission ended during the watch");
         let d = &sim.drones.list[gi];
         let in_frustum = nf_game::drone::in_view(sim.bond.head(), d.pos, nf_game::drone::DRONE_DRAWN_SLACK, &nf_game::drone::frustum_sides(sim.bond.look()));
-        out.push((d.pos, d.anim.danim, d.anim.ftime, in_frustum, d.drawn));
-        let _ = (p0, f0);
+        out.push(Sample { pos: d.pos, danim: d.anim.danim, ftime: d.anim.ftime, in_frustum, cel_vis: cel_visible(sim, gi), drawn: d.drawn });
     }
     out
 }
 
+/// The crouch toggle through the real input edge (walkreal_0700000a_live's `set_crouch`).
+fn set_crouch(w: &mut Walker, on: bool) {
+    for t in 0..400u32 {
+        if w.scene.sim.as_ref().unwrap().bond.crouched == on { return; }
+        w.tick(Input { crouch: t % 70 == 0, ..Input::default() }, false);
+    }
+    panic!("the crouch toggle never reached {on}");
+}
+
 #[test]
-#[ignore = "pending: the atrium lane civilian (#695) is a spawner-held template (present false at the load [this run's roster]) — the walk must first release his spawner the way the walkreal route does (~frame 7485); the fix's own gates are pinned green by window_guard_0a_live (the glass pane), sight_frustum_live (the frustum leg), ai_live switched_guard_patrols_like_the_game (the 05 castle undrawn pin) and guards_0c_live"]
-fn the_atrium_civilian_walks_his_gait_in_full_view() {
-    let mut gi = 0usize;
+fn the_west_office_civilian_spawns_on_his_plate_and_walks_his_gait_while_drawn() {
     let cold = nf_view::load(&iso(), "0700000a.bin", false).expect("load 0700000a");
     let save = {
         let sim = cold.sim.as_ref().unwrap();
         nf_game::player::RamSave::capture(&sim.drones.health, sim.gun.switch_request, &sim.drones.inventory, &sim.drones.channels)
     };
     let mut w = Walker::new(nf_view::load_with_carry(&iso(), "0700000a.bin", false, Some(&save)).expect("load 0700000a warm"));
-    // The lane patroller: #695 is a spawner-held template (present false at the load — the load
-    // log holds 26 meshes back), so the watch rides the PRESENT office civilian whose patrol
-    // lane crosses the same sightline (g7: the office civilian whose east excursion reaches
-    // (−13.1, 2.3) on the z ≈ 2.4 lane [the walkreal route's roster note]) — same AI 0x14
-    // CivilianPatrol, same walk danim 392, same lane, same posts.
-    {
+    // #695 and his spawner at the load: a held template (no object until the spawn [M 0x137cb0]).
+    let gi = {
         let sim = w.scene.sim.as_ref().unwrap();
-        for (i, d) in sim.drones.list.iter().enumerate() {
-            if d.present && d.team == 3 { eprintln!("[roster] list[{i}] placement {} pos ({:.2},{:.2},{:.2})", d.placement, d.pos[0], d.pos[1], d.pos[2]); }
-        }
-        let cands: Vec<usize> = sim.drones.list.iter().enumerate()
-            .filter(|(_, d)| d.present && d.enabled && d.team == 3 && d.pos[2] > -1.0 && d.pos[2] < 5.0 && d.pos[0] > -30.0 && d.pos[0] < 0.0)
-            .map(|(i, _)| i).collect();
-        assert!(!cands.is_empty(), "no present lane civilian near the sightline — re-derive the roster");
-        gi = cands[0];
+        let gi = sim.drones.list.iter().position(|d| d.placement == 695).expect("drone placement #695 [D]");
         let d = &sim.drones.list[gi];
-        eprintln!("[civ] watch list[{gi}] placement {} pos ({:.2},{:.2},{:.2})", d.placement, d.pos[0], d.pos[1], d.pos[2]);
-    }
+        assert!(!d.present && d.group == 2, "#695 is a group-2 spawner template, absent at the load [D]");
+        let sp = sim.drones.spawners.iter().find(|s| s.placement == 692).expect("spawner #692 [D]");
+        assert_eq!((sp.group, sp.start, sp.max_alive, sp.waves), (2, 0x84, 1, 1), "spawner #692: group 2, start ch 0x84, max 1, one wave [D]");
+        assert!(sp.templates.contains(&gi), "#695 is one of #692's templates");
+        gi
+    };
     // The real route prefix: the arrival plate fires under Bond's feet, out of the cab, the lobby.
     w.wait(30);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x47), "the arrival plate #58 → ch 0x47 [D]");
     w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
     w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
-    // East to the vantage: the atrium lane by the lounge (real inputs, no teleports).
-    // The east side sits behind the ring (the lobby's south band dead-ends at x 6.2 [walked:
-    // the z 15.3 band walls at x 6.5, the corridor mouth only opens from the corridor head east
-    // — the walkreal route's frame ~7485 point]). The stand-in transit into the atrium lane's
-    // east end mirrors window_guard_0a_live.rs's merged pattern for this room (transit to
-    // (4.59, 1.2, 5.5), then the real walk); the walk from here on is REAL input.
-    {
-        let sim = w.scene.sim.as_mut().unwrap();
-        sim.bond.pos = [4.59, 0.65, 5.5];
-        sim.bond.vel = [0.0; 3];
-    }
-    w.wait(12);
-    w.walk_to(Wp::new(4.59, 0.65, 2.43).r(0.4), "the vantage (cel 29)");
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[vantage] bond ({:.2},{:.2},{:.2}) yaw {:.2} obj_cel {:?}",
-            sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], sim.bond.yaw, sim.bond.cel);
-    }
-    // Sample #695 over two patrol laps' worth while Bond holds the west sightline.
-    // Diagnostics: his runtime state + whether the room rule's walk reaches his cel.
+    // Beam #607 across the west-hall mouth: crouched under it (walkreal_0700000a_live's crossing).
+    set_crouch(&mut w, true);
+    w.walk_to(Wp::new(-7.4, 0.4, 16.6).r(0.6), "the west hall's doorway line (crouched)");
+    w.walk_to(Wp::new(-10.0, 0.4, 16.6).r(0.6), "through beam #607's plane (crouched)");
+    w.walk_to(Wp::new(-11.6, 0.4, 16.6).r(0.6), "west, clear of beam #607's reach (crouched)");
+    set_crouch(&mut w, false);
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x84), "ch 0x84 is still off before the plate");
+    assert!(!w.scene.sim.as_ref().unwrap().drones.list[gi].present, "#695 is still held before the plate");
+    // The stand that phases the spawn draw onto #695 (see the header), then plate #713.
+    w.wait(3);
+    w.walk_to(Wp::new(-16.6, 0.4, 17.4).r(0.6), "the west offices' north corridor (plate #713)");
+    w.wait(30);
     {
         let sim = w.scene.sim.as_ref().unwrap();
+        assert!(sim.drones.channels.on(0x84), "plate #713 → ch 0x84 [D]");
+        let sp = sim.drones.spawners.iter().find(|s| s.placement == 692).unwrap();
+        let got: Vec<usize> = sp.spawned.iter().map(|&i| sim.drones.list[i].placement).collect();
+        assert_eq!(got, vec![695], "spawner #692 released one group-2 civilian on ch 0x84, #695 on this route's draw [M 0x137cb0]");
+        assert!(sp.gone, "one spawn, one wave: spawner #692 is done [M 0x137e68:126-143]");
         let d = &sim.drones.list[gi];
-        eprintln!("[civ st] present {} enabled {} started {} state {} anim.state {:#x} danim {} ftime {:.1} pos {:?} obj_cel {:?} team {}",
-            d.present, d.enabled, d.started, d.state, d.anim.state, d.anim.danim, d.anim.ftime, d.pos, d.obj_cel, d.team);
-        let start = sim.bond.cel;
-        let doors = sim.drones.doors.closed_flags();
-        let sides = nf_game::drone::frustum_sides(sim.bond.look());
-        let eye = sim.bond.head();
-        let mut depth0: [[f32; 4]; 5] = [[0.0; 4]; 5];
-        for (k, n) in sides.iter().enumerate() {
-            depth0[k] = [n[0], n[1], n[2], -(n[0] * eye[0] + n[1] * eye[1] + n[2] * eye[2])];
-        }
-        let fw = sim.bond.look();
-        let l = (fw[0] * fw[0] + fw[1] * fw[1] + fw[2] * fw[2]).sqrt();
-        let fe = fw[0] / l * eye[0] + fw[1] / l * eye[1] + fw[2] / l * eye[2];
-        depth0[4] = [-fw[0] / l, -fw[1] / l, -fw[2] / l, fe + 200.0];
-        match start.and_then(|st| nf_view::scene::portal_visible_cels_from_cell_doors(&sim.cel_graph, st, eye, &depth0, Some(&doors))) {
-            Some(vis) => {
-                let n = vis.iter().filter(|v| **v).count();
-                let his = d.obj_cel.map(|c| vis.get(c).copied().unwrap_or(false));
-                eprintln!("[mask] start {start:?} visible cels {n}, his cel in mask {:?} (obj_cel {:?})", his, d.obj_cel);
-            }
-            None => eprintln!("[mask] the walk returned None (start {start:?})"),
+        assert!(d.present && d.enabled, "#695 is on the floor after the spawn");
+        eprintln!("[civ] #695 list[{gi}] on the floor at tick {} pos ({:.2},{:.2},{:.2})", w.total_ticks, d.pos[0], d.pos[1], d.pos[2]);
+    }
+    // The watch: Bond stays on the plate and faces south-west down the west corridor while #695
+    // walks the loop's west end (2400 ticks covers one lap of the loop on this route).
+    let samples = watch(&mut w, -2.07, 2400, gi);
+    let (mut seen, mut drawn_seen, mut walk_seen) = (0u32, 0u32, 0u32);
+    let (mut gait, mut moved) = (0.0f32, 0.0f32);
+    for k in 1..samples.len() {
+        let (a, b) = (&samples[k - 1], &samples[k]);
+        // Both ends in view: the sim's gate runs before his move inside a tick, so the tick he
+        // crosses into the frustum reads the old side (one sample on this route).
+        if !(a.in_frustum && a.cel_vis && b.in_frustum && b.cel_vis) { continue; }
+        seen += 1;
+        if b.drawn { drawn_seen += 1; } else { eprintln!("[undrawn] sample {k} pos {:?}", b.pos); }
+        if b.danim == 392 && a.danim == 392 && a.drawn && b.drawn {
+            walk_seen += 1;
+            gait += (b.ftime - a.ftime).abs();
+            moved += walker::dxz(a.pos, b.pos);
         }
     }
-    let samples = watch(&mut w, -1.57, 1500, gi);
-    let mut in_view = 0u32;
-    let mut drawn_in_view = 0u32;
-    let mut danim392_in_view = 0u32;
-    let mut gait_in_view = 0.0f32;
-    let mut moved_in_view = 0.0f32;
-    for k in 0..samples.len() {
-        let (pos, danim, ftime, in_frustum, drawn) = samples[k];
-        if !in_frustum { continue; }
-        in_view += 1;
-        if drawn { drawn_in_view += 1; }
-        if danim == 392 {
-            danim392_in_view += 1;
-            if drawn {
-                if k > 0 && samples[k - 1].4 {
-                    gait_in_view += (ftime - samples[k - 1].2).abs();
-                    moved_in_view += walker::dxz(samples[k - 1].0, pos);
-                }
-            }
-        }
-    }
-    eprintln!("[civ] samples {} in_view {in_view} drawn_in_view {drawn_in_view} danim392_in_view {danim392_in_view} gait {gait_in_view:.1} moved {moved_in_view:.2}", samples.len());
-    // The pin: while he patrols IN VIEW on the walk danim, he is drawn — the game's own rule
-    // (View_AddObjects 0x1e62d8:71) — so the walk anim plays (gait) and the body moves WITH it
-    // (no 0.02/tick slide [M NDrone2_DoAnimation 0x149f88's not-drawn arm]).
-    assert!(in_view >= 300, "the civilian never entered the frustum at the vantage ({in_view}/{}) — re-derive the sightline", samples.len());
-    assert!(danim392_in_view >= 300, "the in-view samples are not the walk danim 392 ({danim392_in_view}) — re-derive");
-    assert_eq!(drawn_in_view, in_view, "an in-view civilian on danim 392 read undrawn — the slide (master's ray gate)");
-    assert!(gait_in_view > 100.0, "the walk anim did not advance while in view ({gait_in_view:.1})");
-    assert!(moved_in_view > 2.0, "the civilian did not patrol while in view ({moved_in_view:.2})");
-    // Sister: Bond faces away — the same civilian leaves the frustum and the game leaves him
-    // undrawn (the not-drawn arm slides him).
-    let away = watch(&mut w, 1.57, 300, gi);
-    let in_view_away = away.iter().filter(|s| s.3 && s.4).count();
-    assert_eq!(in_view_away, 0, "facing away, an in-frustum civilian stayed drawn ({in_view_away}) — the gate over-draws");
+    eprintln!("[civ] samples {} seen {seen} drawn {drawn_seen} walk {walk_seen} gait {gait:.1} moved {moved:.2}", samples.len());
+    assert!(seen >= 300, "#695 was not in a portal-visible cel and the frustum for long enough ({seen}) — re-derive the watch");
+    assert_eq!(drawn_seen, seen, "#695 read undrawn in a portal-visible cel inside the frustum — the slide (the old ray gate) [M View_AddObjects 0x1e62d8:71]");
+    assert!(walk_seen >= 200, "#695 was not on his walk danim 392 while drawn ({walk_seen})");
+    assert!(gait > 100.0, "the walk anim did not advance while drawn ({gait:.1})");
+    assert!(moved > 2.0, "#695 did not patrol while drawn ({moved:.2})");
+    // Sister: Bond faces away (north-east) — #695 leaves the frustum and reads undrawn.
+    let away = watch(&mut w, 1.07, 300, gi);
+    let drawn_away = away.iter().filter(|s| !s.in_frustum && s.drawn).count();
+    let in_frustum_away = away.iter().filter(|s| s.in_frustum).count();
+    assert_eq!(in_frustum_away, 0, "facing away, #695 stayed in the frustum — re-derive the sister");
+    assert_eq!(drawn_away, 0, "facing away, #695 stayed drawn ({drawn_away}) — the gate over-draws");
 }
