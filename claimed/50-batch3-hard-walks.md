@@ -10,3 +10,6 @@ Base: origin/master after the stream batch 1121d push. These walks were ignored 
 - sister_the_dead_ladder_mesh_reaches_the_point_blank_stander: rebuild the fixture on the one-sided push (no standing spot at the old pin)
 
 Done = each walk green on real input at its difficulty, or a measured reason that the game blocks it too. Run every touched walkreal binary in full.
+
+---
+claimed-by: sandbox3 at 2026-11-22T05:17Z
