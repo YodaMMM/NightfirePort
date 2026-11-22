@@ -13,3 +13,7 @@ Done = each walk green on real input at its difficulty, or a measured reason tha
 
 ---
 claimed-by: sandbox3 at 2026-11-22T05:17Z
+
+---
+## Report (done, 2026-11-22T06:18Z)
+
