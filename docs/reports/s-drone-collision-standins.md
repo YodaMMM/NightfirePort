@@ -44,7 +44,7 @@ gate: guards in a no-physics animation (anim info bit 2), not in view, and more 
   disabled guards whose contact the door already ignores.
 
 With the gate and the game shape applied to the trigger touch, the walks stay green: 05 17/17,
-01 7/7 (1 ignored as on master). The gate only delays those contacts by a few ticks on these routes.
+01 7/7 (1 ignored as on master). The gate changes when those plates fire, not whether the walks finish.
 
 ## Why nothing was ported
 
