@@ -4797,7 +4797,12 @@ impl App {
                         }
                         Err(e) => {
                             self.movie_failed = Some(code);
-                            eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown carries the intro");
+                            if self.gfx.is_some() && matches!(e, movie::StartError::NoMovieData(_)) {
+                                eprintln!("movie: {code:08x} not started: {e:?} — skipping missing intro movie (BGFMVPlaying == 0)");
+                                fe.intro_movie_finished();
+                            } else {
+                                eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown carries the intro");
+                            }
                         }
                     }
                 }
