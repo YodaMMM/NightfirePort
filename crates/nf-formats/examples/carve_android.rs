@@ -47,17 +47,24 @@ fn main() -> anyhow::Result<()> {
     }
     std::fs::write(out.join("FILES_INDEX.tsv"), index_tsv)?;
 
-    // 3. Copy PS2/ENGLISH/SB_0/* (shared + menu + early mission SFX) and PS2/MUSIC/MFX_0*
+    // 3. Copy soundbank/music tables (SBINFO.SBI, MFXINFO.MXI), SFX banks, streams, music, and driving archives
     for entry in iso.entries() {
         if entry.is_directory {
             continue;
         }
         let p = &entry.path;
-        let keep = p.starts_with("/PS2/ENGLISH/SB_")
-            || p.starts_with("/PS2/MUSIC/MFX_00")
-            || p.starts_with("/PS2/MUSIC/MFX_01")
-            || p.starts_with("/PS2/MUSIC/MFX_02")
-            || (carve_all && p.starts_with("/DRIVING/") && p.ends_with(".VIV"));
+        let upper = p.to_ascii_uppercase();
+        let keep = upper.ends_with("/SBINFO.SBI")
+            || upper.ends_with("/MFXINFO.MXI")
+            || upper.starts_with("/PS2/ENGLISH/SB_")
+            || upper.starts_with("/PS2/MUSIC/MFX_00")
+            || upper.starts_with("/PS2/MUSIC/MFX_01")
+            || upper.starts_with("/PS2/MUSIC/MFX_02")
+            || (carve_all && upper.starts_with("/PS2/MUSIC/"))
+            || (carve_all && upper.starts_with("/PS2/ENGLISH/STREAMS/"))
+            || (carve_all
+                && upper.starts_with("/DRIVING/")
+                && (upper.ends_with(".VIV") || upper.ends_with(".MUS") || upper.ends_with(".SPE")));
         if keep {
             let dst = out.join(safe_rel_path(p)?);
             if let Some(parent) = dst.parent() {
