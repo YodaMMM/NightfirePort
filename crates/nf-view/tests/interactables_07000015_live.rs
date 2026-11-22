@@ -612,15 +612,27 @@ fn the_dead_ladder_never_grabs_at_point_blank() {
 /// port's `capsule_hits_default`] — so a change that relinks the ladders (bigger boxes, a
 /// ForcedList port) flips the main test too, and a change to the ladder's parsed mesh or the
 /// pick math fails here.
+/// RE-DERIVED STAND (batch3-hard-walks, 2026-11-22, on the game's one-sided push): the old pin
+/// (85.08, 40.4, -2.4) settles Bond onto the raised slabs at y 41.11-42.30 (the collide-push-3
+/// note) and a capsule rooted there rides ABOVE the rung box — the whole old scan box (x
+/// 84.9-85.25, z -3.2..-1.2) measured reach FALSE. The scan grid on this tree [L the fresh-load
+/// grid] found the walkway's RAW floor band 0.7-1.1 u north of the plane axis (z -1.60/-1.20,
+/// x 84.70/84.90): Bond settles grounded at y 40.50-40.56 (the walkway ≈ 40.35 [D floor tris])
+/// and the default arm's capsule DOES overlap the ladder's pickable body there — the rails'
+/// lateral span carries the mesh box under the capsule while the raised-slab stands miss it.
+/// The teleport only REACHES the spot (the file's standing convention); the settle, the stand
+/// and the pick are the game's own one-sided push.
 #[test]
-#[ignore = "collide-push-3: the pin held Bond 0.7 under the floor at the ladder top (the old two-sided push sank him to y 39.69 and he kept falling); on the game's one-sided push a Bond at that spot stands at y 41.32-42.30 and no standing spot from x 84.9-85.25, z -3.2 to -1.2 reaches the ladder's pick; the point-blank pick needs a re-derived stand"]
 fn sister_the_dead_ladder_mesh_reaches_the_point_blank_stander() {
     let mut w = load15();
-    w.scene.sim.as_mut().unwrap().bond.pos = [85.08, 40.4, -2.4];
+    w.scene.sim.as_mut().unwrap().bond.pos = [84.70, 40.5, -1.60];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.scene.sim.as_mut().unwrap().bond.yaw = -std::f32::consts::FRAC_PI_2;
-    w.wait(10);
+    w.wait(30);
     let sim = w.scene.sim.as_ref().unwrap();
+    assert!(sim.bond.grounded, "sister: the one-sided push grounds Bond at the stand");
+    assert!(sim.bond.pos[1] > 40.2 && sim.bond.pos[1] < 40.8,
+        "sister: Bond stands on the walkway's raw floor (y {:?}, the raised-slab stands settle 41.1-42.3 and the capsule rides above the rung box there)", sim.bond.pos[1]);
     let lad = &sim.ladders[0];
     assert!((lad.centre[0] - 84.529).abs() < 0.01 && (lad.centre[1] - 31.733).abs() < 0.01,
         "sister: ladder #382 is the east ladder at the probed spot [D placement]");
@@ -858,3 +870,4 @@ fn the_base_guards_call_out_when_they_see_bond() {
     }
     assert!(heard, "no guard called out in 30 s [M 0x13f1d0, 0x13eac0]");
 }
+
