@@ -4038,6 +4038,55 @@ launch, the ride-free path also skips the chain.
 // fight's 60.0 (the pre-t3000 bleed, 15 hits — the biggest single bucket; the fight-order
 // pick measured byte-identical there [L round 20]) and the #6 15.0 (measured unfixable by
 // stand geometry this round).
+// retune-nb-08-22 (2026-11-22, still red — the walk RE-MEASURED on the merged tree first, as
+// the rounds' law requires: death t25783 BYTE-CONSISTENT with rounds 20/21 — 48 hits for 77.0
+// + other 23.0, the machine's kind-44 blast closes it at (113.1,13.5,-179.1) [L the NF_DMG_TRACE
+// run]). THE DECK FIGHT READ AT THE TAP LEVEL (NF_RF_TRACE, first time): Bond fights it on the
+// PISTOL (0x1 clip 7 spare 41 — the nav's resupply found nothing, the cycle kept 0x1) and the
+// kill order is #3 (t785) -> #14 (t1071) -> #13 (t1112) -> #2 (t1256) -> #9 (t1404) -> #10
+// (t1579); fight 2 alone cost 36.0 (nine -4.00 rows over 286 ticks — a mid-clip dry reload
+// stalled the stand while #14/#2/#13's lanes all held Bond). THE ACCURACY LAW READ (the lever's
+// game evidence): DroneWeap_DoBulletAccuracy 0x179740 rolls p = 100 - 5*accuracy per shot and a
+// PASS fires the ZERO offset (a perfect shot); a FAIL fires a FIXED wobble (sin phases x 0.5 /
+// 1.5 / 1.5 in the drone's aim frame [M :111-127]) that does NOT scale with distance — the
+// round-17 "no out-of-lane spot" wall is this wobble's shape, and NO range lever can beat it.
+// But the PASS probability multiplies by TargetFirstMoved_Accuracy 0.25 while the per-drone
+// +0x1DD latch holds and by TargetMoving_Accuracy 0.75 while Bond's move quad is non-zero
+// [M :52-54, :71-73; the moving flag is |(BL+0x10,0,BL+0x18)| != 0, DroneWeap_DoOpponentTargetting
+// 0x179a48:33-41] — and the shipped stands are STATIONARY, so the guards rolled at FULL p for
+// 640 ticks. The latch re-arms on every stop->move transition (the stop branch clears the +0x1DE
+// hold [M 0x179a48:44-58]) and the walk's own ease zeroes the lane EXACTLY inside 6 no-input
+// ticks (the dead-zone, [M Player_Move 0x191dd0:111-141]). THE ROUND-22 LEVER SHIPPED: the
+// WEAVING fight stands (opt-in thread-local with_real_damage_fight_weave, damage_log.rs
+// stand_and_fire) — a real +-0.5 strafe alternating sides each 46-tick leg with 6-tick stops
+// (the 104-tick period), the sway perpendicular to the aim line so the TooClose 3.0 gate is
+// never entered; the guards' roll reads moving + first-moved = x0.1875 of the standing roll for
+// ~90% of the stand's ticks. MEASURED on its own real run: the deck bleed 60.0 -> 16.0 (FOUR
+// -4.00 rows, t890-1328), the walk reaches the machine-fight anchor at 37.0 health + armour 50.0
+// (the baseline: 2.0 + 50.0) — THE TASK'S ROUND LAW MET (the lever saves health BEFORE the
+// anchor) — and the whole walk's hits for 77.0 at death t21154 at the anchor (113.06,13.09,
+// -179.09) [L the 2026-11-22 lever run]. THE NEW DEATH MIX at the machine phase: the world blast
+// rows (-2.00 x 8, the machine's own salvos/rockets — aim-independent, the weave cannot dodge a
+// radius-8 blast) + #25 (skin 0x500002f, weapon 0x15, (117.1,23.0,-136.7) d 43.6, y 23.0 ABOVE
+// the y 13.1 dive-stand) for -6.00/-6.00/-3.00 = 15.0 — the dive-stand is the walk's own
+// scripted crouch/stand shape (not a stand_and_fire fight), so Bond STOOD those rolls at full p.
+// The re-dealt stream also re-deals the pit pair: #15 + #16 (the excursion law ran, both KILLED
+// at t5382/t6230) cost 24.0 — the excursion WALK legs pay only the x0.75 moving multiplier (a
+// continuously-walking Bond never re-arms the latch; the 2 s window expires — the x0.1875 needs
+// the stops). Whole-file damage for the run: deck 16.0, pit 24.0, machine phase 37.0, other
+// 23.0 (the running-jump fall, closed as accepted cost in round 21). NEXT LEVERS (priority):
+// (1) the machine phase's #25 answer WITHOUT the yaw coupling (the 08-17 lever (1)): the
+// dive-stand's standing window WEAVES too (the same flag inside the scripted shape — real
+// input, no guard code touched) or the dodge-side pin to the anchor bearing; #25 cost 15.0
+// standing at full p. (2) the dive-launch band re-pinned on this stream (the 08-19 shape: the
+// dive launch fired t43 into the ride's own band, LANDED -101.0, the first dive-window machine
+// damage since round 12, death t28907 -> t29335 on the old stream) — the world rows say the
+// machine's salvos/rockets still reach the dive-stand spot; the flight log must time the
+// launch into a blast-free window. (3) the excursion legs' stop discipline (bank ~12 of the
+// pit pair's 24.0: a 6-tick stop inside each excursion leg re-arms the x0.25 latch the same
+// way the stands do). (4) #6's 15.0 (round 21 measured the stand geometry dead; the weave was
+// NOT active for that re-dealt stream's #6 exchange this run — the fights' stands wove and #6
+// never fired this run; the re-deal moved his exchange into the pit pair's rows).
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
@@ -4053,5 +4102,14 @@ fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // — the retarget samples EVERY fight tick and reads the worst shooter over the WHOLE set:
     // the merged-tree y33 burst (#18, 14.0 inside 8 ticks between two 30-tick grid samples)
     // fired mid-burst instead of after it. Judged on its own real run.
-    walker::with_real_damage_glass_fights(|| walker::with_real_damage_most_hits_first(|| walker::with_real_damage_unseen_fights(|| walk_the_whole_mission_on_real_input_at(3))))
+    // retune-nb-08-22 lever: the WEAVING fight stands (opt-in thread-local, damage_log.rs) —
+    // the stands hold a real ±0.5 strafe with 6-tick stops, so the guards' perfect-shot roll
+    // reads a MOVING target (×0.25 first-moved × 0.75 moving = ×0.1875 of the standing roll
+    // [M DroneWeap_DoBulletAccuracy 0x179740:52-54,71-73; the latch law 0x179a48:44-58]): the
+    // merged-tree deck fight paid 60.0 standing (15 × −4.00, t717-1357, six 0xa shooters at
+    // 4.0-11.5 u) and reached the machine-fight anchor at 2.0 health [L the 2026-11-22
+    // baseline run]. A player under machine-gun fire from six shooters does not stand still;
+    // the round-22 lever banks the health BEFORE the anchor (the task's law). Judged on its
+    // own real run.
+    walker::with_real_damage_glass_fights(|| walker::with_real_damage_most_hits_first(|| walker::with_real_damage_fight_weave(|| walker::with_real_damage_unseen_fights(|| walk_the_whole_mission_on_real_input_at(3)))))
 }
