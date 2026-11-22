@@ -8,3 +8,8 @@ Un-ignore when green.
 
 ---
 claimed-by: sandbox1 at 2026-11-22T17:20Z
+
+---
+## Report (done, 2026-11-22T19:17Z)
+
+Closed by the driver: the report is on `s/real-health-00agent-01` (docs/reports/real-health-00agent-01.md); the worker didn't run finish.sh.
