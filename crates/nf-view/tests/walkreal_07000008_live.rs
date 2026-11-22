@@ -4100,6 +4100,44 @@ launch, the ride-free path also skips the chain.
 // way the stands do). (4) #6's 15.0 (round 21 measured the stand geometry dead; the weave was
 // NOT active for that re-dealt stream's #6 exchange this run — the fights' stands wove and #6
 // never fired this run; the re-deal moved his exchange into the pit pair's rows).
+// retune-nb-08-22 round 3 (2026-11-22, still red — the ledger's item (3), the excursion legs'
+// stop discipline, JUDGED ON THREE OWN REAL RUNS): the law first pinned from the decompile —
+// the not-moving branch of DroneWeap_DoOpponentTargetting clears +0x1DD/+0x1DE and the moving
+// branch re-arms +0x1DD ONLY when the +0x1DC/+0x1DD byte pair is still zero [M 0x179a48:44-58],
+// the window is DroneFiring_TargetFirstMoved_TimeToHit 0x40000000 = 2.0 s [M 0x1d3a80] — so a
+// continuously-walking chain re-latches never, and the 6 no-input ticks zero the eased lane
+// exactly (0.0375*0.8^6 < 0.01 [M Player_Move 0x191dd0:111-141]). VARIANT 1 (stops between the
+// legs + the return legs): WASH — the pit pair kept its 24.0 (#15 five rows t4933-5427 + #16
+// t6126): leg 1 paid x0.75 UNLATCHED (the walk's arrival ease still held +0x1DC non-zero at the
+// excursion's first tick — the row t4933 landed ON it), one row landed DURING a 6-tick stop
+// (t5269, the full-p standing cost), and the 120-tick window expires INSIDE the 330-tick crawl
+// legs [L the 2026-11-22 lever22a run; death t22980, the machine re-dealt into three kind-98
+// missile blasts -12.34/-8.88/-12.78]. VARIANT 2 (+ the PRE-LEG stop): the pit bank LANDED
+// (24.0 -> 12.0, leg 1's crawl clean) but the ~100-tick pace shift re-rolled the boarding
+// ledge's unseen pair — #27 burst 28.0 where the shipped stream paid ZERO — entry 15.0, death
+// t20785 [L the lever22b run]. SHIPPED VARIANT 3: the PRE-LEG STOP ALONE (6 no-input ticks
+// between the excursion's entry log and the first descent leg; no other change — the stream
+// shift is 6 ticks). MEASURED on its own real run: the pit pair 24.0 -> 12.0 (#15 three rows
+// t4933/t5032/t5151 — leg 1's crawl LATCHED and clean, the t4933 pre-latch round in flight
+// from the approach walk is unavoidable; #16 ZERO rows), the mid-game transit CLEAN (no #27,
+// no #6 rows), the machine-fight entry armour 0.0 health 49.0 (the shipped tree: 37.0 + armour
+// 50.0 — the boarding chunk drained the whole armour this deal and left the health intact), and
+// death t25843 at the anchor (113.1,13.5,-179.1) — the DEEPEST WALK YET (+4260 over the
+// merged-tree baseline t25783, +4689 over the shipped weave run t21154), "39 hits for 77.0 +
+// other 23.0, 20 return-fire fights" [L the 2026-11-22 lever22c run]. THE LAST KILLER IS ONE
+// ROW: the machine's kind-44 rocket blast −45.00 at t25843 (explosion damage 100.0 radius 8.0
+// → the falloff puts Bond d ≈ 4.4 off the centre) after two −2.00 zaps (t25788/t25817), armour
+// 0.0, health 45.0 when it landed — health 45.0 vs blast 45.0, death by EXACTLY zero margin.
+// NEXT LEVERS (priority): (1) THE KIND-44 ROCKET ANSWER — the dodge machinery (round 7's w62
+// package) does not engage this round class (owner −1 world blast; the salvo gate reads the
+// live w62 rounds): either widen the dodge's round-class read to the machine's in-flight kind-44
+// rockets, or move the stand spot ~1.0 u along the trench (the blast −45.00 → −36.25 at d 5.1
+// survives with 8.75 and the low-band launch windows continue); (2) the pit pair's REMAINING
+// 12.0 — the t4933 pre-latch round is in flight before the excursion starts; a 6-tick stop
+// EARLIER (before the burn-spot arrival leg re-aims) would re-latch the approach walk's last
+// leg too; (3) the armour entry — this deal drained the armour 50 → 0 during the boarding chunk
+// while the shipped deal kept 50: the ledge armour box timing (round 8's item (3)) decides
+// whether the rocket's residue meets armour instead of health.
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
