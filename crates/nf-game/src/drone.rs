@@ -98,7 +98,7 @@ pub mod state {
     /// start state 0xBD [M 0x14b300:722-727]; DroneTypeSettings row 29 start = 0xBD [D :111].
     pub const ASTRONAUT_LAUNCH: u8 = 0xbd;
     /// `NDrone2_DSTATE_AstronautHit` (0x174690): the CombatMove flinch — knockback, no anim, a
-    /// 0.5 s timer back to AstronautCombat [M 0x174690:14-23, 37-39].
+    /// 0.5 s (30-tick) timer back to AstronautCombat [M 0x174690:14-23, 37-39].
     pub const ASTRONAUT_HIT: u8 = 0xbe;
     /// `NDrone2_DSTATE_AstronautDeath` (0x1747b8): the zero-G death — anim 0x6F ± Rand(2), drift
     /// with the damping cleared, 10 s → Fade [M 0x1747b8:15-34].
@@ -8014,7 +8014,7 @@ impl Drone {
             (ASTRONAUT_COMBAT_MOVE, msg::ENTER) => {
                 self.vision_on = true; // `+0x4F8 |= 0x10000` [M 0x174550:18]
                 self.fly_speed = 2.0; // 0x40000000
-                self.timer_c = Some(frame + 150); // FRAME_RATE_INT · 5 [M 0x174550:20]
+                self.timer_c = Some(frame + 5 * 60); // FRAME_RATE_INT · 5 = 300 [M 0x174550:20; disasm 0x1745a4-ec]
                 true
             }
             // CombatMove tick [M 0x174550:28-34]: lost target → stationary Combat; else pick + anim.
@@ -8026,10 +8026,10 @@ impl Drone {
             }
             // CombatMove's 5 s timer → stationary Combat [M 0x174550:43-45].
             (ASTRONAUT_COMBAT_MOVE, msg::TIMER_C) => { self.set_state(ASTRONAUT_COMBAT); true }
-            // Hit ENTER [M 0x174690:14-23]: the 0.5 s timer, the knockback impulse, cease fire; no
+            // Hit ENTER [M 0x174690:14-23]: the 30-tick (0.5 s) timer, the knockback impulse, cease fire; no
             // CallAnim — the flinch anim came from the impact path.
             (ASTRONAUT_HIT, msg::ENTER) => {
-                self.timer_c = Some(frame + 15); // FRAME_RATE_DIV · 30 [M 0x174690:16]
+                self.timer_c = Some(frame + 30); // FRAME_RATE_DIV · 30 = 30 (DIV 1.0 at 60 Hz) [M 0x174690:16; disasm 0x174710-30]
                 self.astronaut_hit_move(); // DroneMove_AstronautHitMove [M 0x155f78]
                 self.firing = false; // [M 0x174690:22]
                 true
@@ -10607,12 +10607,13 @@ impl Drone {
             }
             (LEAD_HIDE, msg::ENTER) => { self.vision_on = true; self.call_anim(d, anim_state::COWER, 0, 0); true } // [M 0x15ec08 case 1: 0x19; the bit 0x15ec08:18]
             (LEAD_HIDE, msg::UPDATE) => {
-                // No armed drone within 14 (0x41600000) → latch and return to Lead in 2 ticks
-                // [M 0x15ec08 case 3: +0xCD8 = 1, timer C = now + 2·FRAME_RATE_INT]. The exit read
+                // No armed drone within 14 (0x41600000) → latch and return to Lead in 2 s = 120 ticks
+                // [M 0x15ec08 case 3: +0xCD8 = 1, timer C = now + 2·FRAME_RATE_INT; disasm
+                // 0x15eccc-ec lw FRAME_RATE_INT, sll 1]. The exit read
                 // is NotNearArmedDrone's latch-aware scan (armed_peer_exit_dist) — the remembered
                 // peer holds the hide by distance alone [M 0x177640:94-115].
                 if self.armed_peer_exit_dist > 14.0 && self.timer_c.is_none() {
-                    self.timer_c = Some(frame + 2);
+                    self.timer_c = Some(frame + 2 * 60);
                 }
                 true
             }
@@ -27604,5 +27605,32 @@ mod timer_units_tests {
         let mut dr = in_state(state::STAND_FIDDLE);
         dr.send(&d, &mut rng, NOW, msg::ENTER);
         assert_eq!(dr.timer_c, Some(NOW + 300));
+    }
+
+    /// `NDrone2_DSTATE_AllyLeadHide` 0x15ec08 case 3: no armed drone within 14 →
+    /// `+ FRAME_RATE_INT·2` [M :31-36; disasm 0x15eccc-ec].
+    #[test]
+    fn lead_hide_exit_waits_two_seconds() {
+        empty_data!(0x0700_0012, k, d);
+        let mut rng = Rng::new(1);
+        let mut dr = in_state(state::LEAD_HIDE);
+        dr.armed_peer_exit_dist = 20.0;
+        dr.send(&d, &mut rng, NOW, msg::UPDATE);
+        assert_eq!(dr.timer_c, Some(NOW + 120));
+    }
+
+    /// `NDrone2_DSTATE_AstronautCombatMove` 0x174550 ENTER: `+ FRAME_RATE_INT·5` [M :20;
+    /// disasm 0x1745a4-ec]; `NDrone2_DSTATE_AstronautHit` 0x174690 ENTER: `fptoui(now +
+    /// FRAME_RATE_DIV·30.0)` [M :16; disasm 0x174710-30, 0x41f0 = 30.0f].
+    #[test]
+    fn astronaut_combat_move_five_seconds_hit_thirty_ticks() {
+        empty_data!(0x0700_001b, k, d);
+        let mut rng = Rng::new(1);
+        let mut dr = in_state(state::ASTRONAUT_COMBAT_MOVE);
+        dr.send(&d, &mut rng, NOW, msg::ENTER);
+        assert_eq!(dr.timer_c, Some(NOW + 300));
+        let mut dr = in_state(state::ASTRONAUT_HIT);
+        dr.send(&d, &mut rng, NOW, msg::ENTER);
+        assert_eq!(dr.timer_c, Some(NOW + 30));
     }
 }
