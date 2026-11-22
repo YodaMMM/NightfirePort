@@ -706,6 +706,18 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the lower landing", [150.0, 43.5, -116.0]),
     ] {
         if name == "the east deck head" && difficulty < 3 { continue; }
+        // retune-nb-08-20: at d3 the east deck head now crosses by the batch-3 running jump
+        // above, shared with the d1/d2 walks. The shipped lip walk + in-place hop
+        // (walks-1121-08-0c) is dead on this stream: under the one-sided wall push the
+        // in-place hop jump reads the lip step's top as walkable ground and lands back on it
+        // (the running-jump comment's own law) — the merged-tree run measured Bond parked at
+        // (141.406, 50.275, -92.503), the lip arrival + 0.87 u east and apex y 50.275, for the
+        // whole 300-tick hop loop, then asserted [L the 2026-11-22 runs: the jump-gated
+        // variant wedged the lip walk 6000 ticks from the deck (142.56,46.13,-91.36); the
+        // jump-restored variant reached the lip (140.54,50.10,-92.37) at +79 ticks and the hop
+        // never moved off the step]. On the 08-19 stream the same hop cleared because the
+        // two-sided push let the in-place jump over the edge. The d1/d2 sisters skip this leg
+        // (difficulty < 3) before the jump call, so their timelines stay byte-exact.
         if name != "the station hall" { running_jump_off_the_balcony(&mut w); }
         // real-health-00agent-08-bleed-3 (d3): the landing nav from the deck-line approach
         // wedges ON the stair lip (146.34, 44.99, −115.69) grounded=false [L the 2026-11-14
@@ -732,29 +744,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // 1.3 u west of the measured node and the next nav re-routed through the east door
         // (160.6, −100.1) into its frame wedge [L the 2026-11-14 run-lever1 log].
         let nav_r = if name == "the east deck head" { 0.7 } else { 1.5 };
-        // walks-1121-08-0c (d3): the hall's east lip. From the station hall the deck-head nav
-        // steps onto the hall floor's east edge (141.41, 50.28, -92.50: the hall floor 49.0 ends
-        // at x ~142.2 over the deck floor 45.0 [L the floor rays, this branch]) and holds there;
-        // the Agent walk's wedge ladder hops it within ~120 ticks (t480 -> t600 -> the deck
-        // (151.24, 46.08, -93.79) at t660 [L the NF_WALK_TRACE run]), but on the 00 Agent walk
-        // the nav re-planned through the south door (140.7, -96.8) and wedged there for both
-        // 3000-tick caps, then the deck line west wedged at (143.34, 49.79, -97.92) [L the
-        // 2026-11-21 run on master 7283c8a76]. Walk to the lip and hop east off it, real input.
-        if difficulty >= 3 && name == "the east deck head" {
-            w.walk_to(Wp::new(141.0, 50.1, -92.5).r(0.5), "the hall's east lip");
-            let start = w.total_ticks;
-            let mut landed = false;
-            for t in 0..300u32 {
-                let (p, grounded, yaw) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, sim.bond.grounded, sim.bond.yaw) };
-                if grounded && p[1] < 47.0 { landed = true; break; }
-                let err = walker::wrap_pi((146.0f32 - p[0]).atan2(-92.9f32 - p[2]) - yaw);
-                w.tick(Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() < 0.3 { 1.0 } else { 0.0 },
-                    jump: grounded && err.abs() < 0.3 && t % 20 == 10, ..Default::default() }, false);
-            }
-            let p = w.scene.sim.as_ref().unwrap().bond.pos;
-            assert!(landed, "the hop off the hall's east lip never landed on the deck (45.0 floor), at {p:?}");
-            eprintln!("[08] the hall's east lip hopped at +{} ticks onto ({:.2},{:.2},{:.2})", w.total_ticks - start, p[0], p[1], p[2]);
-        }
+        // walks-1121-08-0c (d3): the hall's east lip — SUPERSEDED by retune-nb-08-20. The lip
+        // walk + in-place hop was the 08-19-stream crossing (the 00 Agent walk's nav re-planned
+        // through the south door (140.7, -96.8) and wedged there for both 3000-tick caps, then
+        // the deck line west wedged at (143.34, 49.79, -97.92) [L the 2026-11-21 run on master
+        // 7283c8a76]). On the merged batch-3 stream the one-sided wall push parks the in-place
+        // hop jump ON the lip step (the 2026-11-22 measured run above), so the crossing is the
+        // running jump (master's measured d1/d2 line, the jump call above) and the deck-head
+        // nav runs from its deck landing.
         // real-health-00agent-08-bleed-3 (d3): after the deck-head fight the walkway-head nav
         // re-routes through the east door (160.6, −100.1) and wedges in its frame from the deck
         // above (head_bump at (160.27, 46.60, −99.37), the door already open pos01 1.00; every
