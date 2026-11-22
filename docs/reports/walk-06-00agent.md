@@ -124,3 +124,16 @@ beyond (the walk has never reached them on the post-1121b stream).
 
 - Input/output tokens, context used, cost: not visible to me. The session's own environment
   shows no token or cost figures; the WORKLOG entry for this task is the progress record.
+
+## ntfy failed
+
+All three fallbacks hung to timeout against https://ntfy.sh/nightfire-yoda-8k3x from this
+sandbox (the GitHub pushes and the game-file downloads worked all session, so this is an
+ntfy.sh egress failure at finish time, 2026-11-22 ~21:35 UTC):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` —
+   `curl: (28) Connection timed out after 20002 milliseconds` (the tool call died at 23.5 s).
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=20)"` —
+   no output, killed at the 60 s tool timeout.
+3. `wget -q -O- --post-data "..." --timeout=20 https://ntfy.sh/nightfire-yoda-8k3x` — no
+   output, killed at the 60 s tool timeout.
