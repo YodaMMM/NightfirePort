@@ -106,3 +106,18 @@ only pain type 0 (the bullet arm) absorbs — `Player_HandlePain` 0x1902c8:84-10
 
 - Input/output tokens, context used, cost: not visible to me. The session's environment shows no
   token or cost figures; the WORKLOG entries for this task are the progress record.
+
+## ntfy failed
+
+All three fallbacks failed against https://ntfy.sh/nightfire-yoda-8k3x from this sandbox at
+finish time (2026-11-22 ~23:55 UTC) — the same ntfy.sh egress failure the round-1 report
+documented (the GitHub pushes and the game-file downloads all worked all session):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` —
+   `curl: (28) Connection timed out after 20002 milliseconds`.
+2. `python3 -c "... urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'...', headers={'Title':'NightfirePort'}), timeout=20)"` —
+   hung past the timeout (the tool call killed at 70 s with the first bytes-literal attempt
+   erroring `SyntaxError: bytes can only contain ASCII literal characters` before the ASCII
+   retry hung).
+3. `wget -q -O- --post-data "..." --timeout=15 https://ntfy.sh/nightfire-yoda-8k3x` —
+   hung, killed at 25 s, no output.
