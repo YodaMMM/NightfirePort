@@ -190,3 +190,72 @@ fn a_mount_only_shot_does_not_break_the_head() {
     }
     assert!(matches!(sim.drones.searchlights.parts[head].state, 0 | 1), "still sweeping or tracking");
 }
+
+/// T3: the broken head's smoke runs once per broken head per qualifying frame [M Searchlight_Update
+/// 0x1cb900:373-385 — the state-2 arm of THAT head's update: `(GameState+52 + obj+0xEC) % 7 == 0`
+/// while obj+0xFC]. 07000006 carries four heads; over 21 consecutive ticks one broken head makes
+/// exactly 3 puffs (each consumes 6 shared draws, gas.rs). The old port scanned every head on every
+/// head's dispatch — 4 puffs per qualifying frame here (12). The head is put in state 2 directly
+/// (the break itself is T1's real path; this pins the smoke count only).
+#[test]
+fn a_broken_head_smokes_once_per_seventh_frame() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load_settled(&iso);
+    let sim = scene.sim.as_mut().unwrap();
+    let heads = sim.drones.searchlights.parts.iter().filter(|p| p.kind == 1).count();
+    assert!(heads > 1, "07000006 has several heads ({heads})");
+    let head = (0..sim.drones.searchlights.parts.len())
+        .find(|&i| sim.drones.searchlights.parts[i].kind == 1 && sim.drones.searchlights.parts[i].drawn)
+        .expect("a drawn head");
+    sim.drones.searchlights.parts[head].state = 2;
+    let hp = sim.drones.searchlights.parts[head].pos;
+    let near = |sim: &nf_view::scene::Sim| sim.drones.gas.puffs.iter()
+        .filter(|g| g.kind == 7 && g.mesh == nf_game::gas::SMOKE_QUAD
+            && (0..3).all(|k| (g.pos[k] - hp[k]).abs() < 0.5))
+        .count();
+    let before = near(sim);
+    for _ in 0..21 { sim.step_bond(Default::default(), false, false, false); }
+    let made = near(sim) - before;
+    eprintln!("[sl] {heads} heads; broken head {head} made {made} puffs in 21 ticks");
+    assert_eq!(made, 3, "one puff per 7th frame for the one broken head");
+}
+
+/// T4: a GUARD's round breaks a head too — the head's contact walk reads every class-5 contact,
+/// whoever fired it [M Searchlight_Update 0x1cb900:411-417: only the attacker's class byte 5 and the
+/// damage float; Bullet_update 0x12e7b0:388-443 arms the same HITTEST pick for every round]. The
+/// round is placed in flight from a clear spot straight at the head's sphere (owner a present drone,
+/// that drone's weapon). The old port fed only Bond's rounds to the walk.
+#[test]
+fn a_guard_round_breaks_a_courtyard_head() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut scene = load_settled(&iso);
+    let sim = scene.sim.as_mut().unwrap();
+    let head = (0..sim.drones.searchlights.parts.len())
+        .find(|&i| sim.drones.searchlights.parts[i].kind == 1
+            && matches!(sim.drones.searchlights.parts[i].state, 0 | 1))
+        .expect("a lit head");
+    let (centre, _) = { let h = &sim.drones.searchlights.parts[head]; posed_sphere(&h.matrix, h.sph_centre, h.sph_radius) };
+    let owner = sim.drones.list.iter().position(|x| x.present).expect("a guard");
+    let weapon = sim.drones.list[owner].weapon as u16;
+    let mut from = None;
+    for &(dx, dz) in &[(0.0f32, 6.0), (0.0, -6.0), (6.0, 0.0), (-6.0, 0.0), (4.0, 4.0), (-4.0, 4.0), (4.0, -4.0), (-4.0, -4.0)] {
+        let p = [centre[0] + dx, centre[1] - 1.0, centre[2] + dz];
+        if sim.world.line_of_sight(p, centre, nf_game::world::LOS_PROBE_8) { from = Some(p); break; }
+    }
+    let from = from.expect("a clear line to the head");
+    let d = [centre[0] - from[0], centre[1] - from[1], centre[2] - from[2]];
+    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let dir = [d[0] / l, d[1] / l, d[2] / l];
+    eprintln!("[sl] head {head} sphere {centre:?}; guard {owner} weapon {weapon:#x}; round from {from:?}");
+    sim.drones.bullets.push(nf_game::bullet::Bullet { pos: from, dir, speed: 2.0, range: 100.0, damage: 1.0, owner, weapon,
+        ..nf_game::bullet::Bullet::TAIL });
+    let mut broke = None;
+    for t in 0..12u32 {
+        sim.step_bond(Default::default(), false, false, false);
+        if sim.drones.searchlights.parts[head].state == 2 { broke = Some(t); break; }
+    }
+    eprintln!("[sl] broke at {broke:?}");
+    assert!(broke.is_some(), "the guard round's contact breaks the head");
+    let h = &sim.drones.searchlights.parts[head];
+    assert_eq!((h.links[2], h.links[3], h.links[4]), (None, None, None), "the break's deletions");
+}

@@ -3226,7 +3226,17 @@ fn door_lip_lure(w: &mut Walker) {
     }
 
 #[test]
-fn walk_from_the_spawn_to_the_exit_with_the_contact() { walk_from_the_spawn_to_the_exit_with_the_contact_at(1) }
+fn walk_from_the_spawn_to_the_exit_with_the_contact() {
+    // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the contact
+    // walk ended in a mission restart before the LoadPointActivator plate (t45808). Lever: a
+    // 60-tick stop at tick 3000 re-rolls it [L the 11-value sweep: 3000/60, 8000/60, 25000/60,
+    // 35000/60 and 500/200 complete].
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and the 3000/60 walk failed the mission at t81167 (the contact shot down at
+    // (7.0,6.3,11.9) while route pre-clear guard 15 held out). Lever: the same stop, 30 ticks
+    // [L the 9-value sweep: only 3000/30 completes; 3000/60, 3000/90, 500/200, 8000-50000/60 fail].
+    walker::with_pause(3000, 30, || walk_from_the_spawn_to_the_exit_with_the_contact_at(1))
+}
 
 fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
     let iso = iso();
@@ -3240,6 +3250,14 @@ fn walk_from_the_spawn_to_the_exit_with_the_contact_at(difficulty: u32) {
 /// mask-0x18 filter needs the skin-0x4F drone too [M Trigger_Hit 0x1b1fc8].
 #[test]
 fn the_plate_refuses_bond_alone() {
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and guard #3 shot the contact in his spawn room while Bond fought blocker #2, so
+    // the mission-fail restart posted. Lever: a 30-tick stop at tick 100 [L the 18-value
+    // sweep: 100/30, 1000/60, 2000/30 and 3500/200 keep the contact alive].
+    walker::with_pause(100, 30, the_plate_refuses_bond_alone_body)
+}
+
+fn the_plate_refuses_bond_alone_body() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load"));
     for _ in 0..4000u32 {
@@ -3361,6 +3379,14 @@ fn behind_the_in_way_contact(w: &Walker, ci: usize, head: V3) -> Option<V3> {
 
 #[test]
 fn following_mayhew_down_completes_the_level() {
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and the parked contact was not on the plate when Bond reached it (the AND-touch
+    // never fired). Lever: a 30-tick stop at tick 100 [L the 8-value sweep: 100/30, 4000/30
+    // and 6000/60 complete; 500/60, 1000/60, 2000/30, 3000/60 and 8000/60 do not].
+    walker::with_pause(100, 30, following_mayhew_down_completes_the_level_body)
+}
+
+fn following_mayhew_down_completes_the_level_body() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
     // The hall's hanging lamps are solid (and block the guards' sight, as the game's
@@ -3817,7 +3843,13 @@ fn following_mayhew_down_completes_the_level() {
 #[test]
 fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_level_loads() {
     let iso = iso();
-    let mut w = walk_to_the_exit(&iso, true);
+    // Stream batch 1121: the contact walk's lever (see walk_from_the_spawn_to_the_exit_with_the_contact).
+    // s/g019-sky-2 (guards drop a finished voice line every control pass): with the contact
+    // walk's 3000/30 the exit fired mid-fight (stairwell guard 17's flank), and the fight ran
+    // past the 300-frame hold before the read. Lever: a 45-tick stop at tick 3000 [L the
+    // 8-value sweep: 3000/20 and 3000/45 complete; 3000/60, 100/30, 1000/60, 2000/30,
+    // 3500/200 and 8000/60 do not].
+    let mut w = walker::with_pause(3000, 45, || walk_to_the_exit(&iso, true));
     // The exit tick: the hold stands with the full count, the fade level is 0, the request rides.
     {
         let sim = w.scene.sim.as_ref().unwrap();

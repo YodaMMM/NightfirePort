@@ -2708,7 +2708,11 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // L weapon_data every gun bit 0x800 clear] and Bond's own rounds fly the same pass, so
     // the sight rule must too (the plain rule held fire through eleven 61-tick stands on the
     // pair 3-10 u behind the mouth's panes while it walked point-blank and killed Bond).
-    walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2))
+    // Guards' finished voice lines cleared each control pass (s/g019-sky-2): the talk draws
+    // moved and the Hind's rockets (world hits 53.4 + 27.0) killed Bond at t33118 on the
+    // launcher stand. Lever: a 60-tick stop at tick 3000 re-rolls the mission [L the 9-value
+    // sweep: 3000/60, 8000/60 and 22000/60 complete; 500, 15000, 28000-32000 die].
+    walker::with_pause(3000, 60, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
