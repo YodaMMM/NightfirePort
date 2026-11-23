@@ -152,3 +152,30 @@ Round 8 landed the SMG-speed lever and reached the furthest point t9383 (the cha
 shelter barrel ledgered as the next lever. This round continues from that ledger: branch from
 origin master 7562f1e70 with origin/s/retune-nb-16-8 merged in first (clean). Ledger reading and
 the next lever next; every lever judged on its own real run.
+
+### retune-nb-16-9 progress (2026-11-23, round 9, the barrel arm + the abort composition + the muzzle duel)
+
+The two ledger levers LANDED and the walk reached the FINALE SQUAD PHASE — the deepest measured
+point ever (the prior best died AT the shelter entry t9383; this run died t15655 IN the squad
+phase). (1) The shelter barrel (the ledger's lever (a)) is detonated before the walk-in from the
+route's own first-leg stand, 5.65 u outside the 4.0 radius — the self-safe property measured;
+the door assert held at +778 after the give-up bound was tightened 700 -> 450. (2) The ring
+fights' wound-abort composition (lever (b)): abort_on_wound=Some(6.0) scoped to the d3 route
+loop, the escalation made abort-aware in damage_log (a bounded 300-tick kill window instead of
+the 1800 undo; the flag's only other user, the 01 hall test, sets it only inside
+finish_fights=false windows) — the ring fights killed #4/#5 at ZERO health cost and the pool at
+the hand-back moved 9.0 -> 30.0. (3) The pulse-1 sit's wall: the chaser-class heavy
+(skin 0x500001e, hp 100) pours from a spot the strict rays never open (the sit's pick found NO
+exposed drone; the hits-evidence picks came back empty — the grazes never register in
+player_hits); the muzzle-flash duel with the nearest-alive pick (no enabled gate — the heavy
+flips dormant after his burst) ground the nearest drone dry and the walk stormed through the
+sits, both chasers (down +2986/+3407), the pit-room armour #648 and the east armour #649
+(health 24.7, armour 50.0), pulse 2 over +7270 — into the squad phase, where the squad's own
+chaser-class clone #12 (hp 37) poured the pool 74.7 down at 2.0 u point-blank.
+
+Verification: walkreal_07000016_live 18 passed / 0 failed / 1 ignored (re-verified with all
+levers in), walkreal_07000015_live 9/0, walkreal_07000001_live 7 passed / 0 failed / 1 ignored
+(488 s — the abort flag's only other user). The first sister sweep attempt (the barrel arm +
+the sits under the re_arm && !tops_up gate) turned the d1/d2 walks red — caught by the whole
+binary, fixed to the difficulty>=3 gates, re-verified byte-identical sisters. The full
+80-file walkreal sweep did not fit the window; the affected set is documented in the report.

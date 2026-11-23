@@ -650,7 +650,85 @@ fn shelter_tick_proactive_nearest(w: &mut Walker, last_tap: &mut u32) {
     shelter_tick_picked(w, last_tap, pick);
 }
 
+/// The muzzle-flash duel (the 06 file's duel_target idiom, test-local, judged on its own real
+/// run): the most recent hitter's measured chest (pos+0.3), the game's own symmetric hit model
+/// decides for BOTH sides, a tap every 8 ticks once the aim converges, the lock rides the
+/// target until he drops. NO exposure gate — round 9's wall is exactly the strict-ray-unseen
+/// pourer: the chaser-class heavy (skin 0x500001e, hp 100) at the shelter door pours from a
+/// spot the strict-ray exposed_part never opens (the sit's pick found NO exposed drone — the
+/// [sit] diagnostic never printed [L this branch's run]) and the walker's reactive fights'
+/// grind lost the pool race. A player aims at the muzzle flashes' owner and fires — his own
+/// line is open (he hits Bond), so the symmetric model carries Bond's rounds. The hits
+/// include the 0.00 grazes — they register in player_hits (the soak audit's counting idiom).
+fn duel_the_muzzle_16(w: &mut Walker, label: &str, cap: u32) {
+    let mut last_tap = 0u32;
+    let mut hp_watch = f32::MAX;
+    let mut taps = 0u32;
+    let mut why = "cap";
+    for t in 0..cap {
+        let (input, fire, reload) = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if sim.disabled { break; }
+            if sim.gun.clip == 0 && sim.gun.spare == 0 { why = "dry"; break; }
+            let now = sim.drones.frame;
+            let b = sim.bond.pos;
+            // The pick: the NEAREST alive hostile within 45 u — the room-stand context (the
+            // sit's room) holds exactly the unseen pourer; the hits-evidence arm is empty on
+            // this level (the grazes never register in player_hits — the measured duel bailed
+            // "no recent hitter" twice with the heavy's 9462 burst inside any window [L this
+            // branch's runs]) and the shots-evidence arm is the walker's own. A player in a
+            // room with one shooter shoots the shooter: the nearest-alive rule. The gate does
+            // NOT read `enabled` (the heavy flips dormant after his burst — the game's bullets
+            // hit ANY present drone [M Drone_CollisionHandler 0x140968:85-95]).
+            let mut pick: Option<(usize, f32)> = None;
+            for i in 0..sim.drones.list.len() {
+                let d = &sim.drones.list[i];
+                if !(d.present && !d.corpse && d.health > 0.0 && d.team == 1) { continue; }
+                let dd = walker::dxz(d.pos, b);
+                if dd > 45.0 { continue; }
+                if pick.map_or(true, |(_, bd)| dd < bd) { pick = Some((i, dd)); }
+            }
+            let Some((di, _)) = pick else { why = "no nearest hostile"; break };
+            let at = [sim.drones.list[di].pos[0], sim.drones.list[di].pos[1] + 0.3, sim.drones.list[di].pos[2]];
+            let eye = [b[0], b[1] + sim.bond.eye - sim.bond.crouch_drop, b[2]];
+            let (dx, dy, dz) = (at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]);
+            let h = (dx * dx + dz * dz).sqrt().max(0.5);
+            let err = walker::wrap_pi(dx.atan2(dz) - sim.bond.yaw);
+            let perr = (dy / h).atan() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch;
+            let reload = sim.gun.clip == 0;
+            let fire = !reload && err.abs() < 0.02 && perr.abs() < 0.028 && t.saturating_sub(last_tap) > 8;
+            let dhp = sim.drones.list[di].health;
+            if dhp < hp_watch { eprintln!("[duel] ({label}): #{di} hp {hp_watch:.1} -> {dhp:.1} at +{t}"); hp_watch = dhp; }
+            (Input { turn: err.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() }, fire, reload)
+        };
+        if reload {
+            w.scene.sim.as_mut().unwrap().step_bond(Input::default(), false, true, false);
+            w.total_ticks += 1;
+            w.after_step();
+            for _ in 0..60 { w.tick(Input::default(), false); }
+        } else if fire { last_tap = t; taps += 1; w.tick_fire(input); } else { w.tick(input, false); }
+    }
+    let sim = w.scene.sim.as_ref().unwrap();
+    eprintln!("[duel] ({label}): exit {why} taps {taps} (cap {cap}), health {:.1} armour {:.1}",
+        sim.drones.health.health, sim.drones.health.armour);
+}
+
 fn shelter_tick_picked(w: &mut Walker, last_tap: &mut u32, pick: Option<(usize, [f32; 3])>) {
+    // retune-nb-16-9 diagnostic: name the sit's fight target when it changes (the round-9 wall
+    // — the chaser-class heavy (skin 0x500001e, hp 100) at the shelter door — needs its target
+    // proven before the next lever; the print is one line per target change).
+    thread_local! {
+        static LAST_PICK: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+    }
+    if let Some((di, _at)) = pick {
+        if LAST_PICK.with(|c| c.get()) != di {
+            LAST_PICK.with(|c| c.set(di));
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d = &sim.drones.list[di];
+            eprintln!("[sit] the fight target: drone #{di} skin {:#x} hp {:.1} at {:?} d {:.1}",
+                d.skin, d.health, d.pos, walker::dxz(d.pos, sim.bond.pos));
+        }
+    }
     let Some((_, at)) = pick else { w.tick(Input::default(), false); return };
     let (input, fire, reload) = {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -1703,6 +1781,45 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
     // finale squad (the reactive sit let them pour fire the whole phase and the drops landed
     // dry). The punch test and the tops-up walks keep the exact original sit (re_arm and
     // !tops_up gate it, the file's established opt-in pattern).
+    // retune-nb-16-9 (d3 arm, judged on its own real run): the room stand BEFORE the pulse-1
+    // sit — round 9's measured wall: the walk-in SURVIVED (+778, the pool 30.0) and the sit's
+    // fight lost to the chaser-class heavy #9 (skin 0x500001e, hp 100 — never damaged all
+    // walk) at 2.6 u inside the door: the pool 30.0 spent at inside+212 to his 5.0-burst
+    // cadence while the grind ran [L this branch's run]. The stand runs the soldiers-answered
+    // fight from the room's interior (the route's own end spot) with the wound-abort opt-in
+    // (Some(8.0) — one volley's worth bounds the trade; the abort-aware escalation in
+    // damage_log gives the determined pass its bounded 300-tick kill window): if the heavy's
+    // head box is clear from the interior (no door frame between — both inside), the head-tap
+    // class kills him inside the 450-tick cap; if not, the stand ends at −8.0 with him at
+    // reduced hp for the sit. Bounded: the sit's wait runs to the pulse's ch 243 at 1611 [D]
+    // — the stand's 450 ticks fit between the entry (+778) and the rise.
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        let abort0 = w.dmg.abort_on_wound;
+        w.dmg.abort_on_wound = Some(8.0);
+        // The muzzle-flash duel on the room's unseen pourer (the pick needs a recent hit —
+        // the heavy's own grazes register), THEN the soldiers-answered stand as the mop-up.
+        // The duel cap 900: the grind is ~45 taps at the 8-tick cadence ≈ 360-450 ticks.
+        duel_the_muzzle_16(w, "the room's unseen pourer", 900);
+        w.dmg.abort_on_wound = abort0;
+        let mut last_tap = 0u32;
+        let stand_start = w.total_ticks;
+        while w.total_ticks - stand_start < 450 {
+            let any = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let armed = sim.gun.clip + sim.gun.spare > 0 && (2..=0x47).contains(&sim.gun.weapon);
+                armed && !sim.disabled && sim.drones.list.iter().enumerate()
+                    .any(|(i, d)| d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                        && walker::dxz(d.pos, sim.bond.pos) < 30.0
+                        && walker::DamageLog::exposed_part(sim, i).is_some())
+            };
+            if !any { break; }
+            shelter_tick_proactive(w, &mut last_tap);
+        }
+        w.dmg.abort_on_wound = abort0;
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[real-damage] the room stand: soldiers answered at +{}, health {:.1}",
+            w.total_ticks - stand_start, sim.drones.health.health);
+    }
     let n1 = if re_arm && !w.tops_up() {
         sit_out_pulse_proactive(w, "pulse 1 in the shelter (the pit soldiers answered)")
     } else {
@@ -3788,7 +3905,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// 2 hits (every delta within the game's chain [D record 99; M 0x1d4424/0x139fac]), ch 0xbf
 /// at +8428, the lift-out hand-back at +9490, the button, end health 17.0 (the pool spent,
 /// 37 hits for 83.0 across the whole walk).
-#[ignore = "stream batch 3 re-tune round 8 (retune-nb-16-8, 2026-11-23), still red — but the FURTHEST measured point: the SMG-speed lever carried the walk THROUGH the whole ring/station/returns phase (the ring pourers #4/#3/#5 all killed by the reactive fights) and into the chaser stage, death t9383 AT the shelter entry (+322 into the finale, (-14.50,-22.00,-170.18), health 9.0, the kind-27 barrel at (-12.4,-21.4,-169.4) d 2.4 radius 4.0 dealt the last 9.0 [L run 5/7, NF_DMG_TRACE]). The landed levers on THIS tree (d3 && !tops_up, file-local to the test): (1) the 16-7 set — the Delta->P2K switch at the route head, the lane south dealer peek stand (this stream it picks the strafed-out max-dealt muzzle, the all-zero tie breaks nearest onto the ducked hunter, and the not-exposed arm BAILS — the lane stand costs 0 ticks and the stream keeps the 16-7 run-10 shape), (2) NEW the fights' SPEED (the ignore-7 lever (a), landed in two parts): prefer_the_dropped_smg_16 — the clears' loot now prefers the owned 0x1a (7.0 a round vs the P2K's 2.1 [L the guards' rounds on Bond]) over the deep-firearm P2K stop — and loot_the_ring_drops_16 — the ring-1 leg walks over the reactive kills' close drops (the NE guard #0's 0x1a at (7.8,5.7,-77.0), 12 rounds) with RETURN FIRE OFF (the pocket-dash idiom; with it ON the second fight opened ON the take hop and froze Bond short of the drop [L run 3]) and a DIRECT walk_to finisher at 0.35 (the nav's last hop stops up to 4.3 u short and still reports arrived, the take never fires [L run 2]), then swaps to the SMG: the fights killed #4 at t1660 (60 ticks), #3 at t1804, #5 at t2062 — the ring phase's whole pourer set; (3) NEW switch_dry (d3-gated): the SMG dries mid-route (clip 0 spare 0 at the lane head [L run 4]) and the dry fights now cycle to the P2K's 34 spare instead of standing on an R that can never load — the t4996 dry-stand death removed. The measured WORSE set, do not retry: everything in the round-7 ledger (the ring-level stands, the ramp-foot/ramp-2 stands, the walk-wide shooters_window, the blocked-branch sidesteps, the lane flank nav) PLUS the new ones: the lane-stand BATCH (skip the not-exposed pick + widen the band z -84..-132 + 6 iterations) — the stand's own DURATION is the exposure: the NE ring guard #0 (9.0,6.7,-78.7, out of any gallery band) poured 3.5 a hit from 6.4 u the whole time, 24 hits for 96.5, death t1383 AT the stand [L run 6]; the nav-only loot walk (stops short, the take never fires — the direct finisher is required [L run 2]). The health ledger: the ring phase costs ~49 from the 58.0 arrival (the detour 10.5 + the #4 fight 21.0 [#3+#5 poured during the 60-tick SMG kill] + the ring 1->2 pour 7.0) — Bond crossed the ring at 9.0 and NEVER recovered (the med-kit's +10 is behind the shelter entry). NEXT LEVER: the shelter barrel — the kind-27 volume at (-12.4,-21.4,-169.4), 2.4 u from the shelter stand, radius 4.0, damage 50.0, whose fuse lit during the hand-back stand (the soldiers answered at +0 there; Bond's own muzzle lines go EAST toward the soldiers, the soldiers' return fire goes WEST past the shelter door [L run 5/7: death at the shelter entry, ch 0x27/0x28 true at the blast]) — (a) a d3 arm on the hand-back stand: probe the world's explosive volumes around the stand spot and the soldiers' return lines, stand where the lines do not cross the barrel's radius (a live check for the main agent: gdbwatch/fieldprobe on the barrel's state during the hand-back stand names what ignites it); with the barrel quiet the med-kit's +10 lands at 19.5 (the 12882-ledger shape) and the pit phase's own laws take over; (b) the ring-1 fight's 21.0 (the crossfire floor): abort_on_wound (the fight's own opt-in) would break each fight after a volley, BUT it must compose with finish_fights — an aborted fight escalates to the 1800-tick determined pass [M return_fire's !killed arm], undoing the abort; that needs a shared-helper opt-in (the escalation abort-aware, rule 7: the flag set by this test only, every walkreal binary re-run)"]
+#[ignore = "stream batch 3 re-tune round 8 (retune-nb-16-8, 2026-11-23), still red — but the FURTHEST measured point: the SMG-speed lever carried the walk THROUGH the whole ring/station/returns phase (the ring pourers #4/#3/#5 all killed by the reactive fights) and into the chaser stage, death t9383 AT the shelter entry (+322 into the finale, (-14.50,-22.00,-170.18), health 9.0, the kind-27 barrel at (-12.4,-21.4,-169.4) d 2.4 radius 4.0 dealt the last 9.0 [L run 5/7, NF_DMG_TRACE]). The landed levers on THIS tree (d3 && !tops_up, file-local to the test): (1) the 16-7 set — the Delta->P2K switch at the route head, the lane south dealer peek stand (this stream it picks the strafed-out max-dealt muzzle, the all-zero tie breaks nearest onto the ducked hunter, and the not-exposed arm BAILS — the lane stand costs 0 ticks and the stream keeps the 16-7 run-10 shape), (2) NEW the fights' SPEED (the ignore-7 lever (a), landed in two parts): prefer_the_dropped_smg_16 — the clears' loot now prefers the owned 0x1a (7.0 a round vs the P2K's 2.1 [L the guards' rounds on Bond]) over the deep-firearm P2K stop — and loot_the_ring_drops_16 — the ring-1 leg walks over the reactive kills' close drops (the NE guard #0's 0x1a at (7.8,5.7,-77.0), 12 rounds) with RETURN FIRE OFF (the pocket-dash idiom; with it ON the second fight opened ON the take hop and froze Bond short of the drop [L run 3]) and a DIRECT walk_to finisher at 0.35 (the nav's last hop stops up to 4.3 u short and still reports arrived, the take never fires [L run 2]), then swaps to the SMG: the fights killed #4 at t1660 (60 ticks), #3 at t1804, #5 at t2062 — the ring phase's whole pourer set; (3) NEW switch_dry (d3-gated): the SMG dries mid-route (clip 0 spare 0 at the lane head [L run 4]) and the dry fights now cycle to the P2K's 34 spare instead of standing on an R that can never load — the t4996 dry-stand death removed. The measured WORSE set, do not retry: everything in the round-7 ledger (the ring-level stands, the ramp-foot/ramp-2 stands, the walk-wide shooters_window, the blocked-branch sidesteps, the lane flank nav) PLUS the new ones: the lane-stand BATCH (skip the not-exposed pick + widen the band z -84..-132 + 6 iterations) — the stand's own DURATION is the exposure: the NE ring guard #0 (9.0,6.7,-78.7, out of any gallery band) poured 3.5 a hit from 6.4 u the whole time, 24 hits for 96.5, death t1383 AT the stand [L run 6]; the nav-only loot walk (stops short, the take never fires — the direct finisher is required [L run 2]). The health ledger: the ring phase costs ~49 from the 58.0 arrival (the detour 10.5 + the #4 fight 21.0 [#3+#5 poured during the 60-tick SMG kill] + the ring 1->2 pour 7.0) — Bond crossed the ring at 9.0 and NEVER recovered (the med-kit's +10 is behind the shelter entry). NEXT LEVER: the shelter barrel — the kind-27 volume at (-12.4,-21.4,-169.4), 2.4 u from the shelter stand, radius 4.0, damage 50.0, whose fuse lit during the hand-back stand (the soldiers answered at +0 there; Bond's own muzzle lines go EAST toward the soldiers, the soldiers' return fire goes WEST past the shelter door [L run 5/7: death at the shelter entry, ch 0x27/0x28 true at the blast]) — (a) a d3 arm on the hand-back stand: probe the world's explosive volumes around the stand spot and the soldiers' return lines, stand where the lines do not cross the barrel's radius (a live check for the main agent: gdbwatch/fieldprobe on the barrel's state during the hand-back stand names what ignites it); with the barrel quiet the med-kit's +10 lands at 19.5 (the 12882-ledger shape) and the pit phase's own laws take over; (b) the ring-1 fight's 21.0 (the crossfire floor): abort_on_wound (the fight's own opt-in) would break each fight after a volley, BUT it must compose with finish_fights — an aborted fight escalates to the 1800-tick determined pass [M return_fire's !killed arm], undoing the abort; that needs a shared-helper opt-in (the escalation abort-aware, rule 7: the flag set by this test only, every walkreal binary re-run) retune-nb-16-9 round 9 (this branch, every lever judged on its own real run): the two ledger levers LANDED and the walk reached the FINALE SQUAD PHASE — the deepest measured point ever (the prior best died AT the shelter entry t9383; this run died t15655 IN the squad phase, 42 hits for 100.0). LANDED, all gated difficulty>=3 && !tops_up() (the d1/d2 sisters and the tops-up walks byte-identical — the whole binary 18/0/1 re-verified twice): (1) the shelter-barrel lever (a): the kind-27 barrel at (-12.4,-21.4,-169.4) is DETONATED BEFORE the walk-in, from the INTO_THE_SHELTER route's own first-leg stand (-8.5,-22.2,-173.5), 5.65 u OUTSIDE the barrel's 4.0 radius (shoot_point at the barrel position; the blast fires harmlessly at that range — the self-safe property measured: the failed-aim run walked in alive). The arm's give-up is bounded 450 (the converged detonation measured ~250; the 700 bound blew the door-shut assert once — inside_at 1029 > 1000 [L the round-9 run]); the door assert then held at +778. The barrel's ignition owner is STILL unknown (the soldiers' return lines cross it westward [S the round-8 ledger's reading]; a live check stands). (2) the ring fights' wound-abort composition (b): abort_on_wound=Some(6.0) scoped to the d3 route loop + the ESCALATION made abort-aware in damage_log (the determined pass runs a bounded 300-tick kill window instead of the 1800 undo when the flag is set; the flag's only other user, the 01 hall test, sets it only inside finish_fights=false windows — the arm is dead for every existing test; the 01 binary re-run green 7/0/1). MEASURED: the ring fights killed #4 and #5 at ZERO health cost (the determined-pass prints health 30.0 -> 30.0) and the pool at the hand-back moved 9.0 -> 30.0. (3) the room stand's muzzle-flash duel (duel_the_muzzle_16, test-local, the 06 idiom): the sit's pick found NO exposed drone at the pulse-1 sit (the [sit] diagnostic never printed — the chaser-class heavy pours from a spot the strict-ray exposed_part never opens) and the duel's hits-evidence pick also came back empty (the grazes never register in player_hits — \"no recent hitter\" twice with the heavy's burst inside any window [L]); the landed pick is the NEAREST-ALIVE hostile within 45 u (no enabled gate — the heavy flips dormant after his burst): the duel ground the nearest drone (#19, hp 10) dry and the walk stormed through the sit phases, both chasers (down +2986/+3407), the pit-room armour #648 and the east armour #649 (health 24.7, armour 50.0 at +4391), pulse 2 over at +7270 — into the squad phase. THE REMAINING WALL: the squad's chaser-class clone #12 (skin 0x500001e, hp 37) poured 17.5 in 15 hits at 2.0 u point-blank inside the room and the pool 24.7+50 armour died t15655 at (-12.85,-22.01,-170.50) — the same unseen-pourer class at the same door-adjacent geometry. NEXT LEVERS for round 10: (a) the squad phase's own muzzle-duel pass (the nearest-alive duel from the room interior before the squad's hold window — the same shape that cleared the pulse-1 wall, against the clone members as they close); (b) the #596 station armour's spend window (the armour 43.0 at the entry spent to 0.0 by the sit's pours — the pours' true output ~73/window incl. the soak); (c) a live check: the heavy's exposure — gdbwatch on the strict-ray set during the sit names why exposed_part never opens at 2.0-2.6 u (the door-leaf geometry vs the eye-ray rule). Round-9 landed facts: the barrel arm is self-safe; the abort composition is free (zero-cost kills); the nearest-alive muzzle duel is the answer to the unseen-pourer class; the sits' pick order was NOT the flaw (the nearest-first variant measured byte-identical, reverted, kept as the ledger note)."]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles; the ninja's
     // NinjaStand start): the pocket's close four took 72 -> 12.5 and Bond reached the blast
