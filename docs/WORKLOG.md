@@ -78,3 +78,34 @@ Next: TAP mode (hold+aim+tap whenever the live eye has the line, checked every t
 immediate lock while high (skip the double-verify when the eye is above the cavity), and
 a last-clear-box aim memory to kill the box<->torso aim bounce (the endgame tap cadence
 was ~20 dmg/60 ticks).
+
+Final (walk-1b-agent-3): GREEN. The Agent Drake fight is defeated by the ledger's named
+shoot-and-scoot lever:
+- the diagnostic mapped the geometry [L all runs this branch]: the fight hold is the east nest
+  (53.2,-10.9,15.6) with exp (0,0) (zero-loss, 1260+ ticks measured), Drake spawns (-7.3,-1.4,0.1)
+  63 u west, closes ~0.014-0.018 u/tick while ascending (y -1.42 -> -0.1), and the shelter's
+  sight-cut never opens his box line (ondrake false for the whole round-22/23 shapes); weapon
+  0x33's death range +0x1C = 500.0 (no range blocker); the wave's first hits arm ~120 ticks after
+  sight gain [M 0x179740:102-109].
+- the lever: the free wait (no lift, no taps — the round-22 climb cost exp 0->14 and three hits),
+  a 1.5-u grid probe for body spots whose eye (at a live Drake box centre's height) puts a level
+  ray into a box before the world [M 0x1ea398:216-229], the double-verify launch gate from the
+  cavity (immediate lock once high), the two-phase fly (the dark cavity plane until overhead,
+  then the rise), the TAP hold aiming the remembered box offset with the PREDICTED BULLET's own
+  line as the fire gate (the compensated view ray points past the box; the bullet converges onto
+  it [M scene.rs shot_from]), each hold capped at 100 ticks and forced to dive (every armed
+  shooter's 2-s clock resets on lost sight — Drake's -14.0 weapon 0x30 at Agent included
+  [D weapon_data 0x30 +0x0c; M 0x1902c8]). 10 measured red runs banked the margins (the churn
+  laws, the flicker laws, the z ~13.9-14.1 stable column at x ~49-51, the Drake-hit closing
+  shot); run 11 landed green with no env gates.
+- gate: drake_first = waves_first && !hard at the Drake-fight call — the Operative walk (d1)
+  and the 00 Agent walk (d3) keep byte-identical fights; the whole walkreal_0700001b_live binary
+  on the final tree: 18 passed; 0 failed; 1 ignored (210.19s) — the 00agent walk stays ignored
+  with its round-2 ledger (not attempted this round; the Agent lever consumed the window).
+- the prescribed full suite did not fit the window (background jobs die between tool calls in
+  this sandbox — re-verified with two nohup probes; the foreground window went to the lever
+  runs); the change surface is the single 1b test file (no src/, no common/ helpers — verified
+  by grep), all four crates build clean (--no-run), and the whole 1b binary ran twice on the
+  final tree (the green run + the 18/0/1 sweep).
+- NF_1B_PAUSES2 (the second-stop re-roll hook, the ledger's alternate lever) shipped env-gated
+  defaulting to a no-op; NF_1B_SCOOT_DIAG keeps the fight dumps for the next round.
