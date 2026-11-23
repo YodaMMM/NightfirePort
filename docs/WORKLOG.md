@@ -94,3 +94,24 @@ first half: answer the un-answered mouth/balcony stream (round-1 lever (b)'s ~45
 so the 50 armour carries the strip grind and the corner pool sits near ~70. Branch from origin
 master 7562f1e70 with origin/s/walk-06-00agent-2 merged in first (clean). Work log and report
 updates as the levers run; every lever judged on its own real run.
+
+### walk-06-00agent-3 progress (2026-11-23, round 3, the pool-trim probes)
+
+The pool split was re-measured with the armour-soak dealers NAMED (a temporary env-gated soak
+print in the shared damage_log; reverted before the finish — common/ ends the round untouched):
+the 9 zero-delta soaks (armour 50 -> 0.5, ticks 6826-6914) are ALL the ch-55 pair themselves at
+the strip approach (#19 6 hits d 5.1-5.9, #20 3 hits d 7.5-7.9), during the fixed tower duel's
+#11 grind — round 2's "un-answered mouth/balcony stream" was this strip pair, misattributed.
+The final-tree grenade dealer is #22 at (38.4, 51.0, -37.6) (round 2's "#23" citation was the
+lever-a5 run's timeline). Three pool-trim probes measured DEAD on their own real runs: (1) the
+pair answer before the tower duel wakes #11 (4 soaks + health hits at d 23.6; the tower grind's
+pain-stagger is what suppressed his volley in the baseline) and #19 charged to d 4.0 (death
+t7198); (2) the strip stop 2 u east for the <=6 u head band rolls the pair's CHARGE (both to
+d 3.7-3.8, death t7087); (3) the west BodyArmour #754 fetch wedges at the tunnel arch and the
+return-fire-off crossing cost 24.8 health — net-negative. The tower-first order and the
+(6.0,-34.0) posting distance are the proven strip optimum; the ledger and the round-4 levers
+(the #754 fetch on a quieter lane; the 0.2-stall lock trim; the east-floor answer before the
+corner) are in the ignore message.
+
+Verification: walkreal_07000006_live 8 passed / 0 failed / 1 ignored, interactables_07000006_live
+5 passed / 0 failed — the tree ends comments-only (every walk byte-identical to round 2's merge).
