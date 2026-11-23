@@ -134,16 +134,27 @@ fn the_c5_corridor_feeds_the_mission_end_and_the_door_gates_it() {
         assert_eq!(doors.len(), 2, "both C5 leaves parse as Destroy props (0xE1 [M 0x12c318])");
         assert!(doors.contains(&1000.0) && doors.contains(&10000.0), "the leaves' healths are 1000/10000 [D], got {doors:?}");
     }
-    // The corridor's sloped faces (#433's 6 tris [D]) hang to y ≈ 5.4 — the standing capsule
-    // brushes them just inside the C5 end (floor 3.65 [D coll-floor]).
+    // The corridor plate #433 (6 raw tris, all facing up [D]): its flat top hangs at y 5.379 over
+    // the C5 end's flat floor, where the standing walk HITTEST tops at pos + 0.275 = 5.357, behind
+    // the plane (the raw branch's code-99 miss [M Intersect_CylGeom 0x109da0 → Dist2Tri
+    // 0x109770]); its slope face meets the HITTEST on the ramp down north of z −254.6 [D]. Sister:
+    // the stand inside the C5 end stays silent; the walk north onto the ramp fires it.
     {
         let sim = scene.sim.as_mut().unwrap();
         sim.bond = nf_game::player::Bond::stand_at(&sim.world, [134.0, 5.0, -267.0], 0.0);
         for _ in 0..120 { sim.step_bond(Input::default(), false, false, false); }
+        // (The stand-in box reaches the flat top from the stand; the sister holds under the game's contact.)
+        if nf_game::drone::touch_law_live() { assert!(!sim.drones.channels.on(0x28), "sister: standing under the plate's flat top leaves ch 0x28 off"); }
+        // Yaw 0 faces +z: walk straight north down the corridor onto the ramp.
+        for _ in 0..600 {
+            sim.step_bond(Input { forward: 1.0, ..Default::default() }, false, false, false);
+            if sim.drones.channels.on(0x28) { break; }
+        }
     }
     {
         let sim = scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(0x28), "the corridor's sloped faces (#433's tris [D]) touch the standing capsule → ch 0x28");
+        assert!(sim.drones.channels.on(0x28), "the walk onto the corridor ramp meets #433's slope face → ch 0x28 [D #433 tris]");
+        if nf_game::drone::touch_law_live() { assert!(sim.bond.pos[2] > -255.5, "the contact comes on the ramp, not under the flat top, z {}", sim.bond.pos[2]); }
         assert!(!sim.drones.channels.on(100), "the AND #434 is open: ch 0x1f (the C5 death) is missing");
         assert_eq!(sim.drones.level_exit, None, "the mission does not end without the C5 objective");
     }

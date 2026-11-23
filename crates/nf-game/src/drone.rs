@@ -14558,10 +14558,18 @@ pub struct NetBody {
 /// The trigger touchers of one human body (single-player Bond, or one MP slot): the stand-in set
 /// (`box_touchers`). The game's own on-foot contact is ported as `game_touchers`; it is not the
 /// shipped set yet: switching broke walk and plate pins on 01/02/05/06/07/08/0a/0b/0d/011/4a that
-/// stand on the box's reach (docs/reports/s-touch-ref-point.md).
+/// stand on the box's reach (docs/reports/s-touch-ref-point.md; the 08/0a/0b/0d/011/4a re-pins and
+/// the two still red under the law are in docs/reports/s-touch-law-b.md).
 pub fn human_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, riding: bool) -> Vec<crate::triggers::Toucher> {
-    box_touchers(pos, body, crouched, hanging, riding)
+    if touch_law_live() { game_touchers(pos, body, crouched, hanging, riding) } else { box_touchers(pos, body, crouched, hanging, riding) }
 }
+
+/// The one switch from the stand-in set (`box_touchers`) to the game's contact (`game_touchers`)
+/// for every human body. Flipped once, when every pin that relied on the box is re-pinned.
+pub const TOUCH_LAW_LIVE: bool = false;
+
+/// `TOUCH_LAW_LIVE` as a call, for the tests whose pins differ between the two contacts.
+pub fn touch_law_live() -> bool { TOUCH_LAW_LIVE }
 
 /// The game's own on-foot trigger contact for one human body.
 ///

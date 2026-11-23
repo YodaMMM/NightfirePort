@@ -75,7 +75,7 @@ fn mesh_fires(v: &Vol, pos: [f32; 3]) -> bool {
 /// The shipped stand-in's standing decision (`drone::human_touchers`).
 fn port_fires(v: &Vol, pos: [f32; 3]) -> bool {
     let (a, b) = hittest(pos);
-    nf_game::drone::human_touchers(pos, (a, b, R), false, false, false).iter().any(|c| v.t.touched_by(c))
+    nf_game::drone::box_touchers(pos, (a, b, R), false, false, false).iter().any(|c| v.t.touched_by(c))
 }
 
 /// The game's own contact as a toucher set (`drone::game_touchers`).

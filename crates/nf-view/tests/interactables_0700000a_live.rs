@@ -196,8 +196,23 @@ fn armour_pickup_taken_by_walking_over_it() {
     w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
     w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
     w.walk_to(Wp::new(-10.0, 0.4, 16.0).r(1.2), "the west hall");
+    w.walk_to(Wp::new(-20.5, 1.3, 16.5).r(1.2), "the west offices' north corridor");
+    // Guard #8 walks his GoToGoal route west along the z≈5.5 corridor and through the west door
+    // (walkreal-0a's leg e, the same meeting): both standing bodies hold each other in the
+    // corridor [M NDrone2_Collision 0x140e90]. A player lets him through first, from up the
+    // office block. Whether he is in the corridor when Bond gets there rides on the plates' own
+    // contact timing (ch 0xAD / 0x84 rise on the walk HITTEST's crossing).
+    let in_lane = |w: &Walker| {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.list.iter().any(|d| d.present && d.enabled && !d.corpse && d.health > 0.0
+            && (d.pos[1] - 1.1).abs() < 1.5 && d.pos[0] > -21.0 && d.pos[0] < -13.0 && d.pos[2] > 3.5 && d.pos[2] < 7.5)
+    };
+    w.walk_to(Wp::new(-20.5, 1.3, 9.5).r(0.8), "up the office block, clear of the corridor");
+    for _ in 0..1500 {
+        if !in_lane(&w) { break; }
+        w.tick(Default::default(), false);
+    }
     for (to, label) in [
-        ([-20.5, 1.3, 16.5], "the west offices' north corridor"),
         ([-20.5, 1.3, 5.5], "down the west office block"),
         ([-17.5, 1.3, 5.5], "east of the west door"),
         ([-16.2, 1.3, 5.8], "the ai node 27 east"),

@@ -280,10 +280,15 @@ fn the_riders_first_steps_walk_onto_the_top_reveal_plate() {
     // not fire the plate (walkreal-a's "the stand-in toucher misses on a pure vertical ride");
     // the player's own WALK onto the plate fires it. A port that fires the plate without the
     // walk fails here.
+    // Under the game's contact (`drone::TOUCH_LAW_LIVE`) the stand DOES reach the plate: the
+    // standing walk HITTEST bottom (pos − 0.485) rests 0.48-0.54 over the flat quad at y −8.759 [D
+    // #277], inside the strict r 0.55 of the raw branch [M Intersect_CylGeom 0x109da0 →
+    // Dist2Tri 0x109770]; the plate fires within the first ticks on the platform with no step
+    // (the real spawn too: tick 5). Not checked live.
     for _ in 0..90u32 { r.step(Input::default(), false); }
     let bare_fired = r.w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d);
-    assert!(!bare_fired,
-        "sister: the bare stand does not fire the reveal plate — the walk does [M Trigger_Hit 0x1b1fc8:56-123's arm chain]");
+    assert_eq!(bare_fired, nf_game::drone::touch_law_live(),
+        "the bare stand fires the reveal plate only under the game's contact [M Trigger_Hit 0x1b1fc8:56-123's arm chain]");
     for k in 0..84u32 {
         let sim = r.w.scene.sim.as_ref().unwrap();
         let p = sim.bond.pos;

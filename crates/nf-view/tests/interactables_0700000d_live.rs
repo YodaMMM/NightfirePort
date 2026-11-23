@@ -158,9 +158,20 @@ fn c5_shot_open_completes_the_level() {
     // Now the corridor walk: through the door plane to the slope — the re-firing plate #433's
     // band raises ch 0x28 on the low crossing (the walkreal's pin) and leaves it ON while the
     // crossing continues [D; M triggers.rs].
+    // The plate is a re-firing Touch under the game's contact: Bond's walk HITTEST touches its
+    // faces only while it crosses them (`Intersect_CylGeom` 0x109da0; no containment contact
+    // [M Trigger_Hit 0x1b1fc8 reads only the pick's contact list]), so the channel is read off the
+    // walk's own writes, not at the arrival.
+    w.scene.sim.as_mut().unwrap().drones.channels.writes = Some(Vec::new());
     w.walk_to(Wp::new(136.0, 4.2, -278.0).r(2.0), "the yard north");
     w.walk_to(Wp::new(136.0, 5.2, -267.5).r(1.5), "the corridor slope");
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x28), "the corridor plate #433 fires ch 0x28 [D]");
+    // The plate's flat top hangs at y 5.379 over the corridor's flat floor (the standing
+    // HITTEST top is pos + 0.275 = 5.357 there, behind its up-facing plane: the raw branch's
+    // code-99 miss [M Dist2Tri 0x109770]); its slope face meets the walk HITTEST on the ramp down
+    // (z < -254.6 [D #433 tris]). The player walks on down the ramp.
+    w.walk_to(Wp::new(134.0, 4.0, -252.0).r(1.0), "down the corridor ramp");
+    let writes = w.scene.sim.as_mut().unwrap().drones.channels.writes.take().unwrap_or_default();
+    assert!(writes.iter().any(|&(c, v, _, _)| c == 0x28 && v != 0), "the corridor plate #433 fires ch 0x28 on the walk [D]");
     // The mux → ch 100 → mission end → 0x730000d [M 0x182c60:102-103]. The end sequence runs
     // `Mission_Update`'s state-6 timeout (VIDEO_FRAME_RATE << 2 = 240 ticks [M :88-91]) before
     // `LevelEnd` → `ResetMap_LevelToLoad` [M :65-76] — wait it out.

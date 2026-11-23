@@ -488,18 +488,30 @@ fn sound_triggers_play_on_their_channels_real_writes() {
             "sister: neither trigger plays on a fresh load [M 0x1b2790's channel-edge start]");
         assert!(!sim.drones.channels.on(0x4d), "sister: the terminal-room plate silent [D #163]");
     }
-    // The dome-side stand the laserbeam test proves (−1.0, 47.5, −5.5) sits inside plate
-    // #163's box [−3.04, 46.73, −6.67]-[1.23, 48.92, −4.48] [D] — the walk-over fires ch 0x4D.
-    w.scene.sim.as_mut().unwrap().bond.pos = [-1.0, 47.5, -5.5];
+    // Plate #163 is a cross of two raw quads [D]: a flat one at y 47.83 (facing up, over the
+    // standing walk HITTEST top) and an upright one at z −5.57 (facing −z). Bond's contact is the
+    // walk HITTEST alone [M Trigger_Hit 0x1b1fc8 reads the pick's contact list], so a stand
+    // dropped inside the box does not reach it; the walk into the room crosses the upright quad.
+    // Walked from just inside the room's door (z −3.3): the walk from the ring crosses the
+    // dome fence, whose global sound #331 then holds the one global voice and #330 dies
+    // [M 0x1b2790:19-28].
+    w.scene.sim.as_mut().unwrap().bond.pos = [-0.9, 47.8, -3.3];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
-    let mut plate = false;
+    w.wait(10);
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d), "sister: the stand by the door is off the plate [D #163]");
+    w.scene.sim.as_mut().unwrap().drones.channels.writes = Some(Vec::new());
+    w.walk_to(Wp::new(-1.0, 47.5, -5.5).r(0.4), "the terminal room's middle");
+    let mut plate = w.scene.sim.as_mut().unwrap().drones.channels.writes.take().unwrap_or_default()
+        .iter().any(|&(c, v, _, _)| c == 0x4d && v != 0);
     for _ in 0..60 {
+        if plate { break; }
         w.tick(Default::default(), false);
         if w.scene.sim.as_ref().unwrap().drones.channels.on(0x4d) { plate = true; break; }
     }
     assert!(plate, "the walked-over plate #163 writes ch 0x4D [D #163; M triggers.rs]");
-    let mut s1158 = false;
+    let mut s1158 = w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(1158);
     for _ in 0..30 {
+        if s1158 { break; }
         w.tick(Default::default(), false);
         if w.scene.sim.as_ref().unwrap().drones.sound_triggers.playing(1158) { s1158 = true; break; }
     }
@@ -582,20 +594,25 @@ fn lift_shaft_plates_fire_on_the_touch() {
         (sim.drones.triggers.iter().position(|t| t.out == 0x75).expect("lift_stop_trigger #245 [D]"),
          sim.drones.triggers.iter().position(|t| t.out == 0x53).expect("the mid-shaft plate #171 [D]"))
     };
-    // Touch #245: hold Bond inside the box (two y stances cover the toucher's −0.6 law).
-    let (c245, lo245, hi245) = box_of(&w, i245);
+    // Touch #245 is a closed box of 12 raw triangles, every face facing out [D]. Bond's contact
+    // is the walk HITTEST alone [M Trigger_Hit 0x1b1fc8 reads the pick's contact list;
+    // Intersect_CylGeom 0x109da0's raw branch, Dist2Tri 0x109770 code 99 behind a face], so a
+    // stand fully inside reaches no face: the plate fires when Bond's walk meets its south face.
+    // From the roof cut-scene's deck key [−14.71, 58.00, −2.06] [D pack 0790000b] Bond walks
+    // north into the volume.
+    let _ = box_of(&w, i245);
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond = nf_game::player::Bond::stand_at(&sim.world, [-14.71, 58.0, -2.06], 0.0);
+    }
+    w.wait(10);
+    assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x75), "sister: the deck key stands outside #245 [D]");
     let mut stop = false;
-    for y in [hi245[1] - 0.5, lo245[1] + 0.7] {
-        for _ in 0..30 {
-            {
-                let sim = w.scene.sim.as_mut().unwrap();
-                sim.bond.pos = [c245[0], y, c245[2]];
-                sim.bond.vel = [0.0; 3];
-            }
-            w.tick(Default::default(), false);
-            if w.scene.sim.as_ref().unwrap().drones.channels.on(0x75) { stop = true; break; }
-        }
-        if stop { break; }
+    for _ in 0..120 {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let err = walker::wrap_pi(0.0 - sim.bond.yaw);
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), forward: 1.0, ..Default::default() }, false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x75) { stop = true; break; }
     }
     assert!(stop, "the shaft-top stop plate writes ch 0x75 on the crossing [D #245 out 117; M triggers.rs]");
     // Touch #171 (mid-shaft, y 37.5-39.7 [D doc]): same law, its own sister.

@@ -19,7 +19,9 @@
 #[test]
 fn replay_the_operative_walk_headless_to_the_same_mission_end() {
     let iso = std::env::var("NF_ISO").expect("NF_ISO");
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000b_operative.bin");
+    // `_law`: the walk recorded under the game's own trigger contact (`drone::TOUCH_LAW_LIVE`).
+    let path = if nf_game::drone::touch_law_live() { concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000b_operative_law.bin") }
+        else { concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000b_operative.bin") };
     let replay = nf_view::replay::Replay::load(path).expect("the committed Operative recording");
     assert_eq!(replay.header.level, "0700000b.bin");
     let ticks = replay.tick_count();

@@ -2392,12 +2392,17 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         assert_eq!(sim.drones.mission.states[12][2], 4, "objective 6 completes [M 0x1827d8:88-99]");
     }
 
-    // Leg 5: through the dead door into the corridor — the re-firing plate #433's low stretch
-    // raises ch 0x28 while the crossing continues [D; M triggers.rs] — and with 0x1e + 0x1f
-    // latched the AND #434 raises ch 100 [D #434 list; M Trigger_Update's AND arm].
+    // Leg 5: through the dead door into the corridor and down its ramp — the re-firing plate
+    // #433's slope face meets the walk HITTEST on the ramp (its flat top over the C5 end's flat
+    // floor sits just above the standing HITTEST top, behind its up-facing plane [D #433 tris;
+    // M Intersect_CylGeom 0x109da0's raw branch]) — and with 0x1e + 0x1f latched the AND #434
+    // raises ch 100 [D #434 list; M Trigger_Update's AND arm].
+    w.scene.sim.as_mut().unwrap().drones.channels.writes = Some(Vec::new());
     w.walk_to(Wp::new(136.0, 4.2, -278.0).r(2.0), "the yard north");
     w.walk_to(Wp::new(136.0, 5.2, -267.5).r(1.5), "the corridor slope");
-    assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x28), "the corridor plate #433 fires ch 0x28 [D]");
+    w.walk_to(Wp::new(134.0, 4.0, -252.0).r(1.0), "down the corridor ramp");
+    let writes = w.scene.sim.as_mut().unwrap().drones.channels.writes.take().unwrap_or_default();
+    assert!(writes.iter().any(|&(c, v, _, _)| c == 0x28 && v != 0), "the corridor plate #433 fires ch 0x28 on the walk [D]");
     // The mux → ch 100 → mission end → 0x730000d [M 0x182c60:102-103]. The end sequence runs
     // `Mission_Update`'s state-6 timeout (VIDEO_FRAME_RATE << 2 = 240 ticks [M :88-91]) before
     // `LevelEnd` → `ResetMap_LevelToLoad` [M :65-76] — wait it out.

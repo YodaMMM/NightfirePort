@@ -51,7 +51,12 @@ fn type_digit(w: &mut Walker, digit: u8) {
 // Per test thread (the sisters run in parallel in one binary; a process-wide flag leaked
 // one sister's lever into another mid-walk).
 thread_local! { static REC_0A: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
-const REC_0A_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000a_operative.bin");
+/// The committed recording for the live trigger contact: `_law` is the walk under the game's
+/// own contact (`drone::TOUCH_LAW_LIVE`); the plain file is the stand-in box's.
+fn rec_0a_path() -> &'static str {
+    if nf_game::drone::touch_law_live() { concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000a_operative_law.bin") }
+    else { concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000a_operative.bin") }
+}
 thread_local! {
     static REC_0A_RECORDER: std::cell::RefCell<Option<nf_view::replay::Recorder>> = const { std::cell::RefCell::new(None) };
 }
@@ -879,7 +884,7 @@ fn walk_qworm_and_back_at(difficulty: u32) -> Walker {
     if difficulty == 1 && REC_0A.with(|c| c.get()) {
         // The header snapshots the warm load's RNG / pose / weapon / option rows before the
         // first recorded tick (replay_parity_0700000a.rs rebuilds the same warm load).
-        let rec = nf_view::replay::Recorder::start(&w.scene, REC_0A_PATH, "0700000a.bin", None, false,
+        let rec = nf_view::replay::Recorder::start(&w.scene, rec_0a_path(), "0700000a.bin", None, false,
             { let s = w.scene.sim.as_ref().unwrap(); Some(nf_view::replay::ReplayOptions {
                 auto_aim: s.auto_aim, auto_switch: s.drones.auto_switch,
                 crouch_toggle: s.drones.crouch_toggle, crosshair: s.drones.crosshair }) })
@@ -1107,9 +1112,12 @@ fn walk_office_floor_qworm_install_and_back() {
 /// south → the south corridor → the hatch E.
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch() {
-    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
-    // 10-value sweep on the joined tree: 500/30, 1000/60, 2000/30, 4000/90 complete].
-    walker::with_pause(2000, 30, || walk_office_floor_qworm_keyboard_hatch_at(1))
+    // touch-law (the game's on-foot trigger contact, `drone::TOUCH_LAW_LIVE`): the plates' walk
+    // HITTEST contact moves the 0xAD/0x84/0xAE/0x85/0xAF rises 1-3 frames earlier and the office
+    // civilian's lap with them; at 2000/30 camera ch 0x1D caught the pocket leg. Lever 2000/60
+    // [the 9-value sweep: 1000/60, 1500/30, 2000/60, 2500/30, 3000/30, 4000/90 complete; 500/30,
+    // 1000/30, 2000/90 alarm]. The stand-in box keeps stream batch 1121b's lever 2000/30.
+    walker::with_pause(2000, if nf_game::drone::touch_law_live() { 60 } else { 30 }, || walk_office_floor_qworm_keyboard_hatch_at(1))
 }
 
 /// The walk body at `difficulty` (1 Operative = the old warm load's replay parity; 2 Agent rides
@@ -1579,7 +1587,7 @@ fn walk_office_floor_qworm_keyboard_hatch_at(difficulty: u32) {
         if std::env::var_os("NF_REC_0A_WRITE").is_some() {
             rec.finish().expect("the replay write");
         } else {
-            let committed = nf_view::replay::Replay::load(REC_0A_PATH).expect("the committed Operative recording");
+            let committed = nf_view::replay::Replay::load(rec_0a_path()).expect("the committed Operative recording");
             assert_eq!(committed.ticks.len(), rec.replay.ticks.len(), "the walk's tick count matches the committed recording");
             let first = committed.ticks.iter().zip(rec.replay.ticks.iter()).position(|(a, b)| a != b);
             assert!(first.is_none(), "the walk's inputs differ from the committed recording at tick {:?} (re-record with NF_REC_0A_WRITE=1 after a deliberate route change)", first);
@@ -2141,7 +2149,7 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
 fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
     // 10-value sweep on the joined tree: 2000/30 and 4000/90 complete d1, d2 and d3].
-    walker::with_pause(2000, 30, || {
+    walker::with_pause(2000, if nf_game::drone::touch_law_live() { 60 } else { 30 }, || {
         REC_0A.with(|c| c.set(true));
         walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
         REC_0A.with(|c| c.set(false));
@@ -2311,7 +2319,7 @@ fn probe_laser_web_positions() {
 fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
     // 10-value sweep on the joined tree: 2000/30 and 4000/90 complete d1, d2 and d3].
-    walker::with_pause(2000, 30, || {
+    walker::with_pause(2000, if nf_game::drone::touch_law_live() { 60 } else { 30 }, || {
         walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(2))
     })
 }
@@ -2332,7 +2340,7 @@ fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
 fn walk_office_floor_qworm_keyboard_hatch_real_damage_00agent() {
     // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
     // 10-value sweep on the joined tree: 2000/30 and 4000/90 complete d1, d2 and d3].
-    walker::with_pause(2000, 30, || {
+    walker::with_pause(2000, if nf_game::drone::touch_law_live() { 60 } else { 30 }, || {
         walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(3))
     })
 }

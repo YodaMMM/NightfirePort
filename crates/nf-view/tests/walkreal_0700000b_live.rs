@@ -39,6 +39,12 @@ mod walker;
 use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
+/// The committed Operative recording for the live trigger contact: `_law` is the walk under the
+/// game's own contact (`drone::TOUCH_LAW_LIVE`); the plain file is the stand-in box's.
+fn rec_0b_path() -> &'static str {
+    if nf_game::drone::touch_law_live() { concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000b_operative_law.bin") }
+    else { concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000b_operative.bin") }
+}
 fn env_u32(name: &str, default: u32) -> u32 { std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default) }
 
 fn load_warm() -> Walker {
@@ -1866,7 +1872,7 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage() {
         // tests/replays/ for replay_parity_0700000b.rs (the headless replay check) and the
         // app's --replay run (no --difficulty: the walk's carry-free load is the app's default load).
         let mut rec = nf_view::replay::Recorder::start(&w.scene,
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000b_operative.bin"),
+            rec_0b_path(),
             "0700000b.bin", None, false,
             { let s = w.scene.sim.as_ref().unwrap(); Some(nf_view::replay::ReplayOptions {
                 auto_aim: s.auto_aim, auto_switch: s.drones.auto_switch,
@@ -1883,7 +1889,7 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage() {
         if std::env::var_os("NF_REC_0B_WRITE").is_some() {
             rec.finish().expect("the replay write");
         } else {
-            let committed = nf_view::replay::Replay::load(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/replays/0700000b_operative.bin"))
+            let committed = nf_view::replay::Replay::load(rec_0b_path())
                 .expect("the committed Operative recording");
             assert_eq!(committed.ticks.len(), rec.replay.ticks.len(), "the walk's tick count matches the committed recording");
             let first = committed.ticks.iter().zip(rec.replay.ticks.iter()).position(|(a, b)| a != b);

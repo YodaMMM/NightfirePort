@@ -399,12 +399,18 @@ fn the_vent_route_reaches_the_storeroom() {
     for to in [[-0.5, 23.3], [-0.5, 19.5], [8.0, 19.5], [9.3, 19.6]] { walk(&mut scene, to); }
     assert!(!scene.sim.as_ref().unwrap().drones.channels.on(0x5a), "sister: the storeroom plate is still unfired");
     scene.sim.as_mut().unwrap().bond.pitch = -0.95;
+    assert!(!scene.sim.as_ref().unwrap().drones.sound_triggers.playing(331), "sister: sound 331 silent before the fall [D #286]");
     press_e(&mut scene);
-    tick(&mut scene, 200, Default::default(), false, false);
+    let mut s331 = false;
+    for _ in 0..200 {
+        tick(&mut scene, 1, Default::default(), false, false);
+        if scene.sim.as_ref().unwrap().drones.sound_triggers.playing(331) { s331 = true; }
+    }
     {
         let sim = scene.sim.as_ref().unwrap();
         assert!(sim.bond.pos[1] < 48.5, "Bond drops into the storeroom, got {:?}", sim.bond.pos);
         assert!(sim.drones.channels.on(0x66), "the fall crosses the Bond-moment plate #235 [D]");
+        assert!(s331, "the plate's ch 0x66 plays sound 331 on the fall [D #286; M SoundTrigger_Update 0x1b2790]");
     }
     scene.sim.as_mut().unwrap().bond.pitch = 0.0;
     for to in [[10.5, 19.6], [12.7, 19.6]] { walk(&mut scene, to); }
@@ -465,15 +471,10 @@ fn sound_triggers_created_and_played_per_the_disc_gate() {
     }
     assert!(scene.sim.as_ref().unwrap().drones.sound_triggers.playing(632),
         "the spawn touch's ch 0x7E plays sound 632 [D #279; M 0x1b2790]");
-    // The Bond-Moment plate #235 (out 0x66) at (9.36, 49.78, 19.60) [D].
-    scene.sim.as_mut().unwrap().bond.pos = [9.36, 49.3, 19.60];
-    scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
-    let mut fired = false;
-    for _ in 0..40 {
-        scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
-        if scene.sim.as_ref().unwrap().drones.sound_triggers.playing(331) { fired = true; break; }
-    }
-    assert!(fired, "the plate's ch 0x66 plays sound 331 [D #286; M 0x1b2790]");
+    // #286 on the Bond-Moment plate's ch 0x66: the plate #235 hangs at y 49.78 in the
+    // storeroom's vent drop, 0.8 over the standing walk HITTEST's reach [D #235]; the real path
+    // is the vent fall, and `the_vent_route_reaches_the_storeroom` pins sound 331 on it.
+    assert!(!scene.sim.as_ref().unwrap().drones.sound_triggers.playing(331), "sister: sound 331 silent before the vent fall [D #286]");
 }
 
 /// The hint marker (0x33 #288 "HintMsg", param 0 = label 0x1000291 [D]) creates with the disc's

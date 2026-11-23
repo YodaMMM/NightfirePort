@@ -186,8 +186,23 @@ fn files_parachute_and_mission_complete() {
     // moments) before the walkthrough teleports between rooms.
     tick(&mut scene, 10);
     assert!(scene.sim.as_ref().unwrap().drones.channels.on(0x4b), "objective 6 fires on arrival");
-    // Objective 8: the Secure Terminal Room plate #163.
-    step_at(&mut scene, [-1.0, 47.5, -5.5], 0.0, false);
+    // Objective 8: the Secure Terminal Room plate #163, walked into from just inside the room's
+    // door (the plate's raw quads meet Bond's walk HITTEST on the walk, not a stand dropped
+    // inside the plate's box).
+    step_at(&mut scene, [-0.9, 47.8, -3.3], 0.0, false);
+    assert!(!scene.sim.as_ref().unwrap().drones.channels.on(0x4d), "sister: the stand by the door is off the plate [D #163]");
+    tick(&mut scene, 10);
+    // The room's door answers E on the way (walkreal's walk_to presses it the same way).
+    for t in 0..900u32 {
+        let sim = scene.sim.as_mut().unwrap();
+        if sim.drones.channels.on(0x4d) { break; }
+        let p = sim.bond.pos;
+        let (dx, dz) = (-1.0 - p[0], -5.5 - p[2]);
+        if (dx * dx + dz * dz).sqrt() < 0.4 { break; }
+        sim.bond.yaw = dx.atan2(dz);
+        sim.step_bond(nf_game::player::Input { forward: 1.0, ..Default::default() }, false, false, t % 20 == 0);
+    }
+    eprintln!("[0b] terminal walk ends at {:?}", scene.sim.as_ref().unwrap().bond.pos);
     tick(&mut scene, 5);
     assert!(scene.sim.as_ref().unwrap().drones.channels.on(0x4d), "the terminal-room plate completes objective 8");
     // Objective 9: the files channel (docs/levels/0700000b.md: the writer is the level's open
