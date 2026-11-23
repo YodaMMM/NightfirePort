@@ -2267,32 +2267,19 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         w.tick(aim08, false);
     }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, ROCKET, "the switch to the rocket launcher never landed");
-    // retune-nb-08-24: the DRAW settle. The switch loop breaks the tick the weapon FIELD
-    // flips, but the draw animation keeps running and a fire press under it is spent on the
-    // view-state gate [M Player_WeaponFiring 0x1a5460 — tick_fire's own `drawing` guard,
-    // walker.rs]. Measured [L this branch's runs]: the switch broke at f27454, the dive-stand
-    // stood Bond at f27456, the loop opened with the draw still playing, and the fight-entry
-    // dive's closing window (EVERY gate true at t10 — line_ok/slit/eye/lane/cast/fore/
-    // closing/cap/band, yaw_err 0.005 [L the [08 gates] t10 dump]) fell INSIDE the draw — the
-    // trigger press did nothing, the window closed by t30, and the fight stayed at zero
-    // launches. A player shoulders the launcher and lets the draw finish before he hunts the
-    // window. Bond stays on his spot (turn/look only), so the machine's cone/LOS reads and
-    // the deal are untouched. D3-GATED: the sisters' switch loop keeps its shape.
+    // retune-nb-08-24: the DRAW-settle hypothesis was TRIED and DISPROVEN on its own real
+    // run. The hypothesis: the switch loop breaks the tick the weapon FIELD flips, the draw
+    // animation keeps running, and a fire press under it is spent on the view-state gate
+    // [M Player_WeaponFiring 0x1a5460 — tick_fire's own `drawing` guard, walker.rs] — so the
+    // loop should hold fire until switch_state == 0. Measured [L this branch's run, the
+    // [08 draw] dump below]: the switch broke at f27454, the dive-stand stood Bond at
+    // f27456, and when the fight loop opened at f27490 the draw had ALREADY finished
+    // (switch_state 0, 36 ticks after the field flip) — the fight-entry dive's t10-t40
+    // window is NOT inside the draw, the round-23 zero-launch entry had another binder, and
+    // the settle loop would have added ZERO input ticks. The loop is therefore NOT shipped:
+    // the eprintln stays as the evidence line (no sim tick — byte-exact), and the next
+    // entry binder is the launch-band geometry (the dive-window lever below), not the draw.
     if difficulty >= 3 {
-        for _ in 0..120 {
-            if w.scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; }
-            let sim = w.scene.sim.as_ref().unwrap();
-            let cp2 = sim.drones.copters[ci].pos();
-            let head = sim.bond.head();
-            let to = [cp2[0] - head[0], cp2[1] - head[1], cp2[2] - head[2]];
-            let l2 = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(0.01);
-            w.tick(Input {
-                turn: walker::wrap_pi(to[0].atan2(to[2]) - sim.bond.yaw).clamp(-0.08, 0.08),
-                look: ((to[1] / l2).asin() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch).clamp(-0.05, 0.05),
-                aiming: true,
-                ..Default::default()
-            }, false);
-        }
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[08 draw] switch_state {} f{} bond {:?} copter {:?} — the loop opens with the launcher shouldered",
             sim.gun.switch_state, sim.drones.frame, sim.bond.pos, sim.drones.copters[ci].pos());
@@ -3122,13 +3109,10 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // of the band's extent, clear air — and the measured proof is the dive t49 launch that
         // LANDED −101.0 through exactly this dive shape on the round-11/13 trees [L the
         // ledger]. A CLOSING pass with the DIRECT lane already clear (machine_lane_clear,
-        // the live-position cast) therefore skips the extrapolated cast: the chase converges
-        // on a machine that is coming to it, the lane the round actually flies starts as the
-        // verified direct lane. The receding class keeps the full forecast (the t227
-        // self-blast's chase arced BEHIND a receding machine into the band — the straight
-        // cast is the honest model there). The arm lives in `ready`'s fore-conjunction below
-        // (dive_window is defined there); the definition order here keeps the forecast gate
-        // self-contained. D3-GATED: the sisters' forecast is untouched.
+        // the live-position cast) therefore skips the extrapolated cast — that arm was TRIED
+        // on the round-24 run and REVERTED with the whole launch package (the depth verdict
+        // below); the definitions stay for the [08 gates] dump. D3-GATED: the sisters'
+        // forecast is untouched.
         // real-health-00agent-08-bleed-5 (d3): the DISTANCE gate relaxes to the sisters' 10 u — the
         // ledger's lever (2) "one gate's relaxation". The measured d3 roll launches once per ~6500
         // ticks at l >= 16 (death t34720, one rocket landed 100.7 [L update-3]; the machine's
@@ -3187,7 +3171,9 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 })
         };
         let loose08 = difficulty >= 3;
-        // retune-nb-08-24: the DIVE-WINDOW geometric test — the launch line's crossing of the
+        // retune-nb-08-24: the DIVE-WINDOW geometric test — TRIED on the round-24 run, REVERTED
+        // with the whole launch package (the verdict at `ready` below); the definition stays
+        // for the [08 gates] dump (band_x / dive_win). The launch line's crossing of the
         // west band's x-plane must miss the band's z extent. The measured wall: the eye rays
         // stop at x ≈ 110.4, z −176.6..−182.2 [L the measured stops in the fight comment]; a
         // launch line that crosses x 110.4 INSIDE that z range is the t227 self-blast class
@@ -3212,9 +3198,25 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             }
         };
         let dive_window = lane_band_clear && cp[1] <= 16.0 && l <= 50.0;
+        // retune-nb-08-24 VERDICT (the package: the dive-window launch-band arms + the
+        // closing-dive forecast skip + the closing aim relax 0.20, all judged on ONE real
+        // run): the launch FIRED at fight t18 (d 42.8 — the dive geometry admitted what the
+        // l <= 20 cap refuses) and LANDED 100.4 at t211 (hp 598 -> 497.6, the first Hind
+        // landing since rounds 11/13 [L the [08 rocket] t18/t211 lines]) — but the machine's
+        // AGGRO response re-rolled the fight: a w62 salvo round crossed the west band's wall
+        // gap and detonated 0.59 u off Bond's dodge line at fight t881 — the dodge was live
+        // (dh 24) and produced miss 0.59, inside the blast radius — the -13.00/-8.00 rows
+        // into health 21 killed Bond at t28369 total, 1240 ticks SHALLOWER than the shipped
+        // t29609 (the crouched zero-launch stalemate, 8300 fight ticks, whose wall-band
+        // detonation pairs pay -2.00 x2). The stalemate's shield IS the machine's distance:
+        // its w62 rounds detonate on the band and pay the -2.00 residue; the landing draws
+        // the machine through the gap. The package is DEAD by the depth criterion; every
+        // arm below is restored to the round-23 shape. The definitions above stay for the
+        // dump. NEXT: the launch must be paired with an AGGRO ANSWER before it fires —
+        // the ignore-message ledger holds the round-25 levers.
         let ready = rocket.is_none() && sim.missile_cam.is_none() && dodge_hold == 0
-            && yaw_err.abs() < if difficulty >= 3 { if machine_closing { 0.20 } else { 0.10 } } else { 0.25 }
-            && pitch_err.abs() < if difficulty >= 3 { if machine_closing { 0.20 } else { 0.10 } } else { 0.25 }
+            && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
+            && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && l >= 10.0 && slit_clear && sphere_lane_clear && (loose08 || (corridor_clear
             && effective_corridor_clear)) && eye_sees && machine_lane_clear
             // retune-nb-08-23 (the merged-tree killer, judged on its own real run): the 00 Agent
@@ -3228,18 +3230,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // to that band (l <= 20) so a far bearing is held for a low pass instead of burning
             // the scarce rounds (ammo type 0xe caps at 4) on a wall. D3-GATED: the sisters'
             // l >= 10.0 is unchanged.
-            && (difficulty < 3 || l <= 20.0
-                // retune-nb-08-24: the DIVE-WINDOW arm — the geometric class test above. The
-                // shipped cap's self-blast evidence is the in-extent crossing (the t227); the
-                // out-of-extent dive windows are the measured landing class. D3-GATED.
-                || dive_window)
-            && (loose08 || machine_lane_fore_clear
-                // retune-nb-08-24: the closing-dive arm of the forecast gate (the comment at
-                // machine_lane_fore_clear above): a CLOSING pass with the DIRECT lane verified
-                // (machine_lane_clear already required above) and the dive-window geometry true
-                // skips the extrapolated cast — the lane the round actually flies starts as the
-                // verified direct lane. D3-GATED.
-                || (machine_closing && machine_lane_clear && dive_window))
+            && (difficulty < 3 || l <= 20.0)
+            && (loose08 || machine_lane_fore_clear)
             // 00 Agent: no launch while the Hind is SOUTH-WEST of the car (x < 105, z < -165).
             // A held-health map of the whole fight [L the analysis run: ten launches] showed
             // every launch at the machine there - (83.4, -190.0), (91.2, -210.2), (85.2,
@@ -3291,12 +3283,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // wait for the low band the landing geometry was proven in (the round-4 runs: y 12.8-13.7
         // passes, 101.0 landings [L]) — the circuit recurs it on the ~700-tick loop [L the
         // ledger's flight logs]. D3-GATED: the sisters keep l >= 10.0 with no cp[1] gate.
-        && (difficulty < 3 || cp[1] <= 13.7
-            // retune-nb-08-24: the DIVE-WINDOW arm — the dive's approach runs y 15.1 -> 12.8
-            // (the [08 gates] dumps [L]); y <= 16.0 admits the approach and the shipped 13.7
-            // band keeps every circling pass out (the stalemate's circuit flies y 16.5-29.6
-            // [L the flight samples]). D3-GATED.
-            || dive_window);
+        && (difficulty < 3 || cp[1] <= 13.7);
         // 11-15 (00 Agent): the last rocket. Six rockets leave the machine at 590.9 of 598 and
         // its next pass kills Bond on 7.8 health before any gated window opens; a player with the
         // machine under the crosshair (0.2) fires the finisher. D3-GATED.
@@ -3402,19 +3389,22 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // 0x179a48:44-58]. The weave yields to the dodge drive (its strafe owns the axis) and
         // holds off on a launch tick (the muzzle-cast gates read the pre-strafe stance).
         // D3-GATED: the sisters' timelines byte-exact.
-        if difficulty >= 3 && !dodge_drive && !ready && rocket.is_none() && cp[1] > 16.0 {
-            // retune-nb-08-24: the weave now HOLDS OFF whenever the machine is below y 16.0 —
-            // the dive's approach AND the low band. The round-22 weave's anti-sniper roll
-            // (moving x0.1875) answers the guards' 0x15 grind; on the round-24 deal the fight
-            // rows are ALL volume zaps (world hits — no accuracy roll at all [M the hurt path
-            // 0x194458 applies pain directly]) and the weave's strafe is what saturated the
-            // free-aim cursor through the fight-entry dive's closing window (yaw_err 2.65 at
-            // t50, settled only at t90 [L this branch's [08 gates] dump]) — the whole closing
-            // window burned while the cursor decayed. A player holds still to shoot. The
-            // weave resumes the tick the machine leaves the low window (the shipped pattern's
-            // own phase continues from t % 104 — the stalemate's rows stay byte-identical:
-            // the machine never came below 16.0 after the entry dive on this deal [L the
-            // flight samples]). D3-GATED.
+        // retune-nb-08-24: the weave HOLD-OFF below y 16.0 was TRIED on the round-24 run and
+        // REVERTED with the launch package (the verdict at `ready` above): holding the strafe
+        // during the low passes did not answer the fight's rows (they were the volume zaps,
+        // world hits — no accuracy roll to dodge) and the held stand re-rolled the fight
+        // into the salvo-kill class. The weave returns to the shipped round-23 shape.
+        if difficulty >= 3 && !dodge_drive && !ready && rocket.is_none() {
+            // retune-nb-08-24 (measurement kept from the hold-off lever run): the weave's
+            // strafe saturates the free-aim cursor through the fight-entry dive's closing
+            // window (yaw_err 2.65 at t50, settled only at t90 [L this branch's [08 gates]
+            // dump on the hold-off tree]) — a player who wants the dive window's shot must
+            // hold still to shoot. The HOLD-OFF below y 16.0 itself was TRIED and REVERTED
+            // with the launch package (the verdict at `ready` above): the fight's rows on
+            // that deal were volume zaps (world hits — no accuracy roll to dodge [M the
+            // hurt path 0x194458 applies pain directly]), so the held stand bought no
+            // damage answer and the re-deal landed in the salvo-kill class. The shipped
+            // weave phase (t % 104) continues unchanged. D3-GATED.
             input.strafe = match t % 104 { 0..=45 => 0.5, 46..=51 => 0.0, 52..=97 => -0.5, _ => 0.0 };
         }
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
@@ -4386,6 +4376,37 @@ launch, the ride-free path also skips the chain.
 // close bearing (the flight log's per-tick dist series, not the 30-tick samples); (3) the
 // upstream banks (the boarding chunk's remaining rows: #5 -6.0, #26 -4.0, the pit pair's
 // ledger 12.0 on the round-22 stream vs this deal's own rows).
+// retune-nb-08-24 (2026-11-23, still red — the tree stays at the round-23 shape, the deepest
+// t29609 re-confirmed byte-identical on this round's sandbox [L the run: death t29609
+// (112.95,13.09,-179.32), 53 hits for 77.0 + other 23.0]): TWO hypotheses TRIED, judged on
+// their own real runs. (1) THE DRAW SETTLE — DISPROVEN: the hypothesis was that the switch
+// loop breaks on the weapon-FIELD flip (f27454) and the fight loop opens under the still-
+// playing draw (the view-state gate eats the fire press [M Player_WeaponFiring 0x1a5460]).
+// Measured: the draw FINISHES before the loop opens — switch_state 0 at f27490, 36 ticks
+// after the flip [L the [08 draw] dump]; the settle loop would add ZERO input ticks and the
+// round-23 entry binder is not the draw. (2) THE DIVE-WINDOW LAUNCH PACKAGE (the per-tick
+// dist history `machine_closing`; the dive-window geometry — the launch line's crossing of
+// the west band's x-plane outside z -183..-176, y <= 16.0, l <= 50; the closing-pass
+// forecast-cast skip; the closing aim tolerance 0.20; the weave hold-off below y 16.0) —
+// TRIED on ONE real run and DEAD by the depth criterion: the launch FIRED at fight t18
+// (d 42.8 — the dive geometry admitted what the l <= 20 cap refuses) and LANDED 100.4 at
+// t211 (hp 598 -> 497.6, the first Hind landing since rounds 11/13 [L the [08 rocket]
+// t18/t211 lines]) — but the landing RE-ROLLED the fight into the AGGRO class: a w62 salvo
+// round crossed the west band's wall gap and detonated 0.59 u off Bond's dodge line at
+// fight t881 (the dodge was live, dh 24, and its side step produced miss 0.59 — inside the
+// blast radius), the -13.00/-8.00 rows into health 21 killed Bond at t28369 total, 1240
+// ticks SHALLOWER than the shipped t29609 [L the run]. THE LESSON: the stalemate's shield
+// IS the machine's distance — its w62 rounds detonate on the west band and pay the -2.00
+// x2 residue; the landing draws the machine through the gap. NEXT LEVERS (priority for
+// round 25): (1) THE AGGRO ANSWER — the launch lever must ship WITH a salvo answer: the
+// through-the-gap round needs a dodge miss >= ~6 (the wall-band detonations' own -2.00 x2
+// class) instead of 0.59 — a bigger/earlier side step on the w62 read, or hold the launch
+// until the machine sits on the band's FAR side so its own salvos keep hitting the band;
+// (2) the armour entry (08-23 item (3), untried): fight entry armour 20.0 on this deal (the
+// ledge pickup landed 32 -> 50 pre-boarding, the boarding pair drained 30) — the salvo rows
+// met HEALTH 21 because the fight's zaps had drained the 20; with armour 50 the blast meets
+// armour; (3) the salvo close band (08-23 item (1), now measured sharper: the through-the-
+// gap round at miss 0.59).
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
