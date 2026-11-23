@@ -1222,6 +1222,64 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // target. The door drain (radius 45, two legs later) mops the re-fed post and #7.
         // skip=false: one round cannot fail-and-continue into anything (the cap exits first).
         drain_the_wave(&mut w, "13: the north-west mezzanine watch", 45.0, 1, 3, 150, true, false, false);
+        // walk-13-op-3 (THE LEDGER'S LEVER, the walk-13-op-2 ignore message's "Next lever"): the
+        // door phase's POOL — a fetch at the north-west end AFTER the watch drain. The lever-4
+        // run's death t6232 was the pool: the door drain's stands fired clip 6 spare 4 then 3+0
+        // at the behind-Bond #6 (zero lands, killed false, out of ammo at +192) and the #11
+        // stands ran clip 0 spare 0 ("out of ammo at +61" twice) — the −3.5 kill landed during
+        // the drain's failed-stand + quiet waits [L the lever-4 run; repro'd byte-identical on
+        // this tree: t6232, #11 out of ammo at +61 twice, the kill −3.5 from #6 at d 28]. The
+        // margin-6 measured-dead blocker is GONE — the alive #4's fire on the fetch (seven −7.0
+        // rounds in 73 ticks, death t4115 [L run 5]) — #4 dies at the west-mid end now (killed
+        // true, health 3.5 after [L the lever-4 run and this tree's run]). The fetch is the
+        // exit fill's own 3-pass + deepest-gun arm (the retune-nb-13-4 machinery) run HERE, at
+        // the north-west end: the there-and-back errand (resupply_home) keeps the leg geometry,
+        // the lane 12-u fetch keeps the walk's own short-fetch law (the pocket drops are the
+        // only rounds inside it — the re-anchor fill's no-fetch east pocket sits ~24 u out, and
+        // the room's pickups sit across the closed door), the pool target is the exit fill's
+        // own 25 (the mouth exchange needs ~10 and the room's answer+fights need the rest).
+        // d3 only — the sisters never enter the block; no damage, health or RNG change.
+        for pass in 0..3u32 {
+            let pool = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let mut total = sim.gun.clip as i32 + sim.gun.spare as i32;
+                let inv = &sim.drones.inventory;
+                for wid in 2..=0x47usize {
+                    if !inv.owned.get(wid).copied().unwrap_or(false) { continue; }
+                    let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, wid);
+                    total += inv.clip.get(slot).copied().unwrap_or(0) as i32;
+                    total += inv.carried.get(sim.weapons.ammo_type(wid)).copied().unwrap_or(0) as i32;
+                }
+                total
+            };
+            if pool >= 25 { break; }
+            eprintln!("[013] 13: the door-pool fetch: pool {pool} < 25, fetching (pass {})", pass + 1);
+            w.dmg.resupplying = true;
+            let got = w.resupply("13: the door-pool fetch");
+            w.dmg.resupplying = false;
+            eprintln!("[013] 13: the door-pool fetch: pass done ({got}) pool now {}",
+                {
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    let mut total = sim.gun.clip as i32 + sim.gun.spare as i32;
+                    let inv = &sim.drones.inventory;
+                    for wid in 2..=0x47usize {
+                        if !inv.owned.get(wid).copied().unwrap_or(false) { continue; }
+                        let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, wid);
+                        total += inv.clip.get(slot).copied().unwrap_or(0) as i32;
+                        total += inv.carried.get(sim.weapons.ammo_type(wid)).copied().unwrap_or(0) as i32;
+                    }
+                    total
+                });
+            if !got { break; }
+        }
+        for k in 0..12u32 {
+            let (wpn, c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.weapon, sim.gun.clip, sim.gun.spare) };
+            if c + s >= 10 { break; }
+            eprintln!("[013] 13: the door-pool arm: cycling ({k}) (weapon {wpn:#x} clip {c} spare {s})");
+            w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+            for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+        }
+        w.reload_full();
     }
     // warm-chain-margin-6 (measured dead, NOT repeated): a deliberate resupply at this leg end
     // took the spawn-pocket drop (clip 4 spare 28 — the right rounds) but stood Bond in the
