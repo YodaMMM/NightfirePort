@@ -2284,34 +2284,6 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         eprintln!("[08 draw] switch_state {} f{} bond {:?} copter {:?} — the loop opens with the launcher shouldered",
             sim.gun.switch_state, sim.drones.frame, sim.bond.pos, sim.drones.copters[ci].pos());
     }
-    // retune-nb-08-25: the DRAW SETTLE, re-shipped with the launch package. The round-24
-    // verdict's disproof ("the draw finishes before the loop opens, the settle adds zero
-    // ticks") does not hold on the round-23-shaped tree: this branch's v2 lever run measured
-    // [08 draw] switch_state 3 at f27455 — the loop opens MID-DRAW, and tick_fire's drawing
-    // guard ("a press under a draw is spent on the view-state gate" [M Player_WeaponFiring
-    // 0x1a5460; walker.rs tick_fire]) ate every fire press of the dive's all-green window
-    // (the [08 gates] t10 row: line_ok/slit/eye_sees/lane/cast/closing/band_x/dive_win ALL
-    // true, cp[1] 15.39 admitted by the dive arm — zero launches in the whole run [L the
-    // v2 log]). The settle holds the aim on the machine and ticks the sim until the draw
-    // ends (switch_state == 0); the round-24 package's own run measured the settled shape
-    // ([08 draw] switch_state 0 f27490, 36 ticks after the flip [L the round-24 report]) —
-    // that IS the settle's work, and its t18 launch rode on it. d3-gated: the sisters
-    // enter the loop mid-draw unchanged (byte-exact).
-    if difficulty >= 3 {
-        let mut settle_ticks = 0u32;
-        while w.scene.sim.as_ref().unwrap().gun.switch_state != 0 && settle_ticks < 200 {
-            let sim = w.scene.sim.as_ref().unwrap();
-            let cp2 = sim.drones.copters[ci].pos();
-            let from2 = sim.bond.head();
-            let to2 = [cp2[0] - from2[0], cp2[1] - from2[1], cp2[2] - from2[2]];
-            let yaw_err2 = walker::wrap_pi(to2[0].atan2(to2[2]) - sim.bond.yaw);
-            w.tick(nf_game::player::Input { turn: yaw_err2.clamp(-0.08, 0.08), ..Default::default() }, false);
-            settle_ticks += 1;
-        }
-        let sim = w.scene.sim.as_ref().unwrap();
-        eprintln!("[08 draw] settled f{} switch_state {} after {settle_ticks} settle ticks — the fight loop opens shouldered-and-ready",
-            sim.drones.frame, sim.gun.switch_state);
-    }
     // retune-nb-08-19 (round 19): STAND FOR THE ARRIVAL-DIVE LAUNCH — the damage-fraction
     // approach, judged on its own real run. The round-18 ride-free shape (crouch through the
     // dive, zero launches) is measured unwinnable: the Hind damage stayed 0.0 of 598 and the
@@ -2420,9 +2392,6 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // (−15.00 at d 0.3, fight t745) after the first salvo was dodged for −2.70 [L the run]. The
     // side latches at the first episode of a salvo and holds until the salvo dies.
     let mut dodge_side = 0.0f32;
-    // retune-nb-08-25: the w62-line pick's forward leg (latched with the side; -1.0 = unset, the
-    // cannon-only fallback keeps the shipped 0.5-press diagonal).
-    let mut dodge_fwd = -1.0f32;
     // real-health-00agent-08-bleed-4 (d3): the ZAP hold — a world hit under Bond's feet (owner
     // past the drone list — the volume law, no blast row) means he is standing IN the terminal's
     // hurt volume; the walk-out holds for 40 ticks against the dodge (run-bleed4-4/6).
@@ -2702,21 +2671,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 if difficulty >= 3 && bu.weapon == 0x61 && rockets < 3 { return false; }
                 let rel = [chest[0] - bu.pos[0], chest[1] - bu.pos[1], chest[2] - bu.pos[2]];
                 let d = (rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]).sqrt();
-                // retune-nb-08-25 (the AGGRO ANSWER, the w62 read): the round-24 kill class — a
-                // w62 round whose line CLEARS the west band (through the wall gap) detonates at
-                // the chest (miss 0.59, -13.00/-8.00 into health 21, death t28369 [L the round-24
-                // run]); a round whose line the band BLOCKS dies on the band for the -2.00 x2
-                // class (the stalemate's shield — the round-24 weave lesson: those rows are world
-                // hits, no accuracy roll to dodge, walking buys nothing). The read: cast the
-                // round's remaining path to the chest — blocked = the band class (no dodge, the
-                // shipped stand), CLEAR = the gap class, dodged FROM SPAWN (the gate band widens
-                // to 60 u so the side step has the whole flight: the strafe+forward diagonal
-                // covers ~0.105-0.135/tick → ~5-6.5 u over a ~50-tick flight, the ledger's miss
-                // >= ~6 target). D3-GATED: the sisters' gate band stays byte-exact.
-                if difficulty >= 3 && bu.weapon == 0x62 {
-                    if !(2.0..60.0).contains(&d) { return false; }
-                    if sim.world.segment_flight(bu.pos, chest, true).is_some() { return false; }
-                } else if !(2.0..30.0).contains(&d) { return false; }
+                if !(2.0..30.0).contains(&d) { return false; }
                 let vm = (bu.dir[0] * bu.dir[0] + bu.dir[1] * bu.dir[1] + bu.dir[2] * bu.dir[2]).sqrt().max(1e-6);
                 let along = (rel[0] * bu.dir[0] + rel[1] * bu.dir[1] + rel[2] * bu.dir[2]) / (d * vm);
                 if along <= 0.0 { return false; }
@@ -2854,18 +2809,11 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 if bu.state == 2 || bu.weapon != 0x62 { continue; }
                 let rel = [b[0] - bu.pos[0], b[1] + 0.6 - bu.pos[1], b[2] - bu.pos[2]];
                 let d = (rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]).sqrt();
-                if d > 60.0 { continue; }
+                if d > 50.0 { continue; }
                 let vm = (bu.dir[0] * bu.dir[0] + bu.dir[1] * bu.dir[1] + bu.dir[2] * bu.dir[2]).sqrt().max(1e-6);
                 let along = (rel[0] * bu.dir[0] + rel[1] * bu.dir[1] + rel[2] * bu.dir[2]) / (d * vm);
                 if along <= 0.0 { continue; }
                 let miss = d * (1.0 - along * along).max(0.0).sqrt();
-                // retune-nb-08-25: the drive reads the same wall-read as the dodge gate above —
-                // only a round with a CLEAR path to the chest drives the walk (the band-bound
-                // class's detonations pay their -2.00 x2 from the stand; the round-24 weave
-                // lesson: world hits, no accuracy roll to dodge [L the verdict]). The d band
-                // widens 50 -> 60 so the drive is live from the spawn tick (the through-the-gap
-                // round must be answered before it crosses the gap, not after). d3-gated.
-                if sim.world.segment_flight(bu.pos, [b[0], b[1] + 0.6, b[2]], true).is_some() { continue; }
                 if miss < 3.0 { live = true; }
                 // retune-nb-08-11 (d3): the drive's close band widens with the dodge gate above
                 // (the same 3.4-miss round: salvo_close false at 2.0 → the drive never strafed
@@ -2952,64 +2900,9 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 // for the pick. The 6-u eye ray picks the open side, keeping the anchor-ward pick
                 // when both read clear; both blocked → the measured pure-strafe fallback.
                 if dodge_side == 0.0 {
-                    // retune-nb-08-25: the pick reads the w62 LINE first — the away-perpendicular
-                    // of the closest CLEAR-path round. The shipped anchor-ward pick strafes
-                    // perpendicular to the VIEW, which moves Bond ALONG the round's line when the
-                    // view bearing differs from the round's travel — the round-24 kill's miss 0.59
-                    // after 24 live dodge ticks [L the run]. The candidate set is the shipped
-                    // diagonal shape (strafe ±1 + forward leg), scored by the miss growth
-                    // (candidate dir · miss_hat, the unit away-perpendicular of the round's line
-                    // at Bond's chest), filtered by the shipped open-ray check (a wedged strafe
-                    // covers 0.01-0.02/tick [L the rim crawl]) and the shipped west guard (a
-                    // west-pointing diagonal is the lever-3 band-corner death class). The
-                    // anchor-ward/open-ray pick below stays for cannon-only episodes (no w62
-                    // live). D3-GATED.
-                    let mut line_dir: Option<[f32; 2]> = None;
-                    let mut best_d = f32::MAX;
-                    let mut best_pos = [0.0f32; 3];
-                    let chest_l = [b[0], b[1] + 0.6, b[2]];
-                    for bu in sim.drones.bullets.iter() {
-                        if bu.state == 2 || bu.weapon != 0x62 { continue; }
-                        let rel = [chest_l[0] - bu.pos[0], chest_l[1] - bu.pos[1], chest_l[2] - bu.pos[2]];
-                        let d = (rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]).sqrt();
-                        if d >= best_d { continue; }
-                        let vm = (bu.dir[0] * bu.dir[0] + bu.dir[1] * bu.dir[1] + bu.dir[2] * bu.dir[2]).sqrt().max(1e-6);
-                        let along = (rel[0] * bu.dir[0] + rel[1] * bu.dir[1] + rel[2] * bu.dir[2]) / (d * vm);
-                        if along <= 0.0 { continue; }
-                        let miss = d * (1.0 - along * along).max(0.0).sqrt();
-                        if miss >= 8.0 { continue; }
-                        if sim.world.segment_flight(bu.pos, chest_l, true).is_some() { continue; }
-                        best_d = d;
-                        best_pos = bu.pos;
-                        line_dir = Some([bu.dir[0] / vm, bu.dir[2] / vm]);
-                    }
                     let diag = |s: f32| [right[0] * s + fwd[0] * 0.5, right[2] * s + fwd[2] * 0.5];
                     let open = |dx: f32, dz: f32| sim.world
                         .segment_flight(eye, [eye[0] + dx * 6.0, eye[1], eye[2] + dz * 6.0], true).is_none();
-                    if let Some([lx, lz]) = line_dir {
-                        // the away-perpendicular at the chest (horizontal): rel_perp = rel_h -
-                        // dir_h * (rel_h · dir_h), normalized; ON-line (|rel_perp| ~ 0) takes the
-                        // line's own perpendicular.
-                        let relh = [chest_l[0] - best_pos[0], chest_l[2] - best_pos[2]];
-                        let proj = relh[0] * lx + relh[1] * lz;
-                        let mut mh = [relh[0] - lx * proj, relh[1] - lz * proj];
-                        let mhl = (mh[0] * mh[0] + mh[1] * mh[1]).sqrt();
-                        if mhl < 0.05 { mh = [-lz, lx]; } else { mh = [mh[0] / mhl, mh[1] / mhl]; }
-                        let mut best_score = f32::MIN;
-                        let mut best_sf = (input.strafe, 0.5f32);
-                        for s in [1.0f32, -1.0f32] {
-                            for f0 in [0.5f32, 1.0f32] {
-                                // the west guard per candidate: the diagonal must not walk west.
-                                let f = if right[0] * s + fwd[0] * f0 < 0.0 { 0.0 } else { f0 };
-                                let (dx, dz) = (right[0] * s + fwd[0] * f, right[2] * s + fwd[2] * f);
-                                if !open(dx, dz) { continue; }
-                                let score = dx * mh[0] + dz * mh[1];
-                                if score > best_score { best_score = score; best_sf = (s, f); }
-                            }
-                        }
-                        dodge_side = best_sf.0;
-                        dodge_fwd = best_sf.1;
-                    } else {
                     let (dpx, dpz) = (diag(1.0)[0], diag(1.0)[1]);
                     let (dmx, dmz) = (diag(-1.0)[0], diag(-1.0)[1]);
                     let (op, om) = (open(dpx, dpz), open(dmx, dmz));
@@ -3023,12 +2916,9 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                     // ground — the round-13 lever-3's west walk died t29352). The clearance
                     // order above keeps the anchor-ward pick whenever the east side is not
                     // strictly the east-pointing one; both blocked stays the shipped fallback.
-                    // retune-nb-08-25: the pin rides the SHIPPED pick only (the w62-line pick
-                    // above scores its own candidates with the same west guard).
                     if op && om {
                         if dpx > 0.05 && dmx <= 0.05 { dodge_side = 1.0; }
                         else if dmx > 0.05 && dpx <= 0.05 { dodge_side = -1.0; }
-                    }
                     }
                 }
                 input.aiming = false;
@@ -3036,11 +2926,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 // retune-nb-08-14 lever 2: the chosen diagonal must not WALK west — a
                 // west-pointing diagonal is the lever-3 band-corner death class; strafe-only
                 // there (the standing strafe alone is ~0.075/tick [M Player_Move target]).
-                // retune-nb-08-25: the w62-line pick sets its own forward leg (the candidate's
-                // west guard already applied, dodge_fwd >= 0 marks it set); the cannon-only
-                // fallback keeps the shipped 0.5.
-                input.forward = if dodge_fwd >= 0.0
-                    { dodge_fwd } else if right[0] * dodge_side + fwd[0] * 0.5 < 0.0 { 0.0 } else { 0.5 };
+                input.forward = if right[0] * dodge_side + fwd[0] * 0.5 < 0.0 { 0.0 } else { 0.5 };
             }
             } else {
                 input.strafe = dodge_sign;
@@ -3048,7 +2934,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             }
         }
         // The latch releases when the salvo dies (the next salvo re-picks from its own spot).
-        if difficulty >= 3 && dodge_side != 0.0 && !salvo_live && dodge_hold == 0 { dodge_side = 0.0; dodge_fwd = -1.0; }
+        if difficulty >= 3 && dodge_side != 0.0 && !salvo_live && dodge_hold == 0 { dodge_side = 0.0; }
         // retune-nb-08-7: the SALVO DIAGNOSTIC — every live machine bullet each 10 ticks during
         // the rim fight (d3-gated, eprintln only, no sim state touched: the walk's timeline stays
         // byte-exact). Fields: the dodge gate's own d / miss for Bond's chest, the bullet's speed
@@ -3328,9 +3214,40 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // arm below is restored to the round-23 shape. The definitions above stay for the
         // dump. NEXT: the launch must be paired with an AGGRO ANSWER before it fires —
         // the ignore-message ledger holds the round-25 levers.
+        // retune-nb-08-25 VERDICT (the package re-armed WITH the aggro answer, judged on six
+        // real runs): the DRAW SETTLE re-shipped (the round-24 disproof does not hold on the
+        // round-23-shaped tree — the [08 draw] line measured switch_state 3 at f27455: the loop
+        // opens MID-DRAW and tick_fire's drawing guard [M Player_WeaponFiring 0x1a5460;
+        // walker.rs tick_fire] ate the dive's all-green t10-t35 window; the settle reproduced
+        // the round-24 shape exactly: settled f27490, launch t18 d 42.8, LANDED 100.4 at t211,
+        // hp 598 -> 497.6 [L the v3-v6 runs]) — and the AGGRO ANSWER (the w62 drive: detection
+        // from the spawn tick, the latch pick scored by the away-perpendicular of the round's
+        // line with knee-ray open checks and a wedge re-pick, the drive bands miss < 6.0) took
+        // the kill rows from -13.00/-8.00 AT the chest (v3: the drive never ran, Bond frozen)
+        // to -10.85/-3.23/-6.92 spread over three salvos at miss ~1.0 (v5/v6: the standing
+        // strafe grinds ~0.03/tick against the plate lip — the anchor pocket is ~0.5-0.8 u
+        // across and cannot build the ledger's miss >= ~6). DEATH t28821 (v5/v6), 788 ticks
+        // SHALLOWER than the shipped t29609 — DEAD by the depth criterion again. The wall-read
+        // cast variant (v3: skip rounds whose line the world blocks) is DEAD ON ARRIVAL: the
+        // segment_flight cast returned a block the round's own flight refutes, and it silently
+        // disarmed the drive (v3 death t28369, Bond frozen at (113.08,13.57,-179.01) through
+        // the t830-870 approach [L the v3 log]). The wedge re-pick with a per-salvo wedged-side
+        // exclusion changed nothing (v6 byte-identical to v5 — the grind is under the 0.15-u
+        // window threshold). Every arm is restored to the round-23 shape again; the round-25
+        // measurements live in the comments and the report. NEXT LEVERS (priority): (1) the
+        // ARMOUR ENTRY (the 08-23 item (2), still untried — the fight's zaps drained the
+        // entry's 20.0 before the salvos landed; the salvos then met HEALTH 21: -13/-8 = death;
+        // with armour the rows chew armour first — the boarding drain (30.0) is the gate);
+        // (2) the SALVO SOURCE — the aggro salvos fly from the machine's CLOSE passes through
+        // the gap; a live check (gdbwatch on the machine's attack-state open vs its route path
+        // index) would pin whether the landing's damage fraction re-rolled the route into the
+        // close-salvo class [M Copter_Move 0x17d628:63-113] — if yes, a launch delivered from
+        // a FAR machine position (the band between) keeps the stalemate's shield; (3) the
+        // pocket dodge is measured DEAD at this anchor (the 0.5-0.8 u pocket grinds every
+        // bearing; six runs).
         let ready = rocket.is_none() && sim.missile_cam.is_none() && dodge_hold == 0
-            && yaw_err.abs() < if difficulty >= 3 { if machine_closing { 0.20 } else { 0.10 } } else { 0.25 }
-            && pitch_err.abs() < if difficulty >= 3 { if machine_closing { 0.20 } else { 0.10 } } else { 0.25 }
+            && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
+            && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && l >= 10.0 && slit_clear && sphere_lane_clear && (loose08 || (corridor_clear
             && effective_corridor_clear)) && eye_sees && machine_lane_clear
             // retune-nb-08-23 (the merged-tree killer, judged on its own real run): the 00 Agent
@@ -3344,24 +3261,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // to that band (l <= 20) so a far bearing is held for a low pass instead of burning
             // the scarce rounds (ammo type 0xe caps at 4) on a wall. D3-GATED: the sisters'
             // l >= 10.0 is unchanged.
-            // retune-nb-08-25: the dive-window band arm RE-ARMED with the round-24 package plus
-            // the AGGRO ANSWER (the w62 read + the line pick): the round-24 run measured the
-            // launch FIRED at fight t18 (d 42.8 — the dive geometry admits what the l <= 20 cap
-            // refuses) and LANDED 100.4 at t211 (hp 598 -> 497.6, the first Hind landing since
-            // rounds 11/13) — the package died to the AGGRO re-roll (the through-the-gap w62 at
-            // miss 0.59, death t28369), which the w62 read now answers from the spawn tick.
-            // d3-only: the sisters' l >= 10.0 is unchanged. The dive-window geometry is the
-            // admission itself (the band crossing + y <= 16 + l <= 50): the receding-far class
-            // (the t180-class tick, the crossing INSIDE the extent) is refused by band_x, and
-            // the machine_closing trend stays on the forecast skip and the aim relax only
-            // (the settled dive's launch tick reads a sub-0.4 10-tick trend [L the v1/v2 [08
-            // gates] rows t40-t60]).
-            && (difficulty < 3 || l <= 20.0 || dive_window)
-            // retune-nb-08-25: the closing-dive forecast skip RE-ARMED (the round-24 package):
-            // a CLOSING pass with the DIRECT lane verified skips the extrapolated cast — the
-            // straight-line-to-extrapolated cast mis-models a chase behind a laterally-diving
-            // machine [M Bullet_update 0x12e7b0:177-244 steers at the live position]. d3-only.
-            && (difficulty < 3 || (machine_closing && machine_lane_clear) || machine_lane_fore_clear)
+            && (difficulty < 3 || l <= 20.0)
+            && (loose08 || machine_lane_fore_clear)
             // 00 Agent: no launch while the Hind is SOUTH-WEST of the car (x < 105, z < -165).
             // A held-health map of the whole fight [L the analysis run: ten launches] showed
             // every launch at the machine there - (83.4, -190.0), (91.2, -210.2), (85.2,
@@ -3413,13 +3314,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // wait for the low band the landing geometry was proven in (the round-4 runs: y 12.8-13.7
         // passes, 101.0 landings [L]) — the circuit recurs it on the ~700-tick loop [L the
         // ledger's flight logs]. D3-GATED: the sisters keep l >= 10.0 with no cp[1] gate.
-        && (difficulty < 3 || cp[1] <= 13.7
-            // retune-nb-08-25: the dive window's own y band (<= 16.0) is the admission —
-            // the round-24 launch fired at fight t18 at cp[1] 15.4 (the dive passes LOW+WEST at
-            // y 15-16 [L the [08 gates] t10-140 dump on this branch's v1 run: every other gate
-            // TRUE, this gate alone refused]) — the 13.7 band stays for the non-dive passes.
-            // d3-only: the sisters' gate is unchanged.
-            || dive_window);
+        && (difficulty < 3 || cp[1] <= 13.7);
         // 11-15 (00 Agent): the last rocket. Six rockets leave the machine at 590.9 of 598 and
         // its next pass kills Bond on 7.8 health before any gated window opens; a player with the
         // machine under the crosshair (0.2) fires the finisher. D3-GATED.
@@ -3530,13 +3425,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // during the low passes did not answer the fight's rows (they were the volume zaps,
         // world hits — no accuracy roll to dodge) and the held stand re-rolled the fight
         // into the salvo-kill class. The weave returns to the shipped round-23 shape.
-        // retune-nb-08-25: the hold-off RE-ARMED with the launch package — the round-24 verdict
-        // attributes the package's death to the AGGRO re-roll, not to the held stand, and the
-        // [08 gates] dump on the hold-off tree measured the weave saturating the free-aim cursor
-        // through the closing window (yaw_err 2.65 at t50, settled only at t90), so the dive-window
-        // shot needs the stand. d3-only (the block itself is d3-gated; cp[1] >= 16.0 holds the
-        // weave only during the machine's LOW passes).
-        if difficulty >= 3 && !dodge_drive && !ready && rocket.is_none() && cp[1] >= 16.0 {
+        if difficulty >= 3 && !dodge_drive && !ready && rocket.is_none() {
             // retune-nb-08-24 (measurement kept from the hold-off lever run): the weave's
             // strafe saturates the free-aim cursor through the fight-entry dive's closing
             // window (yaw_err 2.65 at t50, settled only at t90 [L this branch's [08 gates]
@@ -4549,6 +4438,32 @@ launch, the ride-free path also skips the chain.
 // met HEALTH 21 because the fight's zaps had drained the 20; with armour 50 the blast meets
 // armour; (3) the salvo close band (08-23 item (1), now measured sharper: the through-the-
 // gap round at miss 0.59).
+// retune-nb-08-25 (2026-11-23, still red — the tree stays at the round-23 shape again, t29609
+// re-confirmed below): the round-24 package RE-ARMED WITH the aggro answer and judged on six
+// real runs. THE DRAW SETTLE re-shipped — the round-24 disproof does not hold: the [08 draw]
+// line measured switch_state 3 at f27455 (the loop opens MID-DRAW; tick_fire's drawing guard
+// [M Player_WeaponFiring 0x1a5460; walker.rs tick_fire] ate the dive's all-green window); with
+// the settle the round-24 launch reproduced EXACTLY (settled f27490, t18 d 42.8, LANDED 100.4
+// at t211, hp 598 -> 497.6 [L the v3-v6 logs]). THE AGGRO ANSWER (the w62 drive: detection
+// from the spawn tick, the drive bands miss < 6.0, the latch pick scored by the away-
+// perpendicular of the round's line, knee-ray open checks, the wedge re-pick with a per-salvo
+// wedged-side exclusion) took the kill from the single -13.00/-8.00 pair (v3, the drive
+// disarmed) to -10.85/-3.23/-6.92 spread over three salvos at miss ~1.0 (v5/v6) — death
+// t28821, 788 ticks SHALLOWER than the shipped t29609. THE MEASUREMENTS THAT SETTLE IT:
+// (a) the anchor pocket is ~0.5-0.8 u across and the standing strafe grinds ~0.03/tick against
+// the plate lip — the dodge CANNOT build the miss >= ~6 the ledger asked for (six runs);
+// (b) the wall-read cast variant silently DISARMS the drive (the segment_flight cast from the
+// round to the chest returned a block the round's own flight refutes — v3: Bond frozen,
+// t28369 [L the log]); (c) the deterministic re-pick without a wedged-side exclusion loops
+// back into the same wedge (v5), and with the exclusion it changes nothing (v6 byte-identical
+// to v5 — the grind is under the 0.15-u window threshold). NEXT LEVERS (priority): (1) the
+// ARMOUR ENTRY (the fight's zaps drained the entry's 20.0 before the salvos landed; the
+// salvos met HEALTH 21 — the boarding drain 30.0 is the gate; kill the boarding pair for
+// less than 18.0 armour and the salvo rows meet armour); (2) the SALVO SOURCE live check —
+// gdbwatch the machine's attack-state open vs its route-path index through a landing: if the
+// landing's damage fraction re-rolls the route into the close-salvo class [M Copter_Move
+// 0x17d628:63-113], the launch must be delivered from a FAR machine position so the band
+// stays between (the stalemate's own shield); (3) the pocket dodge DEAD at this anchor.
 fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // GLASS-SIGHT (guard-glass-finish): the Agent sister's sight rule — the d2 test's comment.
     // UNSEEN FIGHTS (level-08-rocket-self-blast): the lower level east room's second burst pair
