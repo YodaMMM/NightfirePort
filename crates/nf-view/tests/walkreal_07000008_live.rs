@@ -4024,7 +4024,48 @@ fight-order change (the most-hits-first pick over the last-hit pick) is the only
 shape — #13's 4 rows landed while he was fought third; (3) the reply-cadence live check
 (carried rounds 11-16) now DECIDES lever (1)'s value: if the w62 chain is provoked by the
 launch, the ride-free path also skips the chain.
-   data, the entry can only rise via the hall (item 1) or the volume (item 2)."]
+   data, the entry can only rise via the hall (item 1) or the volume (item 2).
+   SHIPPED/MEASURED 2026-11-23 round 25 (retune-nb-08-25, still red — the tree stays at the
+   round-23 shape, death t29609 (112.95,13.09,-179.32) re-confirmed byte-identical, the whole
+   binary 6/0/1 [L the run]): the round-24 package RE-ARMED WITH the aggro answer, judged on
+   six real runs (v1-v6, each through the real input path from the level load). (1) THE DRAW
+   SETTLE RE-SHIPPED — the round-24 disproof does not hold on the round-23-shaped tree: the
+   [08 draw] line measured switch_state 3 at f27455 — the loop opens MID-DRAW and tick_fire's
+   drawing guard [M Player_WeaponFiring 0x1a5460; walker.rs tick_fire] ate every fire press of
+   the dive's all-green t10-t35 window (the v1/v2 runs: the [08 gates] t10 row ALL TRUE with
+   cp[1] 15.39, ZERO launches in the whole run). With the settle (hold aim, tick until
+   switch_state == 0) the round-24 launch reproduced EXACTLY: settled f27490 after 35 settle
+   ticks, launch t18 d 42.8, LANDED 100.4 at t211, hp 598 -> 497.6 [L the v3-v6 runs' [08
+   draw]/[08 rocket] lines]. (2) THE AGGRO ANSWER — TRIED in four shapes, ALL DEAD by the
+   depth criterion: (a) the WALL-READ cast (dodge only rounds whose line the world leaves
+   clear) DISARMED the drive — the segment_flight cast from the round to the chest returned a
+   block the round's own flight refutes (the round detonated AT Bond through the same line),
+   the drive never ran, Bond frozen at (113.08,13.57,-179.01) through the t830-870 approach,
+   the single -13.00/-8.00 pair at miss 0.59, death t28369 [L the v3 log]; (b) the
+   MISS-HAT PICK + the widened drive bands (miss < 6.0, detection from the spawn tick d <= 60)
+   moved the kill to -10.85/-3.23/-6.92 spread over three salvos at miss ~1.0-1.06, death
+   t28717 (v4) [L the log]; (c) + the WEDGE RE-PICK (the deterministic pick loops back into
+   the same wedged bearing) reached t28821 (v5) [L the log]; (d) + the per-salvo WEDGED-SIDE
+   EXCLUSION changed NOTHING (v6 byte-identical to v5 — the grind is under the 0.15-u window
+   threshold). THE MEASUREMENT THAT SETTLES THE CLASS: the anchor pocket is ~0.5-0.8 u across
+   and the standing strafe grinds ~0.03/tick against the plate lip (the round-7 episodes'
+   0.7-2.3 u were the UNWEDGED episodes; the aggro salvos' bearings wedge both sides) — the
+   dodge CANNOT build the miss >= ~6 the ledger asked for at this anchor. THE STALEMATE'S
+   SHIELD IS CONFIRMED THE MACHINE'S DISTANCE (the round-24 lesson, re-measured through six
+   runs). NEXT LEVERS (priority): (1) THE ARMOUR ENTRY (the 08-23 item (2), still untried):
+   the fight's zaps drained the entry's 20.0 armour before the salvos landed and the salvo
+   rows met HEALTH 21 (-13/-8 = death; the v3 run's exact rows) — the boarding pair's drain
+   (30.0) is the gate: kill the boarding pair for less than 18.0 armour (the deck-head arm-up
+   shape, the walkway pair already dies at ZERO cost) and the entry keeps ~32+, the salvo
+   rows meet armour, the stalemate grinds to its deeper death or another landing; (2) THE
+   SALVO SOURCE — a live check for the main agent: gdbwatch the machine's attack-state open
+   (Copter_Update 0x17dbb8 case 1) vs its route-path index (Copter_Move 0x17d628:63-113, the
+   damage-fraction advance) across a landing: if the landing's fraction re-rolls the route
+   into the close-salvo class, the launch must be delivered while the machine sits FAR (the
+   band between — its own salvos then pay the -2.00 x2 residue instead of reaching the
+   chest); (3) the pocket dodge at this anchor is MEASURED DEAD (six runs) — any further
+   dodge lever needs a DIFFERENT anchor (the north-strip variant was measured worse, the
+   round-5 ledger) or a wedge-free bearing the plate lip does not cover."]
 // SHIPPED/MEASURED 2026-11-21 round 18 (retune-nb-08-18, still red — the death moved +724
 // ticks): the branch is origin/master b5278f0d1 + 08-17 merged (the round-17 baseline).
 // LEVER (1) THE PRE-FIGHT CROUCH + THE FIRST-PASS HOLD-OFF — TRIED and SHIPPED (the walk
