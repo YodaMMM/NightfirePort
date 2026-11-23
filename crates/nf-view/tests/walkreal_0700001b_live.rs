@@ -1496,6 +1496,29 @@ fn ray_on_len(sim: &nf_view::scene::Sim, di: usize, probe: f32) -> bool {
         .any(|t| tw.map_or(true, |w| t < w))
 }
 
+/// walk-1b-agent-3 (the shoot-and-scoot): a level shot from the eye point `e` reaches Drake's
+/// boxes — the eye at a box centre's own height (a level view only hits what the eye's plane
+/// spans), the ray entering the box before the world's first solid contact, the same comparison
+/// the bullet pass runs [M 0x1ea398:216-229; `ray_on_len`]. Returns the hit box's centre (the
+/// aim the tap turns onto). The scoot probes this from CANDIDATE eye points, not Bond's own —
+/// the west shelter's sight-cut means the shelter itself never passes.
+fn drake_shot_from(sim: &nf_view::scene::Sim, di: usize, e: [f32; 3]) -> Option<[f32; 3]> {
+    let data = data_of(sim);
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for b in sim.drones.list[di].hit_boxes(&data) {
+        let c = [b.m[3][0], b.m[3][1], b.m[3][2]];
+        if (c[1] - e[1]).abs() > 0.45 { continue; } // the level view's eye plane must span the box
+        let ray = [c[0] - e[0], 0.0, c[2] - e[2]];
+        let Some(t_box) = nf_game::damage::ray_box(e, ray, &b) else { continue };
+        let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(e), e, c);
+        if tw.map_or(true, |wv| t_box < wv) {
+            let dd = dist3(c, e);
+            if best.map_or(true, |(bd, _)| dd < bd) { best = Some((dd, c)); }
+        }
+    }
+    best.map(|(_, c)| c)
+}
+
 /// How many live astronauts within 40 u have a bullet line from their head to the eye point `e`,
 /// and how many float inside 3.5 u of it (the always-hit TooClose band and its doubled damage [M
 /// DoBulletAccuracy 0x179740:113-115; Drone_ModBulletDamage 0x139fac-0x139fc8]).
@@ -1583,6 +1606,16 @@ fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first
     let mut target: Option<(usize, [f32; 3])> = None;
     let mut recharging = false;
     let mut cover = hold;
+    // walk-1b-agent-3 (the scoot, drake_first only): the locked scoot spot. None = the round-22
+    // shape (the shelter cover + the wave taps); Some = fly the spot and tap Drake.
+    let mut scoot: Option<[f32; 3]> = None;
+    let mut scoot_move: Option<[f32; 3]> = None;
+    // the launch stability gate and the hold-through-flicker counters [L the round-24 runs: the
+    // east-spine lines flicker as Drake's boxes cross the spine structures — the first scoot
+    // attempt churned spot-to-spot at deck height for 300 ticks and cost 8.5 hp]
+    let mut last_probe: Option<[f32; 3]> = None;
+    let mut probe_hits: u32 = 0;
+    let mut dead_checks: u32 = 0;
     // real-health-00agent-1b-8 (aim_close only): the tap's muzzle-offset compensation — the
     // shot leaves between the eye and the muzzle datum and flies at the view point 256 u out
     // (scene.rs `shot_from`, weapon 0x33's +0x68 0x10000 arm), so at the tail wave's 6-15 u
@@ -1739,6 +1772,146 @@ fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first
                 if let Some((_, i, a)) = probe { target = Some((i, a)); }
             }
         }
+        // walk-1b-agent-3 (the shoot-and-scoot, drake_first only — the Agent Drake fight): the
+        // west shelter's sight-cut NEVER opens Drake's box line (the round-23 measured law:
+        // exposed_aim(Drake) never passed, Drake 0/96 rounds, Bond bled out inside the fight),
+        // so Bond LEAVES the shelter on a real Drake window instead. Every 30 ticks without a
+        // locked spot, probe body spots on the 3-u grid around Bond whose EYE — at a live Drake
+        // box centre's own height, a level view only hits what the eye's plane spans — puts a
+        // level ray into a box before the world's first solid contact (drake_shot_from, the
+        // bullet pass's own comparison [M 0x1ea398:216-229]); the candidate is refused on the
+        // level's own hurt plates (the run2 law) and scored near-first (the flight is the
+        // exposed leg — the wave's 2-s new-sighting clocks arm ~120 ticks after sight gain [M
+        // 0x179740:102-109], so the measured first ~300 exposed ticks land zero hits [L the
+        // round-24 climb dump]), lined shooters second. The locked spot is re-checked every 60
+        // ticks (Drake closes ~0.017 u/tick [L the round-23 run] and the line drifts); a shut
+        // line re-probes from the live position. While locked: target = Drake (the melee 3.5 u
+        // double-damage band [M DoBulletAccuracy 0x179740:113-115] outranks him), no wave taps,
+        // no cover re-picks; the tap rides the shared aim_close machinery with the flight's own
+        // death-range probe [M Bullet_update 0x12e7b0 case 1]. Judged on its own real run.
+        scoot_move = None;
+        if drake_first {
+            let drake_live = prio.is_some_and(|pr| { let d = &sim.drones.list[pr]; d.present && !d.corpse && d.health > 0.0 });
+            if !drake_live {
+                scoot = None;
+            } else if let Some(sp) = scoot {
+                // hold through a single dead check (the marginal line flickers on Drake's box
+                // drift); two consecutive dead checks unlock
+                if t % 60 == 0 {
+                    if drake_shot_from(sim, prio.unwrap(), [sp[0], sp[1] + eye_off, sp[2]]).is_none() {
+                        dead_checks += 1;
+                        if dead_checks >= 2 { scoot = None; dead_checks = 0; last_probe = None; probe_hits = 0; }
+                    } else { dead_checks = 0; }
+                }
+            } else if t % 30 == 0 {
+                let boxes: Vec<[f32; 3]> = {
+                    let data = data_of(sim);
+                    sim.drones.list[prio.unwrap()].hit_boxes(&data).iter().map(|b| [b.m[3][0], b.m[3][1], b.m[3][2]]).collect()
+                };
+                let p = sim.bond.pos;
+                let mut best: Option<(f32, [f32; 3])> = None;
+                for dx in -8..=8i32 { for dz in -8..=8i32 {
+                    let sx = p[0] + dx as f32 * 3.0;
+                    let sz = p[2] + dz as f32 * 3.0;
+                    for c in boxes.iter() {
+                        let st = [sx, c[1] - eye_off, sz];
+                        // the short-scoot cap: the flight is the exposed leg (the measured round-24
+                        // run burned ~21 hp on a 16-u direct flight and died one tap short), while
+                        // the wait in the zero-loss shelter is FREE (exp (0,0) held 1260+ ticks [L
+                        // the round-22 ledger]) — so only a window within 14 u is worth leaving for
+                        if dist3(st, p) > 14.0 { continue; }
+                        let ey = [sx, c[1], sz];
+                        if !hurt_free(sim, st) { continue; }
+                        if drake_shot_from(sim, prio.unwrap(), ey).is_none() { continue; }
+                        let (seen, cl) = exposure(sim, ey);
+                        let s = dist3(st, p) * 2.0 + seen as f32 + cl as f32 * 5.0;
+                        if best.map_or(true, |b| s < b.0) { best = Some((s, st)); }
+                    }
+                }}
+                // the stability gate: a candidate must repeat (within 0.5 u) on consecutive
+                // probes before the launch — the flickering east lines churn the flight, the
+                // stable deck lines hold (measured round-24)
+                if let Some(b) = best {
+                    if last_probe.map_or(false, |lp| dist3(lp, b.1) < 0.5) { probe_hits += 1; } else { probe_hits = 0; }
+                    last_probe = Some(b.1);
+                    if probe_hits >= 1 { scoot = Some(b.1); probe_hits = 0; last_probe = None; }
+                } else { last_probe = None; probe_hits = 0; }
+            }
+            if let (Some(pr), Some(sp)) = (prio, scoot) {
+                let e = sim.bond.head();
+                let near = live_astronauts(sim).into_iter()
+                    .min_by(|&a, &b| dist3(sim.drones.list[a].pos, e).total_cmp(&dist3(sim.drones.list[b].pos, e)));
+                if let Some(mi) = near.filter(|&i| dist3(sim.drones.list[i].pos, e) < 3.5) {
+                    if let Some(a) = w.exposed_aim(mi) { target = Some((mi, a)); }
+                } else {
+                    let d = &sim.drones.list[pr];
+                    target = Some((pr, drake_shot_from(sim, pr, e).unwrap_or([d.pos[0], d.pos[1] + 0.3, d.pos[2]])));
+                    scoot_move = Some(sp);
+                }
+            }
+            // No window yet: the free wait — hold the zero-loss shelter, no aim lift, no wave
+            // taps (the wave's boxes sit above the cavity's eye plane, so the aim pick finds
+            // nothing anyway; the lift is what exposed Bond in the round-22/23 shapes [L the
+            // round-24 dump: the climb cost exp 0 -> 14 and three hits]). Drake closes into the
+            // short-scoot window on his own clock (measured: the east line opens past his x ~4-6,
+            // t ~750-840). The 3.5 u melee band still outranks the wait.
+            if scoot.is_none() {
+                let e = sim.bond.head();
+                let melee_near = live_astronauts(sim).iter().any(|&i| dist3(sim.drones.list[i].pos, e) < 3.5);
+                if !melee_near { target = None; }
+            }
+        }
+        // walk-1b-agent-3 (the shoot-and-scoot diagnostic, NF_1B_SCOOT_DIAG + drake_first): every
+        // 60 ticks of the Drake fight, dump Drake/Bond/wave state and the best scoot candidates —
+        // body spots around Bond whose EYE (at a Drake box centre's height) puts a level ray into
+        // a box before the world, with their exposure, distance and aim. Stderr only; no sim
+        // state touched.
+        if drake_first && std::env::var("NF_1B_SCOOT_DIAG").is_ok() && t % 60 == 0 {
+            let e = sim.bond.head();
+            if let Some(pr) = prio {
+                let d = &sim.drones.list[pr];
+                if d.present && !d.corpse && d.health > 0.0 {
+                    eprintln!("[scoot] t{t} f{} bond ({:.2},{:.2},{:.2}) eye ({:.2},{:.2},{:.2}) hp {:.1} clip {} drake ({:.2},{:.2},{:.2}) d {:.1} dhp {:.1} astro {} exp {:?} ondrake {:?} rg {:.0} scoot {:?}",
+                        sim.drones.frame, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2], e[0], e[1], e[2],
+                        sim.drones.health.health, sim.gun.clip, d.pos[0], d.pos[1], d.pos[2], dist3(d.pos, e),
+                        d.health, live_astronauts(sim).len(), exposure(sim, e),
+                        drake_shot_from(sim, pr, e).is_some(),
+                        f32::from_le_bytes(sim.weapons.records[sim.gun.weapon as usize][0x1c..0x20].try_into().unwrap()),
+                        scoot.map(|sp| [sp[0], sp[1], sp[2]]));
+                    let mut astro = live_astronauts(sim);
+                    astro.sort_by_key(|&i| (dist3(sim.drones.list[i].pos, e) * 10.0) as i64);
+                    for &ai in astro.iter().take(5) {
+                        let p = sim.drones.list[ai].pos;
+                        eprintln!("[scoot]   astro#{ai} ({:.2},{:.2},{:.2}) d {:.1}", p[0], p[1], p[2], dist3(p, e));
+                    }
+                    // The grid: body spots on a 3-u grid out to 24 u, the eye at Drake's box
+                    // heights (the body y follows the eye). Reachability is NOT checked here —
+                    // the lever owns the two-phase path (low under the deck, then rise).
+                    let mut cands: Vec<(u32, f32, [f32; 3], [f32; 3])> = vec![];
+                    let boxes: Vec<[f32; 3]> = {
+                        let data = data_of(sim);
+                        sim.drones.list[pr].hit_boxes(&data).iter().map(|b| [b.m[3][0], b.m[3][1], b.m[3][2]]).collect()
+                    };
+                    for dx in -8..=8i32 { for dz in -8..=8i32 {
+                        let sx = sim.bond.pos[0] + dx as f32 * 3.0;
+                        let sz = sim.bond.pos[2] + dz as f32 * 3.0;
+                        for c in boxes.iter() {
+                            let st = [sx, c[1] - eye_off, sz];
+                            let ey = [sx, c[1], sz];
+                            if !hurt_free(sim, st) { continue; }
+                            if drake_shot_from(sim, pr, ey).is_none() { continue; }
+                            let (seen, cl) = exposure(sim, ey);
+                            cands.push((seen * 100 + cl * 50, dist3(st, sim.bond.pos), st, *c));
+                        }
+                    }}
+                    cands.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+                    for (exp, dist, st, c) in cands.iter().take(12) {
+                        eprintln!("[scoot]   spot ({:.1},{:.1},{:.1}) exp {} dist {:.1} box ({:.1},{:.1},{:.1})",
+                            st[0], st[1], st[2], exp / 100, dist, c[0], c[1], c[2]);
+                    }
+                }
+            }
+        }
         let (input, fire, nb) = {
             // waves_first (the Agent tactics): hold at the least-exposed point near `hold` from
             // the START, not only while the clip recharges — the hub float at Agent took the
@@ -1747,6 +1920,9 @@ fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first
             // the sheltered hold keeps him shootable (the exposure scoring is the same
             // fewest-astronauts-see-me rule the recharge arm already used).
             let mut spot = if recharging || waves_first { cover } else { hold };
+            // walk-1b-agent-3 (the scoot): a locked spot overrides the cover float — the eye
+            // height still tracks the live aim (the box plane drifts with Drake).
+            if scoot_move.is_some() { spot = scoot_move.unwrap(); }
             if let Some((_, a)) = target { if !recharging { spot[1] = (a[1] - eye_off).min(max_y); } }
             let mut inp = thrust_to(sim, spot);
             let mut fire = false;
@@ -1765,7 +1941,10 @@ fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first
                         let rg = f32::from_le_bytes(sim.weapons.records[sim.gun.weapon as usize][0x1c..0x20].try_into().unwrap());
                         ray_on_len(sim, i, (dist3(sim.drones.list[i].pos, e2) + 10.0).min(rg))
                     } else { ray_on(sim, i) };
-                    fire = fire_ok && view_level(sim) && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
+                    // the kill tap fires what the clip holds — the 12-round minimum would stall the
+                    // kill behind the recharge gate while Drake closes (the measured round-24 run
+                    // reached Drake 21.1 with clip 6 and died waiting)
+                    fire = fire_ok && view_level(sim) && sim.gun.clip >= if scoot_move.is_some() { 1 } else { 12 } && t.saturating_sub(last_tap) >= 12;
                 }
                 None => inp.stabilise = sim.bond.look()[1].abs() > 0.005 && sim.bond.stabiliser == 0,
             }
@@ -2081,7 +2260,11 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
         // [L this branch's runs — exposed_aim(Drake) never passed before Bond died], so the
         // gate ships OFF (false): this call is byte-identical to the round-22 shape. The
         // drake_first scaffolding stays for the next round's shoot-and-scoot, which reuses it.
-        fight_opts_y(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000, f32::MAX, true, false);
+        // walk-1b-agent-3: the scoot round lifts the gate for the diagnostic/scoot runs only
+        // (env NF_1B_SCOOT_DIAG / NF_1B_SCOOT); the round-23 runs measured drake_first
+        // behavior-neutral while its gates never fire, so the dumps ride the round-22 shape.
+        let drake_first = std::env::var("NF_1B_SCOOT_DIAG").is_ok() || std::env::var("NF_1B_SCOOT").is_ok();
+        fight_opts_y(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000, f32::MAX, true, drake_first);
     } else {
         fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000);
     }
