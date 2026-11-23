@@ -119,3 +119,15 @@ ignore message carries the round-25 block with the next levers.
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed (2026-11-23 06:07–06:11 UTC, this sandbox could not reach ntfy.sh —
+the same constraint round 24 documented):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "retune-nb-08-25: done ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds` (rc 28).
+2. `python3 -c "import urllib.request as u; u.urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', data=b'retune-nb-08-25: done ...', headers={'Title':'NightfirePort'}), timeout=20)"`
+   → the python call exceeded its 40 s shell timeout and was killed (no response from ntfy.sh).
+3. `timeout 25 wget -q -O- --post-data "retune-nb-08-25: done ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → rc 124 (timeout, no output).
