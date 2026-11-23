@@ -103,3 +103,16 @@ All three fallbacks failed (network egress to ntfy.sh unreachable from this sand
 The branch, the WORKLOG entry and `docs/reports/walk-1b-agent-3.md` are pushed
 (s/walk-1b-agent-3 e3499a2f6 + the ntfy-failed addendum), and
 `finish.sh 50-walk-1b-agent-3 done` reported OK before the notification attempt.
+
+## Addendum: the 00 Agent sweep tickets banked this round
+
+The round-2 ledger's named lever (the stop-length sweep) plus the k4-leg stops, 8 tickets via
+`NF_1B_PAUSES3` [L this branch, each judged on its own real run of the hard walk]: 7050:30 died
+40.5; 7050:90 and 7050:120 died 42.5; 7250:30 and 7400:30 died in the console phase; 4500:60
+latched k8 7770 but died 0.0; 5000:60 died 37.5; 7100:30 died 0.0 with MissileDeploy
+[0,0,2,2,2,1,0,1] (the m1/m2/m7 p0 sync broke); 7100:90 died 0.0; 7100:120 died 5.3; 6750:120
+stalled the 42.5 shape. EVERY ticket now dies in the console phase (the alive assert at the
+phase end) — none reached the round-2 k8/k6 stall. The ignore message is refreshed: the next
+lever is the console-phase defenses (the k6/k8 leg and the tail [1,2,7]), not more stop rolls.
+The Agent green is unaffected (the whole 1b binary above ran BEFORE these env-only runs; the
+shipped tree takes no env).
