@@ -526,3 +526,18 @@ Task: 08 whole-mission 00 Agent real-damage walk green, round 26. Branch = maste
 Progress:
 - branch created and pushed; setup in progress (game files downloading).
 - read the 08-25 report + the ignore ledger; taking the next untried lever per the ignore message; judged on its own real runs.
+
+## retune-nb-08-26 (2026-11-23)
+
+Task: 08 whole-mission 00 Agent real-damage walk green, round 26. Branch = master 7562f1e70 + s/retune-nb-08-25 merged (d8aed67e0, the round-25 ledger/report included).
+
+Progress:
+- branch created and pushed; setup redone on the reset sandbox (clone, work-slim, the onfoot ISO, rust, the ALSA user prefix, cargo fetch, the queue worktree).
+- read the 08-25 report + the ignore ledger; took the ledger's lever (1) THE ARMOUR ENTRY and re-derived it on the run's own measurements.
+- THE BOARDING-PAIR PREMISE MEASURED DEAD [L the armour-trace run]: the ride pays ZERO (armour 50.0 at every ride stamp t0-t1200) and the boarding/ride windows carry no fights — the 30.0 the ledger charged to the boarding pair drains while the walk STANDS at the rim through the scoop/arm/switch/reload + pane windows (50.0 -> 42.0 at reload f27229 -> 20.0 at the fight entry): the standing capsule (feet 13.470) is on the step edge the hurt volume's zap band covers; the pit floor (feet 13.086) is the zap-free plate. The armour pickups hard-set 50.0 [M Pickup_Handler 0x18e650; pickup.rs take_ex 732-733 — refused at armour >= 50.0], so pre-pickup savings cannot raise the entry.
+- THE ARMOUR ENTRY SHIPPED (the tail stays crouched through scoop/arm/reload/pane shooting; the tail stand press skipped, d3-gated, the 08 test file only): the panes ALL SHOT OUT from the crouch (1 round each), the fight opens armour 44.0 / health 21.0 (was 20.0/21.0), the fight's first health row moved t28034 -> t28821, death t29609 -> t30318 (frame 30320) at (112.80,13.57,-177.29) — +709, the deepest measured shape since round 23 [L the lever-1 run].
+- the CROUCHED FIGHT OPEN tried on its own run (the dive-stand press skipped): death t29696 — +87 over shipped, 622 SHALLOWER than the shipped-stand run (the close circuit's volume pays fastest ON the pit; the shipped stand's fight drives the dodge episodes that spread the rows); the dive-stand press RESTORED [L the lever-2 run].
+- the whole walkreal_07000008_live binary on the final tree: 6 passed / 0 failed / 1 ignored (267.11 s) — the d1/d2 sisters, the plain walks and both ally tests byte-exact [L the run].
+- the ignore message now carries the round-26 block: the measurements + the next levers (the -13.90 blast caught standing off the pit; the salvo-source live check; the pane-window 6.0 drain).
+- the fast runner (tools/test/suite.py) again not completable in this sandbox: background jobs die between tool calls and the four-crate build ENOSPCs on the 9.9 GB disk (the round-24/25 documented constraint); the run step is replicated fresh on the final tree (the whole 08 binary above). The only source the tree touches is the 08 test file; the helpers (walker.rs, damage_log.rs) are untouched — the other walk binaries are byte-unaffected by construction.
+- levers judged on their own real runs; real input only, no top-ups, no damage/health changes, no guard-code changes.
