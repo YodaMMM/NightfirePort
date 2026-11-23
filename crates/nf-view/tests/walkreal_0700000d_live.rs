@@ -1051,6 +1051,34 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // she never clears, the ride rides with one hunter (~54, the -2's law) — still inside the
     // budget the two spawn kills bought.
     let _ = kill_guard_at_present(&mut w, [151.2, -254.0], [3.5, 3.5], "the west roof g29 (chest, the south walk [probe_0d_roof_rays])", 1200);
+    // retune-nb-0d-19, THE ROOF ARMOUR GRAB (the round's own composition lever, from the
+    // 18-12 pickup scan [L]: FOUR body armours — the yard-west one the round-18 ledger
+    // chased sits 15 u BEYOND the lane's measured budget death at x 122.7 [L 19-1/19-2/19-5
+    // — the residual bill is CONSERVED: killing #7 (+148 [L 19-5]) re-attributed his 7.6 to
+    // drone #0's 6.7-in-14, the same 8.6 landed on the same spot]) — but the scan's ROOF
+    // armour (147.0, 21.76, -252.77) sits 4.5 u from the west-roof act stands THIS phase
+    // rides, BEFORE the yard. The grab through the real touch path (the walker's nav web,
+    // the annex grab's own class) lifts the yard-phase armour to ~73.75 (the annex 50 minus
+    // the climb's 26.25 absorption, plus 50 — the armour absorbs the bullets first [M
+    // Player_HandlePain 0x1902c8:84-104]) and the conserved residual bill (the ~32 raw the
+    // lane/garrison chews) absorbs INTO it instead of the 8.6 pool. NF_0D_ROOFARM=1 arms it
+    // (d2 real damage only; unset = byte-identical).
+    if difficulty == 2 && real_damage
+        && std::env::var("NF_0D_ROOFARM").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0
+    {
+        let armour_before = w.scene.sim.as_ref().unwrap().drones.health.armour;
+        w.walk_nav_to([147.0, 21.76, -252.77], "the roof armour", 0.6);
+        w.walk_nav_to([147.0, 21.76, -252.77], "the roof armour tight", 0.2);
+        for _ in 0..40 {
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            if walker::dxz([p[0], p[1], p[2]], [147.0, 21.76, -252.77]) < 1.2 { break; }
+            w.tick(nf_game::player::Input::default(), false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0d] the roof armour: armour {armour_before} -> {} at ({:.2},{:.2},{:.2}) health {}",
+            sim.drones.health.armour, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2],
+            sim.drones.health.health);
+    }
     // THE D2 GROUND-BAND SNIPER SWEEP, from the LADDER TOP (dart-tase-stamps-check): the Agent
     // ledger on the -5 route measured the death at 8533 (201.87,16.01,-255.09), 6 hits for
     // 100.0, 0 return-fire fights — the decisive drain is the d2 ground-band snipers: #36
@@ -3282,13 +3310,56 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         // leg. NF_0D_WARMOUR=1 arms both (d2 real damage only); unset = byte-identical.
         let warmour = difficulty == 2 && real_damage
             && std::env::var("NF_0D_WARMOUR").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+        // retune-nb-0d-19, THE COMPOSITION'S ACT-CLASS KNOBS (the round-18 ignore message's
+        // lever (i), the round's own untried lever): the 18-15/18-16 exit-stand HEAD act on
+        // #4's flat line measured the pitch-pin law (the cross y pinned -0.2257, 5 rounds
+        // high [L 18-16]) — the ledger's own fix classes, both default OFF (d2 real damage
+        // only; unset = byte-identical):
+        // - NF_0D_WARMOUR_ACT=1: the exit-stand act swaps the HEAD class for the CHEST class
+        //   (kill_guard_at_present — the plain shoot_far_aim aim_dy 0.3, the act class the
+        //   15-c chest-ray law measured at 0.139-blocked from the PLATE but never tried from
+        //   the EXIT stand, whose geometry differs by ~13 u and a yaw flip).
+        // - NF_0D_WARMOUR_S1=1: the DETOUR-FIRST order — no exit-stand act at all; the
+        //   armour walk runs FIRST (the +50 absorbs #4's own 0x12 cadence on the lane — the
+        //   bullets hit armour first [M Player_HandlePain 0x1902c8:84-104]), and the #4 act
+        //   fires at the YARD-SOUTH-1 arrival (the round-15 NW_HEAD_EARLY class: the
+        //   corridor band (131.5,-278.0)±(3.5,5.5) covers the live park (dx 0.7, dz 4.6),
+        //   the open-yard far line the 14-e plate act's own class landed on, d ~17 — the
+        //   pitch-pin was an EXIT-stand measurement).
+        let warmour_act = difficulty == 2 && real_damage
+            && std::env::var("NF_0D_WARMOUR_ACT").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+        let warmour_s1 = difficulty == 2 && real_damage
+            && std::env::var("NF_0D_WARMOUR_S1").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+        // retune-nb-0d-19, THE EAST-PAIR ACT (the 19-1/19-2 runs' own law): both orders died
+        // at the SAME choke point x 122.7 on the detour lane — not #4 (the chest act killed
+        // him at +201 [L 19-1]) but the yard-EAST armed pair #7 (145.5,5.0,-280.2) and #1
+        // (148.1,5.0,-281.6) (both skin 0x500007e, weapon 0x12 [L 19-1's last-hits list]):
+        // #7 chewed 7.6 in 12 hits + #1 1.0 in 13 across the ~900-tick lane, eating the
+        // 23.75 remaining armour then the 8.6 pool (armour 0.0 at death [L 19-1/19-2]). The
+        // exit stand sees them at d ~13 — CLOSER than the #4 box the chest act landed on at
+        // d 20.6 — so the same CHEST class takes them before the detour. NF_0D_WARMOUR_EAST=1
+        // arms both acts (d2 real damage only; unset = byte-identical). Each act self-cancels
+        // when the box is empty (the run-14-f law). The 19-3 stale-binary scan [L]: at the
+        // exit stand #7 IS enabled+present at (141.30,5.04,-281.75) state 0x68 — 4.2 OUTSIDE
+        // the 19-3 box (145.5,-280.2)±(4,4) — and #1 not present yet (he wakes mid-lane); so
+        // the #7 box rides his MEASURED exit-stand spot (141.3,-281.75)±(3.5,3.5) with the
+        // 19-1 hit-time spot as the self-cancelling backup, and =2 re-fires the pair after
+        // the lane's first leg (the =2 order).
+        let warmour_east: u32 = if difficulty == 2 && real_damage {
+            std::env::var("NF_0D_WARMOUR_EAST").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0)
+        } else { 0 };
         if warmour {
             // The scoped-reload law first (the 18-8 finding — see the plate block): the
             // 18-15 run's #4 head act converged (the ray full CLEAR) with the hand's clip 1
             // — ONE round, missed, and the in-act reload pulses swallowed while aiming [M
             // scene.rs 4763]. The aim-off reload rides HERE (the exit stand's pool ~13-15
-            // — the highest of the yard legs) so the act has its clip.
-            if w.scene.sim.as_ref().unwrap().gun.clip < 4 && w.scene.sim.as_ref().unwrap().gun.spare > 0 {
+            // — the highest of the yard legs) so the act has its clip. Under the
+            // DETOUR-FIRST order (warmour_s1) the reload still rides the exit stand — the
+            // 18-15/18-16 runs measured THIS window surviving (the deaths were #4's chips
+            // mid-detour, not the reload window) — and the filled clip persists through the
+            // walk (no switch, no firing until the yard-south-1 act).
+            if w.scene.sim.as_ref().unwrap().gun.clip < 4 && w.scene.sim.as_ref().unwrap().gun.spare > 0
+            {
                 for k in 0..3 {
                     if w.scene.sim.as_ref().unwrap().gun.clip >= 4 { break; }
                     w.reload_full();
@@ -3297,18 +3368,63 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
                         k, sim.gun.clip, sim.gun.spare, sim.gun.reload_state);
                 }
             }
-            let _ = kill_guard_head_present(&mut w, [131.5, -278.0], [3.5, 5.5], "the north-west armed #4 (the detour's own head act, the corridor band)", 400);
-            let armour_before = w.scene.sim.as_ref().unwrap().drones.health.armour;
-            w.walk_nav_to([107.75, 6.84, -275.16], "the yard-west armour", 0.6);
-            w.walk_nav_to([107.75, 6.84, -275.16], "the yard-west armour tight", 0.2);
-            for _ in 0..40 {
-                let p = w.scene.sim.as_ref().unwrap().bond.pos;
-                if walker::dxz([p[0], p[1], p[2]], [107.75, 6.84, -275.16]) < 1.2 { break; }
-                w.tick(nf_game::player::Input::default(), false);
+            if warmour_s1 {
+                // THE DETOUR FIRST (the round-18 ignore message's lever (i) second class):
+                // the armour grab runs before any yard leg, so #4's lane chips and the
+                // trench/return legs' residals land into the +50 armour.
+                let armour_before = w.scene.sim.as_ref().unwrap().drones.health.armour;
+                w.walk_nav_to([107.75, 6.84, -275.16], "the yard-west armour (detour first)", 0.6);
+                w.walk_nav_to([107.75, 6.84, -275.16], "the yard-west armour tight (detour first)", 0.2);
+                for _ in 0..40 {
+                    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                    if walker::dxz([p[0], p[1], p[2]], [107.75, 6.84, -275.16]) < 1.2 { break; }
+                    w.tick(nf_game::player::Input::default(), false);
+                }
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[0d] the yard-west armour (detour first): armour {armour_before} -> {} at ({:.2},{:.2},{:.2})",
+                    sim.drones.health.armour, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
+            } else {
+                if warmour_act {
+                    // THE CHEST ACT (the exit stand): the present-pick + the plain chest
+                    // aim — the DIFFERENT act class the ledger asked for on #4's flat line.
+                    let _ = kill_guard_at_present(&mut w, [131.5, -278.0], [3.5, 5.5], "the north-west armed #4 (the detour's own CHEST act, the corridor band)", 400);
+                } else {
+                    let _ = kill_guard_head_present(&mut w, [131.5, -278.0], [3.5, 5.5], "the north-west armed #4 (the detour's own head act, the corridor band)", 400);
+                }
+                // THE EAST PAIR (the 19-1/19-2/19-3 law — the lane's own chippers): #7 and
+                // #1 are NOT enabled/present at the exit stand (19-3: both acts
+                // self-cancelled "no PRESENT guard" [L]) — they wake ~t22100 during the
+                // lane walk. =1 fires the chest acts AT the exit stand (measured
+                // self-cancelled); =2 walks the lane's first leg to (130.0, 5.0, -276.5)
+                // FIRST (the 19-1 lane's own path — it passed x 130 alive at ~t22700),
+                // catching the pair PRESENT at d ~11, then finishes the walk.
+                if warmour_east == 2 {
+                    w.walk_nav_to([130.0, 5.0, -276.5], "the detour east-pair leg", 0.8);
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    for (i, d) in sim.drones.list.iter().enumerate() {
+                        if i == 1 || i == 7 {
+                            eprintln!("[0d] the east pair pre-act: g{i} enabled {} present {} pos ({:.2},{:.2},{:.2}) state {:#x}",
+                                d.enabled, d.present, d.pos[0], d.pos[1], d.pos[2], d.state);
+                        }
+                    }
+                }
+                if warmour_east >= 1 {
+                    let _ = kill_guard_at_present(&mut w, [141.3, -281.75], [3.5, 3.5], "the yard-east armed #7 (the CHEST act, his exit-stand spot)", 400);
+                    let _ = kill_guard_at_present(&mut w, [145.5, -280.2], [4.0, 4.0], "the yard-east armed #7 (the CHEST act, the 19-1 hit-time spot)", 400);
+                    let _ = kill_guard_at_present(&mut w, [148.1, -281.6], [3.0, 3.0], "the yard-east armed #1 (the CHEST act, the detour lane's east chipper)", 400);
+                }
+                let armour_before = w.scene.sim.as_ref().unwrap().drones.health.armour;
+                w.walk_nav_to([107.75, 6.84, -275.16], "the yard-west armour", 0.6);
+                w.walk_nav_to([107.75, 6.84, -275.16], "the yard-west armour tight", 0.2);
+                for _ in 0..40 {
+                    let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                    if walker::dxz([p[0], p[1], p[2]], [107.75, 6.84, -275.16]) < 1.2 { break; }
+                    w.tick(nf_game::player::Input::default(), false);
+                }
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[0d] the yard-west armour: armour {armour_before} -> {} at ({:.2},{:.2},{:.2})",
+                    sim.drones.health.armour, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
             }
-            let sim = w.scene.sim.as_ref().unwrap();
-            eprintln!("[0d] the yard-west armour: armour {armour_before} -> {} at ({:.2},{:.2},{:.2})",
-                sim.drones.health.armour, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
         }
         w.walk_to(Wp::new(136.5, 4.5, -290.0).r(2.0), "the yard south 1");
         if nw_kill == 2 {
@@ -3319,7 +3435,13 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         if north_s1 {
             let _ = kill_guard_certain_at(&mut w, [137.1, -275.5], [6.0, 6.0], 10.0, "the north-band #6 (the yard-south-1 act, the open line)", 260);
         }
-        if nw_head_early {
+        // retune-nb-0d-19: under the DETOUR-FIRST order (warmour_s1) the corridor-band act
+        // fires HERE at the yard-south-1 arrival — the round-15 NW_HEAD_EARLY class on #4's
+        // live park, from the open-yard stand (d ~17), AFTER the +50 armour is on (the
+        // aim-off act ticks' exposure is absorbed — the conserved-tax law's own lever). The
+        // band picks #4 only (the #6 corner 5.6 east of the centre, #3 far south). Unset =
+        // byte-identical (nw_head_early's own gate unchanged).
+        if nw_head_early || warmour_s1 {
             let _ = kill_guard_head_present(&mut w, [131.5, -278.0], [3.5, 5.5], "the north-west armed #4 (the yard-south-1 head act, the corridor band)", 400);
         }
         // retune-nb-0d-18, THE D2 ROOF ACT'S RELOAD (the 18-8 law — see the plate block):
