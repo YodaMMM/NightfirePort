@@ -115,16 +115,20 @@ dive-window verdict with its numbers, and the next levers, in priority order:
   not run, the background runner killed between tool calls). The runner's RUN step was replicated
   over the binaries that are built (`scripts/run_bins.py`, same semantics: `--test-threads=1`,
   NF_SILENT=1, per-binary wall-clock limit, the same totals shape; results appended to
-  `suite.out`):
+  `suite.out`). 165 built binaries were run directly (the seven walk/08 canaries, all 67 built
+  nf-game unit binaries, 90 nf-view unit/census binaries and the `nf_view` lib binary), totalling
+  **823 passed, 19 failed, 48 ignored**:
   - the seven walk/08 canaries (`walkreal_0700000c_eastroute_live`, `walkreal_0700001b_live`,
     `walkreal_probe0c_barrelrow_live`, `walkreal_probe0c_door6_live`,
     `walkreal_probe11_48_live`, `zipline_07000008_live`, `pickups08_live`):
-    **28 passed, 0 failed, 2 ignored**;
-  - all 67 built nf-game unit binaries: **390 passed, 17 failed, 1 ignored** — every one of the
-    17 failures is a disc-reading test that the slim ISO cannot satisfy (`/DRIVING/MIS01.VIV: too
-    small for a BIGF header` — the onfoot ISO stubs the driving VIVs; the failure text is uniform
-    across `drive_*`/`driving_*`), not a regression: the branch's only change is the one test
-    file these binaries do not compile.
+    **28 passed, 0 failed, 2 ignored** — green;
+  - the 19 failed test runs are 18 unique tests inside the ten `drive_*`/`driving_*` binaries,
+    and every one is a disc-reading failure the slim ISO cannot satisfy (`/DRIVING/MIS01.VIV:
+    too small for a BIGF header` — the onfoot ISO stubs the driving VIVs; the failure text is
+    uniform across the family), not a regression: the branch's only change is the one test
+    file those binaries do not compile;
+  - the `nf_view` lib binary: **151 passed, 0 failed, 4 ignored** (green after its first 90 s
+    cap TIMEOUT was re-run at the runner's own 300 s limit).
 - Nothing under `crates/*/src/` changed; the changed file is used by exactly one test binary,
   which ran clean whole. `nf-audio`/`nf-formats` sources are untouched (their targets compiled
   during the build attempts; their tests are out of the touched-code scope).
