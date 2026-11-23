@@ -1538,7 +1538,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             w.tick(input, use_key);
             if t % 300 == 0 {
                 let sim = w.scene.sim.as_ref().unwrap();
-                eprintln!("[08 board t{t}] bond {:?} ch4 {}", sim.bond.pos, sim.drones.channels.on(4) as u8);
+                eprintln!("[08 board t{t}] bond {:?} ch4 {} armour {:.1}", sim.bond.pos, sim.drones.channels.on(4) as u8, sim.drones.health.armour);
             }
         }
     }
@@ -1601,8 +1601,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         }
         if t % 300 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();
-            eprintln!("[08 ride t{t}] bond {:?} ch1 {} ch83 {} disabled {}", sim.bond.pos,
-                sim.drones.channels.on(1) as u8, sim.drones.channels.on(0x53) as u8, sim.disabled);
+            eprintln!("[08 ride t{t}] bond {:?} ch1 {} ch83 {} disabled {} armour {:.1}", sim.bond.pos,
+                sim.drones.channels.on(1) as u8, sim.drones.channels.on(0x53) as u8, sim.disabled, sim.drones.health.armour);
         }
         // retune-nb-08-6: the ride-time pickup geometry the lever needs — the three cable-car
         // rocket pickups' live world centres (the ride script 0x0600004C parents them to the
@@ -1737,7 +1737,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // gravity does the drop, the arrival checks the full plate, and Bond fights from feet
     // 13.086 — the zap-free floor.
     if difficulty >= 3 {
-        eprintln!("[08 tail] the drop block starts f{}", w.scene.sim.as_ref().unwrap().drones.frame);
+        eprintln!("[08 tail] the drop block starts f{} armour {:.1}", w.scene.sim.as_ref().unwrap().drones.frame, w.scene.sim.as_ref().unwrap().drones.health.armour);
         w.walk_to(Wp::new(112.0, 13.08, -179.5).r(0.1), "the d3 fight anchor");
     }
     // retune-nb-08-4 run 8: the raw press that finishes the drop. The walk_to's x/z arrival
@@ -1831,7 +1831,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // sisters' timelines stay byte-exact.
         {
             let sim = w.scene.sim.as_ref().unwrap();
-            eprintln!("[08 standoff] pit entry bond {:?} crouched {}", sim.bond.pos, sim.bond.crouched);
+            eprintln!("[08 standoff] pit entry bond {:?} crouched {} armour {:.1}", sim.bond.pos, sim.bond.crouched, sim.drones.health.armour);
             // 1) the lockout out (70 default ticks on the zap-free pit floor).
             for _ in 0..70 { w.tick(Input::default(), false); }
             // 2) the crouched east walk to the off-hole stand spot (113.3, −179.25) — the
@@ -1871,17 +1871,36 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             }
             let sim = w.scene.sim.as_ref().unwrap();
             eprintln!("[08 standoff] walked bond {:?} crouched {}", sim.bond.pos, sim.bond.crouched);
-            // 3) the stand press: hold crouch until crouched false (bounded 80 ticks).
-            for k in 0..80u32 {
-                let sim = w.scene.sim.as_ref().unwrap();
-                if !sim.bond.crouched { break; }
-                w.tick(Input { crouch: true, ..Default::default() }, false);
-                if k % 20 == 0 { let sim = w.scene.sim.as_ref().unwrap();
-                    eprintln!("[08 standoff] stand k{k} bond {:?} crouched {}", sim.bond.pos, sim.bond.crouched); }
-            }
+            // 3) THE STAND PRESS — SHIPPED as SKIPPED this round (retune-nb-08-26, the
+            // armour entry, judged on its own real run): the ledger's boarding-pair premise
+            // is DEAD — the ride pays ZERO (armour 50.0 at every ride stamp, boarding/ride
+            // windows carry no fights [L the 2026-11-23 armour-trace run]) and the 30.0 the
+            // round-25 ledger charged to the boarding pair actually drains while the walk
+            // STANDS at the rim through the scoop/arm/switch/reload + pane windows (50 -> 42
+            // at reload f27229 -> 20 at the fight entry [L the same trace]) — the standing
+            // capsule (feet 13.470) is back on the step edge the hurt volume's zap band
+            // covers, while the pit floor (feet 13.086) is the zap-free plate [L the
+            // round-5/8 runs; the drop comments above]. A player whose floor is zap-free
+            // does not climb onto the zap band to shoot glass: the tail stays CROUCHED (the
+            // pane aims recompute from the crouched eye each tick — the pane loop's own
+            // yaw/pitch err; all panes SHOT OUT after 1 round from the crouch [L the
+            // lever-1 run]) and the fight opens with armour 44.0 (was 20.0). MEASURED: the
+            // fight's first health row moved t28034 -> t28821 (the 44.0 armour paid ~1200
+            // fight ticks of grind) and the death moved t29609 -> t30318 (+709, the deepest
+            // measured shape since round 23) — the closing killer the -13.90 missile blast
+            // at t30184 caught Bond standing at (113.0,13.5,-180.9) [L the lever-1 run].
+            // The reverted arm (the round-23 shape's press) is kept here in comments for the
+            // revert: it held crouch until crouched false (bounded 80 ticks).
+            //for k in 0..80u32 {
+            //    let sim = w.scene.sim.as_ref().unwrap();
+            //    if !sim.bond.crouched { break; }
+            //    w.tick(Input { crouch: true, ..Default::default() }, false);
+            //    if k % 20 == 0 { let sim = w.scene.sim.as_ref().unwrap();
+            //        eprintln!("[08 standoff] stand k{k} bond {:?} crouched {}", sim.bond.pos, sim.bond.crouched); }
+            //}
             w.tick(Input::default(), false);
             let sim = w.scene.sim.as_ref().unwrap();
-            eprintln!("[08 standoff] stood bond {:?} crouched {}", sim.bond.pos, sim.bond.crouched);
+            eprintln!("[08 standoff] stood bond {:?} crouched {} armour {:.1}", sim.bond.pos, sim.bond.crouched, sim.drones.health.armour);
             eprintln!("[08 tail] the drop block ends f{}", sim.drones.frame);
         }
     }
@@ -1943,7 +1962,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // shoot: the game's R held to a full clip [M Player_WeaponFiring's reload branch],
         // real input, no ammo writes (reload_full is the walker's additive R law).
         w.reload_full();
-        eprintln!("[08 tail] reload ends f{} clip {} spare {}", w.scene.sim.as_ref().unwrap().drones.frame, w.scene.sim.as_ref().unwrap().gun.clip, w.scene.sim.as_ref().unwrap().gun.spare);
+        eprintln!("[08 tail] reload ends f{} clip {} spare {} armour {:.1}", w.scene.sim.as_ref().unwrap().drones.frame, w.scene.sim.as_ref().unwrap().gun.clip, w.scene.sim.as_ref().unwrap().gun.spare, w.scene.sim.as_ref().unwrap().drones.health.armour);
         // A player shoots the glass he can see — the aim-ray-to-bounds-centre gate CANNOT work
         // here: the captured centre is the pane bounds' midpoint, which sits a hair short of the
         // sheet plane (the north pane's centre ray eye→centre reads OPEN while a perpendicular
@@ -1976,7 +1995,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             if pass > 0 { eprintln!("[08 panes] pass {pass}: a pane is still glazed — a player keeps shooting"); }
         for (k, c) in panes.iter().enumerate() {
             if pane_gone(&w.scene.sim.as_ref().unwrap(), *c) { continue; }
-            eprintln!("[08 tail] pane {k} window starts f{} at {:?}", w.scene.sim.as_ref().unwrap().drones.frame, c);
+            eprintln!("[08 tail] pane {k} window starts f{} armour {:.1} at {:?}", w.scene.sim.as_ref().unwrap().drones.frame, w.scene.sim.as_ref().unwrap().drones.health.armour, c);
             let mut fired = 0u32;
             // The bracket (the #447 shoot_mine lesson, muzzle-repin-6): the round flies from the
             // camera along the view, its gravity arc and the camera-vs-head offset land it a
@@ -2319,6 +2338,15 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // anchorwalk's end is ~150 ticks behind the switch block above, so the lockout is long
     // expired and one press stands. D3-GATED: the sisters never run this block.
     if difficulty >= 3 {
+        // retune-nb-08-26: the crouched-fight arm was TRIED on its own real run and measured
+        // SHALLOWER — the fight opened crouched on the zap-free pit floor (feet 13.086) and
+        // the machine's close-circuit grind ran -2.00 x10 + -1.00 over just 370 ticks
+        // (t29327-t29696), death t29696 (+87 over the shipped t29609, 622 SHALLOWER than the
+        // shipped-stand lever run [L the 2026-11-23 lever-2 run]) — the crouch holds Bond ON
+        // the pit where the close circuit's volume pays fastest, while the shipped stand's
+        // fight drives the dodge episodes that spread the rows. The shipped dive-stand stays:
+        // the press re-stands Bond at the open (the round-23 shape; the dive window's
+        // geometry needs the standing eye — the comment above).
         let mut stood = false;
         for k in 0..80u32 {
             let sim = w.scene.sim.as_ref().unwrap();
