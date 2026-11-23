@@ -162,7 +162,29 @@ fn clear_the_visible(w: &mut Walker, label: &str, radius: f32, d3: bool, stop_on
 /// false (byte-identity; the room's #8 kill is the still-gate's too).
 /// No position writes, no RNG draws, no health/ammo writes; the only
 /// inputs are the wait ticks and the trigger taps through the ordinary stand machinery.
-fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, quiet_rounds: u32, wait: u32, retry: bool, skip: bool, loose_floor: bool) {
+///
+/// walk-13-op-3 (the drain-tail cut, the lever-1 run's own measure): TWO additions, both judged
+/// on their own real run at the security-room door where the walk stands at 3.5 hp in the
+/// re-fed #6's line (d 28.5 behind Bond, hp 24, his fire down the lobby's north side):
+/// (1) `retry` now fires only when the failed stand DEALT damage — the lever-9 law's own shape
+/// ("the one-tap-short retry" is for a guard the stands left at 3 hp); a stand that dealt ZERO
+/// (the #6 far stands: the loose gate cannot land at d 28 — the charger law's own d <= 12
+/// envelope, zero lands measured twice [L the lever-4 run + this tree's lever-1 run]) has no
+/// "next pause" to catch, and its 1400-tick window is pure statue in the shooter's own line —
+/// the lever-1 run's #6 retry burned 219 ticks to out-of-ammo for nothing.
+/// (2) `max_quiet` caps the post-kill quiet WAITS (0 = none — the drain takes every exposed
+/// target the pick finds, then ends the moment none is exposed; the pick itself always runs).
+/// The lever-1 run died IN the first quiet wait after the #11 kill (the -3.5 volley ~90 ticks
+/// into a 150-tick wait) — at 3.5 hp the health-watch law ("the first hit ends the drain")
+/// cannot save the walk, so the waits buy nothing once the proven kills are done; every other
+/// call passes its own `max_rounds`, where the cap's break is unreachable before the loop's own
+/// condition (quiet < max_rounds holds whenever taken + quiet < max_rounds), so those call
+/// sites stay byte-identical in behaviour. The east-lane drain passes 12, the watch 1, the room
+/// drain 8; the door drain passes 0 (its mouth is CLEAR after the kills — #7 dead, #11 killed
+/// true by the lever-1 run's own drain — and the E/crossing's fights answer on the move). All
+/// four call sites are d3-only (the sisters never reach the fn), so the d2/d1 walks are
+/// untouched by construction.
+fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, quiet_rounds: u32, wait: u32, retry: bool, skip: bool, loose_floor: bool, max_quiet: u32, rearm: bool) {
     w.switch_to_armed(label);
     let mut quiet = 0u32;
     let mut taken = 0u32;
@@ -184,6 +206,14 @@ fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, qui
             })
         };
         let Some(di) = target else {
+            // walk-13-op-3 (the tail cut): the PICK always runs — a target the moment it exposes
+            // gets its stand — but the quiet WAITS are capped (`max_quiet`, 0 = none): at the
+            // door the waits are pure statue in the behind-Bond #6's line (the lever-1 run died
+            // in the first of them) and the mouth is clear after the kills. The other calls
+            // pass max_rounds, where this break is unreachable before the loop's own condition
+            // (`quiet < max_rounds` holds whenever `taken + quiet < max_rounds`) — the old
+            // shape exactly.
+            if quiet >= max_quiet { break; }
             quiet += 1;
             // warm-chain-margin-2 iter-4: the quiet wait is a STAND — the iter-3 ledger bled
             // inside it (the unseen respawners #6new/#10new landed frames 4995-5121 while the
@@ -206,12 +236,57 @@ fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, qui
             let sim = w.scene.sim.as_ref().unwrap();
             (sim.drones.list[di].pos[1] - sim.bond.pos[1]).abs() <= 2.0
         };
-        let mut killed = if loose_floor && floor_level {
+        // walk-13-op-3 (the charger law's own envelope, MEASURED BOTH WAYS): the loose band
+        // lands at d <= 12 — the law's own measure — and the lever-3 run measured the far side
+        // too: #11 (the posted mouth pistol, d 17.9) took ELEVEN re-armed rounds through the
+        // loose gate for ZERO lands, while the lever-4/5 runs measured the STILL gate's own
+        // cost — the aimed stand's 90-tick no-input settle + the raise loop at the door drain's
+        // FIRST tick reshapes the guards' fire stream, and #6's volley (in flight from the
+        // walk-on legs) landed at the arrival (+4 ticks) and killed the 3.5-hp walk BEFORE the
+        // first stand's aim ever raised — death t5034 twice, byte-identical [L the lever-4/5
+        // runs]. The lever-3 tree (the loose gate on every floor target, the stream the walk
+        // SURVIVED) is the measured shape: the loose gate stays the door drain's floor stand
+        // at every range, and the mouth's far guard belongs to the drain's rounds budget, not
+        // to a stream-reshaping stand swap. The east-lane/watch/room drains pass
+        // loose_floor=false and never enter this arm; the door drain is the only loose_floor
+        // caller. d3 only.
+        let loose_this = loose_floor && floor_level;
+        // walk-13-op-3 (the dealt-damage retry gate): the health before/after the stand decides the
+        // retry — a zero-dealt stand has no tap-short pause to catch (see the fn doc).
+        let hp_before = w.scene.sim.as_ref().unwrap().drones.list[di].health;
+        let mut killed = if loose_this {
             w.shoot_loose(di, label, 700)
         } else {
             aimed_stand(w, di, label, 700)
         };
         w.dmg.aimed_fights = false;
+        let dealt = hp_before - w.scene.sim.as_ref().unwrap().drones.list[di].health.min(hp_before);
+        // walk-13-op-3 (THE DRY RE-ARM, the re-anchor answer block's own dry-gap law): a mag that
+        // dries mid-stand swaps to the deepest gun and finishes the exchange — the ledger's own
+        // law ("with rounds the fights win EVERY measured exchange"), the lever-2b run's own
+        // measure: the door drain's stands fired the held 0x19 dry across the #6 stand (8 rounds,
+        // zero lands) and the #11 stand then fired TWO rounds (12 -> 9 hp) before drying — the
+        // dry retry burned +61 ticks for nothing, #11 SURVIVED at hp 9, CHARGED the door spot
+        // (23 u east, d 21.5) and his first volley killed the 3.5-hp walk at t6120 [L the
+        // lever-2b run]. A player whose mag ran dry mid-answer swaps to the gun that actually has
+        // depth (the arm cycle's own shape: cycle the wheel up to twelve draws, stop on the first
+        // gun with clip+spare >= 10, then top the clip from its own carried rounds) — the retry
+        // and the drain's next rounds fire armed. `rearm`-gated: the door drain passes true (the
+        // ledger's lever family — the door phase's pool), every other drain passes false and
+        // keeps the old shape byte-identical.
+        if !killed && rearm {
+            let (c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.clip, sim.gun.spare) };
+            if c + s < 3 {
+                for k in 0..12u32 {
+                    let (wpn, c, s) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.gun.weapon, sim.gun.clip, sim.gun.spare) };
+                    if c + s >= 10 { break; }
+                    eprintln!("[013] {label}: the dry re-arm: cycling ({k}) (weapon {wpn:#x} clip {c} spare {s})");
+                    w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+                    for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
+                }
+                w.reload_full();
+            }
+        }
         // retune-nb-13-3 (lever-9, the one-tap-short retry, d3 drains only): the lever-8 run's
         // #6 stand dealt 21 (hp 24 → 3) and still returned killed false — the 700 cap closed
         // one tap before the guard's next still window — and the stop_on_fail law then ended
@@ -222,7 +297,7 @@ fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, qui
         // The retry rides the `retry` param: the east-lane drain is the d2 SISTER's too (the
         // byte-identity law) and passes false — the watch and door drains are d3-only and
         // pass true. d3 only.
-        if !killed && retry {
+        if !killed && retry && dealt > 0.0 {
             // lever-10: the retry's window is 1400, not 700 — the lever-9 run measured the
             // pause cadence: three taps landed across the first stand's ~1400 active ticks
             // (hp 24 -> 3, one per ~470-tick still window) and the 700-tick retry caught
@@ -230,7 +305,7 @@ fn drain_the_wave(w: &mut Walker, label: &str, radius: f32, max_rounds: u32, qui
             // is ~470 ticks out, so the doubled window is what the fourth tap needs. The
             // trade: ~-14-21 of his fire for the KILL — at hp 3 the first tap of the pause
             // ends him, and the crossing + the room then run with no rifle behind them.
-            killed = if loose_floor && floor_level {
+            killed = if loose_this {
                 w.shoot_loose(di, label, 1400)
             } else {
                 aimed_stand(w, di, label, 1400)
@@ -797,7 +872,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // re-anchor fight cost 34.0. Drain the wave from here: up to 12 rounds, done after 6
         // quiet rounds (~180-tick waits + the stand times), each guard taken from the taken
         // spot at d ~12.
-        drain_the_wave(&mut w, "13: the lobby east lane", 24.0, 12, 6, 180, false, false, false);
+        drain_the_wave(&mut w, "13: the lobby east lane", 24.0, 12, 6, 180, false, false, false, 12, false);
     }
     // guard-repin-master re-anchor: the west-mid leg's return-fire fights (the north-lobby
     // shooters) displaced Bond SOUTH of the lane line into the lobby pocket at (0.60, −368.30,
@@ -1221,7 +1296,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // first volley landed t5114 with Bond at this same spot [L the ledger]) meets a MOVING
         // target. The door drain (radius 45, two legs later) mops the re-fed post and #7.
         // skip=false: one round cannot fail-and-continue into anything (the cap exits first).
-        drain_the_wave(&mut w, "13: the north-west mezzanine watch", 45.0, 1, 3, 150, true, false, false);
+        drain_the_wave(&mut w, "13: the north-west mezzanine watch", 45.0, 1, 3, 150, true, false, false, 1, false);
         // walk-13-op-3 (THE LEDGER'S LEVER, the walk-13-op-2 ignore message's "Next lever"): the
         // door phase's POOL — a fetch at the north-west end AFTER the watch drain. The lever-4
         // run's death t6232 was the pool: the door drain's stands fired clip 6 spare 4 then 3+0
@@ -1299,7 +1374,7 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // Radius 45 (was 24): the balcony rifle #4 (skin 0x5000006, 0x18, at (16.2, -362.4, 41.7),
         // 6 u up and 40.8 u east) sniped Bond through the whole door wait outside the 24 u drain
         // (40.5 in 11, the t4147 death); at 45 the drain kills him (the 11-13 run, -> t4958).
-        drain_the_wave(&mut w, "13: at the security-room door", 45.0, 8, 3, 150, true, true, true);
+        drain_the_wave(&mut w, "13: at the security-room door", 45.0, 8, 3, 150, true, true, true, 0, true);
         w.dmg.descent_stationary_fights = false;
         w.dmg.return_fire = true;
     }
@@ -1366,7 +1441,38 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
         // pre-clear's own law, one wall earlier); the drain waits out his firing window and
         // takes him before the west-lane leg walks Bond through his TooClose band [M
         // DroneFiring_TooClose_Damage].
-        drain_the_wave(&mut w, "13: inside the security room", 12.0, 8, 3, 150, false, false, false);
+        drain_the_wave(&mut w, "13: inside the security room", 12.0, 8, 3, 150, false, false, false, 1, false);
+        // walk-13-op-3 (THE MOUTH CHARGER ANSWER, the lever-3 run's own measure): the re-fed
+        // wave rifle #6 CHARGED the door phase's whole static window — from (3.4,42.1) across
+        // the lobby to the door mouth — and the lever-3 run's walk reached INSIDE the room,
+        // killed #8 and #11 to the inside drain, and then died t8540 at (−27.28,−368.30,36.09)
+        // to #6's POINT-BLANK volley (d 4.7, hp 14 — Bond's own door stands had dealt 10 into
+        // him) fired during the drain's tail waits [L the lever-3 run]. The charger law's own
+        // envelope: the loose band LANDS at d <= 12 (the 07000006 idiom — the answer blocks'
+        // own machinery), and the armed wheel at this spot holds the taken Spas12 (the 0x1c,
+        // 2 shells): "the Spas12 answers the lobby respawners' 12-14 hp templates in one
+        // blast" (the room legs' own comment above). A player with a charger in the mouth
+        // answers him the moment the drain ends: the nearest live exposed floor drone within
+        // 12, armed (the switch_to_armed cycle finds the shells), TWO bounded loose stands —
+        // the kill or the legs walk on (the fights' return fire is restored; the moving legs
+        // are the sight law's own misses). d3 only — the sisters never enter the block; no
+        // damage, health or RNG change beyond the taps themselves.
+        for _ in 0..2 {
+            let g = { let sim = w.scene.sim.as_ref().unwrap(); let bp = sim.bond.pos;
+                (0..sim.drones.list.len()).filter(|&i| { let d = &sim.drones.list[i];
+                    d.present && d.enabled && !d.corpse && d.health > 0.0 && d.team == 1
+                    && walker::dxz(d.pos, bp) < 12.0
+                    && (d.pos[1] - bp[1]).abs() <= 2.0
+                    && walker::DamageLog::exposed_part_gun_rays(&sim, i).is_some() })
+                    .min_by(|&a, &b| walker::dxz(sim.drones.list[a].pos, bp).total_cmp(&walker::dxz(sim.drones.list[b].pos, bp))) };
+            let Some(g) = g else { break };
+            let _ = w.switch_to_armed("13: the mouth charger answer");
+            w.reload_full();
+            let k = w.shoot_loose(g, "13: the mouth charger answer", 700);
+            eprintln!("[013] 13: the mouth charger answer on drone #{g} killed {k}, health {:.1}",
+                w.scene.sim.as_ref().unwrap().drones.health.health);
+            if !k { break; }
+        }
         // warm-chain-margin-6 (measured dead, NOT repeated): a deliberate resupply at this spot
         // (the room's own box at (-27.2, -369.4, 30.1), d 6.1) is ROOM MOVEMENT — #9 wakes at
         // the first step (he never fired through ~1050 static ticks, then opened 19 ticks after
@@ -1798,7 +1904,7 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// pre-clear at 14-16 u, no bridge_and_retry, no in-place creep or longer stands — each
 /// measured dead in the margin-4 report). Never lowered damage or health; no top-ups.
 #[test]
-#[ignore = "walk-13-op-2 (master 7562f1e70): the walk-13-op ledger's lever (the west-mid ANSWER BLOCK at the sweep's kill spot, one leg earlier) is TAKEN and the walk is STILL RED, but the frontier moved 1895 ticks deeper - death t6232 AT THE SECURITY-ROOM DOOR DRAIN (-24.27,-368.18,38.17), past the north-west watch, with the balcony rifle #4 KILLED TRUE at the west-mid end (the round-1 ledger's best was t4337 mid-leg). Three states, each judged on its own real run: (1) the block moved to the re-anchor end AS LEDGERED - death t4200 INSIDE the block's mezzanine re-stand: the pick re-took the pre-emptive's own FAILED #5 (nearest exposed dy>2; the balcony #4's box never opens from the re-anchor end) and re-stood into his fire, -38.5 across the two stands [L the lever-1 run]. The block's floor-loop skip-set law (lever-4) never reached its own mezzanine loop. (2) TAKEN - the same-end skip-set (failed_at_end, the floor loop's own lever-4 law at END scope, shared by the pre-emptive and the answer blocks): #5 never re-stood; the floor answer KILLED the re-fed #10 at the re-anchor end for the first time (the stand cost -21.0, all of it #5's covering fire - #10 dealt 0), but death t4839 INSIDE the second floor stand: #6 (the re-fed wave rifle, hp 24, at the spawn-pocket sliver (4.9,30.2) d 6.3-7.3) took 8 pistol rounds with ZERO lands (the body-point aim's rounds stop on the pocket edge) and his first -7.0 volley killed the 7.0-hp walk [L the lever-2 run]. (3) TAKEN - the FACE LAW in every mezzanine pick (dy>2 targets with x < -16.29 are unstandable from the lobby floor: every 0x1c pellet AND 0x19 rod stops on the face, hp 12 intact all run [L the MEZZ_DRY_END ledger + the walk-13-op runs]; the walk-13-op lever-1's pre-emptive stand on #5 cost -9.0 for nothing) + THE SPLIT (the mezzanine answer at the WEST-MID END - the only spot #4's box opens, the 0.02/0.028 band converged on him at 21.4 u killed-true [L the nb-13-2 ledger] - and the re-anchor floor answers' pick honours the charger law's own d <= 12 range: the lever-3 run's third stand took #9 at d 17.2 OUTSIDE that envelope, hp 24, clip 2 spare 6, and the statue cost the leg its window [L the lever-3 run]). The lever-4 run (the shipped tree): 47.5 intact into the west-mid leg (the face law took NO pre-emptive stand), the leg crossed, #4 killed true at the west-mid end (health 3.5 after - the leg + his bursts + the in-flight volleys cost -28.0 in 8), the north-west watch KILLED #9, the walk reached the door drain and died t6232: the pool ran DRY (the #11 stands at clip 0 spare 0, out of ammo at +61 twice [L the lever-4 run]) and the re-fed #6 (hp 24, d 28 BEHIND Bond at (3.4,42.1)) fired the -3.5 kill during the drain's failed-stand + quiet waits. MEASURED, NOT REPEATED: the re-anchor floor answers that killed #10 and #6 in the lever-3 run (-16.0/0.0) found NOTHING in the lever-4 state - the pick's own debug dump (temporary, removed) read #10 at dxz 5.3 and #6 at 8.2 with exposure FALSE in the split tree's state, while the pre-split lever-3 state had both exposed and both killed [L both runs] - the exposure at the pick is state-sensitive (the mezzanine loop's absence from the re-anchor block is the only code delta). Next lever: the door phase's POOL - a fetch at the north-west end AFTER the watch drain (the margin-6 measured-dead blocker - the alive #4's fire on the fetch - is GONE: #4 dies at the west-mid end now [L the lever-4 run]), then the door drain with rounds; the exit fill's 3-pass + deepest-gun arm (the retune-nb-13-4 machinery) runs where it is. #5's face (x -16.29) still blocks every round from the lobby floor - the live check stands"]
+#[ignore = "walk-13-op-3 (master 7562f1e70 + s/walk-13-op-2 160dda650): the round-2 ledger's lever (the door phase's POOL — a fetch at the north-west end after the watch drain) is TAKEN and the walk is STILL RED, but the frontier moved 3386 ticks deeper — death t9618 AT THE EXIT CROSSING (−25.98,−368.18,38.18) to the respawned SPAS12 #7's pellets, PAST the door drain, the security room, the Spas12 take AND the BodyArmourLight take (armour 50 [M 0x18e650:220-225] carried the whole exit phase — the round-2 frontier died at the door drain with armour 0). Baseline repro'd byte-identical first (t6232, #11 out of ammo at +61 twice, the −3.5 kill from the re-fed #6 at d 28 behind Bond). Five lever states, each judged on its own real run: (1) the POOL fetch itself (the exit fill's own 3-pass + deepest-gun arm at the north-west end): the pool already reads >= 25 there (the inventory depth), the fetch never walks, and the door drain KILLED #11 TRUE for the first time (the baseline's #11 stands were clip 0 spare 0 statues — the 'kill' was the lobby crossfire, not the rounds); death t6342 (+110), the same −3.5 #6 volley during the drain's post-kill quiet wait — at 3.5 hp the health-watch law cannot save the walk [L the lever-1 run]. (2) THE DRAIN-TAIL CUT: the retry only when the stand dealt damage (the zero-dealt #6 far stands' 1400-tick windows were pure statue in his own line) + max_quiet caps the post-kill waits (0 on the door drain — the waits buy nothing once the proven kills are done); the first cut misfired (the cap gated the loop itself, the drain never ran, death t5350 at the E leg's err-2.9 fight [L the lever-2 run]) and the fixed shape drew the stream where #11 SURVIVED at hp 9, CHARGED 23 u to d 21.5 and fired the kill — death t6120 [L the lever-2b run]. (3) THE DRY RE-ARM (the re-anchor answer block's own dry-gap law, rearm-gated to the door drain): a mag that dries mid-stand cycles to the deepest gun + reload_full before the retry — #6 took 10 (hp 24 → 14), the walk got INSIDE the room, the inside drain killed #8 AND #11, and death t8540 was #6's POINT-BLANK volley (d 4.7 — he CHARGED the whole door phase's static window) during the inside drain's tail waits [L the lever-3 run]. (4) MEASURED DEAD, NOT REPEATED: the far-floor STILL-gate swap at the door drain (the loose band is 0/11 at #11's d 17.9, but the aimed stand's 90-tick no-input settle + raise reshapes the guards' fire stream and #6's in-flight volley landed AT the arrival, +4 ticks, twice byte-identical — death t5034 before the first stand's aim ever raised [L the lever-4/5 runs]). (5) THE SHIPPED TREE = the lever-3 shape (the loose gate on every floor target) + the inside drain's tail cut (max_quiet 1) + THE MOUTH CHARGER ANSWER (the nearest live exposed floor drone within 12 after the inside drain, armed + shoot_loose ×2 — the charger law's own d <= 12 envelope; this stream's #6 never reached the mouth so the pick found nothing and the block passed clean). Final run [L the lever-6 run]: the door phase survived, the walk got inside, #8/#11/#6 all killed (the fights answered the charged #6 twice killed-true on the room legs), the Spas12 take, THE BODYARMOUR TAKE (armour 50), the shutter panel E (ch 0x23), the last-guard loop + the exit fights all green at health 3.5 — the armour ABSORBED the exit phase — and the death landed at the exit crossing's first stand: the respawned #7 (skin 0x5000008, weapon 0x1c, hp 9, at (−13.0,−368.4,39.7) d 13.1 — OUTSIDE the nb-13-4 mouth answer's radius-1.6 pick) fired −1.50 + −2.00 pellet ticks into the armour-0 health-3.5 walk at t9618. Next lever: the EXIT phase's mouth respawn — the nb-13-4 mouth answer's radius-1.6 pick only matches guards IN the leaf; the respawned SPAS sits 13 u out in the lobby and his pellets take the crossing's first stand. Take him from the doorway line first (the still-gate far band — the machinery that converged on #4 at 21.4 u) or widen the mouth answer's pick to the respawner's own post, then judge on its own run; the armour's protection is spent by then, so the answer must KILL, not trade. The sisters stay byte-identical: every lever lives inside real_damage && difficulty == 3 gates or a defaulted-off param (the east-lane/watch/room drains pass skip=false, loose_floor=false, rearm=false and the old quiet shape; the d2/d1 paths are untouched). The exposure-sensitivity mystery from round 2 stands (the re-anchor floor answers' state-sensitive exposure) — the live checks stand"]
 /// GREEN (retune-nb-13-4, 2026-11-19): the walk completed on this tree — MissionState 6, the
 /// entrance touch ch 0x50 written, the objective states asserted, `test result: ok` [L this
 /// session's run]. The round's lever chain, each judged on its own real run: (1) the nb-13-3

@@ -34,17 +34,28 @@ byte-identical. Remove the ignore when green; otherwise push the refreshed ledge
 ### walk-13-op-3 progress (2026-11-23, round 3)
 
 The ledger's lever taken (the door phase's POOL: a fetch at the north-west end after the watch
-drain — the exit fill's own 3-pass + deepest-gun arm machinery, pool >= 25), judged on its own
-real run: the pool already reads >= 25 at the north-west end (the inventory depth — the held gun
-at the door drain was 8+2), the fetch never walks, and the door drain KILLED #11 TRUE for the
-first time (the baseline's #11 stands were clip 0 spare 0 out-of-ammo statues). Frontier t6232 ->
-t6342 (+110): the re-fed #6 (hp 24, d 28.5 BEHIND Bond, his line down the lobby's north side)
-fired the same -3.5 kill, now during the drain's post-kill quiet wait (the 3.5-hp walk cannot
-survive the first hit — the health-watch law cannot save it). The #6 stands stay zero-land (the
-loose gate cannot land at d 28 — the charger law's own d <= 12 envelope; the still gate measured
-killed-FALSE on him at d 3.6) and the tail (the zero-dealt 1400 retry + the quiet waits) is pure
-statue in his line. Baseline repro'd byte-identical first (t6232, #11 out of ammo at +61 twice,
-the -3.5 kill from #6 at d 28). Next: the drain-tail cut (the retry only when the stand dealt
-damage + the door drain's post-kill quiet cap), then the room's BodyArmour fetch (the walk runs
-3.5 hp / 0 armour — armour turns #6's volleys into absorptions; the fetch is INSIDE the room
-where the walls cut #6's line).
+drain — the exit fill's own 3-pass + deepest-gun arm machinery, pool >= 25), then five lever
+states, each judged on its own real run (baseline repro'd byte-identical first: t6232, #11 out
+of ammo at +61 twice, the −3.5 kill from the re-fed #6 at d 28 behind Bond): (1) the pool
+already reads >= 25 at the north-west end — the fetch never walks — and the door drain killed
+#11 true for the first time; death t6342 (+110), the same #6 volley in the drain's post-kill
+quiet wait; (2) the drain-tail cut (the retry only on dealt damage + max_quiet caps the
+post-kill waits; the first cut misfired — it gated the loop itself — then drew the stream where
+wounded #11 charged 23 u and fired: t6120); (3) the dry re-arm (the re-anchor answer block's
+own dry-gap law, rearm-gated): t8540 — the walk got INSIDE the room, the inside drain killed
+#8 and #11, death was charged-#6's point-blank volley (d 4.7) in the inside drain's tail waits;
+(4) measured dead, not repeated: the far-floor still-gate swap at the door drain — the aimed
+stand's settle reshapes the guards' fire stream and #6's in-flight volley landed AT the
+arrival, twice byte-identical (t5034); (5) the shipped tree = the lever-3 shape + the inside
+drain's tail cut + the mouth charger answer (the charger law's own d <= 12 envelope, armed +
+shoot_loose ×2 — passed clean on this stream). FINAL RUN: death **t9618** at the exit crossing
+(−25.98,−368.18,38.18) to the respawned SPAS12 #7's pellets — 3386 ticks past round 2's
+frontier: the door phase survived, the walk got inside, #8/#11/#6 all killed (the fights
+answered the charged #6 twice killed-true), the Spas12 take AND the BodyArmourLight take
+(armour 50 [M 0x18e650:220-225]) carried the whole exit phase at health 3.5, the shutter panel
+E (ch 0x23) wrote, and the death landed on the exit crossing's first stand: #7 (hp 9, d 13.1 —
+OUTSIDE the nb-13-4 mouth answer's radius-1.6 pick) fired −1.50 + −2.00 pellet ticks into the
+armour-0 walk. The refreshed ledger + the next lever (the exit phase's mouth respawn: the
+still-gate far band or a widened mouth pick — the answer must KILL, not trade; the armour is
+spent) are in the ignore message. walkreal whole binary 4 passed / 0 failed / 1 ignored (the
+sisters byte-identical); interactables 10 passed / 0 failed.
