@@ -27,7 +27,6 @@ claimed-by: sandbox1 at 2026-11-22T23:38Z
 
 
 ---
-## Report from the worker (done, 2026-11-23T01:19Z)
 
 # retune-nb-0d-18 — round 18 of the 0d arrival-to-C5-door real-damage walks: the ledger's levers judged on their own runs, the D20 ladder-top FAST act claims #20's 28.0 and walks to t21471 (the deepest), the conserved-tax law, the scoped-reload law, and the yard-west armour lever blocked — still RED, the ledger refreshed
 
@@ -150,3 +149,17 @@ ignore stays, refreshed with the round-18 ledger and the next levers.**
 
 not visible to me — this environment shows no token, credit, cost or context-window figures for
 the session (no gauge, no billing panel, no API counters are exposed to the agent).
+
+## ntfy failed
+
+All three transports timed out (the round-17 blackout signature, re-measured 2026-11-23 ~01:38Z):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28).
+2. `python3 -c "... urlopen(u.Request('https://ntfy.sh/nightfire-yoda-8k3x', ...), timeout=25)"`
+   → no output, killed at the 40 s tool timeout.
+3. `timeout 20 wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → exit 124
+   (timed out); a second `curl -m 15` retry → exit 124.
+
+The queue entry (`done/50-retune-nb-0d-18.md` on origin/queue) carries the full report; the
+notification could not be delivered from this sandbox.
