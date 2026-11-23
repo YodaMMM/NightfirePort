@@ -91,3 +91,17 @@ WORKLOG opened and pushed as the first checkpoint.
 
 - Input/output tokens, context used, cost: not visible to me. The session's environment shows no
   token or cost figures anywhere; the WORKLOG entries for this task are the progress record.
+
+## ntfy failed
+
+All three fallbacks timed out against ntfy.sh egress at finish time (the same failure mode as
+round 2's report recorded):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "walk-06-00agent-4: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds`
+2. `python3 urllib.request` with `timeout=20` → the tool call killed at 30 s with no response.
+3. `wget -q -O- --timeout=20 --post-data "walk-06-00agent-4: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → the tool call killed at 40 s with no response (no output, non-zero exit).
+
+The push, the report and the queue `done` marker all landed before this; the notification text is
+reproduced in the commands above.
