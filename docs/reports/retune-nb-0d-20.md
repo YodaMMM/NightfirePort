@@ -105,3 +105,21 @@ premise — absorb the conserved residual bill with armour volume — has no unt
 
 not visible to me — this environment shows no token, credit, cost or context-window figures for
 the session (no gauge, no billing panel, no API counters are exposed to the agent).
+
+## ntfy failed
+
+All three transports timed out (the round-17/18/19 blackout signature, re-measured 2026-11-23
+~09:28Z):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20001 milliseconds` (exit 28).
+2. `timeout 25 python3 -c "import urllib.request as u; u.urlopen(...)"` → exit 124 (killed at
+   the 25 s timeout, no output).
+3. `timeout 25 wget -q -O- --post-data "retune-nb-0d-20: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → exit 124 (killed at the 25 s timeout, no output).
+
+The queue entry (`done/50-retune-nb-0d-20.md` on origin/queue, commit after 67869bc4c) carries
+the full report body (attached on the second pass — the first finish.sh pass missed the
+relative path because the script cd's to the queue worktree; the header committed then, the
+body appended and pushed right after). The notification could not be delivered from this
+sandbox.
