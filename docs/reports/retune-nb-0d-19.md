@@ -92,3 +92,16 @@ marked them (S15_HEAD, D2_ROOF, WARMOUR's head act, the hop grid). New knobs, al
 
 not visible to me — this environment shows no token, credit, cost or context-window figures for
 the session (no gauge, no billing panel, no API counters are exposed to the agent).
+
+## ntfy failed
+
+All three transports timed out (the round-17/18 blackout signature, re-measured 2026-11-23
+~07:16Z):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28).
+2. `python3 urlopen(... timeout=25)` → killed at the 30 s tool timeout, no output (exit 124).
+3. `timeout 25 wget -q -O- --post-data "..." https://ntfy.sh/nightfire-yoda-8k3x` → exit 124.
+
+The queue entry (`done/50-retune-nb-0d-19.md` on origin/queue) carries the full report; the
+notification could not be delivered from this sandbox.
