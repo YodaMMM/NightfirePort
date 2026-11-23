@@ -478,3 +478,13 @@ crates/nf-view/tests/walkreal_0700000d_live.rs (no crates/*/src/, no common help
 other crates' suites unaffected by construction (0d-16 measured 2153/71/11 on this line); the
 bg suite attempt died between tool calls (the rounds-13..18 signature, re-measured this
 round at ~05:57Z). The report: docs/reports/retune-nb-0d-19.md.
+
+retune-nb-0d-20 (started 2026-07:45Z, sandbox): round 20 of the 0d arrival-to-C5-door Agent
+real-damage walk. Branch s/retune-nb-0d-20 from origin/master 7562f1e70 with origin/s/retune-nb-0d-19
+merged in first (0d-19 not on master; clean carry). Task walk: walk_arrival_to_the_c5_door_real_damage_agent.
+The 0d-19 ignore message's next untried lever: the ROOF ARMOUR via the COMMITTED route's own waypoint
+class — a Wp::new(147.0,21.76,-252.77) leg inserted between the west-roof acts (NOT walk_nav_to, which
+fell off the edge [L 19-6]), composed with the PROVEN acts (D20_TOP + WARMOUR_ACT + WARMOUR_EAST=1:
+#4 +201 [L 19-1], #7 +148 [L 19-5]). Skipped measured-dead levers per the ledger: S15_HEAD, D2_ROOF,
+WARMOUR alone, the hop grid, walk_nav_to roofarm. Progress logged in docs/reports/retune-nb-0d-20.md
+at round end.
