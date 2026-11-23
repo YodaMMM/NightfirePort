@@ -31,16 +31,19 @@ stays in the cover band). The gate ships OFF (`false` at the call site — the s
 byte-identical to round 22); the scaffolding stays for the next round's shoot-and-scoot.
 
 **00 Agent walk (`..._00agent`) — the round's named lever (the 60-tick mid-phase stop sweep
-6000..7500, through the NF_1B_PAUSES3 hook) measured RED at the five sampled stops.** Stops
-6000/60, 6250/60, 6500/60, 6750/60, 7000/60: every re-roll dies mid-phase BEFORE the shared
-k8/k6 read — consoles latched 4/4/3/5/3 (k5 3191, k4 4426, k3 5901 everywhere; k8
-7583/8464/−/7587/−; k6 only at 6750: 8864), health 0.0/0.0/0.0/8.4/42.5 at the end. None
-reached the old stuck-8864 depth; 7000/60 was the least bad (hp 42.5, and the only stop that
-latched k6). The hook stays (defaults to a no-op) because the next lever needs it.
+6000..7500, through the NF_1B_PAUSES3 hook) measured RED — all 15 stops.** k5 3191 / k4 4426 /
+k3 5901 latch identically in every stop; the re-rolls then die or stall at the k8/k6 defenses:
+k8 latched 7583/8464/−/7587/−/−/7859/−/−/−/−/8161/8234/8305/8728 (stops 6000..7500/60), k6 only
+at 6750 (8864); health at the end 0.0/0.0/0.0/8.4/42.5/42.5/17.5/40.9/0.0/42.5/42.5/32.5/42.5/
+42.5/42.5. None latched all 8. The seven 42.5-shape stops are a STALL at the k8/k6 read (same
+shape as the master baseline's stuck-8864/37.5, but with more health); 7100/60 latched k8 (7859)
+and reached 17.5; 7200/60 died. The hook stays (defaults to a no-op) because the next lever
+needs it.
 
 Both ignore messages carry the refreshed ledgers and the next levers (Agent: the
-shoot-and-scoot or a d2 second-stop re-roll; 00agent: finish the sweep 7050..7500/60 and the
-length sweep at 7000, or sweep the k4 stop).
+shoot-and-scoot or a d2 second-stop re-roll; 00agent: sweep the stop LENGTHS at a 42.5 stall
+(7050/7250/7400 at len 30/90/120) to shake the k8/k6 read, or sweep the k4 stop — the re-roll
+divergence starts at the k4 leg).
 
 ## How it was verified
 
@@ -53,8 +56,8 @@ damage/health changes, no guard-code changes). Runs on the final tree (whole bin
   stays green; nothing else in the file moved.
 - `walk_arrival_to_drakes_defeat_on_real_health_agent` (individually, lever formulations 1 and
   2): the death shape above, 39.8s / 39.6s.
-- `walk_arrival_to_drakes_defeat_on_real_health_00agent` (individually, 5 sweep stops):
-  the measurements above, ~16-60s each.
+- `walk_arrival_to_drakes_defeat_on_real_health_00agent` (individually, all 15 sweep stops
+  6000..7500/60): the measurements above, ~16-60s each.
 
 No `src/` change and no shared-helper change (everything is inside
 `crates/nf-view/tests/walkreal_0700001b_live.rs`). `ray_on` now wraps a probe-length
