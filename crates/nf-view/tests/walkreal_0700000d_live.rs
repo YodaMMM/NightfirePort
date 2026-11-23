@@ -560,6 +560,24 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             eprintln!("[0d] the d2 ladder-top crouch: pressed at the roof acts (health {})",
                 w.scene.sim.as_ref().unwrap().drones.health.health);
         }
+        // retune-nb-0d-18, LEVER (d) (the round-17 ledger's item: #20's 28.0 at t3874 — the
+        // climb's tail). The PRE-CLIMB base act (the strip-mouth head act) cannot converge:
+        // the crane kills its UP-hill ray at 0.040 [M the 512 comment]. From the LADDER TOP
+        // the ray to her deck spot (198.4, 14.0, -260.7) is DOWN-hill (the eye y 18.1 vs her
+        // y 14.0) — the crane's own structure hangs BELOW that line, untested in every prior
+        // round. MEASURED (18-2, the DRAINED act on her spot box ±(4,4) before the cover
+        // sweep): the act LANDED — #20 down at +212 (the ray clears, the head act converges)
+        // — but her own 28.0 bullet was already in flight (frame 3803 vs the kill at ~3912:
+        // the race lost ~110 ticks to the 160-tick aim-off drain) and the +212 stand
+        // re-rolled the south-roof windows (#9 28.0 + #19 38.0 + the killing 10.0, death
+        // t4348). THIS run is the FAST variant (no drain): the kill lands ~160 ticks earlier
+        // — before her trigger — and the phase shift is ~+60-100, small enough to keep the
+        // sweep's #9 protection. NF_0D_D20_TOP=1 arms it; unset = byte-identical.
+        let d20_top = difficulty == 2 && real_damage
+            && std::env::var("NF_0D_D20_TOP").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+        if d20_top {
+            let _ = kill_guard_head_present_fast(&mut w, [198.4, -260.7], [4.0, 4.0], "the deck guard #20 (the ladder-top down-hill act, the round-18 lever (d))", 400);
+        }
         // THE D2 SOUTH-ROOF SNIPER #17 FIRST (dart-tase-stamps-check + the t4312 ledger): ANY
         // ladder-area gunshot wakes him — his fire spot (192.3,19.6,−267.4) is d 39 from the
         // ladder top, INSIDE the P2K shot's hearing radius 40 [L] — and in the t4312 run the
@@ -599,6 +617,22 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
             for _ in 0..2 {
                 let _ = kill_guard_head_present_fast(&mut w, [169.6, -271.5], [5.0, 3.0], "the south-roof pair (the pair-first reorder)", 400);
             }
+        }
+        // retune-nb-0d-18, LEVER (c) (the round-17 ledger's next untried lever): #15's 28.0
+        // (t4728) lands INSIDE the #17 act's 452-tick stand — before the committed pair act
+        // (+39, measured) can cover her — and the pair-FIRST reorder measured DEAD (17-4:
+        // at that order position the FAST act's ray read 0.947-blocked, the stall fed the
+        // snipers). This lever is the ledger's own reading: the committed HEAD act
+        // (kill_guard_head_present — the box aim whose part-5 pick takes the HEAD line where
+        // the chest rays die on the roof slab, the height law's own class
+        // [probe_0d_roof_rays]) on a #15-ONLY box at her spot (166.3, -271.4) ±(3,3), run
+        // BEFORE the #17 act. The pick is present-gated (if she has wandered out it costs
+        // zero ticks) and the 400 cap bounds the stall exposure the pair-first law taught.
+        // NF_0D_S15_HEAD=1 arms it; unset = byte-identical.
+        let s15_head = difficulty == 2 && real_damage
+            && std::env::var("NF_0D_S15_HEAD").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+        if s15_head {
+            let _ = kill_guard_head_present(&mut w, [166.3, -271.4], [3.0, 3.0], "the south-roof #15 head act (the round-18 lever (c), before the #17 act)", 400);
         }
         if difficulty >= 2 {
             let _ = kill_guard_at_present(&mut w, [192.3, -267.4], [8.0, 8.0], "the d2 south-roof sniper #17 (the ladder-top shot, before the band guns)", 500);
@@ -3189,6 +3223,12 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // at the open-line stand, the target already down, zero cost). Inert elsewhere.
     let north_s1 = (container_drop && yard_run || (difficulty == 2 && real_damage))
         && std::env::var("NF_0D_NORTH_S1").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(if difficulty == 2 && real_damage { 1 } else { cd(1) }) > 0;
+    // retune-nb-0d-18, THE D2 ROOF-SHOOTER LEVER (declared here, used at the yard-south-1
+    // reload and the plate act below): the run-3 ledger's next lever — see the plate block
+    // for the full ledger. NF_0D_D2_ROOF=1 arms it (d2 real damage only); unset =
+    // byte-identical.
+    let d2_roof = difficulty == 2 && real_damage
+        && std::env::var("NF_0D_D2_ROOF").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
     // retune-nb-0d-15, THE #4 EARLY HEAD ACT knob (the runs 15-a..15-e ledger): see the act
     // comment inside the yard legs below. Gated to the container roll + the run variant
     // (unset = byte-identical).
@@ -3221,6 +3261,55 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         }
         fast_leg(&mut w, [136.0, 4.5, -308.5], 1.2, "the plate");
     } else {
+        // retune-nb-0d-18, THE YARD-WEST ARMOUR DETOUR (the round's pickup scan [L 18-12]:
+        // the level carries FOUR body armours (kind 3 weapon 0x6 rounds 50 — the scan's
+        // kind-3 entries) — the annex floor's one (192.82, 10.79, -272.03) is the committed
+        // grab, and (107.75, 6.84, -275.16) sits in the yard's WEST, ~37 u from the exit
+        // stand — a legal real-input grab (the walker's nav web + the touch, the d1/d3
+        // armour probe's own legs). The conserved-tax law (18-3/18-9): the pool at the yard
+        // legs is ~13-15 and every aim-off stand pays the residals — a SECOND +50 armour
+        // turns the trench legs' residual chips and the plate-arrival bursts into absorbed
+        // armour damage (the bullets hit armour first; only the FALLS skip it [M
+        // Player_HandlePain 0x1902c8:84-104]). 18-13's own run: the detour lane passes
+        // THROUGH #4's live spot — the armed 0x12 guard walked to (132.2,-273.4) (the
+        // park drift law, the 15-c finding — the early-catch box (129.6,-282.1)±(4,4)
+        // missed him by 8.7 in z) and chewed the walk at d 10.1 (6 x 1.05 + the killing
+        // 1.90, death t21336 mid-detour). So the lever kills #4 FIRST: the 15-round
+        // NW_HEAD_EARLY act's own corridor band (131.5,-278.0)±(3.5,5.5) covers the live
+        // spot (dx 0.7, dz 4.6) and the head act rides the live boxes (the walk's own
+        // fight machinery, the mover class the 15-round ledger proved) — from the EXIT
+        // STAND (pool ~13-15, the highest pool of the yard legs), before the yard-south-1
+        // leg. NF_0D_WARMOUR=1 arms both (d2 real damage only); unset = byte-identical.
+        let warmour = difficulty == 2 && real_damage
+            && std::env::var("NF_0D_WARMOUR").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0;
+        if warmour {
+            // The scoped-reload law first (the 18-8 finding — see the plate block): the
+            // 18-15 run's #4 head act converged (the ray full CLEAR) with the hand's clip 1
+            // — ONE round, missed, and the in-act reload pulses swallowed while aiming [M
+            // scene.rs 4763]. The aim-off reload rides HERE (the exit stand's pool ~13-15
+            // — the highest of the yard legs) so the act has its clip.
+            if w.scene.sim.as_ref().unwrap().gun.clip < 4 && w.scene.sim.as_ref().unwrap().gun.spare > 0 {
+                for k in 0..3 {
+                    if w.scene.sim.as_ref().unwrap().gun.clip >= 4 { break; }
+                    w.reload_full();
+                    let sim = w.scene.sim.as_ref().unwrap();
+                    eprintln!("[0d] the detour reload pass {} (exit stand): clip {} spare {} reload_state {}",
+                        k, sim.gun.clip, sim.gun.spare, sim.gun.reload_state);
+                }
+            }
+            let _ = kill_guard_head_present(&mut w, [131.5, -278.0], [3.5, 5.5], "the north-west armed #4 (the detour's own head act, the corridor band)", 400);
+            let armour_before = w.scene.sim.as_ref().unwrap().drones.health.armour;
+            w.walk_nav_to([107.75, 6.84, -275.16], "the yard-west armour", 0.6);
+            w.walk_nav_to([107.75, 6.84, -275.16], "the yard-west armour tight", 0.2);
+            for _ in 0..40 {
+                let p = w.scene.sim.as_ref().unwrap().bond.pos;
+                if walker::dxz([p[0], p[1], p[2]], [107.75, 6.84, -275.16]) < 1.2 { break; }
+                w.tick(nf_game::player::Input::default(), false);
+            }
+            let sim = w.scene.sim.as_ref().unwrap();
+            eprintln!("[0d] the yard-west armour: armour {armour_before} -> {} at ({:.2},{:.2},{:.2})",
+                sim.drones.health.armour, sim.bond.pos[0], sim.bond.pos[1], sim.bond.pos[2]);
+        }
         w.walk_to(Wp::new(136.5, 4.5, -290.0).r(2.0), "the yard south 1");
         if nw_kill == 2 {
             let _ = kill_guard_index_certain(&mut w, 4, 0x500007e, 20.0, 8.0, "the north-west armed #4 (the early catch, index)", 260);
@@ -3232,6 +3321,20 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
         }
         if nw_head_early {
             let _ = kill_guard_head_present(&mut w, [131.5, -278.0], [3.5, 5.5], "the north-west armed #4 (the yard-south-1 head act, the corridor band)", 400);
+        }
+        // retune-nb-0d-18, THE D2 ROOF ACT'S RELOAD (the 18-8 law — see the plate block):
+        // the scoped 0x1e reload only engages on AIM-OFF ticks [M scene.rs 4763], and at
+        // the plate the aim-off reload ticks are the fatal exposure (pool ~0.4). Here at
+        // the yard-south-1 stand the pool is ~13-15 and the 100-200 aim-off ticks are
+        // affordable; the filled clip persists to the plate act (no switch in between).
+        if d2_roof && w.scene.sim.as_ref().unwrap().gun.clip < 4 && w.scene.sim.as_ref().unwrap().gun.spare > 0 {
+            for k in 0..3 {
+                if w.scene.sim.as_ref().unwrap().gun.clip >= 4 { break; }
+                w.reload_full();
+                let sim = w.scene.sim.as_ref().unwrap();
+                eprintln!("[0d] the d2 roof act reload pass {} (yard-south-1): clip {} spare {} reload_state {}",
+                    k, sim.gun.clip, sim.gun.spare, sim.gun.reload_state);
+            }
         }
         w.walk_to(Wp::new(136.0, 4.5, -308.5).r(1.2), "the plate");
     }
@@ -3258,6 +3361,27 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // arms it (the run variant only; unset = byte-identical).
     if yard_run && std::env::var("NF_0D_PLATE_ROOF_KILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(cd(1)) > 0 {
         let _ = kill_guard_certain_at(&mut w, [138.9, -325.3], [3.5, 3.5], 11.0, "the roof shooter above the trench (the plate act)", 300);
+    }
+    // retune-nb-0d-18, THE D2 ROOF-SHOOTER PLATE ACT (the run-3 ledger's next lever): the
+    // FAST D20 act claimed #20's 28.0 (the kill at +52, before her trigger) and the walk
+    // reached t21471 — past the plate — but #29's ROOF SHOOTER chipped 8.6 in 13 hits
+    // across the trench legs (the run-10-f roof-drain law, the same (140.2,9.0,-325.3)
+    // perch) and the pool died at the plate. The PLATE->roof line is the measured
+    // converging one ("from the PLATE the pitch is ~13 deg over the open yard" — the
+    // run-14-b law that killed the trench->roof line), and the certain box act is the run
+    // variant's own proven act. The same box (138.9, -325.3) ±(3.5, 3.5) y<11 catches the
+    // perch sniper only (the trench pair sits 6.4 west, outside the box).
+    // THE RELOAD RIDES YARD-SOUTH-1 (18-8's own run: the plate pool is ~0.4 and the
+    // 200 aim-off reload ticks there were the fatal exposure — the walk died at the plate
+    // DURING the passes, t21315, the act never ran). The scoped-reload law [M scene.rs
+    // 4763 → Player_WeaponFiring's R-key gate 0x1a5460] refuses the reload while AIMING a
+    // scoped weapon (flags & 0x40 — the hand is the yard's picked-up sniper 0x1e, clip 1
+    // spare 8 at the plate): reload_full's default-input ticks are the reload window, and
+    // the yard-south-1 stand's pool (~13-15) can afford them. The ammo state persists to
+    // the plate (no switch in between — the acts fire the carried gun). NF_0D_D2_ROOF=1
+    // arms it (d2 real damage only); unset = byte-identical.
+    if d2_roof {
+        let _ = kill_guard_certain_at(&mut w, [138.9, -325.3], [3.5, 3.5], 11.0, "the roof shooter above the trench (the d2 plate act, the round-18 lever)", 300);
     }
     // retune-nb-0d-14: the #4 plate act (the parked spot, d ~27.2 over the open yard — the
     // plate act's own far class, the roof act landed at +26 from the same stand). Mode 2
