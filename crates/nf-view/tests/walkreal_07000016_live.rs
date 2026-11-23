@@ -779,6 +779,10 @@ fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
 /// — the swarm outshoots one clip), then walk the NAV web back to the spot the caller left
 /// Bond at (the fights displace him; the direct steer hits the door-wall jambs).
 fn clear_hostiles_16(w: &mut Walker, radius: f32, cap: u32) {
+    // retune-nb-16-8 lever (a), d3-gated here (the single call site serves every difficulty's
+    // route loop; the d1 walk, the tops-up sisters and the punch walk keep their measured
+    // streams by construction): the fights' SPEED at the ring — see prefer_the_dropped_smg_16.
+    let prefer_smg = w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up();
     let home = w.scene.sim.as_ref().unwrap().bond.pos;
     for _ in 0..10 {
         let sim = w.scene.sim.as_ref().unwrap();
@@ -853,7 +857,11 @@ fn clear_hostiles_16(w: &mut Walker, radius: f32, cap: u32) {
             };
             if let Some(t) = drop {
                 w.walk_nav_to(t, "the clear's kill loot", 0.6);
-                switch_to_a_deep_firearm(w, "the clear's kill loot");
+                if prefer_smg {
+                    prefer_the_dropped_smg_16(w, "the clear's kill loot");
+                } else {
+                    switch_to_a_deep_firearm(w, "the clear's kill loot");
+                }
             }
         }
     }
@@ -908,6 +916,112 @@ fn switch_to_a_deep_firearm(w: &mut Walker, label: &str) {
         for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); } // the holster/draw cycle
     }
     w.switch_to_armed(label); // anything armed beats the fists
+}
+
+/// retune-nb-16-8 lever (a), the fights' SPEED at the ring (the d3 real-damage defeat walk
+/// only — `clear_hostiles_16` computes the gate): after the clear's kill loot, PREFER the
+/// dropped 0x1a SMG over the P2K when Bond owns it with rounds. The ledger's arithmetic: the
+/// guards' 0x1a rounds deal 7.0 a hit on Bond [L the retune-nb-16-7 runs' NF_DMG_TRACE, the
+/// 0x1a drops' record damage] while the P2K's taps deal 2.1 [L run 5's kill trace: 10 body
+/// rounds for the hp-20 #2] — the same records price Bond's own rounds, so an hp-10 ring
+/// guard falls in ~2 SMG rounds where the P2K needs 5-12 (and the hp-20 gallery brutes 3
+/// vs 10), i.e. every reactive fight + clear stand under the ring's 3-5-pourer crossfire
+/// [L runs 8/9: 0.35-0.67/tick standing] stands ~3x shorter. The deep-firearm cycle keeps
+/// the P2K because its 36 rounds pass the >=10 check [M switch_to_a_deep_firearm's own gate]
+/// — a player who just walked over the guard's own SMG swaps to the gun that kills 3x
+/// faster, and keeps it until the mag dries (the 50-round 0x1a mags [L probe_16_pickups];
+/// switch_to_armed's fight-side cycle then falls back to the still-owned P2K). The swap is
+/// the walk's own switch idiom (one cycle press + the 60-tick holster/draw wait, the same
+/// shape switch_off_the_delta models [M the walker's weapon_cycle input; the switch's 61
+/// ticks a try are the price the run-2 probe measured]); when the 0x1a is NOT owned (no
+/// close drop — the loot's 8 u gate) the deep-firearm switch runs unchanged.
+fn prefer_the_dropped_smg_16(w: &mut Walker, label: &str) {
+    let smg_ready = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let inv = &sim.drones.inventory;
+        let in_hand = sim.gun.weapon == 0x1a && sim.gun.clip + sim.gun.spare > 0;
+        let owned = inv.owned.get(0x1a).copied().unwrap_or(false) && {
+            let slot = nf_game::pickup::Inventory::clip_slot(&sim.weapons, 0x1a);
+            inv.clip.get(slot).copied().unwrap_or(0) > 0
+                || inv.carried.get(sim.weapons.ammo_type(0x1a)).copied().unwrap_or(0) > 0
+        };
+        in_hand || owned
+    };
+    if smg_ready {
+        for _ in 0..12 {
+            let (gw, gc, gs) = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                (sim.gun.weapon, sim.gun.clip, sim.gun.spare)
+            };
+            if gw == 0x1a && gc + gs > 0 { return; }
+            eprintln!("[walk] {label}: cycling to the dropped SMG 0x1a (weapon {gw:#04x} clip {gc} spare {gs})");
+            w.tick(nf_game::player::Input { weapon_cycle: 1, ..Default::default() }, false);
+            for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); } // the holster/draw cycle
+        }
+        eprintln!("[walk] {label}: the SMG never came up — the deep-firearm cycle");
+    }
+    switch_to_a_deep_firearm(w, label);
+}
+
+/// retune-nb-16-8 lever (a), part 2 (the d3 real-damage defeat walk only — the caller is the
+/// route loop's d3 gate): walk over the close ring drops (the reactive fights' own kills) and
+/// swap to the dropped 0x1a when owned. The clear's kill-loot idiom's gates, verbatim: the
+/// LIVE drop positions (the gun bounces off the corpse spot [L the clear-loot doc]), inside 8
+/// u, the ±1.5 floor band, arrive 0.6 (the take's radius is under a unit [M Pickup_Handler
+/// 0x18e650]), nearest first, deduped within 1 u, capped at 2 spots (the detour itself is
+/// exposure — the ring pour is 0.35-0.67/tick standing [L runs 8/9]). The walk-over take
+/// [M Pickup_Handler 0x18e650] files the gun + its clip; prefer_the_dropped_smg_16 then swaps
+/// to the 0x1a when owned with rounds. With no live drop inside the gates the helper ticks
+/// nothing and the stream keeps run 10's shape.
+fn loot_the_ring_drops_16(w: &mut Walker, label: &str) {
+    let spots: Vec<([f32; 3], String)> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let bp = sim.bond.pos;
+        let mut v: Vec<([f32; 3], String)> = sim.drones.pickups.iter().filter(|p| !p.gone)
+            .filter(|p| (p.m[3][1] - bp[1]).abs() < 1.5)
+            .map(|p| ([p.m[3][0], p.m[3][1], p.m[3][2]],
+                format!("kind {:#06x} w {:#04x} rounds {}", p.kind, p.weapon, p.rounds)))
+            .filter(|(t, _)| walker::dxz(*t, bp) < 8.0)
+            .collect();
+        v.sort_by(|a, b| walker::dxz(a.0, bp).total_cmp(&walker::dxz(b.0, bp)));
+        v.dedup_by(|a, b| walker::dxz(a.0, b.0) < 1.0);
+        v.truncate(2);
+        v
+    };
+    if spots.is_empty() { return; }
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let owns: Vec<usize> = (0..sim.drones.inventory.owned.len()).filter(|&w| sim.drones.inventory.owned[w]).collect();
+        eprintln!("[real-damage] {label}: the ring loot detour, {} spot(s) {:?}, health {:.1}, in hand {:#04x} clip {} spare {}, owns {:x?}",
+            spots.len(), spots.iter().map(|(s, tag)| format!("({:.1},{:.1},{:.1}) d {:.1} {}", s[0], s[1], s[2], walker::dxz(*s, sim.bond.pos), tag)).collect::<Vec<_>>(),
+            sim.drones.health.health, sim.gun.weapon, sim.gun.clip, sim.gun.spare, owns);
+    }
+    // THE POCKET-DASH IDIOM (the blast-room loot's own no-standing-fights shape): the detour's
+    // legs run with return fire OFF, restored after. Measured ([L the retune-nb-16-8 run 3]):
+    // with return fire ON the second reactive fight opened ON the take hop itself (t~1591),
+    // the stand's no-displacement law froze Bond 2.7 u short of the drop, the take never
+    // completed and the #3/#5/#1 pour finished him at t1705 — the detour must finish BEFORE
+    // the fights re-open, and the fights open better armed (the SMG's 7.0 a round).
+    let rf = w.dmg.return_fire;
+    w.dmg.return_fire = false;
+    for (k, (s, _)) in spots.iter().enumerate() {
+        w.lenient = true;
+        // DIRECT steer to the drop (the pit-room loot idiom): the nav web's last hop measured
+        // 4.3 u SHORT of the drop and still reported arrived ([L the retune-nb-16-8 run 2:
+        // ended (12.12,6.75,-77.19), drop (7.8,5.7,-77.0), the take never fired]) — the direct
+        // walk_to at 0.35 pushes Bond INTO the take's under-a-unit radius [M Pickup_Handler
+        // 0x18e650].
+        w.walk_to(walker::Wp::new(s[0], s[1], s[2]).r(0.35), &format!("{label} loot {k}"));
+        w.lenient = false;
+    }
+    prefer_the_dropped_smg_16(w, label);
+    w.dmg.return_fire = rf;
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let owns: Vec<usize> = (0..sim.drones.inventory.owned.len()).filter(|&w| sim.drones.inventory.owned[w]).collect();
+        eprintln!("[real-damage] {label}: the loot detour done: in hand {:#04x} clip {} spare {}, owns {:x?}, health {:.1}",
+            sim.gun.weapon, sim.gun.clip, sim.gun.spare, owns, sim.drones.health.health);
+    }
 }
 
 /// The south-gallery AR stands (retune-nb-16-7, the d3 real-damage defeat walk only): the
@@ -1324,6 +1438,25 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
                 // through the whole climb).
                 if *label == "the lane south" {
                     stand_off_the_south_gallery_16(w, label, -10.0);
+                }
+                // retune-nb-16-8 lever (a), part 2 (the loot detour that makes part 1 real on
+                // THIS stream): the pre-ring-1 clear BAILS at its own >15 u close gate [M
+                // clear_hostiles_16's `if dxz > 15.0 return`] — the ring east stretch's guards
+                // stand 20-33 u out (#3 24.4-26.0 u, #4 20.5-21.5 u, #5 32.5 u [L the
+                // retune-nb-16-8 run 1's NF_DMG_TRACE: every ring-level clear left no [clear]
+                // line, the stream byte-identical to the 16-7 run 10, death t1620]) — so the
+                // clear's kill-loot never fires before the ring-1 pour, and the SMG
+                // preference never arms. The reactive fight the machinery DID open killed the
+                // NE ring guard #0 at t1345 during the ring east nav 1 (the fight's own
+                // [L trace]) and his dropped 0x1a lies on the ring ~6.5 u off the ring-1 leg's
+                // own line (the walk passes its edge) — a player walks over the close drop
+                // that his own fight just made BEFORE walking into the next pour, and swaps
+                // to the gun that kills 3x faster (prefer_the_dropped_smg_16). Loot spots are
+                // the LIVE drops' own positions inside the clear-loot gates (8 u, the ±1.5
+                // floor band, arrive 0.6 [M Pickup_Handler 0x18e650's under-a-unit radius]);
+                // with no drop there is no detour and the stream keeps run 10's shape.
+                if *label == "the ring 1" {
+                    loot_the_ring_drops_16(w, label);
                 }
                 // retune-nb-16-7 MEASURED (run 11): the ramp-2 re-stand (the cheap hp-10 kills)
                 // shifted the stream and died EARLIER (t1428 at the ramp 1 arrival) — the ramp
