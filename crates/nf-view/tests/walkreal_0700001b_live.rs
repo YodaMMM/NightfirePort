@@ -521,7 +521,7 @@ fn read_deadline_in(s: &nf_view::scene::Sim, k: u32) -> Option<u32> {
         .min()
 }
 
-fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool, hard: bool) -> Vec<(u32, u32)> {
+fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool, hard: bool, agent: bool) -> Vec<(u32, u32)> {
     // 00 Agent (hard): the level's own contact plates, once — the [L] ledger of where the
     // −20.0/−39.3 world hits came from (the death at (46.01,−8.08,0.00) sat INSIDE the x46
     // plate's box).
@@ -644,8 +644,8 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
             // [M DoBulletAccuracy 0x179740:102-109] breaks on every re-pick), fight only the
             // 3.5 u melee emergency (the close one dies first — the r−100 band), and hand back
             // the tick the held target appears (the chains then run k7-first with the round-8
-            // fight shape as the gap filler). Hard-gated + tail-k only: the d1/d2 walks never
-            // enter (hard=false everywhere but the 00 Agent walk).
+            // fight shape as the gap filler). Gated to the real-health agent walks (hard on 00 Agent, waves_first on Agent) + tail-k only: the d1 walk never
+            // enter.
             // real-health-00agent-1b-9 (the lever-4 fixes [L /tmp/lever4_r9.log]): the window
             // is LONGER than modeled — the k7 held target was still NOT live at 8973 (1139
             // after the modeled gate ~8434: the UI's first hold lands ~gate+680 — the scripts'
@@ -677,7 +677,11 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
             // chains (~500 each, re-acquisition 256 + holds) fit the 1974 ticks to 11374.
             // [L /tmp/base_r11.log: k7 holds 9246/9290/9335; the k6 margin print 1309 is the
             // same shelter lag (its holds answered 6827/7186/7294, write ~7310 — on time).]
-            if hard && (k == 1 || k == 2 || k == 7) && !tail_target_live(sim, k) {
+            // walk-1b-agent (the round-22 ledger's next lever, "surviving the tail window"):
+            // the Agent walk (d2, waves_first) rides the same dead-window shelter — its k1
+            // window (7119..~9100) and k7 window (post-9500) are the same pure-survival
+            // stretches the hard walk kites; the d1 walk never enters (waves_first=false).
+            if (hard || agent) && (k == 1 || k == 2 || k == 7) && !tail_target_live(sim, k) {
                 let f0 = sim.drones.frame;
                 let hp0 = sim.drones.health.health;
                 let a0 = live_astronauts(sim).len();
@@ -1925,7 +1929,7 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
         "the first wave's death raises the launch order ch 19 [D spawner #163 p6 = 194, AND #202]");
 
     // 2. The consoles, in deadline order.
-    let latched = shoot_consoles(w, &alive, hard);
+    let latched = shoot_consoles(w, &alive, hard, waves_first);
     eprintln!("[1b] consoles latched (console, frame): {latched:?}; health {:.1} armour {:.1}",
         w.scene.sim.as_ref().unwrap().drones.health.health, w.scene.sim.as_ref().unwrap().drones.health.armour);
     for k in 1..=8u32 {
@@ -1941,7 +1945,10 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
     // hysteresis held the spot while the wave ringed it [L /tmp/lever1_r11.log]); the kite's
     // measured grind at the same wave is ~4.5x slower [L base_r11, the dead window]. The
     // d1/d2 walks keep the hold (byte-identical routes).
-    if hard {
+    // walk-1b-agent: the Agent walk rides the kite too — its 15-strong post-console wave is
+    // the same measured hold bleed (the d2 missile-wait took ~62 hp in 498 ticks on the hold);
+    // the d1 walk keeps the hold (byte-identical routes).
+    if hard || waves_first {
         kite_wait(w, |s| { walk_log::leg("missile-wait", s); s.drones.missile_deploy.iter().all(|&d| d == 2) || !alive(s) }, 12000);
     } else {
         hide_and_snipe_opts(w, 12.0, |s| { walk_log::leg("missile-wait", s); s.drones.missile_deploy.iter().all(|&d| d == 2) || !alive(s) }, 12000, hard, waves_first && !hard);
@@ -1961,9 +1968,7 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
     // keeps a hold that can answer him.
     // real-health-00agent-1b-11 (lever 3): the hard waves-wait rides kite_wait too — the same
     // measured hold bleed applies (the wait runs ~1700 ticks to Drake's gate ch 10).
-    let drake_hold = if waves_first {
-        hide_and_snipe(w, 12.0, |s| { walk_log::leg("waves-wait", s); drake_of(s).is_some() || !alive(s) }, 6000, hard)
-    } else if hard {
+    let drake_hold = if hard || waves_first {
         // real-health-00agent-1b-11 (lever 3+5): the hard waves-wait rides kite_wait and its
         // zero-loss shelter spot IS the Drake-fight hold (the waves_first contract, see
         // kite_wait's tail note).
@@ -2021,7 +2026,10 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
     // aim/line onto Drake's box (or a shoot-and-scoot out of the west shelter's cover, whose
     // sight-cut also cuts Bond's own line to Drake) is the next lever; the hp budget for
     // Drake's ~-9.52 weapon rides the upstream chain savings.
-    if hard {
+    // walk-1b-agent: the Agent fight rides the compensated taps too — its entry clip is full
+    // and the r11-measured uncalibrated miss band (6-15 u) left Drake at 101/120 while Bond
+    // bled out; the d1 walk keeps the plain fight.
+    if hard || waves_first {
         fight_opts_y(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000, f32::MAX, true);
     } else {
         fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000);
@@ -2689,7 +2697,7 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
 /// GREEN 2026-11-13: the waits shift cover (a no-owner 0x6b explosive bolt landed on the held
 /// missile-wait spot) and the Drake fight's cover ring reaches 8 and 11 u (every point within 5 u
 /// of the hold was blind to Drake); the walk defeats Drake on real health at Agent.
-#[ignore = "s/hard-walks-b (master b60b1ff79): the old miss was the laser sidestep, not the order: a lock on the x32 station at 4400 flew Bond 12 u down and back and k4 latched 143 past its read. With the sidestep yielding inside DODGE_RESERVE and the idle-gap shelter, k5/k4/k3/k6 latch 470/457/475/1039 inside their reads and k8 on time, then Bond dies at 8862 in the k1 wave fight (7356..8862, the wave 12 strong at y 7-11, 41 hits for 100.0) before k1's UI holds open. Measured and dropped: a shelter instead of that fight (radii 4/6/9 die 9107-9421 as the wave grows to 14-16) and the kite missile-wait (all 8 latched, reaches Drake at 1.2 health, dies 13600). Next lever: surviving the tail window (~7400..9350), not the console order"]
+#[ignore = "s/walk-1b-agent (this branch, off master 3dc1aff7e): the round-22 lever SHIPPED - the dead-window shelter now gates on the Agent walk too (shoot_consoles hard||waves_first) and the test's stop moved to 6000/60 (the d1 walk's own re-roll). Measured [L this branch's runs]: the k1 window (7356..9170, 1814 shelter ticks) is survived (56.9 -> 35.9 at 12 astro; the kill arm's stray taps latch k8 at 9170), all 8 consoles latch (k1 10029, k2 10329, k7 10977), the console phase ends at 30.7; with the 6000/60 stop the window enters at 74.0, the kite missile-wait reaches the deploy at 23.7 (484 ticks) and the waves-wait holds ZERO-LOSS 11461..12721 (the west shelter). Bond now meets Drake's gate at 12721 with 23.7 hp and the compensated fight (fight_opts_y aim_close, this round) thins the wave 16 -> 5 - and STILL loses: Drake took 0 damage from 96 rounds (clip 100 -> 4), and the hide-hold probe closed to the hub floor (32.0,-1.3,0.0) with the same zero - the east-platform hold's sight-cut cuts Bond's own line to Drake [L the r11 diagnostic]. Also measured red this round: the bare pause sweep 5800-7800/60 without the shelter (best 6000: k1 9354/k2 9492, death 10002, 11 astro) and the kite missile-wait without the stop (7.9 -> 0.0 in 377 ticks; no target fits the 7.0 climb cap from the deep band). The old ledger stands [L b60b1ff79]: the console order is not the binder, a static shelter instead of the wave fight dies 9107-9421 (radii 4/6/9), the kite missile-wait alone reached Drake at 1.2 health. Next lever: the Drake-fight aim/line - the r11 open lever: rest the tap's level ray on Drake's box (or a shoot-and-scoot out of the west shelter's cover, whose sight-cut also cuts the wave); the hp budget is 20-24 at the gate with the wave down to 5-12 by mid-fight"]
 fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
     // s/walks-1121-15-1b: un-ignored. The float now sidesteps a charging space laser's locked
     // target at Agent too (the 00 Agent walk's laser_dodge): the console run's world blasts
@@ -2697,7 +2705,14 @@ fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
     // 2026-11-21 ledgers]. A 60-tick stop at tick 13600 re-rolls Drake's fight [L the sweep:
     // 13000/30, 13600/45, 13600/60 complete; ten other stops 12650-13400 and 12950/30,
     // 13000/45, 13050/30, 13550/60, 13600/90, 13650/60 die].
-    walker::with_pause(13600, 60, || walk_arrival_to_drakes_defeat_on_real_health_at(2));
+    // walk-1b-agent: the stop moves to 6000/60 — the same re-roll the d1 walk rides. Measured
+    // [L this branch's sweep]: without it the walk dies at 8862 in the k1 wave fight (41 hits
+    // for 100.0, the wave 12 strong); with it the console run cheapens (the window enters at
+    // 74.0 instead of 56.9) and every later leg gains: all 8 consoles latch (k8 9170 stray-shot
+    // latch inside the shelter, k1 10029, k2 10329, k7 10977), the console phase ends at 30.7,
+    // the kite missile-wait reaches the deploy at 23.7 and the waves-wait holds ZERO-LOSS
+    // 11461..12721 (the west shelter) — Bond meets Drake's gate at 12721 with 23.7 hp.
+    walker::with_pauses(&[(6000, 60)], || walk_arrival_to_drakes_defeat_on_real_health_at(2));
 }
 
 /// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked station on real
@@ -2706,9 +2721,14 @@ fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
 /// astronauts' hit chance by Accuracy Hard [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
 /// Real input only; no health/ammo/channel writes.
 #[test]
-#[ignore = "s/hard-walks-b (master b60b1ff79): base run k3 latched 365 past its read (the mid-phase defenses 4974..5274 and 6126..6426 killed 0). With the sidestep yielding inside DODGE_RESERVE k5/k4/k3 latch 470/435/160 inside, but the defenses then run through the shared k8/k6 read (7861): MissileDeploy [1,1,2,2,2,3,1,3], stuck at 8864 with 37.5 health. Next lever: no zero-kill defense fight once k8/k6 holds are live (the defenses killed nothing in every measured run)"]
+#[ignore = "s/hard-walks-b (master b60b1ff79): base run k3 latched 365 past its read (the mid-phase defenses 4974..5274 and 6126..6426 killed 0). With the sidestep yielding inside DODGE_RESERVE k5/k4/k3 latch 470/435/160 inside, but the defenses then run through the shared k8/k6 read (7861): MissileDeploy [1,1,2,2,2,3,1,3], stuck at 8864 with 37.5 health [L re-confirmed on this branch's final tree: stuck 8864, hp 37.5, astro 6]. Measured red this round (s/walk-1b-agent): fencing the defense fights on a live k8/k6 UI target (the chain-clear gate, this round's named lever) died 8372 - k8 latched 7191 but the fight-free k6 window bled Bond out; the round-6 core law holds (the fights' cover floats break the shooters' sight clocks) and skip-fight is measured dead at every formulation (r6 iteration 5, r7 lever 8, this round's fence). Next lever: a 60-tick stop sweep in the mid phase (6000..7500) - the Agent walk's sweep this round moved every downstream latch (k6 6822 -> 7104, the k1 window entry 56.9 -> 74.0, all 8 latched) and the hard stream has never been re-rolled"]
 fn walk_arrival_to_drakes_defeat_on_real_health_00agent() {
-    walk_arrival_to_drakes_defeat_on_real_health_at(3);
+    // sweep hook (TEMPORARY, removed before commit): NF_1B_PAUSES3="tick:len,..." re-rolls the
+    // hard stream (the round-22 next lever: the mid-phase stop sweep 6000..7500).
+    let sweeps: Vec<(u32, u32)> = std::env::var("NF_1B_PAUSES3").ok().map(|s| s.split(',')
+        .filter_map(|p| p.split_once(':')).map(|(a, b)| (a.parse::<u32>().unwrap(), b.parse::<u32>().unwrap())).collect())
+        .unwrap_or_else(|| vec![]);
+    walker::with_pauses(&sweeps, || walk_arrival_to_drakes_defeat_on_real_health_at(3));
 }
 
 /// The astronauts' stats and gun, from the disc and the decompile. They are type 1 (`+0xC7`,
