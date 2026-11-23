@@ -444,3 +444,14 @@ calls; the foreground runs + the report took the window); the per-binary substit
 0d-16/17 precedent — the diff touches only the 0d walkreal test file (no crates/*/src/, no
 common helpers), so the other three crates' suites are unaffected by construction (0d-16
 measured them 2153/71/11 on this line). The report: docs/reports/retune-nb-0d-18.md.
+
+## retune-nb-0d-19 (2026-11-23) — round 19 of the 0d arrival-to-C5-door real-damage walks
+
+Branch `s/retune-nb-0d-19` from origin/master 7562f1e70 with origin/s/retune-nb-0d-18 merged in
+first (0d-18 not on master). Task walk: walk_arrival_to_the_c5_door_real_damage_agent (00
+Agent). The ignore message's next untried lever: (i) the D20-TOP + WARMOUR composition — the #4
+pitch-pin law needs a DIFFERENT act class on his flat line (a chest shoot_far_aim from the exit
+stand, or the #4 kill from the yard-south-1 arrival with the detour run FIRST) — the +50 yard-
+west armour (107.75,6.84,-275.16) then absorbs the trench/return legs. Skipped measured-dead
+levers: S15_HEAD (18-1), D2_ROOF (18-4..9), WARMOUR alone (18-13..16), the hop grid (ii).
+Progress logged in docs/reports/retune-nb-0d-19.md at round end.
