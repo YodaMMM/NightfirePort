@@ -14,8 +14,6 @@ use crate::walker::Wp;
 /// A player who spots the shotgun man before the corridor does not hand him the opening
 /// blast: the stand runs only when the game's own exposed-part probe reads a reachable box
 /// from the leg end (d 2.0), and a kill there means the burst never exists.
-// Per test thread, like every lever flag below (the sisters run in parallel in one binary; a
-// process-wide flag leaked the real-damage levers into the plain walk mid-run).
 thread_local! { pub static PRE_CLEAR_SOUTH_CORRIDOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// OPT-IN (set only by the 07000013 chain's d3 real-damage walk, checked at the one labeled leg

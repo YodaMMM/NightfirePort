@@ -2331,7 +2331,6 @@ fn walk_spawn_to_the_omega_sector_exit_real_damage() {
 /// (#14, #12, #13, one round each). Measured on this tree: green, health 58.6 from the silo
 /// crossing to the exit (the opening crossing still costs 41.0).
 #[test]
-#[ignore = "s/g019-sky-2 (guards drop a finished voice line every control pass): Bond dies t6088 at (34.84,41.41,26.80) at the door[39] north node (#8's 0x1a grenade, -38.0) [L 2026-11-21 run]. Levers tried and dead: 16 single stops 500-8000 and 81 random 1-3-stop runs (46 die at the fence/plank, 26 at the door[29] west lane, 8 in the hall); re-tune and un-ignore"]
 fn walk_spawn_to_the_omega_sector_exit_real_damage_00agent() {
     // s/walks-1121-15-1b: un-ignored. Two route changes (the door[39] leaf opened from its south
     // stop with the pair answered there; the door[47] north leg walked answering fire) carry
