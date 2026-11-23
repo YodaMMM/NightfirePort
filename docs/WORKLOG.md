@@ -488,3 +488,43 @@ fell off the edge [L 19-6]), composed with the PROVEN acts (D20_TOP + WARMOUR_AC
 #4 +201 [L 19-1], #7 +148 [L 19-5]). Skipped measured-dead levers per the ledger: S15_HEAD, D2_ROOF,
 WARMOUR alone, the hop grid, walk_nav_to roofarm. Progress logged in docs/reports/retune-nb-0d-20.md
 at round end.
+
+retune-nb-0d-20 round result (2026-11-23, ~09:25Z): the round took the 0d-19 ignore message's
+lever — the ROOF ARMOUR via the route's own waypoint class — and measured it DEAD BY DESIGN,
+then measured the scan's third armour (the north-east ground pocket) DEAD as wired twice. The
+roof penthouse (the scan's fourth armour (147.0, 21.76, -252.77)) sits on the west-roof guards'
+floor (origin 22.70 [L the wake census]; the touch takes 0 -> 50 from that floor [L the
+teleport probes]) but its ONLY doors are fakedoors #517/#520 (147.12, 22.94, -258.12)/(148.27,
+22.94, -236.15) with lock ch 200 that has NO writer in the level's data [D the audit] — and
+every staged exterior ascent from the main roof (18.58) fell or stalled: the diagonal to y 7.77,
+the band line to y 11.46, the long climb to y 1.04, the hop to y 16.6, the north-edge hug
+stalled at z -266.8 [L the probe series, probe_0d_roofarm_path*]. The north-east ground armour
+(205.41, 0.11, -205.31): the take ARMS AT d2 (the x-210 lane north from the blind-strip band is
+open — the band approaches stall on a player-collision wall at z ~-208.9 for x 202-208.5 but x
+209.5-213.5 passes [L probe_0d_north_armour*]; the pocket settle took the touch, 0 -> 50 at d2
+and 22 -> 50 in-run) — but the ~1900-tick open-ground detour walked INTO the deck line's field:
+20-1 (NF_0D_NARMOUR=1) death t3953 in the pocket's east-out leg, 8 hits for 100.0 + ~100 armour
+eaten (the deck sniper #22 68.0 in 4 hits at d 84.8, the deck guard #20 28.0 at d 57.5, the bay
+#11 4.0; the ground-band snipers #36/#21 SILENT through the whole detour); 20-2 (NARMOUR=2, the
+strip-mouth #22 head act composed first) — the act LANDED but on #11 (the box's nearest live;
+#22's round-1 pick was its own roll's reposition), #22 still fired 56.0, the act cost 34.0 pool,
+death t4174. Both runs reproduced tick-exact on the rebuilt tree after the sandbox reset. The
+armour-volume lever class is MEASURED EXHAUSTED (annex taken; yard-west ~15 u beyond the budget
+death [L 19-2]; roof sealed [D+L]; north dead [L 20-1/20-2]) — the round-19 composition's
+premise (absorb the conserved bill with armour volume) has no untried member. KNOB default OFF:
+NF_0D_NARMOUR=1/2 (d2 real damage only; unset = byte-identical). The ignore message carries the
+round-20 ledger and the NEXT LEVER: the TRENCH-LANE DETOUR to the yard-west armour (107.75,
+6.84, -275.16) — the under-dock trench (floors 3.0/0.0, z -266..-272, the yard-side wall 3.9 at
+z -272 [D]) sits north of the yard-EAST pair's line and its 3.9 rim plausibly blocks their low
+line into it [S unverified]; the trench-edge climb is the route's own proven class [M the walk's
+return leg]. Whole binary on the final tree: 2 passed / 1 failed / 2 ignored in 70.21 s (the
+plain + d1 GREEN — the byte-identity holds; the 00agent failure the pre-existing batch-3
+signature t3995 = 16-0). The diff touches ONLY crates/nf-view/tests/ (the 0d test file + five
+assertion-free probe files; no crates/*/src/, no common helpers) — the other crates' suites
+unaffected by construction (the 0d-16 precedent measured 2153/71/11 on this line); the bg
+suite.py died between tool calls AGAIN this round (re-fired twice: the env FileNotFoundError,
+then the 0-process/no-output kill — the rounds-13..19 signature). The sandbox RESET mid-round
+(~09:01Z): the clone/token/games/ALSA/rustup were rebuilt from the driver message, the branch
+was recovered from origin (both earlier commits intact), and the two lost edits (the eprintln
+arg fix + the NARMOUR=2 block + the ignore refresh) were re-applied and re-verified. The
+report: docs/reports/retune-nb-0d-20.md.
