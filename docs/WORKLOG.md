@@ -455,3 +455,26 @@ stand, or the #4 kill from the yard-south-1 arrival with the detour run FIRST) �
 west armour (107.75,6.84,-275.16) then absorbs the trench/return legs. Skipped measured-dead
 levers: S15_HEAD (18-1), D2_ROOF (18-4..9), WARMOUR alone (18-13..16), the hop grid (ii).
 Progress logged in docs/reports/retune-nb-0d-19.md at round end.
+
+retune-nb-0d-19 round result (same day, ~07:12Z): the round took lever (i) — the D20-TOP +
+WARMOUR composition with a different act class on #4's flat line — 6 measured runs [L, the
+direct test binary, --test-threads=1, each its own roll]: the CHEST act from the exit stand
+LANDS (#4 down at +201 [19-1]; the head act's pitch-pin was a HEAD-aim measurement), and the
+composition D20_TOP+WARMOUR+ACT reached t23067 mid-detour (+1596 past 18-3's t21471, THE
+DEEPEST ANY ROUND) — but the yard-EAST armed pair (#7 7.6-in-12, #1 1.0-in-13) chewed the
+23.75 armour + 8.6 pool across the ~900-tick lane (death at x 122.70, the SAME choke point in
+the detour-first order [19-2 t22235] — the armour sits ~15 u beyond the budget death); the
+east-pair chest acts with the MEASURED exit-stand spot box took #7 at +148 [19-5] but the
+RESIDUAL BILL IS CONSERVED TOO (drone #0 re-attributed the 7.6 as 6.7-in-14, the same 8.6 on
+the same spot, t22180); the ROOF ARMOUR grab (the 18-12 scan's fourth armour, 4.5 u from the
+west-roof stands) measured DEAD as wired — walk_nav_to fell off the roof edge, t7314 [19-6].
+NEW KNOBS all default OFF (NF_0D_WARMOUR_ACT, NF_0D_WARMOUR_S1, NF_0D_WARMOUR_EAST,
+NF_0D_ROOFARM; each =1/=2 re-arms its class). The ignore message carries the round-19 ledger
+and the next lever: the ROOF ARMOUR via the COMMITTED route's own Wp waypoint class (NOT
+walk_nav_to), composed with the proven acts. Whole binary on the final tree: 2 passed / 1
+failed / 2 ignored in 68 s (the plain + d1 GREEN — the byte-identity holds; the 00agent
+failure the pre-existing batch-3 signature t3995 = 16-0). The diff touches ONLY
+crates/nf-view/tests/walkreal_0700000d_live.rs (no crates/*/src/, no common helpers) — the
+other crates' suites unaffected by construction (0d-16 measured 2153/71/11 on this line); the
+bg suite attempt died between tool calls (the rounds-13..18 signature, re-measured this
+round at ~05:57Z). The report: docs/reports/retune-nb-0d-19.md.
