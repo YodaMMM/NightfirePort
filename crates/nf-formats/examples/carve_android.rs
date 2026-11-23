@@ -10,6 +10,7 @@ fn main() -> anyhow::Result<()> {
     let iso_path = args.next().expect("usage: carve_android <iso> <out-dir> [--all]");
     let out_dir = args.next().expect("usage: carve_android <iso> <out-dir> [--all]");
     let carve_all = args.any(|a| a == "--all");
+    let carve_movies = carve_all || std::env::args().any(|a| a == "--movies");
     let out = Path::new(&out_dir);
     let files_dir = out.join("FILES");
     std::fs::create_dir_all(&files_dir)?;
@@ -62,6 +63,7 @@ fn main() -> anyhow::Result<()> {
             || upper.starts_with("/PS2/MUSIC/MFX_02")
             || (carve_all && upper.starts_with("/PS2/MUSIC/"))
             || (carve_all && upper.starts_with("/PS2/ENGLISH/STREAMS/"))
+            || (carve_movies && upper.starts_with("/MOVIES/") && upper.ends_with(".PSS"))
             || (carve_all
                 && upper.starts_with("/DRIVING/")
                 && (upper.ends_with(".VIV") || upper.ends_with(".MUS") || upper.ends_with(".SPE")));
