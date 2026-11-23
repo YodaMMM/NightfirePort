@@ -3500,6 +3500,9 @@ struct App {
     /// decides which one the game would be playing and `present()` feeds the ONE plane in
     /// gpu.rs. Cleared by the skip, the end of a non-looping stream, or a code change.
     movie: Option<movie::Player>,
+    /// Last movie code whose start failed (e.g. carved asset folder without `/MOVIES/*.PSS`),
+    /// so we don't re-probe disk and spam stderr every frame for the same missing movie.
+    movie_failed: Option<u32>,
     /// `--dev`: the dev menu in its own native window beside the game (devwin.rs; a native window, not a browser
     /// page). None without `--dev`, or when the window couldn't open (the F2 overlay is the fallback).
     devwin: Option<devwin::DevWindow>,
@@ -4779,18 +4782,28 @@ impl App {
             // one starts (`fe.intro_movie`); the host plays it and feeds psiMovieFinished back.
             let code = fe.intro_movie_code();
             if fe.intro_movie {
-                let wrong = match &self.movie { Some(p) => p.code() != code || p.is_looping(), None => true };
+                let wrong = match &self.movie { Some(p) => p.code() != code || p.is_looping(), None => self.movie_failed != Some(code) };
                 if wrong {
                     if let Some(p) = self.movie.take() { p.stop(); }
                     match movie::Player::start(&movie_iso, code, movie_sfx_volume(fe)) {
                         Ok(p) => {
-                            self.movie = Some(p); eprintln!("movie: playing {code:08x} (intro)");
+                            self.movie = Some(p);
+                            self.movie_failed = None;
+                            eprintln!("movie: playing {code:08x} (intro)");
                             // frontend-music: the page's movie start removed the pair (menu_movie
                             // = 0) [M 0x209e88:42-44, 0x20a060:20-22]; the movie's own audio
                             // replaces it.
                             fe.music.movie_started();
                         }
-                        Err(e) => eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown carries the intro"),
+                        Err(e) => {
+                            self.movie_failed = Some(code);
+                            if self.gfx.is_some() && matches!(e, movie::StartError::NoMovieData(_)) {
+                                eprintln!("movie: {code:08x} not started: {e:?} — skipping missing intro movie (BGFMVPlaying == 0)");
+                                fe.intro_movie_finished();
+                            } else {
+                                eprintln!("movie: {code:08x} not started: {e:?} — the headless countdown carries the intro");
+                            }
+                        }
                     }
                 }
                 // psiMovieFinished [M 0x1082e8, polled by the page's 0x50]: while the real movie
@@ -4895,8 +4908,9 @@ impl App {
             }
             let wrong = match &self.movie {
                 Some(p) => aux == 0 || p.code() != aux || !p.is_looping(),
-                None => aux != 0,
+                None => aux != 0 && self.movie_failed != Some(aux),
             };
+            if aux == 0 { self.movie_failed = None; }
             if wrong {
                 if let Some(p) = self.movie.take() {
                     let code = p.code();
@@ -4905,8 +4919,8 @@ impl App {
                 }
                 if aux != 0 {
                     match movie::Player::start_looping(&movie_iso, aux, movie_sfx_volume(fe)) {
-                        Ok(p) => { self.movie = Some(p); eprintln!("movie: looping {aux:08x} (page backdrop)"); }
-                        Err(e) => eprintln!("movie: {aux:08x} not started: {e:?} — the dark plate stands in"),
+                        Ok(p) => { self.movie = Some(p); self.movie_failed = None; eprintln!("movie: looping {aux:08x} (page backdrop)"); }
+                        Err(e) => { self.movie_failed = Some(aux); eprintln!("movie: {aux:08x} not started: {e:?} — the dark plate stands in"); }
                     }
                 }
             }
@@ -7335,6 +7349,7 @@ impl App {
             #[cfg(feature = "gamepad")]
             pad: None,
             movie: None,
+            movie_failed: None,
             devwin: None,
             audio_paused: false,
             loading_art: None,
@@ -7743,7 +7758,11 @@ pub fn run() -> Result<()> {
     // 0x7000048 and opens the P_START page on it [M bootup 0x1c7e78 + ResetMap_Load 0x1d6360].
     // A lone positional that names an existing file is the image, not a level (`nf-view <iso>` boots the
     // front end too).
-    let lone_iso = matches!(pos.as_slice(), [p] if std::path::Path::new(p.as_str()).is_file());
+    let is_data_source = |p: &str| {
+        let path = std::path::Path::new(p);
+        path.is_file() || (path.is_dir() && path.join("FILES_INDEX.tsv").is_file())
+    };
+    let lone_iso = matches!(pos.as_slice(), [p] if is_data_source(p.as_str()));
     let (iso, level) = match pos.as_slice() {
         [iso, level] => (iso.to_string(), level.to_string()),
         [iso] if lone_iso => (iso.to_string(), "07000048".to_string()),
