@@ -518,3 +518,11 @@ Progress:
 - the seven walk canaries on the final tree: 28 passed / 0 failed / 2 ignored (eastroute 1, 1b 17/2i, barrelrow 1, door6 1, probe11 2, zipline 1, pickups08 5) - the other walks byte-identical.
 - the ignore message now carries the round-25 block: the measurements + the next levers (the armour entry via the boarding drain < 18.0, the salvo-source live check, the pocket dodge measured dead).
 - the fast runner (tools/test/suite.py) not completable in this sandbox: the background runner is killed between tool calls (the sandbox's own rule) and the build ENOSPCs on this 9.9 GB disk (the round-24 report's documented constraint); its 4-minute leash wrote ~1.5 GB of partial artifacts and died. The run step is replicated fresh on the final tree: the whole 08 binary + the seven canaries (above); round-24's 165-binary replication (823/19/48, all 18 unique fails the slim-ISO driving-VIV stubs) remains valid - the only source this tree touches is the 08 test file, comments/eprintln only since the revert.
+
+## retune-nb-08-26 (2026-11-23)
+
+Task: 08 whole-mission 00 Agent real-damage walk green, round 26. Branch = master 7562f1e70 + s/retune-nb-08-25 merged (d8aed67e0, the round-25 ledger/report included).
+
+Progress:
+- branch created and pushed; setup in progress (game files downloading).
+- read the 08-25 report + the ignore ledger; taking the next untried lever per the ignore message; judged on its own real runs.
