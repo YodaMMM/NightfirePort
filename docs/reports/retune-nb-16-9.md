@@ -105,3 +105,15 @@ exposure (why `exposed_part` never opens at 2.0-2.6 u).
 ## Usage
 
 not visible to me
+
+## ntfy failed
+
+All three fallbacks failed against https://ntfy.sh/nightfire-yoda-8k3x from this sandbox at
+finish time (2026-11-23 ~10:35 UTC) — the same ntfy.sh egress failure the −1/−2/−8 reports
+documented (the GitHub pushes and the game-file downloads all worked all session):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "..." https://ntfy.sh/nightfire-yoda-8k3x` —
+   `curl: (28) Connection timed out after 20002 milliseconds`.
+2. the python urllib fallback — hung past the 20 s timeout, the tool call killed at 40 s.
+3. `wget -q -O- --post-data "..." --timeout=15 https://ntfy.sh/nightfire-yoda-8k3x` — hung,
+   the tool call killed at 30 s, no output.
