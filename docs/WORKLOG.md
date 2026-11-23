@@ -42,3 +42,9 @@ Verification:
   build scripts had duplicated 1320 lib rlibs for ~5 GB; cleaned and rebuilt) plus the lever
   runs. Same justification as round 22: the change surface is the single 1b test file, and the
   whole 1b binary ran twice on the final tree.
+- round-2 addendum: the 00agent sweep was completed to ALL 15 stops (6000..7500/60) — k5 3191 /
+  k4 4426 / k3 5901 identical everywhere; k8 7583/8464/-/7587/-/-/7859/-/-/-/-/8161/8234/8305/
+  8728, k6 only at 6750; final health 0.0/0.0/0.0/8.4/42.5/42.5/17.5/40.9/0.0/42.5/42.5/32.5/
+  42.5/42.5/42.5. Seven stops STALL at the k8/k6 read with hp 42.5 (the master baseline stalls
+  at 8864 with 37.5). Next lever in the ignore message. Whole 1b binary re-run on the final
+  tree: 17 passed; 0 failed; 2 ignored (119.94s).
