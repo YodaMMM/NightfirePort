@@ -504,3 +504,17 @@ Progress:
 - read the 08-24 report + the round-24 verdict comments in walkreal_07000008_live.rs + the ignore message on the 00agent test (its tail carries the round-17 block; rounds 18-24 live in the code comments).
 - ledger for this round: (1) THE AGGRO ANSWER — the launch lever must ship WITH a salvo answer (dodge miss >= ~6 on the through-the-gap w62 rounds via a bigger/earlier side step, or hold the launch until the machine sits on the band's far side); (2) the armour entry; (3) the salvo close band. Round-24 measurement: the dive-window launch FIRED t18 and LANDED 100.4 (hp 598 -> 497.6) but the aggro re-roll killed Bond at t28369 (1240 ticks shallower than shipped t29609).
 - levers in progress; judged on their own real runs.
+
+## retune-nb-08-25 (2026-11-23)
+
+Task: 08 whole-mission 00 Agent real-damage walk green, round 25. Branch = master 7562f1e70 + s/retune-nb-08-24 merged (7e7a96ef8, the round-24 test-file ledger commit 25bcc2a4e included).
+
+Progress:
+- branch created and pushed; sandbox was reset mid-task (setup redone: clone, work-slim, ISO, rust, cargo fetch, the queue worktree).
+- read the 08-24 report + the round-24 verdict comments + the ignore ledger; took the ledger's lever (1): the dive-window launch package re-armed WITH the aggro answer, judged on six real runs (v1-v6).
+- THE DRAW SETTLE re-shipped and PROVEN: the round-24 disproof does not hold on the round-23-shaped tree - the [08 draw] line measured switch_state 3 at f27455 (the loop opens MID-DRAW; tick_fire's drawing guard [M Player_WeaponFiring 0x1a5460] ate the dive's all-green t10-t35 window; v1/v2: zero launches). With the settle the round-24 launch reproduced exactly: settled f27490 after 35 settle ticks, launch t18 d 42.8, LANDED 100.4 at t211, hp 598 -> 497.6.
+- THE AGGRO ANSWER tried in four shapes, all DEAD by the depth criterion: the wall-read cast disarmed the drive (v3 t28369, Bond frozen - the segment_flight cast returned a block the round's own flight refutes); the miss-hat pick + the widened bands (v4 t28717); + the wedge re-pick (v5 t28821); + the wedged-side exclusion (v6 = v5 byte-identical). The measurement that settles the class: the anchor pocket is ~0.5-0.8 u across, the standing strafe grinds ~0.03/tick against the plate lip - the dodge cannot build the miss >= ~6 the ledger asked for at this anchor.
+- behavior restored byte-identical to the round-23 tree: death t29609 (112.95,13.09,-179.32) re-confirmed [L the revert run]; the whole walkreal_07000008_live binary 6/0/1 [L the run].
+- the seven walk canaries on the final tree: 28 passed / 0 failed / 2 ignored (eastroute 1, 1b 17/2i, barrelrow 1, door6 1, probe11 2, zipline 1, pickups08 5) - the other walks byte-identical.
+- the ignore message now carries the round-25 block: the measurements + the next levers (the armour entry via the boarding drain < 18.0, the salvo-source live check, the pocket dodge measured dead).
+- the fast runner (tools/test/suite.py) not completable in this sandbox: the background runner is killed between tool calls (the sandbox's own rule) and the build ENOSPCs on this 9.9 GB disk (the round-24 report's documented constraint); its 4-minute leash wrote ~1.5 GB of partial artifacts and died. The run step is replicated fresh on the final tree: the whole 08 binary + the seven canaries (above); round-24's 165-binary replication (823/19/48, all 18 unique fails the slim-ISO driving-VIV stubs) remains valid - the only source this tree touches is the 08 test file, comments/eprintln only since the revert.
