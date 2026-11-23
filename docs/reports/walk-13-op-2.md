@@ -62,7 +62,16 @@ the sweep's kill print in both runs).
 - `git diff origin/master --stat`: only crates/nf-view/tests/walkreal_07000013_live.rs (+ docs),
   so no other binary's behaviour can differ from master; no sim, draw, RNG, damage, health or
   guard-code change; no top-ups; real input only.
-- The suite (tools/test/suite.py via the resumable chunk runner): see the Suite section below.
+
+## Suite (the final tree, the resumable chunk runner)
+
+The background suite dies between tool calls in this sandbox, so tools/test/suite.py ran through
+scripts/suite_chunked.py (the runner's own per-binary logic, one JSONL state file) on the final
+tree (f4b1334aa, the refreshed ledger included). **The full sweep: 414 test binaries, 1759
+passed, 7 failed, 72 ignored.** The 7 failures are the branch-point allowed set exactly:
+fix_0c_pylon_live (2) + probe_pylon_render (1) — the wgpu tests need a GPU this sandbox lacks,
+driving_ai_follow (1), and disc_golden (3) on the slim ISO. No FAILED/TIMEOUT line belongs to
+this task's change; walkreal_07000013_live ran inside the sweep green (4 passed, 1 ignored).
 
 ## What's left
 
