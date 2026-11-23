@@ -22,3 +22,11 @@ the west-mid leg, #4 killed true at the west-mid end, the watch killed #9, death
 security-room door drain - 1895 ticks past round 1's frontier. walkreal whole binary 4 passed /
 0 failed / 1 ignored; interactables 10 passed / 0 failed. The refreshed ledger + the next lever
 (the door phase's pool: the north-west fetch after the watch drain) are in the ignore message.
+
+## walk-13-op-3 (2026-11-23, s/walk-13-op-3)
+
+Task: branch s/walk-13-op-3 from origin/s/walk-13-op-2 (160dda650, strictly ahead of master
+7562f1e70). Round 3 of the 13 warm-chain real-damage walk: read the round-2 ledger in the
+walkreal_07000013 ignore message, skip the levers it marks measured dead, take the next untried
+one, judge it on its own real run, keep the helpers gated to level+difficulty and the sisters
+byte-identical. Remove the ignore when green; otherwise push the refreshed ledger. Progress below.
