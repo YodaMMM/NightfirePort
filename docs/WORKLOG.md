@@ -482,3 +482,11 @@ Progress:
 - merged-tree baseline: death t21550, killer = Bond own rocket self-blast (owner -1 kind 0x2c, 3.7 u, -14.00) after the l 44.7 far launch; fight entry 21.0/23.0 armour.
 - SHIPPED: the launch distance cap (l<=20, d3) -> t21708; the dive-stand weave (the round-22 strafe pattern in the fight loop held window) -> t22500 (+950, deepest on this tree).
 - next levers in the ignore ledger: the salvo close band vs the 6.3-miss wall-band pairs, the nav-stand weave (shared helper), the armour entry.
+
+## retune-nb-08-24 (2026-11-23)
+
+Task: 08 whole-mission 00 Agent real-damage walk green, round 24. Branch = master 7562f1e70 + s/retune-nb-08-23 merged.
+
+Progress:
+- branch created, round-23 tree merged (death t29609 baseline, three levers shipped in 23: launch distance cap, dive-stand weave, 6300/60 re-roll stop).
+- reading the 08-23 report + ignore ledger to pick the next untried lever.
