@@ -88,3 +88,18 @@ stop) stands unchanged.
 ## Usage
 
 not visible to me.
+
+## ntfy failed
+
+All three fallbacks failed (network egress to ntfy.sh unreachable from this sandbox):
+
+1. `curl -sS -m 20 -H "Title: NightfirePort" -d "walk-1b-agent-3: ..." https://ntfy.sh/nightfire-yoda-8k3x`
+   → `curl: (28) Connection timed out after 20002 milliseconds` (exit 28)
+2. `python3 -c "... urllib.request ..."`
+   → `urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>`
+3. `wget -q -O- --post-data "walk-1b-agent-3: done" https://ntfy.sh/nightfire-yoda-8k3x`
+   → timed out (exit 124 after 30 s, no output)
+
+The branch, the WORKLOG entry and `docs/reports/walk-1b-agent-3.md` are pushed
+(s/walk-1b-agent-3 e3499a2f6 + the ntfy-failed addendum), and
+`finish.sh 50-walk-1b-agent-3 done` reported OK before the notification attempt.
