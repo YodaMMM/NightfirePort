@@ -407,3 +407,40 @@ pre-existing batch-3 regression t3995 = 16-0's signature), interactables_0700000
 first); the per-binary substitute per the 0d-16 precedent — the diff touches only the 0d
 walkreal test file, so the other three crates' suites are unaffected by construction. The
 report: docs/reports/retune-nb-0d-17.md.
+
+## retune-nb-0d-18 (2026-11-23, sandbox2)
+
+Task: round 18 of the 0d arrival-to-C5-door 00 Agent real-damage walk
+`walk_arrival_to_the_c5_door_real_damage_agent`. Branched from origin/master 7562f1e70 with
+origin/s/retune-nb-0d-17 merged in first (0d-17 is not on master; fast-forward — 0d-17's tip
+sits on master). 18 measured runs [L, the direct test binary, --test-threads=1]. The committed
+shape REPRODUCED 17-8b exactly (18-0: t20234, 34 hits 70.6 + 29.4 falls; the no-env byte-
+identity re-verified on the final tree, 18-17). The ledger's levers judged on their own runs:
+(c) the S15 HEAD act DEAD (18-1 t4795 — the head-box line from the ladder-top eye reads full
+0.947-blocked, the order law; the height law does not save it); (d) the #20 LADDER-TOP act —
+the DRAINED variant landed the kill (+212, the DOWN-hill ray CLEARS where the base act's
+up-hill died 0.040) but her 28.0 was already in flight and the stand re-rolled the south-roof
+windows (18-2 t4348); the FAST variant WON the race (the kill +52, #20's 28.0 GONE, t21471 at
+the plate — +1237 past 17-7, the deepest) BUT the bill is CONSERVED (18-3: #19's window opened
++28.0) — THE CONSERVED-TAX LAW: the pair's 2 x 28.0 + #22's 6.0 land on the walk's longest
+stand wherever it is, and the pair ray clears only after the pair's own triggers. NEW LAW [M
+scene.rs 4763 → Player_WeaponFiring's R-key gate 0x1a5460]: the reload is REFUSED while AIMING
+a scoped weapon (flags & 0x40; the hand is the yard's picked-up sniper 0x1e) — the roof-shooter
+lever's act converges (the PLATE->roof ray full CLEAR) but its in-act reload pulses are
+swallowed (18-4/5/6), the pre-act aim-off reload fills the clip (18-7/8) and the aim-off ticks
+at the plate (pool ~0.4) were the fatal exposure (18-8 t21315 during the passes); the reload at
+yard-south-1 (pool ~13-15) died the same way — the pair's tax landed INTO the reload window
+(18-9 t21042). NEW LEVER CLASS from the pickup scan (18-12): FOUR body armours exist (kind 3
+weapon 0x6); the yard-west one (107.75,6.84,-275.16) ~37 u west of the exit stand would absorb
+the trench/return chips — MEASURED BLOCKED: the detour lane passes #4's LIVE park (132.2,-273.4,
+the drift law, 8.7 outside the early-catch box) and the head act from the exit stand cannot
+converge the pitch on his flat line (the cross y pinned -0.2257, 5 rounds high with the filled
+clip — 18-16 t21210; the unfilled run 18-13 t21336). All the round's knobs stay default OFF
+(NF_0D_S15_HEAD, NF_0D_D20_TOP, NF_0D_D2_ROOF, NF_0D_WARMOUR). Whole binary on the final tree:
+walkreal_0700000d_live 2 passed / 1 failed / 2 ignored in 70.3s (the plain + d1 GREEN — the
+byte-identity holds; the 00agent failure the pre-existing batch-3 regression t3995 = 16-0's
+signature). The suite did not fit the window (this sandbox kills background jobs between tool
+calls; the foreground runs + the report took the window); the per-binary substitute per the
+0d-16/17 precedent — the diff touches only the 0d walkreal test file (no crates/*/src/, no
+common helpers), so the other three crates' suites are unaffected by construction (0d-16
+measured them 2153/71/11 on this line). The report: docs/reports/retune-nb-0d-18.md.
