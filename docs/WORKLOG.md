@@ -121,3 +121,27 @@ retune-nb-16-8 (2026-11-23): session opened. Branch s/retune-nb-16-8 created fro
 (7562f1e70) with s/retune-nb-16-7 merged in first (it was not on master). Target: the
 walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent walk, next untried lever
 from the retune-nb-16-7 ignore message (skipping the ledger-dead levers). Work in progress.
+
+retune-nb-16-8 final (2026-11-23): the SMG-speed lever (the ignore-7 lever (a)) LANDED in two
+parts + the dry-fight fallback, judged on their own real runs (8 runs this session): (1)
+prefer_the_dropped_smg_16 — the clears' loot prefers the owned 0x1a (7.0 a round vs the P2K's
+2.1); (2) loot_the_ring_drops_16 — the ring-1 leg walks over the reactive kills' close drops
+with return fire OFF and a direct walk_to finisher (the nav-only hop stops 4.3 u short and
+still reports arrived — measured), then swaps to the SMG; (3) switch_dry (d3) — the dry fights
+cycle to the P2K's 34 spare. Result: the ring fights killed #4 (t1660, 60 ticks), #3 (t1804),
+#5 (t2062) — the whole ring pourer set — and the walk crossed the ring/station/returns and
+REACHED THE CHASER STAGE: death t9383 AT the shelter entry (+322, health 9.0, the shelter-door
+kind-27 barrel's blast dealt the last 9.0) — the furthest measured point of this walk (the
+prior best: the 12872-ledger chaser-stage arrival at 9.5-19.5, from the t1620/t1705 ring
+deaths of the 16-7 tree). Lever (c) (the lane batch: skip the not-exposed pick, widen the
+band, 6 iterations) MEASURED WORSE — t1383 AT the stand (the stand's own duration is the
+exposure: the NE ring guard #0 poured 3.5 a hit from 6.4 u the whole time) — reverted with
+the ledger note. The refreshed ledger + the next levers (the shelter barrel's fuse, the
+abort_on_wound/finish_fights composition) are in the ignore message. Whole
+walkreal_07000016_live binary at the final tree: 18 passed / 0 failed / 1 ignored (139.8 s,
+--test-threads=1) — the d3 walk is the 1 ignored; the diff touches only that test file + docs
+(no crates/*/src/, no crates/nf-view/tests/common/ files), so no other binary can move.
+nf-game + nf-formats + nf-audio at --test-threads=1: 260 passed / 2 failed (the disc-content
+crp_mesh_disc pair reading /DRIVING/MIS01.VIV — absent from the onfoot ISO, the documented
+slim-ISO limitation) / 0 ignored. The background suite.py was killed by the sandbox between
+tool calls before a line (suite.out empty — the same wall the -5/-6/-7 reports documented).
