@@ -2267,6 +2267,36 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         w.tick(aim08, false);
     }
     assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, ROCKET, "the switch to the rocket launcher never landed");
+    // retune-nb-08-24: the DRAW settle. The switch loop breaks the tick the weapon FIELD
+    // flips, but the draw animation keeps running and a fire press under it is spent on the
+    // view-state gate [M Player_WeaponFiring 0x1a5460 — tick_fire's own `drawing` guard,
+    // walker.rs]. Measured [L this branch's runs]: the switch broke at f27454, the dive-stand
+    // stood Bond at f27456, the loop opened with the draw still playing, and the fight-entry
+    // dive's closing window (EVERY gate true at t10 — line_ok/slit/eye/lane/cast/fore/
+    // closing/cap/band, yaw_err 0.005 [L the [08 gates] t10 dump]) fell INSIDE the draw — the
+    // trigger press did nothing, the window closed by t30, and the fight stayed at zero
+    // launches. A player shoulders the launcher and lets the draw finish before he hunts the
+    // window. Bond stays on his spot (turn/look only), so the machine's cone/LOS reads and
+    // the deal are untouched. D3-GATED: the sisters' switch loop keeps its shape.
+    if difficulty >= 3 {
+        for _ in 0..120 {
+            if w.scene.sim.as_ref().unwrap().gun.switch_state == 0 { break; }
+            let sim = w.scene.sim.as_ref().unwrap();
+            let cp2 = sim.drones.copters[ci].pos();
+            let head = sim.bond.head();
+            let to = [cp2[0] - head[0], cp2[1] - head[1], cp2[2] - head[2]];
+            let l2 = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(0.01);
+            w.tick(Input {
+                turn: walker::wrap_pi(to[0].atan2(to[2]) - sim.bond.yaw).clamp(-0.08, 0.08),
+                look: ((to[1] / l2).asin() / std::f32::consts::FRAC_PI_2 - sim.bond.pitch).clamp(-0.05, 0.05),
+                aiming: true,
+                ..Default::default()
+            }, false);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[08 draw] switch_state {} f{} bond {:?} copter {:?} — the loop opens with the launcher shouldered",
+            sim.gun.switch_state, sim.drones.frame, sim.bond.pos, sim.drones.copters[ci].pos());
+    }
     // retune-nb-08-19 (round 19): STAND FOR THE ARRIVAL-DIVE LAUNCH — the damage-fraction
     // approach, judged on its own real run. The round-18 ride-free shape (crouch through the
     // dive, zero launches) is measured unwinnable: the Hind damage stayed 0.0 of 598 and the
@@ -2360,6 +2390,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // level-08-rocket-self-blast: the machine's per-tick position tracker (the forecast gate's
     // velocity source — the loop runs one sim tick per iteration).
     let mut prev_cp = [0.0f32; 3];
+    // retune-nb-08-24: the machine's dist history (the closing-state source, above).
+    let mut dist_hist: Vec<f32> = Vec::new();
     let mut have_cp = false;
     // real-health-00agent-08-bleed (d3): the missile-dodge state — the side step off each
     // inbound round's line (see the dodge block inside the loop) and which side the current
@@ -2444,6 +2476,23 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         };
         let to = [cp[0] - from[0], cp[1] - from[1], cp[2] - from[2]];
         let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+        // retune-nb-08-24: the machine's CLOSING state — the dist trend over the last 10 ticks.
+        // The path-0 circuit's fight-entry dive passes LOW+WEST while RECEDING (l 44.6 -> 49.3
+        // through the cp[1] <= 13.7 band window, [L this branch's [08 gates] t120-190 dump]) —
+        // exactly the receding-far-launch class the l <= 20 cap exists for (the merged-tree
+        // t227 self-blast, [L the 08-23 ledger]). A CLOSING pass is the landing geometry: every
+        // measured landing fired into a closing machine (the dive t49 l 49.7 landed -101.0 [L
+        // the round-11/13 ledger]; the 11-15 SW landings l 29-38 [L the same ledger]) — the
+        // guided chase follows a converging machine along a stable line instead of arcing into
+        // the frame. Gates that read it: the cap/band arms + the aim tolerance in `ready` below,
+        // and the weave's hold-off. The ride skips the push (the rocket-frame dist would
+        // pollute the history); the stalemate's high circling (the dist oscillating < 0.4 u
+        // per 10 ticks, [L the flight samples]) never reads closing.
+        if rocket.is_none() {
+            dist_hist.push(l);
+            if dist_hist.len() > 10 { dist_hist.remove(0); }
+        }
+        let machine_closing = dist_hist.len() >= 10 && dist_hist[0] - l > 0.4;
         let desired_yaw = to[0].atan2(to[2]);
         let desired_pitch = (to[1] / l).asin() / std::f32::consts::FRAC_PI_2;
         // 00 Agent: the shot leaves through the CROSSHAIR, not the view centre — the aim law is
@@ -3061,6 +3110,25 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                     .segment_flight_scoped(sim.world.find_cel(from), from, machine_forecast, true)
                     .is_none_or(|t| t >= 0.8) })
         };
+        // retune-nb-08-24 (the round-24 lever's second half, judged on its own run): the
+        // straight-line-to-extrapolated cast MIS-MODELS a chase behind a laterally-diving
+        // machine. The round steers toward the machine's LIVE position every tick [M
+        // Bullet_update 0x12e7b0:177-244]; the fight-entry dive's forecast position (the
+        // machine advanced 40 u along its westward velocity) sits at z ≈ −222.5, whose
+        // STRAIGHT lane from the anchor crosses the west band's x-plane at z ≈ −182.6 — inside
+        // the band's z extent −176.6..−182.2 → the cast blocks ([L this branch's [08 gates]
+        // t10 dump: every other gate TRUE, fore false]). The REAL chase follows the machine's
+        // dive south-west and crosses x 110.4 at the machine's own z ≈ −215..−218 — far south
+        // of the band's extent, clear air — and the measured proof is the dive t49 launch that
+        // LANDED −101.0 through exactly this dive shape on the round-11/13 trees [L the
+        // ledger]. A CLOSING pass with the DIRECT lane already clear (machine_lane_clear,
+        // the live-position cast) therefore skips the extrapolated cast: the chase converges
+        // on a machine that is coming to it, the lane the round actually flies starts as the
+        // verified direct lane. The receding class keeps the full forecast (the t227
+        // self-blast's chase arced BEHIND a receding machine into the band — the straight
+        // cast is the honest model there). The arm lives in `ready`'s fore-conjunction below
+        // (dive_window is defined there); the definition order here keeps the forecast gate
+        // self-contained. D3-GATED: the sisters' forecast is untouched.
         // real-health-00agent-08-bleed-5 (d3): the DISTANCE gate relaxes to the sisters' 10 u — the
         // ledger's lever (2) "one gate's relaxation". The measured d3 roll launches once per ~6500
         // ticks at l >= 16 (death t34720, one rocket landed 100.7 [L update-3]; the machine's
@@ -3119,9 +3187,34 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 })
         };
         let loose08 = difficulty >= 3;
+        // retune-nb-08-24: the DIVE-WINDOW geometric test — the launch line's crossing of the
+        // west band's x-plane must miss the band's z extent. The measured wall: the eye rays
+        // stop at x ≈ 110.4, z −176.6..−182.2 [L the measured stops in the fight comment]; a
+        // launch line that crosses x 110.4 INSIDE that z range is the t227 self-blast class
+        // (the merged-tree blast at (111.0,14.1,−182.1) [L the 08-23 ledger] — the chase's own
+        // crossing stays inside the wall's z range and the round dies on the band 3.7 u out).
+        // A line that crosses SOUTH of the wall's end (the round-24 t40-class tick: the
+        // machine abeam-north at (105.3,14.6,−221.3), the crossing z −193.6 [L the [08 gates]
+        // dump]) flies over open air — the chase follows the machine's dive west-south and its
+        // crossing stays at the machine's own z ≈ −215..−222, clear — and the dive t49 launch
+        // LANDED −101.0 through exactly this shape [L the round-11/13 ledger]. A line that
+        // never crosses (the machine east of the x-plane) is trivially clear. The t180-class
+        // receding low-west tick (the machine (80.1,12.8,−214.9), crossing z −182.3, INSIDE
+        // the extent) stays refused. [S] the 1.0-u margins north/south of the measured extent
+        // cover the chase's drift; the pane-2 hole shots (z ≈ −181.6) stay refused too — the
+        // t227 blast at −182.1 was 0.5 u from that centre.
+        let lane_band_clear = {
+            let dx = cp[0] - eye[0];
+            if dx.abs() < 1e-4 { true } else {
+                let s = (110.4 - eye[0]) / dx;
+                if !(0.0..=1.0).contains(&s) { true }
+                else { let zc = eye[2] + (cp[2] - eye[2]) * s; !(-183.0..=-176.0).contains(&zc) }
+            }
+        };
+        let dive_window = lane_band_clear && cp[1] <= 16.0 && l <= 50.0;
         let ready = rocket.is_none() && sim.missile_cam.is_none() && dodge_hold == 0
-            && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
-            && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
+            && yaw_err.abs() < if difficulty >= 3 { if machine_closing { 0.20 } else { 0.10 } } else { 0.25 }
+            && pitch_err.abs() < if difficulty >= 3 { if machine_closing { 0.20 } else { 0.10 } } else { 0.25 }
             && l >= 10.0 && slit_clear && sphere_lane_clear && (loose08 || (corridor_clear
             && effective_corridor_clear)) && eye_sees && machine_lane_clear
             // retune-nb-08-23 (the merged-tree killer, judged on its own real run): the 00 Agent
@@ -3135,8 +3228,18 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             // to that band (l <= 20) so a far bearing is held for a low pass instead of burning
             // the scarce rounds (ammo type 0xe caps at 4) on a wall. D3-GATED: the sisters'
             // l >= 10.0 is unchanged.
-            && (difficulty < 3 || l <= 20.0)
-            && (loose08 || machine_lane_fore_clear)
+            && (difficulty < 3 || l <= 20.0
+                // retune-nb-08-24: the DIVE-WINDOW arm — the geometric class test above. The
+                // shipped cap's self-blast evidence is the in-extent crossing (the t227); the
+                // out-of-extent dive windows are the measured landing class. D3-GATED.
+                || dive_window)
+            && (loose08 || machine_lane_fore_clear
+                // retune-nb-08-24: the closing-dive arm of the forecast gate (the comment at
+                // machine_lane_fore_clear above): a CLOSING pass with the DIRECT lane verified
+                // (machine_lane_clear already required above) and the dive-window geometry true
+                // skips the extrapolated cast — the lane the round actually flies starts as the
+                // verified direct lane. D3-GATED.
+                || (machine_closing && machine_lane_clear && dive_window))
             // 00 Agent: no launch while the Hind is SOUTH-WEST of the car (x < 105, z < -165).
             // A held-health map of the whole fight [L the analysis run: ten launches] showed
             // every launch at the machine there - (83.4, -190.0), (91.2, -210.2), (85.2,
@@ -3188,7 +3291,12 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // wait for the low band the landing geometry was proven in (the round-4 runs: y 12.8-13.7
         // passes, 101.0 landings [L]) — the circuit recurs it on the ~700-tick loop [L the
         // ledger's flight logs]. D3-GATED: the sisters keep l >= 10.0 with no cp[1] gate.
-        && (difficulty < 3 || cp[1] <= 13.7);
+        && (difficulty < 3 || cp[1] <= 13.7
+            // retune-nb-08-24: the DIVE-WINDOW arm — the dive's approach runs y 15.1 -> 12.8
+            // (the [08 gates] dumps [L]); y <= 16.0 admits the approach and the shipped 13.7
+            // band keeps every circling pass out (the stalemate's circuit flies y 16.5-29.6
+            // [L the flight samples]). D3-GATED.
+            || dive_window);
         // 11-15 (00 Agent): the last rocket. Six rockets leave the machine at 590.9 of 598 and
         // its next pass kills Bond on 7.8 health before any gated window opens; a player with the
         // machine under the crosshair (0.2) fires the finisher. D3-GATED.
@@ -3201,8 +3309,14 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // only, no sim tick — the timeline stays byte-exact (the round-10/11 diagnostics
         // pattern). Names every `ready` gate's state at the tick.
         if difficulty >= 3 && t < 200 && t % 10 == 0 {
-            eprintln!("[08 gates] t{t} f{} l {l:.1} yaw_err {yaw_err:.3} pitch_err {pitch_err:.3} dh {dodge_hold} line_ok {line_ok} slit {slit_clear} eye_sees {eye_sees} lane {machine_lane_clear} cp ({:.2},{:.2},{:.2}) cam {} clip {} riding {}",
-                w.total_ticks, cp[0], cp[1], cp[2], sim.missile_cam.is_some(), sim.gun.clip, rocket.is_some());
+            // retune-nb-08-24: the dump names the new gates too (closing / the cap arm / the
+            // band arm / the muzzle cast / the forecast lane) — the launch-or-not decision is
+            // readable from one run. eprintln only, no sim tick — byte-exact.
+            let cast_ok = difficulty < 3 || { let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+                [[eye[0] + cy * 0.25, eye[1] - 0.22, eye[2] - fy * 0.25], [eye[0], eye[1] - 0.22, eye[2]], [eye[0] - cy * 0.25, eye[1] - 0.22, eye[2] + fy * 0.25]]
+                    .iter().all(|f| sim.world.segment_flight(*f, [f[0] + aim_dir[0] * 4.0, f[1] + aim_dir[1] * 4.0, f[2] + aim_dir[2] * 4.0], true).is_none()) };
+            eprintln!("[08 gates] t{t} f{} l {l:.1} yaw_err {yaw_err:.3} pitch_err {pitch_err:.3} dh {dodge_hold} line_ok {line_ok} slit {slit_clear} eye_sees {eye_sees} lane {machine_lane_clear} cast {cast_ok} fore {} closing {machine_closing} band_x {lane_band_clear} dive_win {dive_window} cp ({:.2},{:.2},{:.2}) cam {} clip {} riding {}",
+                w.total_ticks, machine_lane_fore_clear, cp[0], cp[1], cp[2], sim.missile_cam.is_some(), sim.gun.clip, rocket.is_some());
         }
         // retune-nb-08-13 (d3): the CROUCH-WINDOW stance plan — the ledger's lever (2), judged
         // on its own run. The two measured burst windows drained the whole 44.0 entry STANDING
@@ -3288,7 +3402,19 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // 0x179a48:44-58]. The weave yields to the dodge drive (its strafe owns the axis) and
         // holds off on a launch tick (the muzzle-cast gates read the pre-strafe stance).
         // D3-GATED: the sisters' timelines byte-exact.
-        if difficulty >= 3 && !dodge_drive && !ready && rocket.is_none() {
+        if difficulty >= 3 && !dodge_drive && !ready && rocket.is_none() && cp[1] > 16.0 {
+            // retune-nb-08-24: the weave now HOLDS OFF whenever the machine is below y 16.0 —
+            // the dive's approach AND the low band. The round-22 weave's anti-sniper roll
+            // (moving x0.1875) answers the guards' 0x15 grind; on the round-24 deal the fight
+            // rows are ALL volume zaps (world hits — no accuracy roll at all [M the hurt path
+            // 0x194458 applies pain directly]) and the weave's strafe is what saturated the
+            // free-aim cursor through the fight-entry dive's closing window (yaw_err 2.65 at
+            // t50, settled only at t90 [L this branch's [08 gates] dump]) — the whole closing
+            // window burned while the cursor decayed. A player holds still to shoot. The
+            // weave resumes the tick the machine leaves the low window (the shipped pattern's
+            // own phase continues from t % 104 — the stalemate's rows stay byte-identical:
+            // the machine never came below 16.0 after the entry dive on this deal [L the
+            // flight samples]). D3-GATED.
             input.strafe = match t % 104 { 0..=45 => 0.5, 46..=51 => 0.0, 52..=97 => -0.5, _ => 0.0 };
         }
         if ready { w.tick_fire(input); } else { w.tick(input, false); }
