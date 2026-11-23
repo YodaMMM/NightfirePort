@@ -110,3 +110,12 @@ task's change.
 
 not visible to me (no token, credit, context-window or cost figures are exposed in this
 environment; nothing to copy).
+
+## ntfy failed
+
+All three fallbacks failed. Exact outputs:
+
+- curl: `curl: (28) Connection timed out after 20002 milliseconds`.
+- python urllib: the `urlopen(..., timeout=20)` call hung; the wrapper `timeout 25` killed it
+  (exit 124), no response printed.
+- wget: hung the same way; the wrapper `timeout 25` killed it (exit 124), no output.
