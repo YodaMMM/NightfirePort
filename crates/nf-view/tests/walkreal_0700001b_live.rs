@@ -715,7 +715,7 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
                         TAIL_DEBUG.store(true, Ordering::Relaxed);
                         fight_opts_y(w, [lx, here[1], lz], Some(i), true,
                             |s2| stuck(s2) || tail_target_live(s2, k) || s2.drones.channels.on(k)
-                                || live_astronauts(s2).len() + 2 <= n0, 600, 7.0, true);
+                                || live_astronauts(s2).len() + 2 <= n0, 600, 7.0, true, false);
                         TAIL_DEBUG.store(false, Ordering::Relaxed);
                         t_shelter += w.scene.sim.as_ref().unwrap().drones.frame - ff0;
                         last_defense = w.scene.sim.as_ref().unwrap().drones.frame + 300;
@@ -893,7 +893,7 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
                             |s| stuck(s) || !tail_ok(s)
                                 || !live_astronauts(s).iter().any(|&i| dist3(s.drones.list[i].pos, s.bond.pos) < 25.0)
                                 || live_astronauts(s).len() + 2 <= n0,
-                            600, 7.0, true);
+                            600, 7.0, true, false);
                         TAIL_DEBUG.store(false, Ordering::Relaxed);
                         // real-health-00agent-1b-8: the cooldown anchors at the fight's END
                         // (+300), not its start — the fights run 300-800 ticks and a start
@@ -1136,7 +1136,7 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
                 let pending_at_start = order.iter()
                     .find(|&&c| !w.scene.sim.as_ref().unwrap().drones.channels.on(c)).copied();
                 fight_opts_y(w, lane, prio_i, true,
-                    |s| stuck(s) || exposure(s, s.bond.head()).0 <= 1 || live_astronauts(s).len() + 2 <= n0, fight_cap, 7.0, false);
+                    |s| stuck(s) || exposure(s, s.bond.head()).0 <= 1 || live_astronauts(s).len() + 2 <= n0, fight_cap, 7.0, false, false);
                 {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let end = sim.drones.frame;
@@ -1476,9 +1476,18 @@ fn first_tracker(sim: &nf_view::scene::Sim) -> usize {
 /// spread +0x24 is 0 [D weapon_data]) enters one of its hit boxes before the world's first bullet
 /// contact — the comparison the bullet pass itself runs (`exposed_aim`'s rule, along the view).
 fn ray_on(sim: &nf_view::scene::Sim, di: usize) -> bool {
+    ray_on_len(sim, di, 40.0)
+}
+
+/// `ray_on` with the probe length a caller's law sets. The flight's own death range is
+/// `weapon_data+0x1C` [M `Bullet_update` 0x12e7b0 — case 1], and the laser flies straight
+/// (0x33's spread +0x24 is 0 [D weapon_data]), so a shot at a target inside the weapon's
+/// range is legal wherever its ray enters a box before the world — the probe follows the
+/// shot, not the 40 u pick cap.
+fn ray_on_len(sim: &nf_view::scene::Sim, di: usize, probe: f32) -> bool {
     let eye = sim.bond.head();
     let f = sim.bond.look();
-    let ray = [f[0] * 40.0, f[1] * 40.0, f[2] * 40.0];
+    let ray = [f[0] * probe, f[1] * probe, f[2] * probe];
     let end = [eye[0] + ray[0], eye[1] + ray[1], eye[2] + ray[2]];
     let data = data_of(sim);
     let tw = sim.world.segment_bullet_scoped(sim.world.find_cel(eye), eye, end);
@@ -1537,6 +1546,10 @@ fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_
     fight_opts(w, hold, prio, false, done, cap)
 }
 
+// walk-1b-agent-2: the Agent Drake-fight call passes `drake_first` = true (gated to the Agent
+// walk: waves_first && !hard). Every other caller passes false — the d1 Operative walk and the
+// d3 00 Agent walk keep their byte-identical routes.
+
 /// `fight` with the Agent tactics switch (real-health-agent-difficulty-16-1b-41-4a, opt-in —
 /// the Operative walks keep the master behaviour): `waves_first` scores a THREATENING wave
 /// astronaut (its muzzle→Bond ray is clear) ABOVE the prio target. The master order fights the
@@ -1547,7 +1560,7 @@ fn fight(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, done: impl Fn(&nf_
 /// boss last; the fight's `done` gate is the prio target's death, so the waves dying never
 /// ends it early.
 fn fight_opts(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32) {
-    fight_opts_y(w, hold, prio, waves_first, done, cap, f32::MAX, false)
+    fight_opts_y(w, hold, prio, waves_first, done, cap, f32::MAX, false, false)
 }
 
 /// `fight_opts` with a float-height cap (0700001b 00 Agent, the k5-late-latch task): the view is
@@ -1565,7 +1578,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // fight. Remove once the lever is measured.
 static TAIL_DEBUG: AtomicBool = AtomicBool::new(false);
 
-fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32, max_y: f32, aim_close: bool) {
+fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first: bool, done: impl Fn(&nf_view::scene::Sim) -> bool, cap: u32, max_y: f32, aim_close: bool, drake_first: bool) {
     let mut last_tap = 0u32;
     let mut target: Option<(usize, [f32; 3])> = None;
     let mut recharging = false;
@@ -1681,6 +1694,29 @@ fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first
                 if best.map_or(true, |b| s < b.0) { best = Some((s, i, a)); }
             }
             target = best.map(|b| (b.1, b.2));
+            // walk-1b-agent-2 (the ignore message's named lever: "rest the tap's level ray on
+            // Drake's box"): the round-22 fight spent its 96 rounds on the wave (the aim_close
+            // gap pick never chose him — his aim gap is wide until he closes) and Drake took 0
+            // damage [L the r11 diagnostic + the round-22 run]. The prio target's exposed-aim
+            // point IS a clear eye→box bullet segment ([M exposed_aim's rule: the bullet hits
+            // iff the ray enters the box volume before the world, 0x1ea398:216-229]); when it
+            // exists, a player with a boss on the field and a wave that no longer needs thinning
+            // rests the level view on the boss and taps: the aim arm lifts the eye to the aim
+            // height, level_turn puts the level ray on the box, and the ray_on gate fires the
+            // tap. Only while no shooter sits in the 3.5 u double-damage band ([M DoBulletAccuracy
+            // 0x179740:113-115]) — a melee astronaut outranks the boss. The hp math: 6 taps =
+            // 120 (weapon 0x33's 20.0 [D weapon_data +0x0c]); the wave keeps its damage (the
+            // astronauts' 0x6a 3.5 a hit at Agent) while Drake's own gun (0x30's 20.0 ×
+            // Plr_DMod_Normal 0.7 = 14.0 [D weapon_data 0x30 +0x0c; M 0x1902c8]) costs two
+            // thirds of the 23.7 budget a hit.
+            if drake_first && !cands.iter().any(|&i| dist3(sim.drones.list[i].pos, e) < 3.5) {
+                if let Some(pr) = prio {
+                    let d = &sim.drones.list[pr];
+                    if d.present && !d.corpse && d.health > 0.0 {
+                        if let Some(a) = w.exposed_aim(pr) { target = Some((pr, a)); }
+                    }
+                }
+            }
             // real-health-00agent-1b-8 (aim_close fallback): the LEVEL view only hits what is at
             // the eye's own height — from the low cover (eye y −5.1) every shooter at aim 5-11.9
             // reads exposed_aim None, no target is set, the eye never climbs, and the fight sat
@@ -1718,7 +1754,18 @@ fn fight_opts_y(w: &mut Walker, hold: [f32; 3], prio: Option<usize>, waves_first
                 Some((i, a)) => {
                     let aim_at = if aim_close { cal.eye_target(sim, a) } else { a };
                     level_turn(sim, &mut inp, aim_at, 0.08);
-                    fire = ray_on(sim, i) && view_level(sim) && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
+                    // walk-1b-agent-2 (drake_first): the boss engages at the weapon's own
+                    // flight range [M Bullet_update 0x12e7b0 case 1: the death range is
+                    // weapon_data+0x1C], not the 40 u pick cap — Drake spawns ~60 u out and
+                    // closes at ~0.018 u/tick, so the 40 u probe starved every early window
+                    // (the first lever run: 7 taps at the wave, Drake 0 damage, Bond died
+                    // before the 40 u line opened [L this branch]).
+                    let fire_ok = if drake_first && Some(i) == prio {
+                        let e2 = sim.bond.head();
+                        let rg = f32::from_le_bytes(sim.weapons.records[sim.gun.weapon as usize][0x1c..0x20].try_into().unwrap());
+                        ray_on_len(sim, i, (dist3(sim.drones.list[i].pos, e2) + 10.0).min(rg))
+                    } else { ray_on(sim, i) };
+                    fire = fire_ok && view_level(sim) && sim.gun.clip >= 12 && t.saturating_sub(last_tap) >= 12;
                 }
                 None => inp.stabilise = sim.bond.look()[1].abs() > 0.005 && sim.bond.stabiliser == 0,
             }
@@ -1831,7 +1878,7 @@ fn kite_wait(w: &mut Walker, done: impl Fn(&nf_view::scene::Sim) -> bool + Copy,
             let ff0 = s.drones.frame;
             TAIL_DEBUG.store(true, Ordering::Relaxed);
             fight_opts_y(w, [lx, here[1], lz], Some(i), true,
-                |s2| done(s2) || live_astronauts(s2).len() + 2 <= n0, 600, 7.0, true);
+                |s2| done(s2) || live_astronauts(s2).len() + 2 <= n0, 600, 7.0, true, false);
             TAIL_DEBUG.store(false, Ordering::Relaxed);
             t += w.scene.sim.as_ref().unwrap().drones.frame - ff0;
             last_defense = w.scene.sim.as_ref().unwrap().drones.frame + 300;
@@ -2030,7 +2077,7 @@ fn play_the_mission_opts(w: &mut Walker, alive: impl Fn(&nf_view::scene::Sim) ->
     // and the r11-measured uncalibrated miss band (6-15 u) left Drake at 101/120 while Bond
     // bled out; the d1 walk keeps the plain fight.
     if hard || waves_first {
-        fight_opts_y(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000, f32::MAX, true);
+        fight_opts_y(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000, f32::MAX, true, waves_first && !hard);
     } else {
         fight_opts(w, drake_hold.unwrap_or([32.0, -1.7, 0.0]), Some(drake), waves_first, |s| { walk_log::leg("drake-fight", s); s.drones.list[drake].corpse || s.drones.list[drake].health <= 0.0 || !alive(s) }, 6000);
     }
