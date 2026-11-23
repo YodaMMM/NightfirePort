@@ -145,3 +145,10 @@ nf-game + nf-formats + nf-audio at --test-threads=1: 260 passed / 2 failed (the 
 crp_mesh_disc pair reading /DRIVING/MIS01.VIV — absent from the onfoot ISO, the documented
 slim-ISO limitation) / 0 ignored. The background suite.py was killed by the sandbox between
 tool calls before a line (suite.out empty — the same wall the -5/-6/-7 reports documented).
+
+### retune-nb-16-9 progress (2026-11-23, round 9)
+
+Round 8 landed the SMG-speed lever and reached the furthest point t9383 (the chaser stage), the
+shelter barrel ledgered as the next lever. This round continues from that ledger: branch from
+origin master 7562f1e70 with origin/s/retune-nb-16-8 merged in first (clean). Ledger reading and
+the next lever next; every lever judged on its own real run.
