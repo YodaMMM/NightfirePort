@@ -5671,6 +5671,10 @@ impl Sim {
         // The drones' sight points: Bond's seven `Drone_View_Bones` on his posed body
         // (`DroneVision_SeekOpponentLOS` 0x175cb8 → `DroneFunc_GetBonePos` 0x149bd0).
         self.drones.bond_view_bones = self.bond_view_bones();
+        // His hit boxes' frame: the same resolved script list (`bond_local_pose`) — the stance
+        // transitions and the set's layers, as `AnimGetCollData` 0x1c4ac8 builds the palette from
+        // the anim object's current frame.
+        self.drones.bond_pose = self.bond_local_pose();
         // The class byte the AI's `ObjectIsArmed` 0x178768 reads: Bond obj+0xdc+0x62. `Player_WeaponSelect`
         // 0x1a2cc0 copies the request (+0x63) into it at the switch's START (the `weapon_data[+0x64].+0xc4
         // == 0` arm — +0x64 is 0x47 from InitWeapon 0x1a7ef8:137-139), so mid-holster the AI already reads
@@ -15794,6 +15798,15 @@ impl Sim {
     /// anim+0xB8 row 0 +0x30 − obj+0x30 = 0]. So: the local pose (root translation zeroed) through
     /// the object matrix at `obj+0x30` (`Bond::pos`) and the object yaw. None outside the walk
     /// substate, in MP, or without the skin / an empty script list.
+    /// Bond's single-player local pose from his script list (`bond_anim`), as the root translation
+    /// the layers carry; None outside the walk substate, in MP, or without the skin / an empty list.
+    pub fn bond_local_pose(&self) -> Option<nf_game::anim::Pose> {
+        if self.mp.is_some() || self.bond.substate != nf_game::player::SS_WALK { return None; }
+        let skin = self.skins.get(&nf_game::player::player_skin_hash(self.level))?;
+        let skel = self.skeletons.get(&skin.skeleton)?;
+        self.body_local_pose(&self.bond_anim, skel, skin)
+    }
+
     pub fn bond_view_bones(&self) -> Option<[[f32; 3]; 7]> {
         if self.mp.is_some() || self.bond.substate != nf_game::player::SS_WALK { return None; }
         let skin = self.skins.get(&nf_game::player::player_skin_hash(self.level))?;
