@@ -621,6 +621,35 @@ fn shelter_tick_proactive(w: &mut Walker, last_tap: &mut u32) {
     shelter_tick_picked(w, last_tap, pick);
 }
 
+/// The nearest-first proactive shelter tick (retune-nb-16-9, d3 — MEASURED BYTE-IDENTICAL on
+/// this stream and REVERTED in the sits: the pulse sits keep the original list-order pick — the
+/// sit's pick already took the nearest exposed threat, so the sort changed nothing while it
+/// would have shifted the d1/d2 sisters' streams had their call site run it; the sits are
+/// `re_arm && !tops_up`-gated which the real-damage sisters pass. Kept here only as the ledger
+/// note: the sit's fight at the pulse-1 measured the chaser-class heavy #9 (skin 0x500001e,
+/// hp 100) as its target and STILL lost the grind (the torso taps at 2.6 u vs his 5.0-burst
+/// cadence, the pool 30.0 spent at inside+212 [L this branch's run]) — the pick order was not
+/// the flaw; the 100-hp elite's point-blank grind needs the east-armour fetch's window or a
+/// live check on his exposure (see the report).
+#[allow(dead_code)]
+fn shelter_tick_proactive_nearest(w: &mut Walker, last_tap: &mut u32) {
+    let pick = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let armed = sim.gun.clip + sim.gun.spare > 0 && (2..=0x47).contains(&sim.gun.weapon);
+        if !armed || sim.disabled { None } else {
+            let b = sim.bond.pos;
+            let mut cands: Vec<(usize, f32)> = sim.drones.list.iter().enumerate()
+                .filter(|&(_, d)| d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                    && walker::dxz(d.pos, b) < 30.0)
+                .map(|(i, d)| (i, walker::dxz(d.pos, b)))
+                .collect();
+            cands.sort_by(|a, c| a.1.partial_cmp(&c.1).unwrap());
+            cands.into_iter().find_map(|(i, _)| walker::DamageLog::exposed_part(sim, i).map(|at| (i, at)))
+        }
+    };
+    shelter_tick_picked(w, last_tap, pick);
+}
+
 fn shelter_tick_picked(w: &mut Walker, last_tap: &mut u32, pick: Option<(usize, [f32; 3])>) {
     let Some((_, at)) = pick else { w.tick(Input::default(), false); return };
     let (input, fire, reload) = {
@@ -1184,6 +1213,17 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         // there — Bond still at y 2.9 under the whole ring — and the stand burned ~1400
         // ticks on a hunting guard 17-27 u out (12 rounds, zero damage) while the ring
         // guards emptied him (the 1988 death).
+        // retune-nb-16-9 (the ledger's lever (b), d3-gated by construction — this loop IS the
+        // d3 branch; the sisters' walk_route branch never runs it): the wound-abort opt-in on
+        // the route's reactive fights. The ring's measured cost is the fights' trades (the #4
+        // fight 21.0 — #3+#5 poured during the 60-tick SMG kill [L the round-8 ledger]) — a
+        // player who takes a volley breaks the exchange and KEEPS WALKING (the pours while
+        // walking measured ~7.0 for the whole ring 1->2 crossing [L the same ledger]), and the
+        // fights' own escalation is made abort-aware in damage_log (the determined pass runs
+        // its bounded 300-tick kill window instead of the 1800 undo). Threshold 6.0: one
+        // 0x14/0x1a volley's worth (the measured hits 2.5-7.0 each).
+        let abort0 = w.dmg.abort_on_wound;
+        w.dmg.abort_on_wound = Some(6.0);
         for (label, wp) in APPROACH {
             // retune-nb-16-7 MEASURED (run 10, after runs 8/9): the per-leg shooters window is
             // REMOVED. The wide window's reactive fights at the ring east chained (the #5 kill
@@ -1548,6 +1588,9 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
             // perch outlasts the gun and the stand sits in his line (19.5 -> 0.0). Not landed:
             // the ammo gap is the binding constraint, not the sight.
         }
+        // The wound-abort scope ends with the route: the finale's scripted stands (the
+        // hand-back, the pulse sits, the pit phases) keep their measured machinery.
+        w.dmg.abort_on_wound = abort0;
     } else {
         w.walk_route(APPROACH);
     }
@@ -1585,6 +1628,71 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
         let sim = w.scene.sim.as_ref().unwrap();
         eprintln!("[real-damage] the hand-back stand: soldiers answered at +{}, health {:.1}, holds {:#04x} clip {} spare {}",
             w.total_ticks - t0, sim.drones.health.health, sim.gun.weapon, sim.gun.clip, sim.gun.spare);
+    }
+    // retune-nb-16-9 (d3 arm, judged on its own real run): the shelter-door kind-27 barrel
+    // detonated BEFORE the walk-in. Round 8's death: the barrel at (−12.4,−21.4,−169.4)
+    // (radius 4.0, damage 50.0) sits 1.7 u off the INTO_THE_SHELTER route's own door leg and
+    // its fuse lit while Bond walked the entry (the soldiers' return lines cross it westward
+    // [L run 5/7: death t9383 at the shelter entry, the blast dealt the last 9.0 at d 2.4,
+    // ch 0x27/0x28 true at the blast]) — the route's own first-leg stand (−8.5,−22.2,−173.5)
+    // is 5.65 u from the barrel, OUTSIDE the 4.0 radius, so a player who sees the barrel at
+    // the doorway he must pass shoots it from that stand and lets it blow (rounds ignite
+    // kind-27 volumes — the soldiers' own rounds lit this one [L run 5/7]) BEFORE walking
+    // through. Bounded give-up: if the aim never lands within 700 ticks the barrel stays
+    // unlit and the route walks as before (a miss is the benign arm — an unlit barrel cannot
+    // blow; the blast's own failure mode is firing at 5.65 u, outside the radius). The walk-in
+    // budget holds: the detonation ~250-450 + the route's last two legs ~280 < the 1000-tick
+    // door-shut law [D the leaves move 1000..1350].
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+        w.walk_to(INTO_THE_SHELTER[0].1, "the barrel detonation stand (the route's own first leg)");
+        let barrel = [-12.4f32, -21.4f32, -169.4f32];
+        let gave_up = std::cell::Cell::new(false);
+        let seen = std::cell::Cell::new(0u32);
+        let blown = w.shoot_point(barrel, "the shelter-door barrel detonated from the 5.65 u stand", |sim| {
+            let t = seen.get() + 1;
+            seen.set(t);
+            // Bounded 450: the converged detonation measured ~250 ticks [L this branch's runs];
+            // a non-converging aim is a disturbed/walled one — the give-up keeps the door-shut
+            // budget (450 + the measured 350 walk-in < 1000 [D the leaves move 1000..1350]).
+            // The arm is self-safe either way: a landed round (even a near-miss within the
+            // ±0.02-0.05 rad band = ±0.3 u at 5.65 u) lights the fuse and the blast fires at
+            // Bond 5.65 u out — outside the 4.0 radius — and an unlit barrel cannot blow.
+            if t > 450 { gave_up.set(true); return true; }
+            sim.drones.explosions.iter().any(|e| {
+                let d = ((e.0[0] - barrel[0]).powi(2) + (e.0[1] - barrel[1]).powi(2) + (e.0[2] - barrel[2]).powi(2)).sqrt();
+                d < 3.0
+            })
+        });
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[real-damage] the barrel arm: blown {blown}, gave-up {}, health {:.1}, at {:?}",
+            gave_up.get(), sim.drones.health.health, sim.bond.pos);
+        // The soldiers-answered extension (the hand-back stand's own law, re-run from the
+        // detonation stand): round 9's measured death — the barrel BLOWN (blown true at the
+        // 5.65 u stand) and the walk-in still poured by the pit soldiers (#9 skin 0x500001e at
+        // (−10.4,−22.0,−167.7) d 4.8 ON the entry lane, −5.21; #8 skin 0x5000093 at
+        // (−1.5,−22.0,−163.0) d 14.8, −3.79 — the pool 9.0 at the arm carried neither [L this
+        // branch's run, death t9530 at the same entry spot]). A player who just detonated the
+        // barrel answers the soldiers on the lane before walking through the door: the same
+        // exposed-gate fight the hand-back stand runs, from the stand (their drops keep the
+        // finale squad's clips, and #9's head box at d <6 is the 1-tap class). Bounded 400 —
+        // the door-shut budget holds (the measured inside_at 350 + 400 < 1000 [D]).
+        let mut last_tap = 0u32;
+        let stand_start = w.total_ticks;
+        while w.total_ticks - stand_start < 400 {
+            let any = {
+                let sim = w.scene.sim.as_ref().unwrap();
+                let armed = sim.gun.clip + sim.gun.spare > 0 && (2..=0x47).contains(&sim.gun.weapon);
+                armed && !sim.disabled && sim.drones.list.iter().enumerate()
+                    .any(|(i, d)| d.team == 1 && d.present && d.enabled && !d.corpse && d.health > 0.0
+                        && walker::dxz(d.pos, sim.bond.pos) < 30.0
+                        && walker::DamageLog::exposed_part(sim, i).is_some())
+            };
+            if !any { break; }
+            shelter_tick_proactive(w, &mut last_tap);
+        }
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[real-damage] the entry lane stand: soldiers answered at +{}, health {:.1}",
+            w.total_ticks - stand_start, sim.drones.health.health);
     }
     w.walk_route(INTO_THE_SHELTER);
     let inside_at = w.total_ticks - t0;

@@ -1053,7 +1053,16 @@ impl Walker {
             };
             if alive {
                 let h_mid = self.scene.sim.as_ref().unwrap().drones.health.health;
-                killed = self.shoot_bounded(di, label, 1800);
+                // retune-nb-16-9 (the abort-aware escalation, opt-in): with the wound-abort
+                // opt-in set (abort_on_wound — today the 01 hall test sets it only inside
+                // finish_fights=false windows, so this arm is dead for every existing test),
+                // the 1800-tick determined pass stands in the lane re-fighting what the volley
+                // already priced — the abort's whole point is ending the exchange — so the
+                // pass runs a bounded 300-tick kill window instead (shoot_bounded returns on
+                // the kill; the SMG-class kills measured 60-90 ticks [L the retune-nb-16-8
+                // runs]). Without the opt-in the escalation keeps its measured 1800 pass.
+                let cap_pass = if self.dmg.abort_on_wound.is_some() { 300 } else { 1800 };
+                killed = self.shoot_bounded(di, label, cap_pass);
                 let sim = self.scene.sim.as_ref().unwrap();
                 eprintln!("[real-damage] {label}: the determined pass on drone #{di} (killed {killed}) health {h_mid:.1} -> {:.1}", sim.drones.health.health);
             }
