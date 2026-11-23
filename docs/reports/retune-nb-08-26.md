@@ -110,3 +110,9 @@ dive-stand press RESTORED.
 ## Usage
 
 not visible to me
+
+## Notification
+
+curl timed out at 20 s (`(28) Connection timed out after 20002 milliseconds`), the python
+urllib fallback timed out at 30 s, and the wget fallback SUCCEEDED (exit 0) — the notification
+was delivered on the third fallback; no "ntfy failed" section required.
