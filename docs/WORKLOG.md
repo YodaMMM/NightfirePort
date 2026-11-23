@@ -85,3 +85,12 @@ ledgered 00 walk); interactables_07000006_live 5 passed / 0 failed. The backgrou
 twice in this sandbox (pids 2265 and 6523 killed between tool calls) — the touched-binary runs
 above are the round-2 verification set (only the one test file changed; no src/, no shared
 helpers).
+
+### walk-06-00agent-3 progress (2026-11-23, round 3, pool-trim)
+
+Round 2's state: death t8566 at the SE corner, 27 hits for 100.0, the killing blow ONE #23
+grenade, the pool 20.8 at the corner. This round attacks the ledgered DECIDING LEVER pool-trim,
+first half: answer the un-answered mouth/balcony stream (round-1 lever (b)'s ~45-armour soak)
+so the 50 armour carries the strip grind and the corner pool sits near ~70. Branch from origin
+master 7562f1e70 with origin/s/walk-06-00agent-2 merged in first (clean). Work log and report
+updates as the levers run; every lever judged on its own real run.
