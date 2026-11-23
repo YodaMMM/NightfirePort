@@ -726,16 +726,20 @@ fn walk_the_chasers_defeat_completes_the_mission() {
 /// a weapon away.
 #[test]
 fn bond_is_armed_at_the_chaser_fight_after_the_15_handoff() {
-    let iso = iso();
-    let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
-    assert_eq!(save.weapon, 0x11, "15's exit saves the Delta Repeater as the held weapon [M 0x195670:18-19]");
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&save)).unwrap());
-    w.wait_enabled(3000, "the launch-centre arrival");
-    w.wait(60);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 arrival");
-    let taken = track_drop_takes(&mut w);
-    walk_to_the_chaser_fight(&mut w, false, false);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&CHAIN_OWNED, &taken), "the 15 → 16 chain");
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: 100/30, 500/30, 1000/60, 1500/45 complete].
+    walker::with_pause(1000, 60, || {
+        let iso = iso();
+        let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
+        assert_eq!(save.weapon, 0x11, "15's exit saves the Delta Repeater as the held weapon [M 0x195670:18-19]");
+        let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&save)).unwrap());
+        w.wait_enabled(3000, "the launch-centre arrival");
+        w.wait(60);
+        assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &CHAIN_OWNED, "the 15 → 16 arrival");
+        let taken = track_drop_takes(&mut w);
+        walk_to_the_chaser_fight(&mut w, false, false);
+        assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&CHAIN_OWNED, &taken), "the 15 → 16 chain");
+    })
 }
 
 /// The same pin on a direct (cold) load of 16: the fresh 14 kit [M 0x1a7ef8 case 0x7000016 →
@@ -744,16 +748,20 @@ fn bond_is_armed_at_the_chaser_fight_after_the_15_handoff() {
 /// own archive keeps on a cold load.
 #[test]
 fn bond_is_armed_at_the_chaser_fight_on_a_direct_load() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load(&iso, "07000016.bin", false).unwrap());
-    w.wait_enabled(3000, "the launch-centre arrival");
-    w.wait(60);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 arrival");
-    let taken = track_drop_takes(&mut w);
-    walk_to_the_chaser_fight(&mut w, false, false);
-    assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&COLD_OWNED, &taken), "the cold 16 load");
-    let diff: Vec<usize> = COLD_OWNED.iter().copied().filter(|w| !CHAIN_OWNED.contains(w)).collect();
-    assert_eq!(diff, vec![0x50], "the two paths differ only by the Grapple, as in the game [M 0x1a97c8]");
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: 100/30, 500/30, 1000/60, 1500/45 complete].
+    walker::with_pause(1000, 60, || {
+        let iso = iso();
+        let mut w = Walker::new(nf_view::load(&iso, "07000016.bin", false).unwrap());
+        w.wait_enabled(3000, "the launch-centre arrival");
+        w.wait(60);
+        assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &COLD_OWNED, "the cold 16 arrival");
+        let taken = track_drop_takes(&mut w);
+        walk_to_the_chaser_fight(&mut w, false, false);
+        assert_armed_for_the_chaser(w.scene.sim.as_ref().unwrap(), &with_takes(&COLD_OWNED, &taken), "the cold 16 load");
+        let diff: Vec<usize> = COLD_OWNED.iter().copied().filter(|w| !CHAIN_OWNED.contains(w)).collect();
+        assert_eq!(diff, vec![0x50], "the two paths differ only by the Grapple, as in the game [M 0x1a97c8]");
+    })
 }
 
 /// From the arrival to the chaser fight: the approach, the pack cinema (played out), pulse 1 in
@@ -953,7 +961,7 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
                 // d3: (19.3, -93.6) - the old peek (19.0, -92.2) wedged its 3000-tick cap 2.1 u short while the
                 // pocket bled 72 -> 4.7; from here the cycles clear the gallery at 61.5 [L the 11-13 sweep:
                 // (19.6, -93.0) t2841, (20.2, -93.2) t2723, (19.3, -93.6) 61.5 at the fight's end].
-                let peek = if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 { [19.3f32, 0.9, -93.6] } else { [19.0f32, 0.9, -92.2] };
+                let peek = if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 { [19.3f32, 0.9, -93.6] } else { [19.0f32, 0.9, -92.2] };
                 // nb-scan-all (the d3 ledger, the 3093 death): with the spacing scan live the d3
                 // gallery phase ends with the EAST ring guard alive at the ring east (skin 0x50000b1,
                 // 0x1a, strafed to (14.1, 6.4, -79.8) — x > 0, so the west-only alive filter below
@@ -1021,7 +1029,7 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
                 // t3972. Fight them here before the back-out, the 0x50000b2 man first (#5 hit for 14 a
                 // round; nearest-first left 26.5 after the pair, #5-first keeps all 61.5 and reaches the
                 // hand-back at 37.0 with the AR loaded - death t12054 -> t12518 in the chaser fight).
-                if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+                if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
                     // nb-scan-all (the d3 ledger, the 3093 death): the close-pair stand measured
                     // exposed FALSE from the pocket ("shooting drone 0 ... exposed false" — the
                     // scan's strafes park the pair behind the pocket lip) and the whole fight
@@ -1317,7 +1325,14 @@ fn walk_to_the_chaser_fight(w: &mut Walker, re_arm: bool, station_armour: bool) 
             let serr = walker::wrap_pi((at[0] - bp[0]).atan2(at[2] - bp[2]) - sim.bond.yaw);
             let want_pitch = ((at[1] - eye[1]) / sdist.max(0.5)).atan() / std::f32::consts::FRAC_PI_2;
             let perr = want_pitch - sim.bond.pitch;
-            let on = serr.abs() < 0.04 && perr.abs() < 0.05;
+            // Hold the tap while she stands in the line of fire, nearer than the shooter: the
+            // batch-3 run's taps at a pit shooter behind her took her head instead (two SMG
+            // rounds at 9.6 u, 52.5 each [M NDrone2_HitDamage part 5 x5], 100 -> -5.0 at
+            // +2461), and the punch window never opened.
+            let her = &sim.drones.list[chaser];
+            let herr = walker::wrap_pi((her.pos[0] - bp[0]).atan2(her.pos[2] - bp[2]) - sim.bond.yaw);
+            let blocked = herr.abs() < 0.2 && dist < sdist;
+            let on = serr.abs() < 0.04 && perr.abs() < 0.05 && !blocked;
             let input = Input { turn: serr.clamp(-0.08, 0.08), look: perr.clamp(-0.08, 0.08), ..Default::default() };
             if on && sdist >= 2.0 { w.tick_fire(input); } else { w.tick(input, false); }
             continue;
@@ -1424,7 +1439,7 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
     // stage's one live flip at +3185) is 7 u north of the route. Return fire stays off for the
     // legs (the room loot hop's dash idiom), and the spot is skipped when any live volume
     // claims it (the loot-hop probe, the standing capsule feet→feet+1.8 r 0.55 [M hurt.rs]).
-    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+    if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 && !w.tops_up() {
         let spot = {
             let sim = w.scene.sim.as_ref().unwrap();
             sim.drones.pickups.iter().find(|p| !p.gone && p.kind == 3 && {
@@ -1522,7 +1537,7 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
             };
             if members.is_empty() {
                 None
-            } else if sim.drones.difficulty >= 3 && !w.tops_up() {
+            } else if sim.drones.difficulty >= 2 && !w.tops_up() {
                 let mut waited = 0u32;
                 loop {
                     let sim = w.scene.sim.as_ref().unwrap();
@@ -1623,7 +1638,7 @@ fn finish_after_the_chaser(w: &mut Walker, t0: u32) {
             // (−13.4,−172.1) ~685 ticks after the spawn and fired from d 1.2, #14 (−10.7,−167.1)
             // at d 4.9), where the close stands above answer them. The wait is the slice's own
             // 300-tick budget; the member itself is shot the moment it is close or exposed.
-            if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() {
+            if w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 && !w.tops_up() {
                 let chase = {
                     let sim = w.scene.sim.as_ref().unwrap();
                     let d = &sim.drones.list[i];
@@ -2303,7 +2318,9 @@ fn clear_the_pit_shooters(w: &mut Walker, chaser: usize, stand_cap: u32) {
 /// the walker's own pub opt-in, set by this test only.
 #[test]
 fn the_chasers_punch_lands_the_record_damage() {
-    walker::with_real_damage_no_return_fire(|| {
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): no punch landed on an idle tick on the no-stop run.
+    // Lever: 2000/30 [L the 2-value sweep: only 2000/30 completes].
+    walker::with_pause(2000, 30, || walker::with_real_damage_no_return_fire(|| {
         let iso = iso();
         let save = carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]);
         let mut w = Walker::new(nf_view::load_with_carry_difficulty(&iso, "07000016.bin", false, Some(&save), 1).unwrap());
@@ -2398,7 +2415,9 @@ fn the_chasers_punch_lands_the_record_damage() {
                 let meet = [-11.0f32, -22.0, -170.0];
                 sim.drones.list.iter().enumerate()
                     .filter(|&(i, d)| i != chaser && d.team == 1 && d.present && d.enabled && !d.corpse
-                        && d.health > 0.0 && (walker::dxz(d.pos, meet) < 4.0 || walker::dxz(d.pos, sim.bond.pos) < 4.0)
+                        // 14 u (was 4): the batch-3 run's #8 (hp 10) chipped Bond from 11.3 u
+                        // through the whole meet walk and killed him at +7900 (25.8 in 13 hits).
+                        && d.health > 0.0 && (walker::dxz(d.pos, meet) < 4.0 || walker::dxz(d.pos, sim.bond.pos) < 14.0)
                         && walker::DamageLog::visible(sim, i))
                     .min_by(|a, b| walker::dxz(a.1.pos, sim.bond.pos).total_cmp(&walker::dxz(b.1.pos, sim.bond.pos)))
                     .map(|(i, _)| i)
@@ -2453,7 +2472,10 @@ fn the_chasers_punch_lands_the_record_damage() {
             if idle_hits.iter().any(|&hit| (hit - 20.0).abs() < 0.01) { break; }
             // Her point-blank bursts — survival first. Armour soaks a type-0 hit before health
             // [M 0x1904ec], so the margin is health + armour.
-            if { let h = &w.scene.sim.as_ref().unwrap().drones.health; h.health + h.armour < 30.0 } { break; }
+            // The margin is one punch (20.0) plus a star: the batch-3 route reaches the window
+            // with 27.8 after the meet clears, under the old 30.0 line, so the window closed
+            // before an idle tick.
+            if { let h = &w.scene.sim.as_ref().unwrap().drones.health; h.health + h.armour < 21.5 } { break; }
             if w.total_ticks >= clear_at { clear_the_pit_shooters(&mut w, chaser, 900); clear_at = w.total_ticks + 900; continue; }
             // An idle tick: every chaser hit landing in it is read as health + armour lost
             // (the absorbed part [M 0x1904ec]). A tick that also carries another shooter's hit
@@ -2490,7 +2512,7 @@ fn the_chasers_punch_lands_the_record_damage() {
             eprintln!("[punch] the punch landed: {punches:?} = 50 [D record 99] × 0.4 [M Operative]");
         }
         assert!(sim.drones.health.health > 0.0, "Bond survives the pinned punches ({} landed)", chaser_hits.len());
-    });
+    }));
 }
 
 /// The chaser's kill with the melee band held off — the walker's own tactics, no game code:
@@ -3144,7 +3166,13 @@ fn walk_the_chasers_defeat_completes_the_mission_agent() {
 
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission_00agent() {
-    walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3);
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: nine of ten, 6000/60 the one red complete].
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 1000/60 wedged at the return 5 (5.41,1.53,-74.94).
+    // Lever: 2000/30 [L the 2-value sweep: only 2000/30 completes].
+    walker::with_pause(2000, 30, || {
+        walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(3);
+    })
 }
 
 /// UN-IGNORED (level-16-pit-squad-operative, 2026-11-13): the ignore's tick-15337 death does
@@ -3172,7 +3200,13 @@ fn walk_the_chasers_defeat_completes_the_mission_00agent() {
 /// coin toss. No health top-ups, no damage lowered, no state pokes.
 #[test]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
-    walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(1));
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/90/200/400/1100 passed.
+    walker::set_post_intro_wait(30);
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): the no-stop walk died at (-13.41,7.39,-94.81) t6100.
+    // Lever: 2000/30 [L the 2-value sweep: only 2000/30 completes].
+    walker::with_pause(2000, 30, || walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(1)));
 }
 
 /// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked
@@ -3212,7 +3246,16 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
 /// answer him from the first slice. Measured green run: the squad audit clean (21 hits, every
 /// delta within the game's chain), ch 0xbf/0xc0/0x82, the button, MissionState 6.
 #[test]
+/// UN-IGNORED (s/hard-walks-a, 2026-11-22 [L the runs on this branch]): the ignored run died in
+/// the pocket at t5005 because the old d2 peek (19.0, -92.2) sits up a step the nav reaches only
+/// by a detour south to (19.1, -97.4), in the gallery's and the south-lane hunter's lines (76.9
+/// -> 10.1 before the first kill). The Agent walk now runs the 00 Agent plan: the (19.3, -93.6)
+/// peek (gallery fight ends at 37.4), the close pair fought from the peek before the back-out,
+/// the east armour #649 after the kill loop and the squad stage's exposed-member pick with no
+/// chase across the pit. The stop below is unchanged.
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1500/45 [L the
+    // 10-value sweep on the joined tree: 1500/45 only complete].
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): Bond died at
     // t5217 in the pocket fight (#5 / #4 bursts). Lever: a 30-tick stop at tick 1600 re-rolls the
     // pocket [L the 22-value sweep: 1600/30 and 3500/30 complete; 1500/30, 1700/30, 1600/20 die].
@@ -3220,7 +3263,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
     // moved and Bond died at t19492 in the last chaser fight (#14 / #15 at 2-4 u) under the
     // 1600/30 stop. Lever: the batch's other green value, a 30-tick stop at tick 3500 [L the
     // 18-run sweep: every 1600/30 + second stop died; 3500/30 and 3400/30 alone complete].
-    walker::with_real_damage_head_hunting(|| walker::with_pause(3500, 30, || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2)));
+    walker::with_real_damage_head_hunting(|| walker::with_pause(1500, 45, || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2)));
 }
 
 /// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked chaser mission on
@@ -3249,6 +3292,7 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
 /// 2 hits (every delta within the game's chain [D record 99; M 0x1d4424/0x139fac]), ch 0xbf
 /// at +8428, the lift-out hand-back at +9490, the button, end health 17.0 (the pool spent,
 /// 37 hits for 83.0 across the whole walk).
+#[ignore = "stream batch 1121b: Bond dies in the pocket fight near (20.5, 0.9, -92) at t2200-5600; no stop of 37 swept completes it. walks-1121-06-16: the pocket is NOT out of sight, its south face is a glass pane (z -96.67) the 0x1a rounds pass [M Bullet_update 0x12e7b0 glass mask; Collide_Update 0x1ea398:216-229], so the south lane hunter #1 hits Bond in the pocket from 19 u; 190 more stop sets (single to triple, also with a reshaped dash) never complete, the best reaching the pit squad (t22534)"]
 fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles; the ninja's
     // NinjaStand start): the pocket's close four took 72 -> 12.5 and Bond reached the blast

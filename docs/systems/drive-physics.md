@@ -252,12 +252,12 @@ the "driving" byte +0x299 the gearbox reads is the contact count `FUN_0018c1b0` 
 | `FUN_001c9778` | the box = model+0xc bbox (max − min)/2 | `half_extents` = vanquish.crp article bbox (0.919, 0.578, 2.317) [D] | model+0xc = the article Base payload [S] |
 | `FUN_00210938` | inverse inertia from mass + box (hz ≤ 4 / > 4 branches) | `inv_inertia_per_mass` | [M] |
 | `FUN_001f87d8` / `88c8` / `8888` / `87a8` | force / torque accumulate × mass (87a8 without) | accumulators hold per-mass values | [M] |
-| `FUN_001f89e0` + `.vutext` 0x568 | integration, `|v| ≤ M_LIMIT·…`, `|ω| ≤ AM_LIMIT` | semi-implicit Euler, body-frame I⁻¹ | [S] (VU0 microcode not lifted) |
+| `FUN_001f89e0` + micro 0x568 | integration: per-component M_LIMIT / AM_LIMIT clamps, L state, quaternion step | `Car::integrate` (§12) | [M] lifted |
 | `FUN_001f8088` | angular damping ×0.995, gated `+0x6c == 0 && +0x6d > 3` | not applied (cars are kinds 1-3) | [M] |
 | `FUN_001f7c60` | zero accumulators, gravity −13 (−34 for jungle_truck) | `acc_accum = (0, gravity, 0)` | [M] |
 | `FUN_001f6ae0` | per-wheel ground query → plane: n = norm((v1−v0)×(v0−v2)), y ≥ 0, n.y ≤ 0.9999; w = (v0 − p)·n (+ `FUN_00213618` term) | `Ground::wheel_plane`, `CollisionGround` (class 0x04 skipped), the per-wheel cache | [M]; the `FUN_00213618` term is taken 0 and the track query's search window (`UP_REACH` 1 m) is [S] |
 | `FUN_0018cef8` | pedal states (brake hold 30 ticks → reverse at long ≤ 0; brake zeroed below 0.5 m/s while counting), the front/rear grip shares (ACCEL/COAST/BRAKE/REVERSE/HANDBRAKE FRW × BRAKING_FRICTION / TOTAL_HANDBRAKE…), counter-steer 0x43c, the wheel roll `|v_xz|/(R·6.32·fps)`, wheel spin, drive `throttle·MAXACC·RATIO − brake·(MAXBRAKE | rev)`, steering, per-wheel grip / drive / limit × friction[surface], FRIC_MOD, the handbrake park | `Car::controller` | [M]; boosts (+0x294/+0x428), 0x29b/0x29f/0x2b2/0x29d bytes (no traced writer, taken 0), the shredded-tyre byte +0x43c, the skid/FX calls not ported |
-| `FUN_0018c1b0` | per wheel: x = clamp(w + REST, 0, LIMIT); contact x > 0 ∥ prev > 0; gate 0.2 < up.y·n.y; spring x·K + (x − prev)·C along n; lateral = (v_pt·lat)·grip·fricmod clamped to the limit, slip scale; drive along the wheel's long axis; slope scale on the spring's horizontal part; handbrake drag; − vel·ROLLING_RESISTANCE; torque r × F (r.y × WHEEL_FORCE_APP_SCALE); the lifted-wheel (0, −50, 0) torque; yaw stability | `Car::controller`'s wheel loop | [M]; vtbl+0x214 (taken true), the 0x324 lift, the shift squat −0.02 not ported [S] |
+| `FUN_0018c1b0` | per wheel: x = clamp(w + REST, 0, LIMIT); contact x > 0 ∥ prev > 0; gate 0.2 < up.y·n.y; spring x·K + (x − prev)·C along n; lateral = (v_pt·lat)·grip·fricmod clamped to the limit, slip scale; drive along the wheel's long axis; slope scale on the spring's horizontal part; handbrake drag; − vel·ROLLING_RESISTANCE; torque r × F (r.y × WHEEL_FORCE_APP_SCALE); the lifted-wheel (0, −50, 0) torque; yaw stability | `Car::controller`'s wheel loop | [M]; vtbl+0x214 = `prev != 0` and the 0x324 landing lift ported (§12); the shift squat −0.02 not ported [S] |
 | `FUN_0018aa88` | rpm / auto box | `update_rpm_gear` (unchanged), driving = contacts > 0 | [M] |
 | `FUN_001fc2f0` (+`FUN_001fb318`) | hull points swept by vel·dt against the world; land-car response vector y = 0 | `walls`: horizontal push-out + inward velocity removed, steep tris (|n̂.y| < 0.7) only | sweep [M], response [S] |
 
@@ -519,3 +519,100 @@ when the mission name holds `uw_`), the damage call itself, the land-car branch 
 The port tests every triangle the segment's xz box meets instead of the game's per-vehicle cache
 (radius 1.1·(r + min(1, |Δpos|)) around the moved centre) and does not apply `FUN_00214c08`'s
 group-sphere prefilter; both matter only for a surface the cache or the sphere leaves out.
+
+## 12. The AI cars' land pass and the land collision (branch s/drive-physics-robust)
+
+Port: `crates/nf-game/src/driving/physics.rs` (`Car::controller_ai`, `air_level`, `integrate`,
+`hull_ground` / `hull_response`, `walls` / `wall_respond`, `CollisionGround::with_walls`),
+`nf_formats::crp_mesh::CollisionWall` / `Crp::extract_collision_walls`,
+`nf_formats::carmesh::hull_points`; `AiDriver::step_land` in `driving/ai.rs`. Tests:
+`crates/nf-game/tests/drive_ai_land_physics.rs` (unit) and `drive_ai_land_disc.rs` (NF_ISO).
+
+**Who drives** (actor+0x2c8, the car constructor's argument [M FUN_001862c0:118]): 0 the
+player (`FUN_00176658`, `FUN_001566b0`); the AIEl spawner `FUN_0012cb08` passes 4 (2 when the
+element's flags hold 8) and the constructor turns 4 into 2; traffic (`FUN_0013fae0`) passes 3.
+No caller passing 1 was found. `FUN_00188200` runs `FUN_0018ecb8` for every non-zero kind
+[M 0x188bf8-0x188c60]. `Car::kind` (`DriverKind`) picks the pass.
+
+**The vtable slots the land passes call** (car vtable 0x379ef0, set by the constructor
+[M 0x1862c0:105]; entries are {i16 delta, fn}): +0x214 = `FUN_001931f8` =
+`prev_compression[i] != 0`; +0x14c = `FUN_00193118` = `tyre[i] (+0x2a0) == 0`; +0x9c =
+`FUN_00193008` = actor+0x2c8. This settles §8's "vtbl+0x214 taken true": in both the player
+pass and the AI pass a wheel that was not compressed last tick raises the landing lift (scratch
++0x324 = max unclamped `w + REST`, added to the body's y after the wheel loop [M 0x18c1b0:160-166,
+:657; 0x18e548]), and the player's drive force goes only to a wheel whose own or axle partner's
+last compression is non-zero [M 0x18c1b0:396-409].
+
+**`FUN_0018ecb8` / `FUN_0018e548`** (the AI pass), as ported: one pedal (the smaller of
+throttle/brake zeroed); grip shares 0.3/0.7 (handbrake 0.8/0.2 above 5 m/s, else 0.5/0.5), ×5
+while the hit stun +0x29d is 0, ×1.5 more for kinds 1 and 2; drive
+`throttle·max(MAXACC, 12.5) − brake·max(MAXBRAKE, 12.5)` on each rear wheel; steer
+`input·max(MAXSTEERING, 0.2)`, no speed falloff; a lateral limit of 20 on every wheel; no gearbox
+ratio, no surface friction table, no FRIC_MOD, no rolling resistance; per wheel the spring
+`x·K + (x − prev)·C`, `long = norm(n × norm(axle × n))`, `lat = n × long`,
+`f_lat = clamp(v_pt·lat·grip, ±20)`, force `long·drive + n·spring` (xz × SLOPE_SCALE) minus the
+handbrake drag and `lat·f_lat`, torque `r × F` with r.y × WHEEL_FORCE_APP_SCALE, and the
+lifted-wheel (0, −25, 0) push. The traffic AI's velocity snap and brake stop
+(`AiDriver::step_shared`) stood in for this side force; `step_land` uses neither.
+
+**The in-air levelling `FUN_0018bb90`** (kind 1, kind 2 while alive; no wheel and no hull point
+down; more than 50 ticks (`DAT_00331964`) since a car-to-car hit, class+0x4de, which the body
+constructor and the placement hold at 0xffff [M 0x1f6e98:262, 0x1f7880:140] and `FUN_001f9d98`
+zeroes): with up.y ≥ 0.4 the rows blend `((n − 1)·row + target)/n` (NUM_BLEND_STEPS +0xb8)
+toward the level frame of the heading pitched nose down by NOSE_JUMP_ANGLE (+0x3c; FUN_002cc510
+is an x-axis rotation); past 10 air ticks (`DAT_00331968`) the angular momentum ×0.8. Traffic
+(kind 3) is never levelled. The blended matrix's re-orthonormalisation (FUN_002cc690) is [S].
+
+**The integration** (micro 0x568 in the overlay `.DVP.overlay..0x0.2745173155` loaded from
+.vutext 0x324e70, continued by `..0x800.2816476395` from 0x325678 [D .DVP.ovlytab]; the VF
+registers from the lqc2 sequence 0x1f8c84-0x1f8cb4): momentum clamped per component to
+±M_LIMIT·m before this tick's force, `v = P/m`; `L += τ·dt`, `ω = I_w⁻¹·L` clamped per component
+to ±AM_LIMIT, L rebuilt from the clamped ω; `pos += v·dt`; `q += 0.5·(0, ω·dt) ⊗ q`, normalised;
+rows and `I_w⁻¹` rebuilt from q. The SUB_PHYSICS port (`sub_physics::Body::integrate`) lifted the
+same program independently and reads alike. The land car now keeps L as its state (ω derived),
+per unit mass.
+
+**Pass C** (`FUN_001f9500`): the plane under the body centre first (class+0x4e0); while the
+centre is above it, points whose world offset is above the centre are skipped. The points are
+the model's hull (`Base` payload +0x60, count +0x3c, each y lowered by `Base+0x38 − half height`,
+`FUN_001d38a8` = model vtable 0x3885d8 slot +0x54 [M 0x1f72d8, 0x195ae0, 0x1c98f8]) after the four
+wheel points; upright, list entries 8..11 (hull 4..7, the bumper corners); a fast-falling AI body
+4..11; tilted, every hull point. The response is the VU0 program at micro 0x1a0
+(`FUN_001f91e8`), lifted: per contact in order
+`j = −(1 + e·min(|vn|, 10))·vn / (1/m + n·((I_w⁻¹(r × n)) × r))`, e = GROUND_RESTITUTION /
+MICRO_THRESHOLD = 0.05 [M FUN_001fd338:7], plus the tangential push
+`norm(u_t)·(n·F/m)·mass/8·GROUND_FRICTION_COEFF` (class+0x4d4 [M 0x1f72d8:166]), applied only when
+the impulse's y is ≥ 0 (the Sy MAC flag at micro 0x92-0x94); then the body moves out along the
+deepest contact's normal. A caller without a hull list keeps the box stand-in points and the
+old inelastic deepest-point impulse [S].
+
+**Pass B for a land car**: the land gather flags (4) query only the 2-D wall list of every `ci`
+item's article (`ca` +0x02 u16 list offset from +0x20, +0x04 u16 count, 32-byte records: end A,
+surface +0x0c, class +0x0d, end B, 1/|AB| +0x1c [M FUN_00219a50]). A query segment hits a wall
+when their xz segments cross (FUN_00231548) at a height strictly between the wall's end heights;
+the nearest by `max(|dx|, |dz|) + 0.25·min` wins and its normal is the horizontal perpendicular
+turned toward the start [M FUN_00219328, FUN_0021a248]. The eleven points of
+`sub_collide::hull_offsets` sweep `pos → pos + offset + vel·dt`; depth = |end − hit| with y
+zeroed (side points ×0.25, weight 0.25); the application point is the end moved to the body
+centre's height plus −0.11 (or the fast head-on form) [M FUN_001fc2f0 :190-330]; the response is
+`FUN_001fb318` with the land branch's torque, body y and z lanes ×0.2 [M :206-216, :245-258]. The
+disc lists: MIS01 24935 walls, MIS4 and RACE 6275 each [D]. The port takes the walls to world
+space (the item transform applied to both ends); the game tests a rotated item in its local
+frame (FUN_00219328's second arm) [S for rotated items].
+
+**What the failures were** (`drive_ai_land_disc.rs`; its sister runs the pre-branch
+configuration on the same spawns and fails). Cars driven by the traffic brain through the player
+pass with the box hull stand-ins and no wall list rolled on kerbs (the upright stand-in points
+sat under the floor and a corner contact spun the body), drove under ledges and into raised
+blocks that have no steep triangles (MIS01's 5 m planters are bounded only by the 2-D wall
+list), and ran off the mesh. With this branch none of the runs ends below the ground, rolls, or
+leaves the road by more than a lane; a few end early when the brain crawls round a carrot inside
+its turning circle (FUN_00131770's stuck re-join is not ported).
+
+**Not ported / unproven**: the hit stun +0x29d (FUN_00187a78) and the flat tyres
+(+0x2a0..+0x2ac: the steer pulls and the per-wheel shares), the kind-3 two-query shortcut (wheels
+1/3 copy 0/2 when the instance's collide bit is clear), the kind-2/3 tipped damage
+(FUN_00188200: 100 hit points per tick while tipped with hull contacts), the kind-1 righting, the
+dynamic-object lists of the wall query, the surface 0x0e event, the IS_SNOWMOBILE restitution
+(0.025/10), the PS2's rsqrt/normalise rounding. The brain (speed, carrot) is the existing port's;
+the race rival's own profile was not run on this physics here.

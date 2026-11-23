@@ -62,7 +62,11 @@ fn dyn_tri_dist(w: &nf_game::world::CollisionWorld, p: [f32; 3], pad: f32) -> f3
 fn fire_one(scene: &mut nf_view::scene::Scene, pos: [f32; 3], yaw: f32, pitch: f32) {
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = pos;
+        // At the standing rest over the floor (`Bond::stand_at`'s +1.1): placed lower, the
+        // spine drops through the floor, which the game's one-sided push [M Intersect_CylGeom
+        // 0x109da0, flags 99] never lifts (the old two-sided push did), and the shot leaves low.
+        let y = sim.world.floor_below([pos[0], pos[1] + 1.0, pos[2]], 10.0).map_or(pos[1], |f| f + 1.1);
+        sim.bond.pos = [pos[0], y, pos[2]];
         sim.bond.vel = [0.0; 3];
         sim.bond.yaw = yaw;
         sim.bond.pitch = pitch;

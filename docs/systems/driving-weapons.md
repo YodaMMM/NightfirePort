@@ -107,8 +107,8 @@ Ultralight, Sentinel (0x3349b0, `FUN_001d7620`) [M]; vanquish/vanquishalps 1, su
 jungle cars 3, ultralight 5, sentry 6 [D]. Each shooter steps a counter that wraps at
 BulletStreakCount{type}; only the shot that finds it at 0 draws a streak [M]. The FX tun carries
 the colour/texture/width/length/speed/count per type and the Lighting tun the projectile glow
-Colour/Size{Missile,Rocket,SnowmobileRocket,EMPInflight,EMPTarget} [D]; drawing them is not part
-of this module.
+Colour/Size{Missile,Rocket,SnowmobileRocket,EMPInflight,EMPTarget} [D]; what they draw is
+docs/systems/driving-projectile-gfx.md (`projectile_gfx.rs`).
 
 ## 6. The projectile (`FUN_00180bc8`, `FUN_00181e70`, `FUN_00182978`)
 

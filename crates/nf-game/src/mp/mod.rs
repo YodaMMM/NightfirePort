@@ -246,6 +246,15 @@ pub struct MpSettings {
 }
 
 impl MpSettings {
+    /// mp-drops: the slot's character row allows the second SMG — `BOT_getDefaultStats(
+    /// MPSettings[slot·0x30 + 0x24])` byte 9 == 1, the test `Pickup_Handler`'s match take remap
+    /// runs [M 0x18e650:146-147; `BOT_getDefaultStats` 0x1263a8 = `default_bot_stats + i·0xE`].
+    /// A skin past the 29-row table reads false [S — the game would read past the table].
+    pub fn dual_wield(&self, slot: usize) -> bool {
+        let Some(p) = self.players.get(slot) else { return false };
+        bots::DEFAULT_BOT_STATS.get(p.skin as usize).is_some_and(|r| r.weapon_byte9() == 1)
+    }
+
     /// The phase-1 default for `--mp <arena>`: an Arena-1-style deathmatch. The menu's own defaults
     /// are not read here (no menu path in phase 1) — the values are the game's fresh-boot
     /// setup records: the score limit 10 and the time limit 10 menu-minutes [M bootup
@@ -646,6 +655,15 @@ impl MpMatch {
         if (scenario == scenario::DEMOLITION || scenario == scenario::PROTECTION) && game.limit < 0.0 {
             game.limit = 60.0; // 0x42700000 [M 0x183438:53]
         }
+        // mp-scenarios-full: Top Agent's lives copy: every slot's score starts at the lives
+        // limit, `(float)(int)MPSettings+0x19C` [M 0x183438:56-62, all 8 slots; the port's 16];
+        // `MP_PlayerKilled` takes 1.0 off per death [M 0x188f70:96-98], so the debriefing's
+        // points column (and its sort) reads the lives left. The port started it at 0.
+        if scenario == scenario::DEATH_LIMIT_FFA {
+            for slot in &mut game.slots {
+                slot.score = settings.frag_limit as f32;
+            }
+        }
         MpMatch {
             settings,
             spawns: MpSpawnState::zeroed(),
@@ -737,6 +755,15 @@ impl MpMatch {
             // and reads the body's skin from `MP_skins[rec[0x10]]` [M 0x1249e8:100] — the loader
             // reads the same word per slot.
             self.settings.players[slot].skin = rec.character() as u32;
+            // mp-scenarios-full: the bot record's name (`MPSettings+slot·0x30+0x00`). The boot
+            // writes `sprintf("%s %d", "Bot", i − 3)` into records 4..7 [M bootup 0x1c7e78:50-61;
+            // D "%s %d" @0x30ce18, "Bot" @0x30ce20], and `Menu_PrepareBots` 0x1f94a0 carries the
+            // name with the record it compacts. The debriefing's result line and `MP_SortOutWhoWon`'s
+            // status print it for a bot winner [M P_MPDEBRIEFING 0x212198:227-228, 0x1848d0:73-76];
+            // the port left it empty ("" wins the match). The port's bot i is the game's record 4+i.
+            if self.settings.players[slot].codename.is_empty() {
+                self.settings.players[slot].codename = format!("Bot {}", i + 1);
+            }
             let sp = self.get_spawn_point(team, slot, rng) as usize;
             let p4 = self.spawns.points[sp].pos;
             let pos = [p4[0], p4[1], p4[2]];

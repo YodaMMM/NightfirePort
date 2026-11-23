@@ -103,7 +103,21 @@ fn iso() -> Option<String> {
 // 0xe3fb_90fd_011b_bbef (34 kills).
 // join-1110-mp: the four mp branches joined (setup defaults + DefaultInit bands + arrival 2.0 /
 // raw walk mul + the combat-move draw order) — re-pinned on the joined tree.
-const PINNED_DIGEST: u64 = 0x29b0_8957_ec71_90d7; // 48 kills (re-pinned for mp-bot-backoff-2: the CanBackoff probe is the game's (0, 0, −1.8) [M 0x1501a0:57 `0xbfe66666`] scaled by the bot speed mul (a bot's +0xc5 is 0x1e [M 0x14c938 case 0x10]), through the MoveTest, behind the disc anim-state-4 gate; decompile-backed behaviour change, not an optimisation)
+// mp-drops: a dead human now drops the held gun (`Player_CheckForDeath` 0x190810:42-56) and a
+// match take runs the MP id remap (0x18e650:141-160) and the full online respawn wait
+// (0x18e148:183-185) — decompile-backed behaviour changes: 0x29b0_8957_ec71_90d7 (48 kills) →
+// 0xa730_a7ac_a608_f75a (36 kills); the machines still agree on every tick.
+// mp-drops-draw: the match load reserves inert pickup slots for the dead players' drops (so the
+// renderer can draw them); the world hash folds every pickup, so the digest moves with the list
+// while the run does not (still 36 kills; with the reservation off the old 0xa730_a7ac_a608_f75a
+// comes back exactly): 0xa730_a7ac_a608_f75a -> 0x25c0_6d1e_41bf_5788.
+// mp-bot-drops: a dead bot now drops its gun (`DroneWeap_DropWeapon` 0x17a2a0 from the bot death
+// states 0x175508 case 3 / 0x1755a8): one `Rand_FRand` per drop on the shared stream, a new
+// pickup the takers can reach, and the reservation grows to 2 slots per weapon for every body
+// (humans + bots). A behaviour change from the decompile: 0x25c0_6d1e_41bf_5788 (36 kills) ->
+// 0xb6fb_5b05_bf9b_0ccc (43 kills); with the bot drop and the bot reservations switched off the
+// old value comes back exactly; the machines agree on every tick.
+const PINNED_DIGEST: u64 = 0x8d3c_64a1_8b34_2d54; // re-pinned for collide-push-3 (the game's one-sided cylinder push moves every body's wall contact); was 0xce7d_8e35_58a9_738f; 39 kills, re-pinned for stream batch 1121b on master (the joined bullet-direction, MP-scenario and auto-aim ports over master's bot drops and scenario fixes); was 0xb6fb_5b05_bf9b_0ccc; earlier 0x25c0_6d1e_41bf_5788; earlier 0xa730_a7ac_a608_f75a; // previous note: 48 kills (re-pinned for mp-bot-backoff-2: the CanBackoff probe is the game's (0, 0, −1.8) [M 0x1501a0:57 `0xbfe66666`] scaled by the bot speed mul (a bot's +0xc5 is 0x1e [M 0x14c938 case 0x10]), through the MoveTest, behind the disc anim-state-4 gate; decompile-backed behaviour change, not an optimisation)
 
 const TICKS: u32 = 3600;
 

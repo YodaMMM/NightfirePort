@@ -299,12 +299,12 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
                 let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
-                let cx_want_raw = -yaw_err / 0.76966;
-                let cy_want_raw = pitch_err / 0.57724;
+                // s-auto-aim: the cursor that puts the shot on `at` (screen units, through the zoom).
+                let [cx_want_raw, cy_want_raw] = sim.cursor_for(at).unwrap_or([-yaw_err / 0.76966, pitch_err / 0.57724]);
                 let cur = sim.cursor;
                 let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
                 let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
-                let aoff = sim.drones.aim_offset;
+                let aoff = sim.aim_offset_angles();
                 let err = { let mut a = yaw_err - aoff[0];
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
@@ -379,6 +379,7 @@ fn mezz_far_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
         let mut still = 0u32;
         let mut last_pos = [0.0f32; 3];
         let mut have_pos = false;
+        let mut dry_taps = 0u32;
         for t in 0..cap {
             let (input, fire, reload) = {
                 let sim = w.scene.sim.as_ref().unwrap();
@@ -391,7 +392,8 @@ fn mezz_far_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                 have_pos = true;
                 last_pos = d.pos;
                 still = if moved { 0 } else { still.saturating_add(1) };
-                if d.health < hp0 { hp0 = d.health; last_hit = t; }
+                if d.health < hp0 { hp0 = d.health; last_hit = t; dry_taps = 0; }
+                if MEZZ_DRY_END.with(|c| c.get()) && dry_taps >= 3 { return false; }
                 if t - last_hit > 1500 { return false; }
                 if t % 10 == 0 { aim = walker::DamageLog::exposed_part_gun_rays(&sim, di); }
                 if aim.is_none() { unseen += 1; if unseen > 60 { return false; } } else { unseen = 0; }
@@ -406,12 +408,12 @@ fn mezz_far_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
                 let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
-                let cx_want_raw = -yaw_err / 0.76966;
-                let cy_want_raw = pitch_err / 0.57724;
+                // s-auto-aim: the cursor that puts the shot on `at` (screen units, through the zoom).
+                let [cx_want_raw, cy_want_raw] = sim.cursor_for(at).unwrap_or([-yaw_err / 0.76966, pitch_err / 0.57724]);
                 let cur = sim.cursor;
                 let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
                 let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
-                let aoff = sim.drones.aim_offset;
+                let aoff = sim.aim_offset_angles();
                 let err = { let mut a = yaw_err - aoff[0];
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
@@ -432,6 +434,7 @@ fn mezz_far_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                 for _ in 0..60 { w.tick(nf_game::player::Input::default(), false); }
             } else if fire {
                 last_tap = t;
+                dry_taps += 1;
                 w.tick_fire(input);
             } else {
                 w.tick(input, false);
@@ -451,20 +454,29 @@ fn mezz_far_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
     killed
 }
 
+/// The far stand's dry-tap end (OPT-IN, the d3 chain only): three taps without a hit on the
+/// target end the stand. At the re-anchor end the wheel's armed pick is the 0x1c shotgun (the
+/// 0x19 pistol is dry there), and every pellet of its taps at the mezzanine pistol guard #5
+/// (25.9 u) lands on the balustrade face at x -16.29, his box above it untouched; the stand
+/// kept tapping for 540+ ticks while he landed 20 rounds for 47.5 [L this branch's impact log].
+thread_local! { static MEZZ_DRY_END: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
 /// The whole warm chain (12 → 4A → 13 → out) on real input. `real_damage` = the armour detour
 /// (see the real-damage test below); the wrapper turns the top-up off for every walker the walk
 /// makes. `difficulty` = the menu pick the chain runs at (the front-end's launch path [M
 /// C_SBNFDFCTY 0x216ca8:15]; 3 = the pre-sister byte-identical 00 Agent).
 fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
-    // warm-chain-margin-4: the tower2 OPT-IN flags are PROCESS-GLOBAL atomics and the tests of
-    // this binary share one process (--test-threads=1, the suite's shape) — the d3 walk's stores
-    // would leak into whichever test runs next (the run-8 ledger caught the agent sister running
-    // the d3 pre-clear). Every walk resets them first: the sisters stay byte-identical no matter
-    // the run order, and the d3 block below sets its own.
+    // walk-13-flaky: the tower2 OPT-IN flags are PER-THREAD cells. They were process-wide
+    // atomics, and libtest runs this binary's four walks side by side, so the d3 walk's stores
+    // reached the sisters mid-walk (the d2 walk took the d3 route and died at tick 4583 in the
+    // whole-binary run, passing alone). Every walk still resets them first: libtest may reuse a
+    // thread after a panicked walk, and the d3 block below sets its own.
     tower2::PRE_CLEAR_SOUTH_CORRIDOR.with(|c| c.set(false));
     tower2::PRE_CLEAR_NORTH_LOBBY.with(|c| c.set(false));
     tower2::REANCHOR_NORTH_LOBBY.with(|c| c.set(false));
     tower2::FLANK_LOBBY_EAST.with(|c| c.set(false));
+    tower2::NAV_SOUTH_HALL_WEST.with(|c| c.set(false));
+    MEZZ_DRY_END.with(|c| c.set(false));
     // ---- 07000012 walked (the shared route) ----
     // Agent difficulty (3): the keypad locks' param-6 tag auto-unlocks them at create on
     // Operative [M 0x1ae1f8 tail], and the route's burn leg pins the Agent+ behaviour
@@ -536,6 +548,8 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // bridge_and_retry, no in-place creep/longer stands (each measured dead, the
             // margin-4 report).
             tower2::FLANK_LOBBY_EAST.with(|c| c.set(true));
+            tower2::NAV_SOUTH_HALL_WEST.with(|c| c.set(true));
+            MEZZ_DRY_END.with(|c| c.set(true));
             // warm-chain-margin-4: the lobby-east posts (#6 rifle 0x18 + #7 0x19, hp 30/12, at
             // (3-5,15-18)) open fire the moment the lane's west half is crossed — the d3 melt
             // ledger: −59.5 in 64 ticks from x −9.1, the fights' own exposure flickering and
@@ -573,6 +587,14 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
             // this exact kit (its recorded death is on 13, tick 2448 [L the sight batch's
             // ledger]); this tree's one run with the loose gate died inside 12's resupply nav,
             // not in the pursuit the lever answers.
+        }
+        if real_damage && difficulty == 1 {
+            // batch3 (5e9460adb): the drop at (17.5, 0.9, 1.5) on 12's lower floor is out of
+            // reach on the new floor/wall contact: two fetches stood the 6000-tick cap at
+            // (16.6, 1.40, 3.19) and the third left Bond on the furniture at y 1.93, from which
+            // the south-east bend 2 leg wedged at (19.21, 2.02, -8.94) [L this tree's runs]. A
+            // player who cannot reach it walks on with the pistol.
+            w.no_fetch.push([17.5, 0.9, 1.5]);
         }
         tower2::walk_12(&mut w);
         tower2::walk_12_exit(&mut w);
@@ -1526,6 +1548,10 @@ fn walk_the_warm_chain(iso: &str, real_damage: bool, difficulty: u32) {
 
 #[test]
 fn walk_the_warm_chain_to_the_front_entrance_and_out() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/90/400/700/1100 passed.
+    walker::set_post_intro_wait(30);
     let iso = iso();
     walk_the_warm_chain(&iso, false, 3);
 }
@@ -1616,7 +1642,7 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
 /// pre-clear at 14-16 u, no bridge_and_retry, no in-place creep or longer stands — each
 /// measured dead in the margin-4 report). Never lowered damage or health; no top-ups.
 #[test]
-#[ignore = "s/g019-sky-2 (guards drop a finished voice line every control pass): Bond dies t5170 at (-10.52,-368.29,37.94) in 13's lobby west mid (#13's 0x18 bursts, 49.5 in 7 hits), entering 13 at 61.5 instead of 93.0 (12's lobby-east flank cost 28) [L 2026-11-21 run]. Levers tried and dead: 6 third stops 3200-5000, 14 stops 9200-11650 before 12's flank, 79 random 1-4-stop runs (entering 13 at up to 96 still dies there); re-tune and un-ignore"]
+#[ignore = "s/hard-walks-b (master b60b1ff79): the base run wedged in 12 at the south hall west (a return-fire fight on #12 backed Bond up the south passage to (6.43,-19.50); the leg's straight line ends on the passage wall, the 6000-tick cap). Two route levers taken: that leg walks the nav graph (NAV_SOUTH_HALL_WEST; 12 now completes, Bond reaches 13 at 48 health + 50 armour), and the 13 mezzanine far stand ends after three dry taps (MEZZ_DRY_END; the held 0x1c shotgun's pellets all stop on the balustrade face x -16.29 under guard #5 at 25.9 u, the 0x19 pistol is dry). Bond now dies at t5119 at the lobby west mid (-4.92,-368.39,39.07) after the re-anchor pool fill ends at 13.5 health. Next lever: the 13 lobby budget from the re-anchor end on (the health 13 starts with)"]
 /// GREEN (retune-nb-13-4, 2026-11-19): the walk completed on this tree — MissionState 6, the
 /// entrance touch ch 0x50 written, the objective states asserted, `test result: ok` [L this
 /// session's run]. The round's lever chain, each judged on its own real run: (1) the nb-13-3
@@ -1665,8 +1691,14 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage() {
 /// health, ammo or channel writes.
 #[test]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_agent() {
-    let iso = iso();
-    walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 2));
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 1500/45, 2000/30 complete].
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 2000/30 wedged at the south corridor east
+    // (17.12,1.61,-10.60). Lever: 1000/60 [L the 2-value sweep: only 1000/60 completes].
+    walker::with_pause(1000, 60, || {
+        let iso = iso();
+        walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 2));
+    })
 }
 
 
@@ -1679,4 +1711,21 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_agent() {
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_operative() {
     let iso = iso();
     walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 1));
+}
+
+/// walk-13-flaky: the d3 walk's route flags must not reach the sister walks that libtest runs
+/// beside it in this process. Fails on the old process-wide atomics (a store on one thread read
+/// back on another); passes on the per-thread cells.
+#[test]
+fn tower2_route_flags_stay_on_their_own_thread() {
+    std::thread::spawn(|| {
+        tower2::PRE_CLEAR_SOUTH_CORRIDOR.with(|c| c.set(true));
+        tower2::PRE_CLEAR_NORTH_LOBBY.with(|c| c.set(true));
+        tower2::REANCHOR_NORTH_LOBBY.with(|c| c.set(true));
+        tower2::FLANK_LOBBY_EAST.with(|c| c.set(true));
+    }).join().unwrap();
+    assert!(!tower2::PRE_CLEAR_SOUTH_CORRIDOR.with(|c| c.get()), "PRE_CLEAR_SOUTH_CORRIDOR leaked across threads");
+    assert!(!tower2::PRE_CLEAR_NORTH_LOBBY.with(|c| c.get()), "PRE_CLEAR_NORTH_LOBBY leaked across threads");
+    assert!(!tower2::REANCHOR_NORTH_LOBBY.with(|c| c.get()), "REANCHOR_NORTH_LOBBY leaked across threads");
+    assert!(!tower2::FLANK_LOBBY_EAST.with(|c| c.get()), "FLANK_LOBBY_EAST leaked across threads");
 }

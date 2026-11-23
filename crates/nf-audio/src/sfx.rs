@@ -100,6 +100,57 @@ struct Item {
     sample_hash: u64,
     /// The port's sound log (`NF_SOUND_LOG`): why the item was marked `DeleteMe` (numbers only).
     why: &'static str,
+    /// The line ledger (`Driver::line_ledger`, tests): the item's `counter` when channel 0 keyed on
+    /// with the sim frame (None while a precache holds it), and that sample's length in game frames.
+    keyed_at: Option<(i32, u32)>,
+    expect_frames: u32,
+}
+
+/// One item's life in the line ledger (tests, the voice-cut sweep): what started, how long its
+/// first sample lasts on the frame clock, and how many updates it ran before the kill pass took it.
+#[derive(Clone, Debug)]
+pub struct LineRec {
+    pub id: u32,
+    pub handle: u32,
+    pub streamed: bool,
+    pub looped: bool,
+    /// 0 = one sample; else the effect's multi-sample cue (a sequence or chord).
+    pub multi: bool,
+    /// The sim frame (`log_frame`) of the key-on and of the kill.
+    pub start_frame: u32,
+    pub end_frame: u32,
+    /// The first sample's length in game frames on the frame clock (`VoiceClock::advance`).
+    pub expect_frames: u32,
+    /// Updates between the key-on and the kill pass.
+    pub played_frames: u32,
+    /// Why the kill pass took it (`Item::why`); "" = still alive at the read.
+    pub why: &'static str,
+    /// The item's channel-0 voice still sounded at the kill (no end flag yet).
+    pub voice_live: bool,
+    /// False: the start never keyed a voice (the setup rejected it, or a precache expired).
+    pub keyed: bool,
+}
+
+/// frame-hitches: one background decode's input (`Driver::predecode_in_background`).
+struct PredecodeJob { slot: usize, bank: Bank, sbf: Vec<u8>, streams: Vec<usize>, table: Option<(Vec<[u32; 4]>, Arc<Vec<u8>>)> }
+
+/// Its output: the same `Pcm` values the first-use decodes (`Driver::pcm`, `Driver::stream`) build.
+struct Predecoded { slot: usize, samples: Vec<(usize, Arc<Pcm>)>, streams: Vec<(usize, Arc<Pcm>)> }
+
+impl PredecodeJob {
+    fn run(self) -> Predecoded {
+        let samples = (0..self.bank.samples.len())
+            .filter_map(|k| self.bank.decode(&self.sbf, k).ok().map(|(data, loop_start)| (k, Arc::new(Pcm { data, loop_start }))))
+            .collect();
+        let streams = match &self.table {
+            Some((lut, bin)) => self.streams.iter().filter_map(|&k| {
+                let data = nf_formats::soundbank::stream_data(bin, *lut.get(k)?).ok()?;
+                Some((k, Arc::new(Pcm { data: nf_formats::vag::decode(data), loop_start: None })))
+            }).collect(),
+            None => Vec::new(),
+        };
+        Predecoded { slot: self.slot, samples, streams }
+    }
 }
 
 /// Bank slot data: the parsed bank, its decoded samples (lazily) and the raw ADPCM.
@@ -169,6 +220,10 @@ pub struct Driver {
     /// Streamed effects: `STREAMS.LUT` and `STREAMS.BIN`, decoded entries.
     streams: Option<(Vec<[u32; 4]>, Arc<Vec<u8>>)>,
     stream_pcm: HashMap<usize, Arc<Pcm>>,
+    /// frame-hitches: the background decode of the level bank's samples and the streams its effects
+    /// name (`predecode_in_background`). Its results only pre-fill the two first-use caches above;
+    /// every lookup still decodes on a miss, so the voices play the same PCM either way.
+    predecoded: Option<std::sync::mpsc::Receiver<Predecoded>>,
     /// The global pause (`SFXPaused` on the IOP — the batch's op 9/0xa state): the items live at the
     /// pause are held [M sound.md §8]. The EE keeps the batch flowing while paused; the port's host
     /// stops ticking under a menu, so the pause reaches the output through `set_paused` at once.
@@ -178,6 +233,8 @@ pub struct Driver {
     pub clock: crate::VoiceClock,
     /// The sound log's frame tag (`NF_SOUND_LOG`): the host writes the sim frame before each batch.
     pub log_frame: u32,
+    /// Test hook (the voice-cut sweep): when set, every item is logged here at its kill (or its rejected start).
+    pub line_ledger: Option<Vec<LineRec>>,
 }
 
 /// `Streams[1..2]`: at most two streamed effects at once (slot 0 is the music) [M `SFXInitialiseStream`].
@@ -206,8 +263,8 @@ impl Driver {
             music_master: 70, mute_sfx: 1, indoors: 100, indoors_target: 100, reverb: 0, reverb_target: 0, underwater: false,
             fade: 10000, fade_music_volume: 10000, fade_status: 0, fade_rate: 30, fade_music: 1, fade_start: 0,
             ducker_current: 100, ducker_volume: 100, ducker_duration: 1, ducker_start: 0, timer_ms: 0, nis_quitten: false, nis_playing: false,
-            key_on_frame_delay: 0, paused: false, clock: Default::default(), log_frame: 0,
-            listener_pos: [0; 3], listener_dir: [0, 1000, 0], listener_norm: [-1000, 0, 0], active: Vec::new(), streams: None, stream_pcm: HashMap::new() }
+            key_on_frame_delay: 0, paused: false, clock: Default::default(), log_frame: 0, line_ledger: None,
+            listener_pos: [0; 3], listener_dir: [0, 1000, 0], listener_norm: [-1000, 0, 0], active: Vec::new(), streams: None, stream_pcm: HashMap::new(), predecoded: None }
     }
 
     /// `STREAMS.LUT` / `STREAMS.BIN` (`SFXInitialiseAudioStreamSystem`).
@@ -215,11 +272,70 @@ impl Driver {
 
     fn stream(&mut self, k: usize) -> Option<Arc<Pcm>> {
         if let Some(p) = self.stream_pcm.get(&k) { return Some(p.clone()); }
+        if self.absorb_predecoded() { if let Some(p) = self.stream_pcm.get(&k) { return Some(p.clone()); } }
         let (lut, bin) = self.streams.as_ref()?;
         let data = nf_formats::soundbank::stream_data(bin, *lut.get(k)?).ok()?;
         let p = Arc::new(Pcm { data: nf_formats::vag::decode(data), loop_start: None });
+        nf_formats::workcount::add("snd: stream decode (first use)", p.data.len() as u64 * 2);
         self.stream_pcm.insert(k, p.clone());
         Some(p)
+    }
+
+    /// frame-hitches: decodes the level bank's samples and every stream its effects name on a
+    /// worker thread, so a sound's first start mid-play finds its PCM ready instead of decoding it in
+    /// the frame (the first-use decodes were the largest one-off work of a play frame: up to ~0.5 MB of
+    /// PCM for a dialogue line). Port-side only: the caches hold exactly what the first-use decode
+    /// would store, a decode the worker could not make stays a first-use miss, and a lookup before
+    /// the worker is done decodes as before. No-op without a level bank.
+    pub fn predecode_in_background(&mut self) {
+        let Some(job) = self.predecode_job() else { return };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new().name("sound predecode".into()).spawn(move || { let _ = tx.send(job.run()); });
+        if spawned.is_ok() { self.predecoded = Some(rx); }
+    }
+
+    /// `predecode_in_background`'s work run on this thread (tests and probes: the caches full now).
+    pub fn predecode_now(&mut self) {
+        let Some(job) = self.predecode_job() else { return };
+        let done = job.run();
+        self.absorb(done);
+    }
+
+    /// The decoded PCM held by the first-use caches, in bytes (all banks and streams; a measuring aid).
+    pub fn cached_pcm_bytes(&self) -> usize {
+        self.slots.values().flat_map(|s| s.pcm.values()).chain(self.stream_pcm.values()).map(|p| p.data.len() * 2).sum()
+    }
+
+    fn predecode_job(&self) -> Option<PredecodeJob> {
+        let slot = self.primary?;
+        let s = self.slots.get(&slot)?;
+        let mut streams: Vec<usize> = Vec::new();
+        if self.streams.is_some() {
+            for &(id, _) in &s.bank.effects {
+                let Some(fx) = s.bank.effect(id).and_then(|b| Effect::parse(b).ok()) else { continue };
+                for sub in &fx.subs { if sub.file < 0 { streams.push((-1 - sub.file) as usize); } }
+            }
+            streams.sort_unstable();
+            streams.dedup();
+        }
+        Some(PredecodeJob { slot, bank: s.bank.clone(), sbf: s.sbf.clone(), streams, table: self.streams.clone() })
+    }
+
+    /// Takes a finished background decode into the caches (entries already decoded stay as they are).
+    fn absorb_predecoded(&mut self) -> bool {
+        let Some(rx) = self.predecoded.as_ref() else { return false };
+        match rx.try_recv() {
+            Ok(done) => { self.predecoded = None; self.absorb(done); true }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.predecoded = None; false }
+        }
+    }
+
+    fn absorb(&mut self, done: Predecoded) {
+        if let Some(s) = self.slots.get_mut(&done.slot) {
+            for (k, p) in done.samples { s.pcm.entry(k).or_insert(p); }
+        }
+        for (k, p) in done.streams { self.stream_pcm.entry(k).or_insert(p); }
     }
 
     /// `SFXLoadSoundBank` into `slot` (the index of its hash in `SBINFO.SBI`). The first call names the
@@ -256,10 +372,12 @@ impl Driver {
     }
 
     fn pcm(&mut self, slot: usize, k: usize) -> Option<Arc<Pcm>> {
+        if self.slots.get(&slot)?.pcm.get(&k).is_none() { self.absorb_predecoded(); }
         let s = self.slots.get_mut(&slot)?;
         if let Some(p) = s.pcm.get(&k) { return Some(p.clone()); }
         let (data, loop_start) = s.bank.decode(&s.sbf, k).ok()?;
         let p = Arc::new(Pcm { data, loop_start });
+        nf_formats::workcount::add(if Some(slot) == self.primary { "snd: bank sample decode (first use)" } else { "snd: spare bank sample decode (first use)" }, p.data.len() as u64 * 2);
         s.pcm.insert(k, p.clone());
         Some(p)
     }
@@ -286,6 +404,7 @@ impl Driver {
             // (`SampleKeyOn(VoiceHandle[0], …)` [M §3.2 step 3]).
             self.items[k].key_on_delay = 0;
             self.items[k].started_when_nis = self.nis_playing;
+            if self.items[k].keyed_at.is_none() { self.items[k].keyed_at = Some((self.items[k].counter, self.log_frame)); }
             let held = std::mem::take(&mut self.items[k].held);
             // The key-on clears the voice's end state: the SPU's KON resets ENDX, and a stream's
             // end test (`ES_HasStreamEnded`, HasSampleEnded@6ac's stream arm) starts over with the
@@ -319,6 +438,8 @@ impl Driver {
             gpaused: false,
             sample_hash: 0,
             why: "",
+            keyed_at: None,
+            expect_frames: 0,
             started_when_nis: self.nis_playing,
             streamed: false,
         };
@@ -329,7 +450,10 @@ impl Driver {
         // start reports the failure. Left in the list it reached the next `update` before the kill
         // pass, and the polyphonic arm indexed its empty `cued` — a crash (at
         // sfx.rs `fx.subs[cued[k]]`) when the front end restarted its music pair over the live one.
-        if self.items[0].delete { self.items.remove(0); }
+        if self.items[0].delete {
+            if let Some(r) = self.line_ledger.is_some().then(|| self.line_rec(0)).flatten() { if let Some(l) = self.line_ledger.as_mut() { l.push(r); } }
+            self.items.remove(0);
+        }
         1
     }
 
@@ -472,6 +596,11 @@ impl Driver {
             let it = &self.items[i];
             eprintln!("[snd] f{} start {:#x} handle {} voice {front} rear {:?} len {} pitch {:#x} stream {streamed} held {hold} nis {}",
                 self.log_frame, it.id, it.handle, rear, pcm.data.len(), pitch.max(0), it.started_when_nis);
+        }
+        if ch == 0 && self.items[i].keyed_at.is_none() {
+            let step = pitch.max(1) as f64 / 4096.0;
+            self.items[i].expect_frames = (pcm.data.len() as f64 / step / crate::CLOCK_FRAME as f64).ceil() as u32;
+            if !hold { self.items[i].keyed_at = Some((self.items[i].counter, self.log_frame)); }
         }
         let front_cmd = Cmd::Play { voice: front, pcm: pcm.clone(), pitch: pitch.max(0) as u32, left: l, right: r, delay: 0.0, reverb };
         if hold { self.items[i].held.push(front_cmd) } else { out.push(front_cmd) }
@@ -783,6 +912,15 @@ impl Driver {
                     let it = &self.items[k];
                     eprintln!("[snd] f{} kill {:#x} handle {} why {} after {} updates", self.log_frame, it.id, it.handle, if it.why.is_empty() { "?" } else { it.why }, it.counter);
                 }
+                if self.line_ledger.is_some() || crate::line_log() {
+                    if let Some(r) = self.line_rec(k) {
+                        if crate::line_log() {
+                            eprintln!("[line] id {:#x} handle {} f{}-f{} played {} expect {} why {} live {} stream {} loop {} multi {} keyed {}",
+                                r.id, r.handle, r.start_frame, r.end_frame, r.played_frames, r.expect_frames, r.why, r.voice_live, r.streamed, r.looped, r.multi, r.keyed);
+                        }
+                        if let Some(l) = self.line_ledger.as_mut() { l.push(r); }
+                    }
+                }
                 for ch in 0..10 {
                     if let Some(v) = self.items[k].vh[ch].take() {
                         if let Some(x) = self.voices[v].take() {
@@ -796,6 +934,22 @@ impl Driver {
         }
         self.active = self.items.iter().map(|it| (it.id, it.handle)).collect();
         reverb_depth
+    }
+
+    /// The ledger row of item `k` (`keyed` false when it never keyed a voice).
+    fn line_rec(&self, k: usize) -> Option<LineRec> {
+        let it = &self.items[k];
+        let (c0, f0, keyed) = match it.keyed_at { Some((c, f)) => (c, f, true), None => (it.counter, self.log_frame, false) };
+        Some(LineRec { keyed, id: it.id, handle: it.handle, streamed: it.streamed || it.fx.subs.first().is_some_and(|s| s.file < 0),
+            looped: it.fx.looped != 0 || it.vh.iter().flatten().any(|&v| self.voices[v].as_ref().is_some_and(|x| x.looping)),
+            multi: it.fx.multi_sample != 0, start_frame: f0, end_frame: self.log_frame, expect_frames: it.expect_frames,
+            played_frames: (it.counter - c0).max(0) as u32, why: it.why,
+            voice_live: it.vh[0].is_some_and(|v| self.voices[v].as_ref().is_some_and(|x| x.playing)) })
+    }
+
+    /// The ledger rows of the items still alive (tests): `why` "".
+    pub fn live_line_recs(&self) -> Vec<LineRec> {
+        (0..self.items.len()).filter_map(|k| self.line_rec(k).map(|mut r| { r.why = ""; r })).filter(|r| r.keyed).collect()
     }
 
     /// `SFXUpdateEnding` (0x4e20): delete, or for `Loop` re-trigger after the cue delay. True = process again now.

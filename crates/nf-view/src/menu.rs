@@ -2068,11 +2068,15 @@ pub struct MpBot {
 }
 impl MpBot {
     /// A fresh record: the game's defaults for `slot` — character 6/7/8/9, enabled = 0, stats from
-    /// the character's preset [M the msg-0x51 init + BOT_getDefaultStats].
+    /// the character's preset [M the msg-0x51 init + BOT_getDefaultStats]. The team byte +0x0F is
+    /// 0 = Phoenix: the init writes only the characters (+0x10) [M C_SBMPOPTIONS 0x20e818:26-31]
+    /// and the records ship zeroed [D ACTION.ELF .data 0x2deeaa..0x2def01]; the start check reads
+    /// +0x0F != 0 as MI6 [M :72-80]. This was `!side`, which put the four default Phoenix
+    /// characters on MI6.
     pub fn fresh(slot: usize) -> Self {
         let character = 6 + slot as u32;   // [M DAT_002deeba=6, 0x2deecc=7, 0x2deede=8, 0x2deef0=9]
         let (skill, aim, hp, speed, r1, r2, trait_id) = Self::preset(character as usize);
-        MpBot { skill, aim, hit_points: hp, speed, recovery1: r1, recovery2: r2, trait_id, enabled: false, team_mi6: !MP_CHARACTER_SIDE_MI6[character as usize], character, dirty: false }
+        MpBot { skill, aim, hit_points: hp, speed, recovery1: r1, recovery2: r2, trait_id, enabled: false, team_mi6: false, character, dirty: false }
     }
     /// `default_bot_stats` @0x26D2F0's stats for a preset — (aggr, aim, HP, speed, rec1, rec2,
     /// trait) [L the table dump 2026-10-15, verified by mp_menu_lists_live.rs; weapon class +0x0A
@@ -7997,7 +8001,15 @@ the next mission is unlocked.",
             // settings) — `mp_player_radar` alone was only set when the row was edited, so a saved
             // Radar Off came back as On after a restart.
             let radar_on = self.opts.get(&0x1000_0128).map_or(self.mp_player_radar, |&v| v as u32);
-            s.players[i] = nf_game::mp::MpPlayer { team, skin, armor_bonus: 0, radar_on, codename };
+            // +0x2c: the Health Handicap, the Setup page's state-4 pick [M C_RBMPSETUP 0x20de58:112]
+            // or the codename's MP options row [M P_CNMPOPTIONS 0x2144d8:14, slot 0's word]; the
+            // confirm's compaction copies the whole 0x30 record, +0x2c included [M P_MPCONFIRM
+            // 0x20ec00:113], and Player_Init / MP_ReSpawn spawn at +0x2c + 100 health [M
+            // 0x1910f8:128-131, 0x185368:71-72]. Agent 1 (slot 0) is the port's one local agent;
+            // the other rows keep the boot 0 [M bootup 0x1c7e78:52]. This was a hard 0, so the
+            // pick never reached a match.
+            let handicap = if i == 0 { self.opts.get(&0x1000_011c).copied().unwrap_or(self.mp_handicap) } else { 0 };
+            s.players[i] = nf_game::mp::MpPlayer { team, skin, armor_bonus: handicap as u32, radar_on, codename };
         }
         // mp-bot-objectives: the enabled bots' team bytes (record +0x0F — blue = MI6 = team 1,
         // the confirm summary's split [M :337-352]) ride the bot slots' team words; the bots follow

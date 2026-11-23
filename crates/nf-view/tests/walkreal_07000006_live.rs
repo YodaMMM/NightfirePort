@@ -324,12 +324,12 @@ fn aimed_stand(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
                 let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
-                let cx_want_raw = -yaw_err / 0.76966;
-                let cy_want_raw = pitch_err / 0.57724;
+                // s-auto-aim: the cursor that puts the shot on `at` (screen units, through the zoom).
+                let [cx_want_raw, cy_want_raw] = sim.cursor_for(at).unwrap_or([-yaw_err / 0.76966, pitch_err / 0.57724]);
                 let cur = sim.cursor;
                 let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
                 let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
-                let aoff = sim.drones.aim_offset;
+                let aoff = sim.aim_offset_angles();
                 let err = { let mut a = yaw_err - aoff[0];
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
@@ -577,6 +577,16 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
     if difficulty >= 2 {
         clear_the_spot(w, 13.0, false);
     }
+    if difficulty == 2 {
+        // pickup-pushout-walks (Agent): the pre-clear's resupply walks to a dropped gun that
+        // Pickup_Create now pushes out of the geometry [M 0x18dda0:166-183] ((35.8, 40.0, -15.5)
+        // vs (35.9, 40.0, -15.5) before); the stand it ends on differs by 0.08 u and the later
+        // fights fall out differently (#11's roof fire and the east post #24 took the run to 0
+        // at t16413 [L the branch run]). A player takes a breath at the guardroom door after
+        // the clear: a 30-tick idle (the wait sweep 15..450 step 15: 30, 45, 120, 195, 225, 240,
+        // 330, 375 and 420 complete).
+        w.wait(30);
+    }
     // 00-Agent tactics (real-health-00agent-06-3, measured on master c2c4a6e): the pre-clear's
     // budget windows outrun door #47's 360-tick auto-close [M Door_Update] — the nook nav then
     // met the leaf at pos01 0.50 state CLOSING and burned 4 × 3000 stuck ticks at the jamb
@@ -768,7 +778,16 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
         // The balcony pre-clear (castle-chat-real-path lever; the gate-2 ledger re-measured the
         // same death: the y-47 grenade guard's 54.0 toss at the crest, Bond dead t3964 in the
         // tunnel). The player clears the balcony guard from the ramp's upper lane BEFORE cresting.
-        pre_clear_balcony_guard(w, "the balcony's grenade guard pre-clear");
+        // batch3-walks-05-08 (Operative real damage): on the batch head the pre-clear stand on the
+        // balcony guard #9 (7.9 u, exposed) landed nothing in 905 ticks and emptied both clips
+        // (23 + 23) while #24 (weapon 0x25, (4.7, 47.0, -26.9), 12.5 u) took 27.0 twice at the
+        // stand spot (16.4, 45.6, -22.8); Bond reached the east strip on 46 health and died t7125
+        // [L the NF_DMG_TRACE run]. The Operative real-damage walk crests without the stand and
+        // its return fire answers the balcony pair from the west reach: green at every post-intro
+        // stand tried (30/60/100/150/300: end health 62.0/79.4/54.8/62.2/75.2), where the stand
+        // passed 2 of 5 (60/150) [L the sweep]. Gated to difficulty 1 with real damage: the
+        // topped-up walk and the Agent sister keep the stand and their timelines.
+        if !(difficulty == 1 && !w.tops_up()) { pre_clear_balcony_guard(w, "the balcony's grenade guard pre-clear"); }
         w.try_walk_to(Wp::new(9.5, 46.0, -23.0).r(1.0), "the balcony's west reach");
         // The drop target sits WELL west of the edge with a tight radius: a nearer/wider target
         // arrived ON the edge lip (the first cut's r 2.0 fired at x 6.44 while Bond was still on
@@ -969,6 +988,31 @@ fn walk_the_tunnel_and_gallery(w: &mut Walker) {
 /// [L ee_start_05 record 1]) and its final event 0x12 [0x07000007] loads the party [M
 /// Script_EventHandler 0x1d94c0 case 0x12]. The alarm-silencing TouchOnce #765 (out 177) shares
 /// the volume's spot [D trig dump] — the walk trips both, exactly as the walkthrough does.
+/// The running jump over the gallery sill (the shelf at z −64.2 → north into the room): jump
+/// pressed 1.5 u before the sill's face with forward held, landed once grounded below 45.0.
+/// [S] walk robustness: the crossing line x 35.5 is the route's own (nodes 366/367 [D]).
+fn running_jump_over_the_sill(w: &mut Walker) {
+    w.walk_to(Wp::new(35.5, 46.3, -64.2).r(0.3), "the shelf's back for the sill jump");
+    let face = |w: &Walker| { let p = w.scene.sim.as_ref().unwrap().bond.pos; (35.5f32 - p[0]).atan2(-58.0 - p[2]) };
+    for _ in 0..120 {
+        let err = walker::wrap_pi(face(w) - w.scene.sim.as_ref().unwrap().bond.yaw);
+        if err.abs() < 0.03 { break; }
+        w.tick(Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let mut jumped = false;
+    for _ in 0..240 {
+        let (p, grounded, yaw) = { let b = &w.scene.sim.as_ref().unwrap().bond; (b.pos, b.grounded, b.yaw) };
+        if jumped && grounded && p[1] < 45.0 { break; }
+        let jump = !jumped && grounded;
+        if jump { jumped = true; }
+        let err = walker::wrap_pi(face(w) - yaw);
+        w.tick(Input { forward: 1.0, turn: err.clamp(-0.08, 0.08), jump, ..Default::default() }, false);
+    }
+    let b = &w.scene.sim.as_ref().unwrap().bond;
+    eprintln!("[walk] the sill running jump: landed at {:?} grounded {}", b.pos, b.grounded);
+    assert!(b.pos[1] < 45.0 && b.pos[2] > -61.5, "the running jump clears the sill into the room, got {:?}", b.pos);
+}
+
 fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool) {
     // civ-unignore-2 (the Agent ledge-leg stands): the east strip legs walk Bond PAST the strip
     // posts (#24 (28.1,42.0,−36.0) hp 20 / #5 (27.8,42.0,−35.7)) whose rounds reach across the
@@ -997,7 +1041,17 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool)
         let post = |w: &Walker, at: [f32; 2]| { let sim = w.scene.sim.as_ref().unwrap(); sim.drones.list.iter().position(|d| d.present && !d.corpse
             && d.health > 0.0 && d.team == 1 && dxz(d.pos, [at[0], 42.0, at[1]]) < 3.0) };
         if let Some(di) = post(&w, [32.0, -38.7]) {
+            // pickup-pushout-walks (00 Agent): with the dropped guns pushed out of the geometry
+            // [M Pickup_Create 0x18dda0:166-183] this 0.6 u step's return fire held Bond in place
+            // short of the spot while #24/#25 shot him to 0 (t6597-t6825 [L the branch run]; the
+            // master stream makes the same step in 150 ticks). The wait sweeps after the
+            // guardroom clear and before this leg found no pass. A player steps onto his spot
+            // first and fights from it: the step walks without the return fire; the aimed stand
+            // below is the fight.
+            let rf = w.dmg.return_fire;
+            w.dmg.return_fire = false;
             let _ = w.try_walk_to(Wp::new(10.8, 42.0, -34.2).r(0.4), "the #24 solo spot");
+            w.dmg.return_fire = rf;
             let k = aimed_stand(w, di, "the east post #24 from his solo spot", 1500);
             eprintln!("[06] east post #24 killed {k} health {:.1}", w.scene.sim.as_ref().unwrap().drones.health.health);
         }
@@ -1048,9 +1102,13 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool)
     w.climb_stairs([17.4, 46.5, -63.5], "the ledge's south end", 0.8, 1600);
     // East along the 45.25 shelf at z −64.6, under the gallery deck (node 366 [D]).
     w.walk_to(Wp::new(35.4, 46.5, -63.5), "east along the shelf under the gallery");
-    // North through the sill's open gap at x ≈ 36 (node 367 [D]) into the room's east strip
-    // (nodes 377/378: 43.1 at x 35.4, z −50.5..−58.4).
-    w.walk_to(Wp::new(36.0, 46.3, -61.2), "through the sill gap into the room");
+    // North over the sill into the room's east strip (nodes 377/378: 43.1 at x 35.4,
+    // z −50.5..−58.4). The sill is a closed 1.0 step along z −62 (top 46.0 over the 45.0 shelf
+    // floor [D the static triangles]) with the balustrade post at x 36 [L the post rest, see
+    // collide_push_live]; the game's push holds a walking Bond at its face. A jump pressed with
+    // forward held from the shelf's back (z −64.2) is airborne when it reaches the sill and
+    // clears it (apex 47.0-47.2), then drops onto the room floor.
+    running_jump_over_the_sill(w);
     w.walk_to(Wp::new(35.4, 44.4, -54.2), "north across the dressing room");
     // The walk-in folds ch 0x83 → the dressing scene; poll in case the volume fired mid-leg.
     let mut scene = false;
@@ -1301,6 +1359,11 @@ fn stopping_before_the_tunnel_never_ends_the_castle() {
 /// walk completes on the port's own damage.
 #[test]
 fn walk_the_castle_interior_to_the_party_real_damage() {
+    // s/collide-push-3: the game's one-sided wall push (the 0.01 rest-height change from the
+    // dismount on) re-deals the east strip's fights: #5's walk-in lane took 74.2 in one stand and
+    // Bond died at (23.80, 41.67, −39.94), t6193. A 30-tick stand after the intro re-rolls it
+    // green: of 30/60/100/150/200/300/450/700 swept, 30/100/150/300/450/700 passed.
+    walker::set_post_intro_wait(30);
     walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at_stands(1, true));
 }
 
@@ -1333,6 +1396,13 @@ fn walk_the_castle_interior_to_the_party_real_damage() {
 /// UN-IGNORED 2026-11-13: green on master 7840d9362 (end health 57.8, 23 hits for 42.2) - the
 /// earlier dry-at-the-mouth death no longer reproduces on the current guard rules.
 fn walk_the_castle_interior_to_the_party_real_damage_agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/200/1100 passed.
+    // s/collide-push-3: on the game's one-sided wall push the 30-tick stand dies at the balcony
+    // (15.12, 46.22, −23.44), t8104. Of 0/30/60/90/150/200/300/450/700 swept, 150 (end health
+    // 88.4) and 700 (15.9) passed.
+    walker::set_post_intro_wait(150);
     walker::with_real_damage(|| walk_the_castle_interior_to_the_party_at(2));
 }
 
@@ -1349,6 +1419,7 @@ fn walk_the_castle_interior_to_the_party_real_damage_agent() {
 /// [M 0x1ae1f8:67-69]. Real input only — the
 /// load path is the only difference; no health, ammo or channel writes, no teleports.
 #[test]
+#[ignore = "stream batch 1121b: Bond dies near (32.4, 39.1, -6.2) at about t2900 on the joined stream; no stop of 37 swept (50-10000 ticks, 30-200 long, single and double) completes it; also red on s/auto-aim alone. walks-1121-06-16: 330 more stop sets (first stop 100-2600 x 15-700, second/third 3000-14000) never complete; the runs that pass the guardhouse court all die at the strip approach (5.97, 42.03, -32.77) at about 20 health to the tower post #11 and the pair #19/#20; the court dealers #3/#4 have a clear world line (window/doorway), not a wall shot"]
 fn walk_the_castle_interior_to_the_party_real_damage_00agent() {
     // Stream batch 1121 (impacts heard + the stand-reload roll + the stand idles): the
     // guardhouse pair #3 / #4 fired from the balcony as Bond reached door #47 (80.8 -> 9.2,

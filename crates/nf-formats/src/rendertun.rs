@@ -326,8 +326,9 @@ pub struct ReflectionLayer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReflectionStep {
     Layer(ReflectionLayer),
-    /// The world drawn from [`CarRender::reflection_camera`] (`FUN_0021fa58` / `FUN_001c2720`; what
-    /// those draw is not traced).
+    /// The scene drawn from the reflection camera ([`ReflectionView`]): the track items that rise
+    /// over the car ([`ReflectionItemQuery`], `FUN_0021fa58`), then the kept vehicles
+    /// ([`REFLECTION_VEHICLES`], `FUN_001c2720`). No sky is drawn here; the sky is the `cref` layers.
     Scene,
 }
 
@@ -435,8 +436,11 @@ impl CarRender {
     ///    `FUN_001c0930`), colour = the packed `Desat` word as bytes, ALPHA 0x62 (Cd − Cs·FIX/128,
     ///    FIX = 0x80): a subtraction.
     ///
-    /// `cref` comes from the sheet registered as key 4, else from `data\render\ext.ssh` (key 5)
-    /// [M `FUN_001c1358`]; which file key 4 is has not been traced.
+    /// `cref` comes from a sheet registered as key 4, else from `data\render\ext.ssh` (key 5)
+    /// [M `FUN_001c1358`]. Key 4 holds the sheets the loaded modules name in their `sn  ` records
+    /// (`FUN_001a9600`); the track's `sn #0` names its own sheet [D], and among every `.ssh` of the
+    /// 8 archives only the track sheets of paris, uw, snow1a and snow2a and `ext.ssh` hold a `cref`
+    /// (128 × 128) [D]. So the jungle tracks use `ext.ssh`'s.
     pub fn reflection_steps(&self) -> Vec<ReflectionStep> {
         let s = self.sky_level();
         let mut out = Vec::new();
@@ -455,11 +459,182 @@ impl CarRender {
 
     /// The reflection camera's eye and forward axis for a view forward `f` and a point `p`
     /// [M `FUN_001c1b18`]: eye = `p + (0, Refl HEIGHT, 0)`, forward = `normalize(0.8 · f + (0, 1,
-    /// 0))` (0.8 = `DAT_00333e78` [D .data]). `p` is the position argument `FUN_001c5eb0` passes
-    /// (from `FUN_00201af0(0x339190)`, the instance table; which instance is not traced).
+    /// 0))` (0.8 = `DAT_00333e78` [D .data]). `p` is the player car's position ([`Self::reflection_view`]).
     pub fn reflection_camera(&self, p: [f32; 3], f: [f32; 3]) -> ([f32; 3], [f32; 3]) {
         let v = [0.8 * f[0], 0.8 * f[1] + 1.0, 0.8 * f[2]];
         ([p[0], p[1] + self.refl_height, p[2]], normalize(v))
+    }
+
+    /// Everything `FUN_001c1ec0` 0x1c1ec0 needs to draw this frame's `GAME::ReflectionMap`
+    /// (docs/formats/car-model.md §10.6.3). There is one map per frame, shared by every car.
+    ///
+    /// - `car_pos`: the player car's position. `FUN_001c5eb0` passes `FUN_00201af0(0x339190)`:
+    ///   the first car of the sim's `+0xdcc` list (the car `FUN_001fee68` places at the track
+    ///   start), its body (`FUN_001ff088` / `FUN_001ff0b0`) `+ 0x10` [M].
+    /// - `main_forward`: row 2 (`+0x20`) of the camera `**DAT_00333ed8` points at, read at the top
+    ///   of `FUN_001c1ec0` [M].
+    pub fn reflection_view(&self, car_pos: [f32; 3], main_forward: [f32; 3]) -> ReflectionView {
+        let (eye, forward) = self.reflection_camera(car_pos, main_forward);
+        // FUN_001c1b18: right = normalize((0, 0, -1) x forward), up = normalize(forward x right)
+        // (VOPMULA/VOPMSUB at 0x1c1c14 and 0x1c1c50, fs x ft with fs = (0, 0, -1) then forward).
+        let right = normalize(cross([0.0, 0.0, -1.0], forward));
+        let up = normalize(cross(forward, right));
+        ReflectionView {
+            eye,
+            right,
+            up,
+            forward,
+            projection: ReflectionProjection { fov_deg: self.refl_angle, aspect: 1.0, near: 1.0, far: 2500.0 },
+            items: ReflectionItemQuery { centre: car_pos },
+            vehicles: REFLECTION_VEHICLES,
+            fog: REFLECTION_FOG,
+            steps: self.reflection_steps(),
+        }
+    }
+}
+
+/// The reflection map's size in texels: `FUN_0027ed78(0x100, 0x100, 0x10)` [M `FUN_001c0930`]; the
+/// quads and both views cover (0, 0, 256, 256) [M `FUN_001c1ec0`, `FUN_001c1560`].
+pub const REFLECTION_MAP_SIZE: u32 = 256;
+/// How many vehicles the reflection scene draws: the 4 slots at `RReflection + 0x1f4`
+/// [M `FUN_001c2720`, `FUN_001c2508`].
+pub const REFLECTION_VEHICLES: usize = 4;
+/// The fog range set for the scene draw: `DAT_0033376c + 4` gets (24560, 0, 0, 4080 / 24560) and is
+/// restored after [M `FUN_001c1ec0` 0x1c2140]. As (start, end) this is (0, 24560): far beyond the
+/// 2500 far plane, so the reflection carries almost no fog. Reading the four words as
+/// (end, start, -, scale) is inferred from the `4080 / (w0 - w1)` they compute.
+pub const REFLECTION_FOG: (f32, f32) = (0.0, 24560.0);
+
+/// The reflection camera, its projection and what it draws ([`CarRender::reflection_view`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReflectionView {
+    /// The camera position: the car position raised by `Refl HEIGHT`.
+    pub eye: [f32; 3],
+    /// The camera rows 0-2 that `FUN_001a4520` stores [M `FUN_001c1b18`]. The camera looks along
+    /// `forward`. The view matrix is the inverse of the rows (right, up, -forward, eye)
+    /// (`FUN_001a44f0` negates row 2, `FUN_001a4468` inverts, `FUN_00296e80` loads it), the same
+    /// as for the main camera (`FUN_001d4878`). See [`ReflectionView::to_view`].
+    pub right: [f32; 3],
+    pub up: [f32; 3],
+    pub forward: [f32; 3],
+    pub projection: ReflectionProjection,
+    /// The track items drawn ([`ReflectionItemQuery`]).
+    pub items: ReflectionItemQuery,
+    /// The vehicles drawn after the items ([`REFLECTION_VEHICLES`]).
+    pub vehicles: usize,
+    /// (start, end) of the fog during the scene draw ([`REFLECTION_FOG`]).
+    pub fog: (f32, f32),
+    /// The layers and the scene in draw order ([`CarRender::reflection_steps`]).
+    pub steps: Vec<ReflectionStep>,
+}
+
+impl ReflectionView {
+    /// A world point in view space: `((p - eye)·right, (p - eye)·up, -(p - eye)·forward)`. Points
+    /// in front of the camera have z < 0.
+    pub fn to_view(&self, p: [f32; 3]) -> [f32; 3] {
+        let d = [p[0] - self.eye[0], p[1] - self.eye[1], p[2] - self.eye[2]];
+        let dot = |a: [f32; 3]| d[0] * a[0] + d[1] * a[1] + d[2] * a[2];
+        [dot(self.right), dot(self.up), -dot(self.forward)]
+    }
+
+    /// The map texel `(s, t)` a world point lands on, `None` when it is not in front of the camera
+    /// ([`ReflectionProjection::map_texel`]).
+    pub fn map_texel(&self, p: [f32; 3]) -> Option<[f32; 2]> { self.projection.map_texel(self.to_view(p)) }
+}
+
+/// The reflection view's perspective [M `FUN_001c1560`: `FUN_00295910(Refl ANGLE, 1, 1, 2500,
+/// view)`, once, in the constructor; nothing on the per-frame path rewrites it]. The `.tun` value
+/// is already in place then: `FUN_001426a8` reads each key from the loaded file when it is
+/// registered, inside `FUN_001c0930`, which `FUN_001c1560` calls first [M]. The constructor default
+/// is 120 [M `FUN_001c0930`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReflectionProjection {
+    /// Full angle in degrees, the same across and down (aspect 1, square map).
+    pub fov_deg: f32,
+    pub aspect: f32,
+    pub near: f32,
+    pub far: f32,
+}
+
+impl ReflectionProjection {
+    /// The clip coordinates of a view-space point [M `FUN_00295910`]: with `k = 1 / tan(fov / 2)`,
+    /// `(k·x, -k·aspect·y, a·z + b, -z)`, `a = -(far + near) / (far - near)`,
+    /// `b = far·(a + 1) = -2·far·near / (far - near)`. The game also divides x and y by the view's
+    /// `+0x190` scale and multiplies the viewport by it (`+0x17c`), so that factor cancels and is
+    /// left out.
+    pub fn clip(&self, v: [f32; 3]) -> [f32; 4] {
+        let k = 1.0 / (self.fov_deg * 0.5).to_radians().tan();
+        let (n, f) = (self.near, self.far);
+        let a = -(f + n) / (f - n);
+        [k * v[0], -k * self.aspect * v[1], a * v[2] + f * (a + 1.0), -v[2]]
+    }
+
+    /// The texel on the 256 × 256 map: `128 + 128 · clip / w` on both axes, so x goes right and y
+    /// goes down (the y row of the matrix is negated). This assumes the viewport maps -1..1 onto
+    /// 0..256 (`+0x16c` centre, `+0x17c` half size); the GS step itself is not followed.
+    pub fn map_texel(&self, v: [f32; 3]) -> Option<[f32; 2]> {
+        let c = self.clip(v);
+        if c[3] <= 0.0 {
+            return None;
+        }
+        let h = REFLECTION_MAP_SIZE as f32 * 0.5;
+        Some([h + h * c[0] / c[3], h + h * c[1] / c[3]])
+    }
+}
+
+/// The packed bounds word at `+0x3c` of a track item (the 0x40-byte entries of the track module's
+/// `Map` → `in  ` record, `FUN_0021eae8`): `(radius, height)` [M `FUN_0021fa58` 0x21fbfc..0x21fd28,
+/// disassembled]. Scale s = 16 when bit 30 is set, else 0.25 (`DAT_003999d8` [D]). radius =
+/// `(w & 0x3ff) · s`; height = `((w >> 10) & 0x3ff) · s` when bit 31 is set, else `2 · radius`.
+pub fn item_bounds(w: u32) -> (f32, f32) {
+    let s = if w & 0x4000_0000 != 0 { 16.0 } else { 0.25 };
+    let r = (w & 0x3ff) as f32 * s;
+    let h = if w & 0x8000_0000 != 0 { ((w >> 10) & 0x3ff) as f32 * s } else { 2.0 * r };
+    (r, h)
+}
+
+/// Which track items the reflection scene draws [M `FUN_0021fa58` 0x21fa58, called from
+/// `FUN_001c1ec0` as `FUN_0021fa58(50.0, world = DAT_0033a5d4, list, car_pos, (0, 1, 0, 1))`].
+///
+/// - The world's cell tree (`*(DAT_0033aac8 + 0x1c)`, `FUN_0021f8d0`) gives the cells whose circle
+///   (size · 1.414) meets the 50-unit sphere round `centre`. Each cell lists u16 item indices.
+/// - An item of those cells is kept by [`Self::keeps`].
+/// - The kept items are sorted by address (`FUN_002207c0` with `FUN_00220bc0` comparing the item
+///   pointers), which is table order, and each is drawn with `FUN_001ad618`: skipped when
+///   `+0x0c & 1` or when it has no `as` set (`+0x1c`); otherwise the item matrix (`FUN_001beee0`)
+///   and the LOD pick `FUN_001ad2e0`, as for the car parts (car-model.md §11).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReflectionItemQuery {
+    /// The car position (not raised by `Refl HEIGHT`).
+    pub centre: [f32; 3],
+}
+
+/// The query sphere's radius (`DAT_00333e7c` = 50.0 [D .data]).
+pub const REFLECTION_ITEM_RADIUS: f32 = 50.0;
+/// An item is drawn only when its top is more than this above the car: 5.0 + `DAT_0033a5f0` (5.0
+/// [D .data]; no writer in DRIVING.ELF) [M 0x21fb84, 0x21fd00].
+pub const REFLECTION_ITEM_RISE: f32 = 10.0;
+
+impl ReflectionItemQuery {
+    /// Whether an item at `pos` (`+0x30`) with bounds word `bounds` (`+0x3c`, [`item_bounds`]) and
+    /// flags byte `flags` (`+0x0c`) is drawn, given that its cell was gathered. All of:
+    /// 1. `pos.y + height > centre.y + 10` (the item rises over the car);
+    /// 2. `|pos - centre| - 50 ≤ radius` and radius > 0 (`FUN_0021e9f0`; the direction (0, 1, 0)
+    ///    has x = z = 0, so its plane test only needs radius > 0);
+    /// 3. `|pos - centre| < radius + 25 + 0.75 · height`;
+    /// 4. `flags & 0x0d == 0`.
+    pub fn keeps(&self, pos: [f32; 3], bounds: u32, flags: u8) -> bool {
+        let (r, h) = item_bounds(bounds);
+        let c = self.centre;
+        if !(pos[1] + h > c[1] + REFLECTION_ITEM_RISE) {
+            return false;
+        }
+        let d = [pos[0] - c[0], pos[1] - c[1], pos[2] - c[2]];
+        let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if !(r > 0.0 && dist - REFLECTION_ITEM_RADIUS <= r) {
+            return false;
+        }
+        dist < r + 25.0 + 0.75 * h && flags & 0x0d == 0
     }
 }
 
@@ -611,5 +786,99 @@ mod tests {
         assert_eq!(eye, [1.0, 2.5, -3.0]);
         let l = (0.64f32 + 1.0).sqrt();
         assert!(close(fwd, [0.0, 1.0 / l, -0.8 / l]), "{fwd:?}");
+    }
+
+    #[test]
+    fn the_reflection_view_looks_up_past_the_car_with_the_traced_axes() {
+        let c = CarRender::parse(&car_render_text()).unwrap();
+        let v = c.reflection_view([10.0, 2.0, -5.0], [0.0, 0.0, -1.0]);
+        let l = (0.64f32 + 1.0).sqrt();
+        // forward = normalize(0.8·f + up); right = normalize((0, 0, −1) × forward) = +x here;
+        // up = forward × right. The opposite cross order would flip right and up.
+        assert!(close(v.forward, [0.0, 1.0 / l, -0.8 / l]), "{:?}", v.forward);
+        assert!(close(v.right, [1.0, 0.0, 0.0]), "{:?}", v.right);
+        assert!(close(v.up, [0.0, -0.8 / l, -1.0 / l]), "{:?}", v.up);
+        assert_eq!(v.eye, [10.0, 2.0, -5.0]);
+        assert_eq!(v.projection, ReflectionProjection { fov_deg: 120.0, aspect: 1.0, near: 1.0, far: 2500.0 });
+        assert_eq!(v.items.centre, [10.0, 2.0, -5.0]);
+        assert_eq!((v.vehicles, v.fog), (4, (0.0, 24560.0)));
+        assert_eq!(v.steps, c.reflection_steps());
+        // Refl HEIGHT raises the eye only; the item query stays at the car.
+        let r = CarRender { refl_height: 3.0, ..c.clone() }.reflection_view([10.0, 2.0, -5.0], [0.0, 0.0, -1.0]);
+        assert_eq!((r.eye, r.items.centre), ([10.0, 5.0, -5.0], [10.0, 2.0, -5.0]));
+        // Any view direction gives an orthonormal basis; right has z = 0 ((0, 0, −1) × F).
+        let w = c.reflection_view([0.0; 3], normalize([0.6, -0.2, 0.7]));
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        assert!(dot(w.right, w.up).abs() < 1e-5 && dot(w.right, w.forward).abs() < 1e-5 && dot(w.up, w.forward).abs() < 1e-5);
+        assert!(w.right[2].abs() < 1e-6, "{:?}", w.right);
+        // right × up = +forward: the map is a mirror image (a plain camera has right = forward × up).
+        assert!(close(cross(w.right, w.up), w.forward), "right × up = forward");
+    }
+
+    #[test]
+    fn the_reflection_projection_maps_the_view_cone_onto_the_256_map() {
+        let c = CarRender::parse(&car_render_text()).unwrap();
+        let v = c.reflection_view([0.0; 3], [0.0, 0.0, -1.0]);
+        // A point straight along forward is at view (0, 0, −d) and lands on the centre texel.
+        let ahead = v.forward.map(|x| x * 40.0);
+        let p = v.to_view(ahead);
+        assert!(close(p, [0.0, 0.0, -40.0]), "{p:?}");
+        let t = v.map_texel(ahead).unwrap();
+        assert!((t[0] - 128.0).abs() < 1e-3 && (t[1] - 128.0).abs() < 1e-3, "{t:?}");
+        // 120° full angle: a point 60° off axis to the right sits on the right edge (s = 256);
+        // the same angle along up sits on the top edge (t = 0): t grows downwards.
+        let k = 60f32.to_radians().tan();
+        let edge = v.projection.map_texel([k * 10.0, 0.0, -10.0]).unwrap();
+        assert!((edge[0] - 256.0).abs() < 1e-3 && (edge[1] - 128.0).abs() < 1e-3, "{edge:?}");
+        let top = v.projection.map_texel([0.0, k * 10.0, -10.0]).unwrap();
+        assert!((top[1] - 0.0).abs() < 1e-3, "{top:?}");
+        // Behind the camera: no texel.
+        assert_eq!(v.projection.map_texel([0.0, 0.0, 5.0]), None);
+        // Depth: near → −1, far → +1 after the divide (the game forms b as far·(a + 1), off by ~1e-4 in f32).
+        let n = v.projection.clip([0.0, 0.0, -1.0]);
+        let f = v.projection.clip([0.0, 0.0, -2500.0]);
+        assert!((n[2] / n[3] + 1.0).abs() < 1e-3 && (f[2] / f[3] - 1.0).abs() < 1e-3, "{n:?} {f:?}");
+        // A narrower Refl ANGLE magnifies: the 60° point leaves the map.
+        let narrow = ReflectionProjection { fov_deg: 90.0, ..v.projection };
+        assert!(narrow.map_texel([k * 10.0, 0.0, -10.0]).unwrap()[0] > 256.0);
+    }
+
+    #[test]
+    fn item_bounds_unpack_the_scaled_radius_and_height() {
+        // Bits 0-9 radius; bit 30 scale 16 (else 0.25); bit 31 = an own height in bits 10-19.
+        assert_eq!(item_bounds(40), (10.0, 20.0));
+        assert_eq!(item_bounds(0x4000_0003), (48.0, 96.0));
+        assert_eq!(item_bounds(0x8000_0000 | (12 << 10) | 8), (2.0, 3.0));
+        assert_eq!(item_bounds(0xc000_0000 | (5 << 10) | 1), (16.0, 80.0));
+        // Bits above 9 are not part of the radius when bit 31 is clear.
+        assert_eq!(item_bounds((7 << 10) | 4), (1.0, 2.0));
+    }
+
+    #[test]
+    fn the_reflection_scene_keeps_only_items_that_rise_over_the_car_nearby() {
+        let q = ReflectionItemQuery { centre: [0.0, 0.0, 0.0] };
+        // r 10, h 20 at 30 units: top 20 > 10, 30 − 50 ≤ 10, 30 < 10 + 25 + 15.
+        assert!(q.keeps([30.0, 0.0, 0.0], 40, 0));
+        // Flag bit 1 is not in the 0x0d mask; bits 0, 2, 3 are.
+        assert!(q.keeps([30.0, 0.0, 0.0], 40, 0x02));
+        for f in [0x01, 0x04, 0x08] {
+            assert!(!q.keeps([30.0, 0.0, 0.0], 40, f), "flag {f:#x}");
+        }
+        // Too low: r 10 but h 8, top 8 ≤ 10.
+        let low = 0x8000_0000 | (32 << 10) | 40;
+        assert!(!q.keeps([5.0, 0.0, 0.0], low, 0));
+        // The same item 3 units higher rises over the car.
+        assert!(q.keeps([5.0, 3.0, 0.0], low, 0));
+        // 55 away: inside 50 + r but not inside r + 25 + 0.75·h = 50.
+        assert!(!q.keeps([55.0, 0.0, 0.0], 40, 0));
+        // A tall thin item (r 1, h 250) at 60: inside the height reach, outside 50 + r.
+        let tall = 0x8000_0000 | (1000 << 10) | 4;
+        assert!(!q.keeps([60.0, 0.0, 0.0], tall, 0));
+        assert!(q.keeps([50.5, 0.0, 0.0], tall, 0));
+        // Radius 0 never passes the sphere test.
+        assert!(!q.keeps([10.0, 0.0, 0.0], 0x8000_0000 | (1000 << 10), 0));
+        // The rise is measured from the car's own height.
+        let up = ReflectionItemQuery { centre: [0.0, 15.0, 0.0] };
+        assert!(!up.keeps([30.0, 0.0, 0.0], 40, 0));
     }
 }

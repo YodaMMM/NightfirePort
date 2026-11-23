@@ -219,8 +219,8 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
                 let pitch_err = desired_pitch - sim.bond.pitch * std::f32::consts::FRAC_PI_2;
-                let cx_want_raw = -yaw_err / 0.76966;
-                let cy_want_raw = pitch_err / 0.57724;
+                // s-auto-aim: the cursor that puts the shot on `at` (screen units, through the zoom).
+                let [cx_want_raw, cy_want_raw] = sim.cursor_for(at).unwrap_or([-yaw_err / 0.76966, pitch_err / 0.57724]);
                 let cx_want = cx_want_raw.clamp(-0.296, 0.296);
                 let cy_want = cy_want_raw.clamp(-0.4, 0.4);
                 let cur = sim.cursor;
@@ -232,7 +232,7 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                 let turn = ((cur[0] - cx_want_raw) * 0.76966).clamp(-0.08, 0.08);
                 let look = ((cy_want_raw - cur[1]) * 0.57724 / std::f32::consts::FRAC_PI_2).clamp(-0.08, 0.08);
                 // The effective aim (what the fired round obeys): the view + the eased offsets.
-                let aoff = sim.drones.aim_offset;
+                let aoff = sim.aim_offset_angles();
                 let err = { let mut a = yaw_err - aoff[0];
                     while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
                     while a < -std::f32::consts::PI { a += std::f32::consts::TAU; } a };
@@ -282,7 +282,7 @@ fn yard_stand_aimed(w: &mut Walker, di: usize, label: &str, cap: u32) -> bool {
                     eprintln!("[0c] yard stand ({label}) t{t}: tgt #{di} hp {:.1} at ({:.2},{:.2}) still {still} aim {:?} err {err:.3} perr {perr:.3} clip {} spare {} hp {:.1} atgt {:?} aoff {:?} aimbit {} fire_state {} cursor ({:.3},{:.3})",
                         sim.drones.list[di].health, sim.drones.list[di].pos[0], sim.drones.list[di].pos[2],
                         aim.map(|a| [a[0], a[2]]), sim.gun.clip, sim.gun.spare, sim.drones.health.health,
-                        sim.drones.aim_target, sim.drones.aim_offset, sim.aiming, sim.gun.fire_state, cur[0], cur[1]);
+                        sim.drones.aim_target, sim.aim_offset_angles(), sim.aiming, sim.gun.fire_state, cur[0], cur[1]);
                 }
                 (nf_game::player::Input { turn, look, aiming: true, ..Default::default() }, fire, reload)
             };
@@ -1723,6 +1723,23 @@ pub fn walk_spawn_to_the_band_at(iso: &str, difficulty: u32) -> Walker {
     yard_sniper_stands(&mut w, "lip-3", 3);
     w.walk_to(Wp::new(-1.4, 12.4, -223.6).r(1.0), "icon #6 at wire #282's B end");
     yard_sniper_stands(&mut w, "lip-4", 3);
+    // master-reds-1121: a guard parked ON the ride's landing ledge (4..8, -221..-226) shoots the
+    // rider point blank for the whole crossing (the wire rider cannot fire). On the batch-3 stream
+    // (the one-sided wall push) the eastroute's guard 34 holds AimStand 0x67 at (5.98, -224.55),
+    // 1.4 u from the A end, and with guards 0 and 1 kills Bond on the wire at x 4.94 (6 x 16 + 20
+    // [measured this branch]). Shoot any live hostile standing on the landing from the B end first,
+    // as a player would; no hostile there = no change to the walk.
+    for _ in 0..3 {
+        let target = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.drones.list.iter().position(|d| d.present && !d.corpse && d.health > 0.0 && d.team == 1 && d.enabled
+                && (3.0..9.0).contains(&d.pos[0]) && (-227.0..-220.0).contains(&d.pos[2]) && (d.pos[1] - 12.4).abs() < 2.0)
+        };
+        let Some(g) = target else { break };
+        eprintln!("[0c] guard {g} stands on the #282 landing: shooting from the B end");
+        if !w.shoot(g, "the #282 landing guard") { break; }
+    }
+    w.walk_to(Wp::new(-1.4, 12.4, -223.6).r(1.0), "icon #6 at wire #282's B end (after the landing guard)");
     // REAL: grab wire #282 (`wire_silosilo2`, A (5.85, 14.11, −223.15) B (−0.25, 14.11, −223.15)
     // [D probe blk]) — the standing body at (−1.4, −223.6) is inside the wire's world sphere
     // (centre (2.80, 14.11, −223.15) r 5.05 [D probe blk]), so the walk-east contact grab fires
@@ -2056,6 +2073,10 @@ fn shoot_at(w: &mut Walker, target: [f32; 3], range: f32, max_ticks: u32, _label
     }
 }
 
-/// 00 Agent real damage (difficulty 3, the top-up off): the 0c walk's own levers below run only here,
-/// so the Operative/Agent sisters and the top-up walk keep their timelines byte-exact.
-fn hard_0c(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 && !w.tops_up() }
+/// Agent and 00 Agent real damage (difficulty >= 2, the top-up off): the 0c walk's own levers run
+/// only here, so the Operative sister and the top-up walk keep their timelines byte-exact.
+/// The real-health deck answers (the display-ground armour and drops, the deck snipers): Agent
+/// and 00 Agent. walks-1121-08-0c: the Agent walk without them died on the deck crossing to the
+/// balcony pair #19/#20 (weapon 0x1e, -28.00 a hit at d2, three hits) at tick 5026 (53.72, 6.01,
+/// -157.63) [L the 2026-11-21 run on master 7283c8a76]; with them it completes (79.0 at the 0d).
+fn hard_0c(w: &Walker) -> bool { w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 && !w.tops_up() }

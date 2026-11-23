@@ -384,13 +384,22 @@ fn mgl_impact_and_delay_through_the_real_mode_press() {
 /// script's end (fire-anim length 280 [L 0x32 +0x44]) and its impact blasts with the record's
 /// radius 8 / damage 256 through the +0x70 & 0x100000 arm [M Bullet_CollisionHandler 0x12ce80:207-216].
 /// The beam twin spends 12 per shot [L 0x33 +0x91] at its 30-tick interval.
+/// Un-ignored (beam-ammo-0x33): HARNESS TIMING, not the port. The overcharge's shot sets the
+/// shared refire timer `BL+0x92C` to its +0x40 = 60 and spends the whole clip; every later tick
+/// `Player_RoundToFire(+0x91 = 100)` fails and both trigger arms RETURN before the countdown
+/// (held: `if (+0xF6 != 10) return`; released: the reload / `Player_HandleHasNoAmmo` returns)
+/// [M 0x1a5460:442-456, 590-597], so the timer stays frozen at 60 until the beam's own 12-round
+/// check passes. The old leg armed clip[0x33] = 100 and pressed ~40 ticks later with the timer
+/// still at ~21: the fresh press arms nothing while `+0x92C > 0` [M :601-624], the countdown
+/// runs out under the held trigger with `+0x936` at 0 [M :650-655], and with no new press the
+/// held beam never fires [M :627-629]. The game does the same; the leg now pins that window and
+/// then re-presses once the timer is out.
 /// Un-ignored (fire-modes-real-press): PORT BUG (fixed on master, fd1f5f32c) — the switch_to
 /// owned read used the VARIANT's own slot, but a variant owns nothing: the give writes the
 /// BASE's owned byte (`BL+0x1BA + base·0xC` [M Player_EquipWeapon 0x1a8a58:39-41]), so the
 /// 0x32 request was refused on owned[0x32] and the draw never started; the read moved to the
 /// base's slot (scene.rs switch_to gate).
 #[test]
-#[ignore = "the 0x32 charge leg passes on this tree; the 0x33 beam leg spends nothing over 100 held ticks (clip 100 -> 100) — not traced yet"]
 fn samurai_charge_drains_and_blasts_and_beam_spends_twelve() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = load(&iso);
@@ -451,6 +460,20 @@ fn samurai_charge_drains_and_blasts_and_beam_spends_twelve() {
     assert_eq!(w, 0x33, "the mode press landed the beam twin 0x33");
     let per = { let sim = scene.sim.as_ref().unwrap(); sim.weapons.records[0x33][0x91] };
     assert_eq!(per, 12, "the beam's ammo per shot [L 0x33 +0x91 = 12]");
+    arm(&mut scene, 100);
+    // The overcharge's frozen refire window [M 0x1a5460:590-597, 601-629]: the timer is still
+    // running when the beam is drawn, so a press now arms nothing and a held trigger never fires.
+    let left = { let sim = scene.sim.as_ref().unwrap(); sim.gun.timer };
+    assert!(left > 0.0, "the overcharge's 60-tick refire timer is still running after the swap ({left})");
+    for _ in 0..100 {
+        scene.sim.as_mut().unwrap().step_bond(Default::default(), true, false, false);
+        assert!(!scene.sim.as_ref().unwrap().shot_tick, "a press inside the refire window never fires");
+    }
+    let held_clip = { let sim = scene.sim.as_ref().unwrap(); sim.gun.clip };
+    assert_eq!(held_clip, 100, "the refused hold spent nothing");
+    // Release, then a fresh press with the timer out: the beam drains its clip.
+    tick(&mut scene, 2);
+    assert!(scene.sim.as_ref().unwrap().gun.timer <= 0.0, "the timer ran out under the hold");
     arm(&mut scene, 100);
     let before = { let sim = scene.sim.as_ref().unwrap(); sim.gun.clip };
     let mut beam_shots = 0u32;

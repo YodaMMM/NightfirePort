@@ -189,7 +189,13 @@ fn at_difficulty_3_the_guards_walk_their_disc_owner_points() {
 #[test]
 fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
     let start = [-0.40f32, 25.83];
-    let in_box = |p: [f32; 3]| (-4.0..=5.0).contains(&p[0]) && (15.5..=22.0).contains(&p[2]);
+    // master-reds-1121: the box spans one StepAim sidestep either side of the game's spots. The
+    // game's own sidesteps run ~3.7 u (d3 #126: (3.01, 17.77) 0x74 at f200 to (-0.71, 17.09) 0x74 at
+    // f700 [L table]); on the batch-3 stream the port's #127 enters StepAimRight 0x74 at t525 from
+    // its (-1.46, 20.04) AimStandFire spot and is mid-step at t700 ((-4.09, 21.23) d2,
+    // (-4.87, 21.98) d3), turning back at (-5.03, 22.17) [measured this branch], a 3.6 u step.
+    // The old -4.0 / 22.0 edges were harness margin round the sampled spots, not a wall.
+    let in_box = |p: [f32; 3]| (-5.5..=5.5).contains(&p[0]) && (15.5..=22.5).contains(&p[2]);
     for (diff, guards, per_hit, dies) in [
         (1u32, &[126usize][..], 10.0f32, false),
         (2, &[126, 127][..], 12.0, true),
@@ -232,7 +238,7 @@ fn idle_bond_is_approached_and_shot_at_every_selectable_difficulty() {
                     // the corridor by t900 below instead of its t700 spot.
                     if t == 700 && fled[k] { continue; }
                     let dr = sim.drones.list.iter().find(|d| d.placement == p && d.present).unwrap();
-                    assert!(in_box(dr.pos), "d{diff} t{t}: #{p} stands in the corridor (x −4..5, z 15.5..22) as the game's does [L], at ({:.2},{:.2})",
+                    assert!(in_box(dr.pos), "d{diff} t{t}: #{p} stands in the corridor (x −5.5..5.5, z 15.5..22.5) as the game's does [L], at ({:.2},{:.2})",
                         dr.pos[0], dr.pos[2]);
                     let dx = dr.pos[0] - start[0];
                     let dz = dr.pos[2] - start[1];

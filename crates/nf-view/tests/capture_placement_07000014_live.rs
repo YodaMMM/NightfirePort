@@ -83,7 +83,11 @@ fn the_capture_scene_hands_bond_back_at_the_scene_marker_not_the_void() {
     // → ch 9 [D placements]. 0x0C comes from the room touch (Bond is standing in it); 0x8C is the
     // fuseboxes' AND (the sabotage itself is walk_07000014_live's stage 3 pin — this test's target
     // is the scene-end placement, so the channel is written directly).
-    sim.drones.channels.set(0x8c, 1, sim.drones.frame);
+    // The sabotage's two outputs (AND #391 [0x87, 0x88] -> ch 0x8C [D]): a poked ch 0x8C alone is
+    // recomputed off by the AND on the first tick, before the Touch #456 write that lands one
+    // tick after the contact [L g031_object_order_live].
+    sim.drones.channels.set(0x87, 1, sim.drones.frame);
+    sim.drones.channels.set(0x88, 1, sim.drones.frame);
     sim.bond.pos = [-33.1, 0.9, 26.8];
     let mut ch4a = false;
     for _ in 0..1200u32 {

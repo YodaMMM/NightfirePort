@@ -136,12 +136,16 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
         assert!((sim.bond.pos[0] - 57.18).abs() < 2.0 && (sim.bond.pos[2] - 22.61).abs() < 2.0,
             "the truck route spawns at the 0x1D entry [D placement 496], got {:?}", sim.bond.pos);
     }
-    next.wait(2); // Mission_Init latches on the first tick (the port's init-per-tick latch)
+    // Mission_Init latches on the first tick (the port's init-per-tick latch); the arrival plate
+    // writes its channel on tick 2 (the tick after the contact [L g031_object_order_live: the 05
+    // reveal and 09 arrival plates]) and the monitor, which runs ahead of the object walk, reads
+    // it on tick 3.
+    next.wait(3);
     {
         let sim = next.scene.sim.as_ref().unwrap();
         // The truck-ride spawn (57.18, 39.73, 22.61) sits INSIDE the 0x51 arrival plate cluster
         // (#743-745/#497, (55.3-58.8, 39.2-39.9, 21.2-23.9) [D dump]) — the real game's arrival:
-        // the plate fires on the first tick, OR #498 raises ch 0x46, and the monitor completes the
+        // the plate fires on its first ticks, OR #498 raises ch 0x46, and the monitor completes the
         // carried "Breach the castle walls" record and reveals the part-1 record [M 0x1827d8
         // cases 1/3; the live ride-time snapshot sat at state 3 only because it was taken on 05
         // (L ee_snapshot), before any arrival plate could fire].
@@ -1835,6 +1839,8 @@ thread_local! { static REAL_DAMAGE_BACKOFF: std::cell::Cell<bool> = const { std:
 
 #[test]
 fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 100/30, 500/30, 1500/45, 2000/30, 2500/90, 4000/90, 6000/60, 8000/60 complete].
     // The explicit store at entry (not only the plain variant's set): a death PANIC above skips
     // this static's restore and would leak the lever into the sisters that run later in the same
     // binary — each variant pins its own gate value first.
@@ -1846,7 +1852,7 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage() {
     // Guards' finished voice lines cleared each control pass (s/g019-sky-2): with 9000/200 the
     // walk fell off the south strip 38.5 again. Lever: a 60-tick stop at tick 3000 in its place
     // [L the 7-value sweep: 500/60, 1000/60, 2000/60, 3000/60, 4000/30, 5000/60, 6000/30 all pass].
-    walker::with_real_damage(|| walker::with_pause(3000, 60, the_door_band_exit_chains_to_07000006_walked));
+    walker::with_real_damage(|| walker::with_pause(2000, 30, the_door_band_exit_chains_to_07000006_walked));
     REAL_DAMAGE_BACKOFF.with(|c| c.set(false));
 }
 
@@ -1879,7 +1885,10 @@ fn the_door_band_exit_chains_to_07000006_walked_real_damage_agent() {
 /// the min-difficulty placements pass Drone_Create's gate [M 0x136be0:49]. Real input only — the
 /// load path is the only difference.
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): Bond dies t10830 at (43.01,45.19,-73.11): every gun dry at the walkway pair [L 2026-11-18 run]; re-tune and un-ignore"]
+/// UN-IGNORED (walks-1121, 2026-11-21 [L the run on this branch]): on the stream-batch-1121b
+/// master the walk completes unchanged — the door chain fires at t11042 with 89.0 health
+/// (1 hit for 11.0, 3 return-fire fights); the 2026-11-18 walkway-pair death no longer
+/// reproduces.
 fn the_door_band_exit_chains_to_07000006_walked_real_damage_00agent() {
     // The fights HEAD-HUNT (see the Agent sister): at 00 Agent the guards' accuracy is 1.3 and
     // Bond's pain is unscaled, so every tick a fight stands is a tick of bursts — the head pick

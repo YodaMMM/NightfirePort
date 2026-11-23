@@ -94,6 +94,10 @@ pub struct MpFx {
     /// reads it is NOT evaluated — see `Sim::mp_bot_bark`'s doc. Cleared on the bot's respawn
     /// (a fresh drone object, a fresh +0x73c).
     pub bot_bark: [Option<u32>; nf_net::MAX_AGENTS],
+    /// mp-bot-hit-fx: this tick's player rounds that reached a bot through the match's pain path
+    /// (`Sim::mp_hurt`, local and online): (attacker slot, weapon, contact point). The flush puffs
+    /// each one as `NDrone2_DealWithObjHit` 0x13fff0 case 5 does (see [`bot_flesh_puff`]).
+    pub bot_hits: Vec<(usize, u16, V3)>,
     /// Off: the combat still records, the flush only clears (the hash-equality tests).
     pub disabled: bool,
 }
@@ -103,7 +107,7 @@ impl Default for MpFx {
         MpFx {
             events: Vec::new(), body_sounds: Vec::new(), last_shot: [None; nf_net::MAX_AGENTS], tracers: Vec::new(),
             step: [0.0; nf_net::MAX_AGENTS], prev_pos: [None; nf_net::MAX_AGENTS], was_dead: [false; nf_net::MAX_AGENTS],
-            due: Vec::new(), started: Vec::new(), bot_bark: [None; nf_net::MAX_AGENTS], disabled: false,
+            due: Vec::new(), started: Vec::new(), bot_bark: [None; nf_net::MAX_AGENTS], bot_hits: Vec::new(), disabled: false,
         }
     }
 }
@@ -225,6 +229,7 @@ impl Sim {
     pub fn flush_mp_fx(&mut self) {
         let events = std::mem::take(&mut self.mp_fx.events);
         let body_sounds = std::mem::take(&mut self.mp_fx.body_sounds);
+        let bot_hits = std::mem::take(&mut self.mp_fx.bot_hits);
         if self.mp.is_none() || self.mp_fx.disabled { return; }
         let local = self.mp_local_slot;
         let frame = self.drones.frame;
@@ -237,6 +242,17 @@ impl Sim {
         // 2. This tick's shots.
         for (k, shot) in events.iter().enumerate() {
             self.mpfx_shot(shot, k as u32, local, frame);
+        }
+        // 2b. mp-bot-hit-fx: the player rounds that reached a bot this tick (local and online, the
+        // `mp_hurt` bot arm). The game's case-5 puff draws `Gas_Init`'s spin and sign from its one
+        // random stream [M 0x1aacc8:72-77]; here they come from a generator seeded by (frame,
+        // attacker, hit index), so both machines draw the same puff and the shared match stream
+        // never moves (the PS2 had no online play) [S].
+        for (k, &(attacker, weapon, at)) in bot_hits.iter().enumerate() {
+            let mut rng = Rng::new(frame.wrapping_mul(0x0100_0193) ^ (attacker as u32).wrapping_mul(0x9e37_79b9) ^ (k as u32).wrapping_mul(0x85eb_ca6b) ^ 0x6268_6678);
+            let rec = self.weapons.records.get(weapon as usize).cloned();
+            let mesh = bot_flesh_puff(&mut self.drones.gas, &mut rng, weapon, rec.as_ref().map(|r| &r[..]), at);
+            if log_on() { eprintln!("[mpfx] f{frame} slot {attacker} weapon {weapon:#x} hit bot at ({:.2}, {:.2}, {:.2}): puff {mesh:?}", at[0], at[1], at[2]); }
         }
         // 3. The fire-script sounds that fall due now (at the shooter's live head).
         let due: Vec<(u32, usize, u32)> = self.mp_fx.due.iter().copied().filter(|d| d.0 <= frame).collect();
@@ -429,11 +445,11 @@ impl Sim {
                 }
             }
             MpShotHit::Bot(_) if shot.damage > 0.0 || matches!(shot.weapon, 0x32 | 0x33) => {
-                // The bots are drones: `NDrone2_DealWithObjHit` 0x13fff0 case 5 puffs the flesh gas
-                // at the hit — 0x20008bc (3.0, 6.0, life 0x3c) for every weapon outside {0x2b,
-                // 0x34..0x37} with damage, 0x200026e (1.0, 16.0) for the Phoenix Samurai bolt
-                // [M :235-256] — on every machine, the local player's own hits included (the
-                // local pipeline's bullets do not touch the MP bots).
+                // A BOT's round on another bot (the player's rounds on a bot reach the puff through
+                // `mp_fx.bot_hits` instead). The bots are drones: `NDrone2_DealWithObjHit` 0x13fff0
+                // case 5 puffs the flesh gas at the hit: 0x20008bc (3.0, 6.0, life 0x3c) for every
+                // weapon outside {0x2b, 0x34..0x37} with damage, 0x200026e (1.0, 16.0) for the
+                // Phoenix Samurai bolt [M :235-256], on every machine.
                 let puff = match shot.weapon {
                     0x32 | 0x33 => Some((1.0, 16.0, 0x0200_026e)),
                     w if !matches!(w, 0x2b | 0x34..=0x37) => Some((3.0, 6.0, 0x0200_08bc)),
@@ -443,6 +459,10 @@ impl Sim {
                     // The bot flesh puff: NDrone2_DealWithObjHit 0x13fff0:245-253 — quat NULL, vel
                     // NULL, no caller draw; Gas_Init's spin/sign come from the shared stream.
                     self.drones.gas.init_ex(&mut self.drones.rng, mesh, shot.end, 0.0, [0.0; 3], s0, s1, 5, [0xff, 0xff, 0xff, 0xff], 0, 60.0, nf_game::gas::HostCel::default());
+                    // The blood puff's `+0xF0 |= 8` (the viewer-facing billboard) [M :248].
+                    if mesh == 0x0200_08bc {
+                        if let Some(g) = self.drones.gas.puffs.last_mut() { g.billboard = true; }
+                    }
                     if log_on() { eprintln!("[mpfx] f{frame} slot {} hit bot at ({:.2}, {:.2}, {:.2}): flesh puff {mesh:#x}", shot.shooter, shot.end[0], shot.end[1], shot.end[2]); }
                 }
             }
@@ -468,6 +488,33 @@ impl Sim {
             _ => {}
         }
     }
+}
+
+/// mp-bot-hit-fx: a round's flesh puff on a bot (the bots are drones in the game), as
+/// `NDrone2_DealWithObjHit` 0x13fff0 case 5 spawns it at the contact `HITDATA+0x40`:
+/// - the weapons the case's first switch sends straight to its return show nothing (0x1b, 0x2a,
+///   0x2b, 0x2e..0x31, 0x34..0x37, 0x3a, 0x46, 0x48, 0x49, 0x4e, 0x50, 0x51, 0x5f) [M :153-173];
+/// - the Phoenix Samurai bolt (0x32, 0x33): `Gas_Init(1.0, 16.0, …, 0x200026e, 5, …)` [M :251-255];
+/// - every other weapon whose `weapon_data+0x0C` damage is above 0: the blood puff
+///   `Gas_Init(3.0, 6.0, …, 0x20008bc, 5, …)` with the gas obj's `+0xF0 |= 8` (the viewer-facing
+///   billboard) [M :243-249], life 0x3c (the SP guard path's reading, drone.rs fix-flesh-impacts).
+/// Before it, the case's gates (the bot alive, the friendly-fire team test) [M :179-235] are the
+/// caller's (`mp_hurt` returns first on a dead bot or a refused `register_bullet_hit`). No flesh
+/// contact effect besides: a body's hit carries material 0 and `Effect_Create` returns [M
+/// Collide_Jointy 0x1ec180:125/173; 0x1ce688:52]. Returns the mesh it spawned.
+pub fn bot_flesh_puff(gas: &mut nf_game::gas::GasPool, rng: &mut Rng, weapon: u16, rec: Option<&[u8]>, at: V3) -> Option<u32> {
+    let damage = rec.filter(|r| r.len() >= 0x10).map_or(0.0, |r| rec_f32(r, 0x0c));
+    let (s0, s1, mesh) = match weapon {
+        w if nf_game::mp::combat::drone_ignores_round(w) => return None,
+        0x32 | 0x33 => (1.0, 16.0, 0x0200_026e),
+        _ if damage > 0.0 => (3.0, 6.0, 0x0200_08bc),
+        _ => return None,
+    };
+    gas.init_ex(rng, mesh, at, 0.0, [0.0; 3], s0, s1, 5, [0xff, 0xff, 0xff, 0xff], 0, 60.0, nf_game::gas::HostCel::default());
+    if mesh == 0x0200_08bc {
+        if let Some(g) = gas.puffs.last_mut() { g.billboard = true; }
+    }
+    Some(mesh)
 }
 
 /// A remote body's gun muzzle from its shot ray: `from` (the eye) + 0.55 forward along the aim, 0.30 to the gun side

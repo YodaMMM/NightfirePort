@@ -145,8 +145,9 @@ Placement parameters (DefaultInit, `param(k)` = `piVar19[0xD + k]`) [M, checked]
   bone 2; line of sight. Checked in the decomp (0x1a73f8, 0x1a7c98): the nearest qualifying drone wins (the range
   shrinks to each accepted distance); a hit sets the crosshair offset `BL+0x120 / +0x124` to the target's screen
   position and `+0x114` to it; without one `+0x114` = 0; the offsets then halve every tick (weapons 0x50 / 0x51 use
-  k = 1 and scan type-0x51 objects instead). Port: `Drones::auto_aim` keeps the offset as a yaw / pitch angle
-  (*approximation* of the screen offset), test `auto_aim_snaps_to_a_guard_near_the_crosshair`.
+  k = 1 and scan type-0x51 objects instead). Port: `Drones::auto_aim_view` keeps the offset in the game's screen units
+  (docs/systems/auto-aim.md), tests `auto_aim_snaps_to_a_guard_near_the_crosshair`,
+  `auto_aim_offset_is_the_targets_screen_position`.
 - Gunshot sound: the first-person fire script plays **0x403** (inner 2, outer 40, weight 65) at the gun: guards
   within ~28 units hear it. Silenced variants remap to 2 (weight 0).
 

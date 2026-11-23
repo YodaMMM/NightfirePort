@@ -204,8 +204,9 @@ fn top_agent_lives_round_end_and_no_kill_score() {
     join(&mut m, 1, 0);
     join(&mut m, 2, 0);
     m.player_killed(1, Some(0), false, false, &mut rng);
-    assert!((m.game.slots[1].score + 1.0).abs() < 1e-6, "the lives copy drops per death [M 0x188f70:96-98]");
-    assert_eq!(m.game.slots[0].score, 0.0, "kills never score in 0x10 (not one of the four)");
+    // The lives copy starts at the limit (2) [M MP_Init 0x183438:60-61] and drops per death.
+    assert!((m.game.slots[1].score - 1.0).abs() < 1e-6, "the lives copy drops per death [M 0x188f70:96-98]");
+    assert_eq!(m.game.slots[0].score, 2.0, "kills never score in 0x10 (not one of the four)");
     assert!(m.respawn_allowed(1), "still alive after 1 death of 2");
     m.player_killed(1, None, false, false, &mut rng);
     m.player_killed(2, None, false, false, &mut rng);
@@ -594,4 +595,87 @@ fn a_death_tells_the_victim() {
         m.objects_rt.slot_msgs,
         [(0, 0x2000038, Some(1), 0xb4), (1, 0x2000037, Some(1), 0xb4), (1, 0x2000037, Some(1), 0xb4)]
     );
+}
+
+/// g053: the dropped-object return counter (`MPOBJECT+0x04`) zeroes only on the dropped-state
+/// returns — the takes, the CTF capture, the blueprint delivery and the strike completion leave
+/// it [M 0x1861a8:170-263, 0x1882d8:124-198, 0x187568:120-253, 0x188970:33-46]. So a flag dropped
+/// for 1000 frames, re-taken and dropped again comes home ~800 frames later, not 1802. Sister:
+/// a flag that went home through the teammate touch starts the next drop from 0.
+#[test]
+fn g053_return_counter_survives_a_retake() {
+    let mut rng = Rng::new(7);
+    let mut m = make(scenario::CAPTURE_THE_FLAG, 20, -1);
+    join(&mut m, 0, 0);
+    join(&mut m, 1, 1);
+    m.register_mp_object([30.0, 1.0, 30.0], [0.0, 0.0, 1.0], 0, [0, 0, 0, 0, 0, 0, 0], 0);
+    m.create_mode_objects(&mut rng);
+    m.touch_flag(1);
+    m.player_killed(1, Some(0), false, false, &mut rng);
+    tick(&mut m, 1000, &mut rng);
+    assert_eq!(m.objects_rt.flags[0].as_ref().unwrap().state, 2);
+    m.do_respawn(1, 0);
+    m.touch_flag(1); // the enemy re-takes the dropped flag
+    assert_eq!(m.objects_rt.flags[0].as_ref().unwrap().counter, 1000, "the take keeps the count");
+    m.player_killed(1, Some(0), false, false, &mut rng);
+    tick(&mut m, 802, &mut rng);
+    assert_eq!(m.objects_rt.flags[0].as_ref().unwrap().state, 0, "the resumed count expires at 1801");
+    // sister: after a counter-zeroing return the next drop needs the full 30 s
+    m.do_respawn(1, 0);
+    m.touch_flag(1);
+    m.player_killed(1, Some(0), false, false, &mut rng);
+    tick(&mut m, 802, &mut rng);
+    assert_eq!(m.objects_rt.flags[0].as_ref().unwrap().state, 2, "a fresh drop is still down at 802 frames");
+
+    // GoldenEye: the same — the take keeps the item's count [M 0x187568:187-253]
+    let mut g = make(scenario::GOLDENEYE, 10, -1);
+    join(&mut g, 0, 0);
+    join(&mut g, 1, 1);
+    g.register_mp_object([1.0, 0.0, 1.0], [0.0, 0.0, 1.0], 6, [6, 0, 0, 0, 0, 0, 0], 0);
+    g.register_mp_object([2.0, 0.0, 2.0], [0.0, 0.0, 1.0], 7, [7, 0, 0, 0, 0, 0, 0], 0);
+    g.create_mode_objects(&mut rng);
+    g.touch_ge_item(0, 0);
+    g.player_killed(0, Some(1), false, false, &mut rng);
+    tick(&mut g, 1000, &mut rng);
+    g.do_respawn(0, 0);
+    g.touch_ge_item(0, 0);
+    assert_eq!(g.objects_rt.ge[0].as_ref().unwrap().counter, 1000, "the GE take keeps the count");
+
+    // Espionage: the take keeps it too [M 0x1882d8:124-145]
+    let mut b = make(scenario::BLUEPRINT, 5, -1);
+    join(&mut b, 0, 0);
+    join(&mut b, 1, 1);
+    b.register_mp_object([1.0, 0.0, 1.0], [0.0, 0.0, 1.0], 5, [5, 0, 0, 0, 0, 0, 0], 0);
+    b.create_mode_objects(&mut rng);
+    b.touch_blueprint(1);
+    b.player_killed(1, Some(0), false, false, &mut rng);
+    tick(&mut b, 1000, &mut rng);
+    b.do_respawn(1, 0);
+    b.touch_blueprint(1);
+    assert_eq!(b.objects_rt.blueprint.as_ref().unwrap().counter, 1000, "the blueprint take keeps the count");
+}
+
+/// g053: the blueprint's 30 s expiry copies its spawn matrix back (`Mat_Copy(MPOBJECT+0x10 →
+/// obj+0x90)` [M 0x1882d8:150-160]) — it goes back to where it spawned, not where it fell.
+/// Sister: before the expiry it still lies at the drop spot.
+#[test]
+fn g053_blueprint_expiry_goes_back_to_its_spawn() {
+    let mut rng = Rng::new(7);
+    let mut m = make(scenario::BLUEPRINT, 5, -1);
+    join(&mut m, 0, 0);
+    join(&mut m, 1, 1);
+    m.register_mp_object([1.0, 0.0, 1.0], [0.0, 0.0, 1.0], 5, [5, 0, 0, 0, 0, 0, 0], 0);
+    m.create_mode_objects(&mut rng);
+    let home = m.objects_rt.blueprint.as_ref().unwrap().pos;
+    m.touch_blueprint(1);
+    m.set_slot(1, [60.0, 0.0, 60.0]);
+    tick(&mut m, 1, &mut rng); // the carry rides the carrier
+    m.player_killed(1, Some(0), false, false, &mut rng);
+    m.set_slot(1, [90.0, 0.0, 90.0]); // the body leaves (respawn) — nobody near either spot
+    tick(&mut m, 1801, &mut rng);
+    assert_eq!(m.objects_rt.blueprint.as_ref().unwrap().state, 2);
+    assert_eq!(m.objects_rt.blueprint.as_ref().unwrap().pos, [60.0, 0.0, 60.0], "lies at the drop spot");
+    tick(&mut m, 1, &mut rng);
+    assert_eq!(m.objects_rt.blueprint.as_ref().unwrap().state, 0);
+    assert_eq!(m.objects_rt.blueprint.as_ref().unwrap().pos, home, "back at its spawn");
 }

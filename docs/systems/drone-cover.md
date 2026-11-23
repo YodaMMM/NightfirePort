@@ -76,7 +76,7 @@ reload, out-of-range and no-sight checks, before grenades and combat moves) and 
 
 | State | Behaviour |
 |---|---|
-| RunForCover 0x8C | Update: node no longer OK, or opponent visible within 4 → 0x56. `MoveToGoalPosition` to the approach point: moving → combat-move anim, and `SlideToPosition(0.025, in-cover point, y = 1)` when the route's remaining distance (route+0x88) < 1.0 [M 0x169150:62-67] — unreachable in practice, because `MoveToGoalPosition` reports arrival at route distance < 2.0 first (+0x8EC = 2.0 [M 0x14b300:579]); arrived (route < 2.0) → 0x93; blocked → face, aim or 0x21; else 0x56. Exit (not to 0x93): disown. |
+| RunForCover 0x8C | Update: node no longer OK, or opponent visible within 4 → 0x56. `MoveToGoalPosition(+0x704, approach point)` — the goal radius 0.5 that `FindCover`'s `SetupGoalPosition` stored [M disasm 0x169240/0x169250 `lwc1 $f12, 0x704`]: moving → combat-move anim, and `SlideToPosition(0.025, in-cover point, y = 1)` when the route's remaining distance (route+0x88) < 1.0 [M 0x169150:62-67]; arrived (route < route+0x8C = 0.5: `SetupRouteToPosition` stores the caller's radius there [M 0x158b10:104], and both `MoveToGoalPosition` [M 0x1517d8:49-52] and `AINetwork_FollowRoute` past the last node [M 0x15b110:20-22] compare against it) → 0x93; blocked → face, aim or 0x21; else 0x56. Exit (not to 0x93): disown. (The DefaultInit 2.0 at +0x8EC [M 0x14b300:579] is only the seed; the route build overwrites it. The old reading "arrival at < 2.0, slide unreachable" was wrong.) |
 | UnderCoverInit 0x93 | `CoverAnim(6)` → 0x94; slide 8 %/tick (xz) to the in-cover point, face the cover angle. |
 | UnderCoverIdle 0x94 | `CoverAnim(1)`; refill the clip; timer C in FRand(150) ticks (not with prop 0x10). Update: slide, face; node not OK or > 1.5 from the goal → 0x9C. Ambushers (prop 0x10) wait until the opponent is visible or within 3 → 0x9C. Timer C: Rand(5) = 0 and another cover → 0x8C; node OK with LOS → 0x95; other cover → 0x8C; else retry up to 3 times, then 0x56. |
 | UnderCoverAim 0x95 | `CoverAnim(2)` (lean / step-out) → 0x96. |
@@ -111,15 +111,40 @@ OutOfRange (66) → RunForCover (67; strafe 0xC, back-off 0x4, strafe 0xD around
 stand-cover loop 171) → UnderCoverIdle (296, clip refilled) → UnderCoverAim (394, lean-out 176 at speed 1.5, then loop
 182) → UnderCoverFire (431) at corner node 1 (59.11, 98.69, yaw −90°), position (58.93, 99.45) — 0.28 from the
 computed in-cover point (59.21, 99.49) (U-031). The port matches the sequence, node, UnderCoverInit / Aim durations and
-the end position (0.2); RunForCover is shorter in the port (U-030).
+the end position (0.2). RunForCover: live 198 ticks (strafe 0xC east of the gate pillar, back-off 0x4 west along its
+south face, strafe 0xD north round its corner, UnderCoverInit at (58.60, 99.07)); the port now takes 199 ticks over
+the same three legs and arrives at (58.57, 99.02) (`cover_run_rounds_the_gate_pillar_like_the_game`). The old 148-tick
+port run stopped 1.5 short south of the pillar: every port goal route was built with a flat 2.0 arrival radius
+instead of the goal's own. Fixed for RunForCover only (`handle_cover` passes `goal_arrival` to `move_to_goal_r`).
+The game passes the goal radius from EVERY `MoveToGoalPosition` caller (e.g. `ReFindMissionPath` 0x153a30, disasm
+0x153ce4/0x153e64 `lwc1 $f12, 0x704`); the port's other callers keep 2.0 (*deviation*, out of this row's scope).
+**Open reds (2026-11-21):** the RunForCover change turns 17 scripted-walk tests red, 15 of them green on the old
+code (walkreal 01 was not re-run on the old code): escort_follow_07000001 and fix_npc_doors (Bond's walker wedges at (3.4, 10.4) on the way to the 01 corridor
+plate and the escort run stalls), walkreal 01 (2: the contact dies), 02 (geisha group trigger), 03, 06, 08, 0d (2),
+11, 13 (1 more beside the 2 already red), 15 (2), 16 (3) — almost all real-damage deaths or tick caps. The guards'
+own cover runs are the change; whether the reds are only the scripted walks tuned to the old short runs or a port
+fault the longer runs expose is not settled. Widening the radius to every caller added two more (15).
 
 ## Sniper cover (0x97/0x98) [M] (WORKLOG 0079)
 
 `UnderCoverFire` ENTER (0x16a3e0) branches to `UnderCoverSniperFire` (0x97) when the drone's anim set `+0xDA == 0x13`
-(sniper) AND `level < 0x0700000E` (the test level 07000005 qualifies). On later levels the sniper fires through
-`UnderCoverFire` directly. State 0x97: timer C at +1 s (fires), timer D at +6 s (returns to 0x99); clip empty → 0x98
-(reload anim 0x52, refill `+0xBBC = +0xBBE`, back to 0x97). `OpponentIsAimingAtMe(7.5)` + `BondIsFacingMe(45)` +
-`Rand(3) == 0` → duck to 0x99. Ported in `drone.rs::handle_cover`.
+(sniper) AND the level is 0x0700000C or 0x0700000D: the test is the unsigned `GameState+0xC + 0xf8fffff4 < 2`
+[M 0x16a3e0 case 1]. On every other level (05's three sniper-set guards included) the sniper fires through
+`UnderCoverFire` directly. Per level (`nf_view::load` over `dev::LEVELS`): sniper-set drones on 02 (1), 03 (1),
+05 (3), 06 (7), 0c (20), 0d (19), none elsewhere.
+
+State 0x97 [M 0x16a610]:
+- ENTER: `+0x4F8 |= 0x10000`, AttackTalk, `+0x2E`, timer C at +1 s, timer D at +6 s, then the fire request
+  `+0x3B = 0` and the shot flag `+0x40 = 0` (no round before timer C).
+- UPDATE: a round fired (`+0x40`, set by `DroneWeap_FireWeapon` 0x178f68:260) with the clip empty → 0x98. Otherwise
+  nothing unless the danim class `+0x568 == 2` and `+0x3B` stands. Then `CoverNodeOK(node, type & 3, 0)` (no sight
+  need): failed → a corner node with a lean type returns (0x99), any other leaves now (0x9C). Passed, and only with
+  the burst done (`+0x3C`): the armed opponent's aim latch `+0x2A` (`DroneWeap_OpponentIsAimingAtMe` 0x17a500; its
+  7.5 is the MP-only facing angle, no distance) → 0x99; else `BondIsFacingMe(45)` and `Rand(3) == 0` → 0x99.
+- Timer C: `DroneWeap_Fire(1)`. Timer D: 0x99.
+
+State 0x98 [M 0x16a8b0]: ENTER `AlertStatusSet(1)`, `+0x3B = 0`, the reload anim 0x52 back to 0x97, the clip refill
+`+0xBBC = +0xBBE`. Ported in `drone.rs::handle_cover`.
 
 ## Ambush (0x37/0x38) [M] (WORKLOG 0079)
 
@@ -171,6 +196,23 @@ anim is queued, so UnderCoverInit/Aim linger and UnderCoverReturn/TypeChange tak
 
 `+0x2E`, `+0x38`, `+0x4C0`, the meaning of low-node flag 2, UnderCoverFire's clip handling, the
 units of `OpponentIsAimingAtMe` / `BondIsFacingMe` (U-031); `+0x4F8 & 0x10000` = the transient flag the state
-machine clears on every change (set by RunForCover/RunAway/Hide ENTERs [M 0x171df8:182-183]); U-030's RunForCover
-duration gap (live 198 vs port 114 ticks) is NOT the slide (dead in both — see the state table) and remains open:
-the prime suspect is the port's `OptimiseRoute` trimming a waypoint the live route kept.
+machine clears on every change (set by RunForCover/RunAway/Hide ENTERs [M 0x171df8:182-183]). The RunForCover
+duration gap (live 198 vs port 148 ticks, earlier 114) is closed: the arrival radius, not the route (see Live check).
+
+## Target slots [M] (checked 2026-11-21)
+
+The usability bits are kept per NPCGlobals target slot (0x299110, 8 × 0x20). Only the player ever holds a slot in
+single player: `DroneFunc_AllocateTargetID` 0x141f28 returns 0xff unless the drone's team (+0x44) is 1
+[M 0x141f28:11-13], and a team-1 drone's opponent is always the player (`NDrone2_FindOpponent` 0x1424e0:101-118,
+team != 2 → `glb_players`, or 0 when `PlrStat_OkToUpdate` fails or he is dead). `Drone_InitComms` 0x139520 refreshes
+each claimed slot's position from its object (+0x30) [M :127-147], runs `ProcessCoverNodes`, then clears every slot
+[M :150-160]; the drones' `SetOpponent` 0x1422d0 re-claims slot 0 later in the frame [M 0x1422d0:74-86]. So slot 0 = Bond at his
+live position, as the port models. Port deviations, neither visible in play: (1) with no claimed slot (the first
+frame of a level, a mission already won or lost) `IsCoverNodeUsable` clears a node's bits and casts no ray
+[M 0x1386d8:60-63], so the round robin walks the whole list; the port always evaluates for Bond. (2) the walk stops
+only when `DroneVision_CanSeePosition` 0x178438 really cast a ray (its cel pre-test can refuse first, the ray counter
+0x299092 then unchanged [M 0x1386d8 return]); the port stops at every node that reached the ray step. (3) the
+occupied-node gate: a node owned by a drone whose own slot (+0x174) is not the slot being evaluated is skipped
+[M 0x1386d8:70-91]; every owner is a team-1 guard on slot 0, so it never fires. `iTimeToCalc.255` (0x30caa0) is a
+function static that only `ProcessCoverNodes` touches [M: no other function in the decompile names it], so nothing
+resets it per level and the game's 5-frame phase carries over between levels; the port starts each level at 0.

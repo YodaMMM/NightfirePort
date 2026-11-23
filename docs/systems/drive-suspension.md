@@ -10,8 +10,8 @@ Evidence: [M] DRIVING.ELF decompile + raw instructions (work/decomp/DRIVING.ELF)
 `FUN_00190510` when `SUB_PHYSICS` (+0xc0) is 0 and the object returned by vtbl+0x1d4 has a
 non-zero +0xc8 [M 0x188bf8-0x188c30]. In the pvehicle schema +0xc8 is `IS_SNOWMOBILE`
 (`FUN_001968f8` :265); supersnow and small_snowmobile set it [D], and `FUN_0018fc00` compares
-the vehicle name with "small_snowmobile" (:366). That the vtbl+0x1d4 object is the attr block
-is [S]. `FUN_0018e548` has the same per-wheel shape (rest + query + clamp + `+0x324` max).
+the vehicle name with "small_snowmobile" (:366). The vtbl+0x1d4 object is the attr block: the car
+class's slot (vtable 0x379ef0 + 0x1d4 holds 0x193170) is `FUN_00193170`, `return car+0x23c` [M]. `FUN_0018e548` has the same per-wheel shape (rest + query + clamp + `+0x324` max).
 
 The attrs come through `*(vehicle+0x23c)`; `FUN_00188200` writes that slot back after each
 pass (`sw s0, 0x23c(s2)` in the delay slots at 0x188c10/0x188c3c/0x188c54/0x188c60) [M]. What

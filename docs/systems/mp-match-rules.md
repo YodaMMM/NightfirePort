@@ -31,7 +31,7 @@ where it matters (`MPGame._412_4_` = hex `+0x19A`).
 ## Kill scoring — `MP_PlayerKilled` 0x188f70
 
 - deaths (slot+0x08) += 1 in every scenario [M 0x188f70:92-94]. Scenario 0x10 (Top Agent): the
-  slot score (the lives copy, +0x18) −= 1.0, and `frag_limit <= deaths` = the player is out [M
+  slot score (the lives copy, +0x18, seeded with the lives limit by `MP_Init` [M 0x183438:60-61]) −= 1.0, and `frag_limit <= deaths` = the player is out [M
   0x188f70:96-100].
 - Self-kill: streak = 0, kills −= 1, last-killer = 0xffff [M 0x188f70:151-155]. Another player:
   last-killer = attacker slot [M :164]; kills/streak += 1 only when FFA or different teams [M
@@ -49,8 +49,18 @@ where it matters (`MPGame._412_4_` = hex `+0x19A`).
   `MP_assassinReset(1)` [M :229-243]. These bypass the bit30/scenario gate.
 - Carried objects drop: every registered MP object owned by the victim frees its hit list, and —
   types 0 (flag) / 5 (blueprint) / 6+7 (GoldenEye) — its update runs with died=1 [M :276-303]. If
-  the killing hurt type was 4..7 (explosive) the object's return counter preloads to
-  `30*FRAME_RATE_INT` frames [M :193-198, 276-299].
+  the dying body's hit list holds a hurt volume (class 0x27) whose `Hurt_GetType` is 5..7
+  (`4 < type < 8` [M :190-195]) the object's return counter preloads to `30*FRAME_RATE_INT`
+  frames [M :281-283], so the drop comes home two frames later. Three arenas carry such volumes:
+  0700004b (8), 07000025 (6), 07000026 (4), all type 6, damage 1000 (the kill floors) [D
+  `Hurt::create` census]; 07000023/24/27/28/29 have none. Fall and drown damage are no hit-list
+  object and never preload (g053: the port's online path used pain types 4..7 incl. fall/drown,
+  and offline passed no preload at all).
+- The return counter (`MPOBJECT+0x04`) zeroes ONLY on the dropped-state returns (the CTF
+  teammate touch and every 30 s expiry) [M 0x1861a8:195-197,226-231, 0x187568:191-195,
+  0x1882d8:150-153]. The takes, the CTF capture, the blueprint delivery, the strike completion
+  and the GE death re-pick write no counter, so an object dropped, re-taken and dropped again
+  resumes its old count (g053; the port zeroed it on every take).
 
 ### Assassin reset — `MP_assassinReset` 0x18aa70
 
@@ -74,8 +84,9 @@ last-shooter word (+0x20) = attacker slot in every allowed case [M :34].
 - The position comes from `MP_GetSpawnPoint` 0x185098 (ported in phase 1). Reset: streak = 0,
   last-shooter = 0xfffe, status bits = 0 [M 0x185368:55-57]; human health =
   `MPSettings[slot].armor_bonus + 100.0` [M :65-73]; weapons via `MP_EquipPlayer` 0x1855f8 (the
-  weapon-set row of `PickupMatrix`, the capture-reward second weapon when `+0x1BC hex != 0`, and
-  the scenario-bonus weapon 0x3b for Protection/team 0 or Demolition/team 1) [M 0x1855f8:14-47].
+  weapon-set row of `PickupMatrix`, the grapple (0x50 via `Upgrade_MPWeapon`) when the
+  `+0x1D0 hex` enviro-mod is set (g053: an older line here named `+0x1BC`; the decompile reads
+  `_464_` = 0x1D0), the 0x45 item on level hash 0x5000085, and the scenario-bonus weapon 0x3b for Protection/team 0 or Demolition/team 1) [M 0x1855f8:14-47].
 - Timing: the caller (`Player_HandleDeath` 0x190bb0) respawns only after 5 s of death and, in 0x10,
   only while `deaths < limit` [M 0x190bb0:41-54].
 
@@ -164,8 +175,16 @@ mirrors the game's per-type globals (`Flags`[2] @0x317210, `Bases`[2] @0x317330,
 - **Industrial Espionage 0x20000100** — `MP_BluePrintUpdate` 0x1882d8 + `MP_BluePrintReachedBase`
   0x188970. One neutral blueprint (state 0 free / 1 carried / 2 dropped); any team carries it. The
   carrier reaching their own team's base scores **team +1.0 and carrier +1.0**, and the blueprint
-  respawns at a random registered spawn [M 0x1882d8:50-79, 0x188970:27-55]. Dropped 30 s → resets
-  to free where it lies (no re-spawn pick) [M 0x1882d8:147-180].
+  respawns at a random registered spawn [M 0x1882d8:50-79, 0x188970:27-55]. Dropped 30 s → goes back
+  to its spawn matrix (`Mat_Copy(MPOBJECT+0x10 → obj+0x90)`: the create's placement or the last
+  delivery's random pick [M 0x188970:33-34]), state 0, counter 0 [M 0x1882d8:150-160] (g053: the
+  port left it where it fell). NOT PORTED: with the `+0x1BC` Player Mod set,
+  `MP_BluePrintReachedBase` also hands a human carrier (obj state 1) the next weapon of the
+  weapon-set row it does not own, after its first owned non-spawn weapon, through
+  `Player_EquipWeapon(.., 999)`, and drops the old one (owned/clip cleared, the switch request
+  moved if it was held); a bot carrier gets the same ladder through `BOTWEAP_EquipWeapon` +
+  `BOTSTATE_pickupWeaponChangeChoice` [M 0x188970:56-160]. The port has no standalone
+  `Player_EquipWeapon` 0x1a8a58 to run it.
 - **Deathmatch 0x1 / Team Arena 0x20000002** — no objects; kills only (above).
 
 ## Online play — the live contacts and the corrections (mp-scenarios-online, 2026-10-18)
@@ -265,12 +284,26 @@ so in every scenario the bots played deathmatch. Now (crates/nf-game/src/mp/bots
   record copy is not routed].
 - **Bot walk**: the walk-clear test adds a knee line (floor + 0.35) — the floor + 1.0 line passed
   over 07000023's pit-ramp side wall and bots pushed into its edge for good [S].
+- **Hurt volumes** (g053): `NDrone2_DealWithObjHit` 0x13fff0's class-0x27 MP arm takes
+  `Hurt_GetDamage` straight off a bot's health (no armour, no multipliers; skipped in a type-10
+  state), barks trigger 0x1f, and at health <= 0 enters 0xF2 [M :320-335]; the death's
+  `MP_PlayerKilled` credits no player and preloads the carried objects when the type is 5..7.
+  `Sim::step_mp_bots` now runs that contact after the bots move (capsule root − 1.0 … eye, r 0.4,
+  the SP drones' law [S]); before, a bot never died in an arena's kill floor. The bark draws
+  the shared stream (`Rand(n)` [M 0x1266b4]) on every contact tick, so a run where a bot touches
+  a hurt volume draws differently from the old code.
 - Not ported: the own dropped flag has no goal in the game's scan either (a team-mate's contact
   returns it [M 0x1861a8:195-221]); `NDrone2_CanSeeObject`'s one-row-per-tick refresh
   (`+0x767`); the port's blueprint rules still set status bit 1 (the game sets 2 — the bots'
   snapshot derives the bits from the carriers instead).
 - Test aids: NF_NET_SCENARIO=<hex>, NF_NET_TEAMS="t0,t1,…" (flag host); NF_BOTLOG also prints the
   scenario objects/scores and each bot's slot-1 goal once a second.
+- Two-window scenario aids (mp-scenarios-full): NF_MP_OBJLOG=1 prints one `[mp-obj]` line each tick
+  the match state, latches, scores or any scenario object changes, and the board each window opens
+  (`[mp-debrief]`); NF_NET_AUTOOBJ="a-b" steers the local player at the scenario objective;
+  NF_MP_PLACE_OBJ="<slot>:<obj>:dx,dz" places a body beside a scenario object at the start.
+- The bot records' names: the boot writes "Bot 1".."Bot 4" into records 4..7 [M bootup 0x1c7e78:50-61];
+  a bot winner's result line reads it [M 0x212198:227-228]. The port names bot i "Bot i+1".
 
 ## Deviations (model gaps, marked, not silent rewrites)
 

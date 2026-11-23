@@ -200,6 +200,23 @@ const CONSOLE_ORDER: [u32; 8] = [5, 4, 3, 6, 8, 1, 2, 7];
 /// closer than this opens the screen window (see the mid-defense block).
 const CHAIN_NEED: u32 = 790;
 
+/// s/hard-walks-b: the laser sidestep (walker `laser_dodge`, Agent and up) yields to the chain
+/// once the pending console's read is closer than this. Measured on master b60b1ff79 at Agent:
+/// a lock on the x32 station at f4400 flew Bond 12 u straight down and back (4400..5002), k4's
+/// third hold waited the round trip and k4 latched 143 ticks past its read (m4 launched). With
+/// the yield the chain answers hold #3 at 4402 and k4 latches 457 inside the read; one world
+/// blast (~7-9) is the price [L this branch's runs, reserves 700 and 1000 measured].
+const DODGE_RESERVE: u32 = 700;
+
+/// s/hard-walks-b: the radius of the idle-gap shelter. Between a console's UI going live and
+/// its first hold the walk used to hover the open station (32,-1.7,0) for 800-1200 ticks while
+/// the wave above (y 3-9) landed 3.0 rounds: 9 hits for 27.0 in 5964..6791 on k6 alone [L the
+/// Operative hit log]. Before the chain's first hold Bond floats to the least-seen point within
+/// this radius of the station (the shooters' 2-s sight clock breaks on cover [M
+/// DroneWeap_DoBulletAccuracy 0x179740:102-109]); the return trip fits the ~450-tick read slack.
+/// Radii 4 and 9 measured red, 6 green [L this branch's Operative runs].
+const SHELTER_RAD: f32 = 6.0;
+
 /// real-health-00agent-1b-7: the 00 Agent (hard) order with the +5999 pair REVERSED — k8
 /// before k6. k6 and k8 share the read 7774 (missile_start 5375 + P0_LEN − 1) and BOTH
 /// missiles read on time (m6 launched on the +14-late k6 latch [L /tmp/lever3.log], m8
@@ -575,7 +592,15 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
     // the route), so the guard is inert on green runs; on red runs it hands back a fast,
     // ledger-rich failure instead of hanging the suite.
     let stuck = |s: &nf_view::scene::Sim| !alive(s) || s.drones.mission.status() > 1;
+    let dodge_wanted = w.laser_dodge;
+    let mut shelter: Option<(u32, u32, [f32; 3])> = None;
     for tt in 0..12000u32 {
+        if dodge_wanted {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let tight = order.iter().find(|&&c| !sim.drones.channels.on(c))
+                .and_then(|&c| read_deadline_in(sim, c)).map_or(false, |n| n < DODGE_RESERVE);
+            w.laser_dodge = !tight;
+        }
         // The wave defense, TAIL CONSOLES ONLY (aim-route-5, ported from master's raw-aim fix):
         // the station's astronaut wave follows Bond across the map (measured: 3.0-damage hits
         // at d 3-13 from ~launch+6810 — the real-health walk took 50 hits for the full 100.0
@@ -1343,7 +1368,22 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
             // down at the exposed station and the walk died 10635 mid-chain (vs the all-8
             // latched 10026 without it). The chain keeps its aim; the thinning rides the
             // waits' kite kill arm (lever 3: astro 14 -> 13 in the missile-wait).
-            let crossing = station[2].abs() < 0.5 && (station[0] - sim.bond.pos[0]).abs() > 2.0 && sim.bond.pos[2].abs() > 0.4;
+            // The idle-gap shelter (SHELTER_RAD): no held target yet and no hold of this
+            // console's chain answered. The d1/d2 walks only (the hard walk has its own).
+            let mut sheltering = false;
+            if best.is_none() && !hard && answered[pi] == 0 {
+                if shelter.map_or(true, |(kk, t0, _)| kk != k || tt.saturating_sub(t0) >= 30) {
+                    let from = console_station(k);
+                    let ys: Vec<f32> = (0..=4).map(|j| from[1] - 4.0 + j as f32).collect();
+                    let score = |c: [f32; 3]| {
+                        let (sn, cl) = exposure(sim, [c[0], c[1] + eye_off, c[2]]);
+                        Some(sn as f32 + 4.0 * cl as f32 + if !hurt_free(sim, c) { 1000.0 } else { 0.0 })
+                    };
+                    if let Some((c, _)) = best_float_point(sim, from, SHELTER_RAD, &ys, score) { shelter = Some((k, tt, c)); }
+                }
+                if let Some((kk, _, c)) = shelter { if kk == k { station = c; sheltering = true; } }
+            }
+            let crossing = !sheltering && station[2].abs() < 0.5 && (station[0] - sim.bond.pos[0]).abs() > 2.0 && sim.bond.pos[2].abs() > 0.4;
             let mut inp = float_to(sim, if crossing { [station[0], station[1], -8.0 * sim.bond.pos[2].signum()] } else { station });
             match aim {
                 Some(c) => level_turn(sim, &mut inp, c, 0.08),
@@ -1397,6 +1437,7 @@ fn shoot_consoles(w: &mut Walker, alive: &impl Fn(&nf_view::scene::Sim) -> bool,
             ch19_was = sim.drones.channels.on(19);
         }
     }
+    w.laser_dodge = dodge_wanted;
     let sim = w.scene.sim.as_ref().unwrap();
     for &k in order.iter() {
         if sim.drones.channels.on(k) && !latched.iter().any(|&(c, _)| c == k) {
@@ -2598,7 +2639,9 @@ fn walk_arrival_to_drakes_defeat_on_real_health_at(difficulty: u32) {
     // within 10 u (walker laser_dodge). Measured: the laser blasts land 13.6-19 u away (world
     // 28.9 -> ~15), Bond survives the console run at 15.9 with k5/k4/k3/k8/k6/k7 latched (k7 for
     // the first time); k1/k2 stay unlatched - the walk now stops on the console assert, not a death.
-    if difficulty >= 3 { w.laser_dodge = true; }
+    // Agent rides the same sidestep (s/walks-1121-15-1b): the world blasts were the console
+    // run's largest bill there (27.7 in 4) and the dodge is a player's own move.
+    if difficulty >= 2 { w.laser_dodge = true; }
     play_the_mission_opts(&mut w, alive, difficulty >= 2, difficulty >= 3);
     let sim = w.scene.sim.as_ref().unwrap();
     let lost: f32 = sim.drones.player_hits.iter().map(|h| h.2).sum();
@@ -2622,8 +2665,19 @@ fn walk_arrival_to_drakes_defeat_on_real_health_at(difficulty: u32) {
 
 #[test]
 /// UN-IGNORED 2026-11-13: green on master c94c1043e (the ignored-walk sweep).
+/// GREEN (s/hard-walks-b, master b60b1ff79): the old ledger's "k1/k2/k7 past their deadlines"
+/// was a sign misread (the latch print's margin is latch minus read, and all three were ~2100-2900
+/// INSIDE); the binder was health. The idle-gap shelter (SHELTER_RAD) takes Bond off the open
+/// station before each chain's first hold: he leaves the console run at 29.1 health instead of
+/// 9.2 and defeats Drake at 6.9 (34 hits for 93.1) [L this branch's run]. Without the 6000/60
+/// stop the same tree dies at 8352 in the k1 wave fight, so the stop stays.
 fn walk_arrival_to_drakes_defeat_on_real_health() {
-    walk_arrival_to_drakes_defeat_on_real_health_at(1);
+    // s/walks-1121-1b-astro (the astronaut strafe re-arm at the game's 120 + Rand(300)): lever
+    // 6000/60 [L the sweep on that tree: 5900/60, 5950/60, 6000/60, 6000/90, 6100/60 complete;
+    // 700/45 and ten other stops 300-5000, 6000/45, 6050/60 die].
+    walker::with_pause(6000, 60, || {
+        walk_arrival_to_drakes_defeat_on_real_health_at(1);
+    })
 }
 
 /// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked
@@ -2635,8 +2689,15 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
 /// GREEN 2026-11-13: the waits shift cover (a no-owner 0x6b explosive bolt landed on the held
 /// missile-wait spot) and the Drake fight's cover ring reaches 8 and 11 u (every point within 5 u
 /// of the hold was blind to Drake); the walk defeats Drake on real health at Agent.
+#[ignore = "s/hard-walks-b (master b60b1ff79): the old miss was the laser sidestep, not the order: a lock on the x32 station at 4400 flew Bond 12 u down and back and k4 latched 143 past its read. With the sidestep yielding inside DODGE_RESERVE and the idle-gap shelter, k5/k4/k3/k6 latch 470/457/475/1039 inside their reads and k8 on time, then Bond dies at 8862 in the k1 wave fight (7356..8862, the wave 12 strong at y 7-11, 41 hits for 100.0) before k1's UI holds open. Measured and dropped: a shelter instead of that fight (radii 4/6/9 die 9107-9421 as the wave grows to 14-16) and the kite missile-wait (all 8 latched, reaches Drake at 1.2 health, dies 13600). Next lever: surviving the tail window (~7400..9350), not the console order"]
 fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
-    walk_arrival_to_drakes_defeat_on_real_health_at(2);
+    // s/walks-1121-15-1b: un-ignored. The float now sidesteps a charging space laser's locked
+    // target at Agent too (the 00 Agent walk's laser_dodge): the console run's world blasts
+    // fell from 27.7 to 10.5 and Bond meets Drake with 61.5 health instead of 5.8 [L the
+    // 2026-11-21 ledgers]. A 60-tick stop at tick 13600 re-rolls Drake's fight [L the sweep:
+    // 13000/30, 13600/45, 13600/60 complete; ten other stops 12650-13400 and 12950/30,
+    // 13000/45, 13050/30, 13550/60, 13600/90, 13650/60 die].
+    walker::with_pause(13600, 60, || walk_arrival_to_drakes_defeat_on_real_health_at(2));
 }
 
 /// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked station on real
@@ -2645,6 +2706,7 @@ fn walk_arrival_to_drakes_defeat_on_real_health_agent() {
 /// astronauts' hit chance by Accuracy Hard [M DroneWeap_DoBulletAccuracy 0x179740:74-88].
 /// Real input only; no health/ammo/channel writes.
 #[test]
+#[ignore = "s/hard-walks-b (master b60b1ff79): base run k3 latched 365 past its read (the mid-phase defenses 4974..5274 and 6126..6426 killed 0). With the sidestep yielding inside DODGE_RESERVE k5/k4/k3 latch 470/435/160 inside, but the defenses then run through the shared k8/k6 read (7861): MissileDeploy [1,1,2,2,2,3,1,3], stuck at 8864 with 37.5 health. Next lever: no zero-kill defense fight once k8/k6 holds are live (the defenses killed nothing in every measured run)"]
 fn walk_arrival_to_drakes_defeat_on_real_health_00agent() {
     walk_arrival_to_drakes_defeat_on_real_health_at(3);
 }

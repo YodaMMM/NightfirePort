@@ -291,6 +291,14 @@ fn storeroom_door_unlocks_from_its_touch_plate() {
 /// (#261, kind 3, 100 [D]) sets armour 100, the Spas12 (#267, weapon 0x1C, 5 [D]) and the grenades
 /// (#268, weapon 0x34, 1 [D]) and the Satchel (#255, weapon 0x3B, 5 [D]) arm their weapons, and a
 /// "Pickup 007" (#275, kind 6 [D]) is consumed. Sisters: armour 0 / the Spas un-owned before.
+/// Bond standing at (x, z): obj+0x30 at the floor below + 1.1 (`Bond::stand_at`'s rest). A
+/// spine dropped through the floor is not lifted by the game's one-sided push [M
+/// Intersect_CylGeom 0x109da0, flags 99], so the teleport lands at the standing height.
+fn rest_at(scene: &nf_view::scene::Scene, p: [f32; 3]) -> [f32; 3] {
+    let w = &scene.sim.as_ref().unwrap().world;
+    [p[0], w.floor_below([p[0], p[1] + 1.0, p[2]], 10.0).map_or(p[1], |f| f + 1.1), p[2]]
+}
+
 #[test]
 fn pickups_taken_by_walking_over() {
     // pickup-medal-gate: the kind-6 row (#275) creates only with 07000011's gold medal recorded
@@ -303,7 +311,7 @@ fn pickups_taken_by_walking_over() {
         assert!(!sim.drones.inventory.owned[0x1c], "sister: the Spas un-owned before");
     }
     // The armour at (23.12, 47.62, 22.88) [D].
-    scene.sim.as_mut().unwrap().bond.pos = [23.12, 47.0, 22.88];
+    scene.sim.as_mut().unwrap().bond.pos = rest_at(&scene, [23.12, 47.0, 22.88]);
     scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     let mut got = false;
     for _ in 0..40 {
@@ -313,7 +321,7 @@ fn pickups_taken_by_walking_over() {
     assert!(got, "the walk-over grants the armour 50.0 [M 0x18e650:217-219 — the hard set], got {}",
         scene.sim.as_ref().unwrap().drones.health.armour);
     // The Spas12 at (13.60, 15.55, 5.52) [D] — the lower floor by the exit.
-    scene.sim.as_mut().unwrap().bond.pos = [13.60, 15.1, 5.52];
+    scene.sim.as_mut().unwrap().bond.pos = rest_at(&scene, [13.60, 15.1, 5.52]);
     scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     let mut owned = false;
     for _ in 0..40 {
@@ -326,7 +334,7 @@ fn pickups_taken_by_walking_over() {
         .filter(|p| (p.m[3][0] - 17.55).abs() < 0.5 && (p.m[3][2] - 28.57).abs() < 0.5)
         .all(|p| p.gone || p.hidden);
     assert!(!taken(&scene), "sister: the bonus sits before the walk");
-    scene.sim.as_mut().unwrap().bond.pos = [17.55, 47.3, 28.57];
+    scene.sim.as_mut().unwrap().bond.pos = rest_at(&scene, [17.55, 47.3, 28.57]);
     scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     for _ in 0..40 { scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false); }
     assert!(taken(&scene), "the BOND_BONUS is consumed on the walk-over [M 0x18e650:234-236]");

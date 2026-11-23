@@ -1784,7 +1784,7 @@ fn mp_panes(h: &mut Hud, s: &crate::scene::Sim, t: &nf_formats::hud::HudTables) 
     let paned = s.zoom_target > 1.0 && matches!(zoom_overlay(s.gun.weapon), ZoomOverlay::Camera | ZoomOverlay::Oicw);
     if !paned && s.missile_cam.is_none() && s.drones.ronin_mounted().is_none() {
         let (x0, y0) = (MP_FIX_INSET, SH - MP_FIX_INSET - 16.0);
-        let bonus = m.settings.players[me].armor_bonus as f32;
+        let bonus = m.settings.players[me].armor_bonus as i32 as f32; // the signed handicap word [M 0x1910f8:129]
         let frac = (s.drones.health.health / (bonus + 100.0)).max(0.0);
         let bw = (frac * 128.0).floor().min(128.0);
         let col = if frac < 0.2 { 0x9d1912 } else if frac < 0.5 { 0xc6984e } else { 0x52a88b };

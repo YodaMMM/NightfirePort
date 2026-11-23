@@ -28,11 +28,14 @@
 //!   once [M 0x1551b8 / 0x154cb0 / 0x14c260; 0x205b08 sets 3, 0x205bf0 sets 4].
 //!
 //! Inputs the port does not compute itself (the caller fills [`Facts`]): the player car's
-//! position/velocity/radius, the AI elements' health/speed/position, the weapon counts the ammo
-//! rule reads, the AI statistics block, the property flags. Only the player car is walked
-//! against the triggers; the walks for kind-2/other cars (`FUN_0022d240` for them), the object
-//! classes (`FUN_0022dae8`, `FUN_0022d5a8`) and the projectile walk (`FUN_0022def0`) are not
-//! ported (their triggers never fire here).
+//! position/velocity/radius, the other cars of the trigger walk (traffic, kind 3; the AI
+//! elements' vehicles, kind 2: `hostiles::HostileWorld::trigger_cars`), the AI elements'
+//! health/speed/position/properties (`hostiles::HostileWorld::script_elements`), the weapon
+//! counts the ammo rule reads, the AI statistics block, the property flags. The game runs
+//! nothing of the script when an element dies or despawns: the rules poll the element's record
+//! every frame (`SRuleDeath` = its +0x4c hit points at 0) [M 0x209820, 0x12c740, 0x189598].
+//! The walks for the object classes (`FUN_0022dae8`, `FUN_0022d5a8`) and the projectile walk
+//! (`FUN_0022def0`) are not ported (their triggers never fire here).
 
 use std::collections::HashMap;
 
@@ -287,7 +290,9 @@ impl CarBox {
 /// What the rules and the trigger walk read each frame.
 #[derive(Clone, Debug, Default)]
 pub struct Facts {
-    /// The other cars the trigger walk tests (AI traffic, rivals), in slot order.
+    /// The other cars the trigger walk tests: every vehicle-manager slot whose +0x6e is 2
+    /// [M 0x22f0c0]: the traffic (kind 3), the AI elements' ground vehicles and rivals (kind 2,
+    /// [M 0x1862c0]). Walk slot `k + 1` is `cars[k]` (slot 0 = the player).
     pub cars: Vec<CarFacts>,
     /// The player car `+0x10` position.
     pub player_pos: [f32; 3],
@@ -620,6 +625,13 @@ pub struct DriveScript {
     queue: Vec<Event>,
     /// Everything reported since the last [`DriveScript::take_output`].
     pub output: Vec<Output>,
+    /// Every trigger run since the last [`DriveScript::take_fired`], with the walk slot of the
+    /// car that ran it (0 = the player, 1.. = [`Facts::cars`]; −1 = the load-time start list,
+    /// mode-0/1 events keep the slot they were given): a port log, nothing the game keeps.
+    pub fired: Vec<(usize, i32)>,
+    /// Every rule that fired since the last [`DriveScript::take_fired_rules`] (its `Rule` entry
+    /// index): a port log, nothing the game keeps.
+    pub fired_rules: Vec<usize>,
 }
 
 impl DriveScript {
@@ -693,6 +705,8 @@ impl DriveScript {
             now: 0,
             queue: Vec::new(),
             output: Vec::new(),
+            fired: Vec::new(),
+            fired_rules: Vec::new(),
         };
         for i in 0..s.map.triggers.len() {
             if s.map.triggers[i].actions.iter().any(|a| a.id == 0x16) {
@@ -704,6 +718,12 @@ impl DriveScript {
 
     /// Takes the outputs gathered so far.
     pub fn take_output(&mut self) -> Vec<Output> { std::mem::take(&mut self.output) }
+
+    /// Takes the trigger log gathered so far ([`DriveScript::fired`]).
+    pub fn take_fired(&mut self) -> Vec<(usize, i32)> { std::mem::take(&mut self.fired) }
+
+    /// Takes the rule log gathered so far ([`DriveScript::fired_rules`]).
+    pub fn take_fired_rules(&mut self) -> Vec<usize> { std::mem::take(&mut self.fired_rules) }
 
     pub fn won(&self) -> bool { self.state == DriveState::Won }
     pub fn lost(&self) -> bool { self.state == DriveState::Lost }
@@ -756,6 +776,7 @@ impl DriveScript {
         let pass = self.run_test(&mut test, facts);
         self.rules[r].test = test;
         if self.rules[r].invert != pass {
+            self.fired_rules.push(self.rules[r].index);
             let actions = self.rules[r].actions.clone();
             // FUN_002095f8: no current trigger; the fire params are the player car's [M].
             for a in actions {
@@ -923,6 +944,7 @@ impl DriveScript {
 
     /// `FUN_0022c890`: run a trigger's list as the current trigger; clear bit 0 when once [M].
     pub fn fire(&mut self, trigger: usize, mode: u32, car: i32) {
+        self.fired.push((trigger, car));
         let actions = self.map.triggers[trigger].actions.clone();
         for a in actions {
             self.create(a, Some(trigger), mode, car);
@@ -1039,11 +1061,16 @@ impl DriveScript {
                 }
             }
             // EFireTriggerSpeedCondition 0x14c8c8: fire when the car's |v| is above (dir 0) or
-            // below the threshold. The car is the firing context's; only the player is modelled.
+            // below the threshold. The car is the firing context's walk slot
+            // (`FUN_001ff088(0x339190, event+0x14)` +0x20) [M]: slot 0 the player, k the
+            // walk's car k - 1; any other (a rule's, -1) reads the player [S].
             0xab => {
                 if let Some(t) = self.map.trigger_ref(a.word(1)) {
                     let (thr, below) = (a.float(2), a.word(3) != 0);
-                    let v = facts.speed();
+                    let v = match usize::try_from(ev.car).ok().filter(|&k| k >= 1).and_then(|k| facts.cars.get(k - 1)) {
+                        Some(c) => (c.vel[0] * c.vel[0] + c.vel[1] * c.vel[1] + c.vel[2] * c.vel[2]).sqrt(),
+                        None => facts.speed(),
+                    };
                     if (!below && v > thr) || (below && v < thr) {
                         self.fire(t, ev.mode, ev.car);
                     }
@@ -1407,6 +1434,54 @@ mod tests {
         f.cars.push(CarFacts { kind: 2, pos: [1.0, 0.0, 0.0], vel: [0.0; 3], radius: 2.0, bbox: None });
         s.step(&f);
         assert_eq!((s.state, s.outcome), (DriveState::Lost, 1));
+    }
+
+    #[test]
+    fn speed_condition_reads_the_car_that_ran_the_trigger() {
+        // EFireTriggerSpeedCondition (0x14c8c8) reads `FUN_001ff088(0x339190, event+0x14)` +0x20:
+        // the walk slot of the car whose trigger queued it [M]. A kind-2 car at 20 u/s runs A
+        // (bit 3 only); A's speed test (above 10) fires B; the player stands still.
+        let mut map = MapScript::default();
+        let b = tref(&mut map, 1);
+        map.triggers.push(trig(0, [0.0; 3], 5.0, 2, 0x0b, vec![act(0xab, &[b, 10f32.to_bits(), 0])]));
+        map.triggers.push(trig(1, [500.0, 0.0, 0.0], 1.0, 2, 0x00, vec![act(0x83, &[7])]));
+        let mut s = DriveScript::new(map);
+        let mut f = at([200.0, 0.0, 0.0]);
+        f.cars.push(CarFacts { kind: 3, pos: [300.0, 0.0, 0.0], vel: [0.0; 3], radius: 2.0, bbox: None });
+        f.cars.push(CarFacts { kind: 2, pos: [1.0, 0.0, 0.0], vel: [0.0, 0.0, 20.0], radius: 2.0, bbox: None });
+        s.step(&f);
+        assert_eq!(s.take_fired(), vec![(0, 2), (1, 2)], "A by walk slot 2 (cars[1]), then B with the same car");
+        assert_eq!(s.score[1], 7);
+        // The same car below the threshold: A fires, B does not.
+        let mut s2 = DriveScript::new(s.map.clone());
+        f.cars[1].vel = [0.0, 0.0, 5.0];
+        f.player_vel = [0.0, 0.0, 50.0];
+        s2.step(&f);
+        assert_eq!(s2.take_fired(), vec![(0, 2)], "the player's speed is not the one read");
+    }
+
+    #[test]
+    fn element_rules_fire_from_the_element_facts() {
+        // Death / Damage / Range on a kind-4 selector read the element's facts every frame; the
+        // game queues nothing of its own when the element dies [M 0x209820, 0x209ff0, 0x2098a0].
+        let mut map = MapScript::default();
+        map.rules.push(rule(0, 3, 0b011, -1, [4, 9, 0, 0], vec![act(0x83, &[1])])); // Death, once
+        map.rules.push(rule(1, 2, 0b001, -1, [4, 9, 50, 0], vec![act(0x83, &[100])])); // Damage > 50
+        map.rules.push(rule(2, 7, 0b001, -1, [4, 9, 0, 30], vec![act(0x83, &[10000])])); // Range < 30
+        let mut s = DriveScript::new(map);
+        let mut f = at([0.0; 3]);
+        f.elements.insert(9, ElementFacts { health: 300.0, pos: [100.0, 0.0, 0.0], ..Default::default() });
+        s.step(&f);
+        assert_eq!(s.take_fired_rules(), Vec::<usize>::new(), "first Damage test only stores the value");
+        f.elements.get_mut(&9).unwrap().health = 240.0;
+        f.elements.get_mut(&9).unwrap().pos = [20.0, 0.0, 0.0];
+        s.step(&f);
+        assert_eq!(s.take_fired_rules(), vec![1, 2], "60 lost in one frame; 20 from the player");
+        f.elements.get_mut(&9).unwrap().health = 0.0;
+        s.step(&f);
+        s.step(&f);
+        assert_eq!(s.take_fired_rules(), vec![0, 1, 2, 2], "Death once, Damage on the 240 drop, Range every frame");
+        assert_eq!(s.score[1], 1 + 200 + 30000);
     }
 
     #[test]

@@ -349,8 +349,28 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
     if w.scene.sim.as_ref().unwrap().gun.weapon != 0x12 {
         w.tick(Input { switch_to: Some(0x12), ..Default::default() }, false);
         for _ in 0..90 { w.tick(Default::default(), false); }
-        assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x12, "the SMG must be Bond's gun after the hand-off");
     }
+    // Bond leaves the meet holding 0xe; whether he already owns an SMG there is fight luck
+    // (bond-hitboxes-2: the body boxes re-deal the ambush and he no longer does). A missing SMG
+    // is fetched from the nearest live dropped 0x12 on this floor, on real input.
+    if w.scene.sim.as_ref().unwrap().gun.weapon != 0x12 {
+        let drop = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            let bp = sim.bond.pos;
+            sim.drones.pickups.iter()
+                .filter(|p| !p.gone && !p.hidden && p.weapon == 0x12)
+                .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]])
+                .filter(|p| (p[1] - bp[1]).abs() < 1.5)
+                .min_by(|a, b| walker::dxz(*a, bp).total_cmp(&walker::dxz(*b, bp)))
+        };
+        let at = drop.expect("a dead ambush guard's SMG 0x12 on this floor");
+        eprintln!("[smg] no SMG after the meet: taking the dropped 0x12 at ({:.2},{:.2},{:.2})", at[0], at[1], at[2]);
+        walk_leg(&mut w, at, "the dropped SMG", 0.5);
+        w.walk_to(Wp { at, act: Act::None, arrive: 0.3 }, "the dropped SMG close");
+        w.tick(Input { switch_to: Some(0x12), ..Default::default() }, false);
+        for _ in 0..90 { w.tick(Default::default(), false); }
+    }
+    assert_eq!(w.scene.sim.as_ref().unwrap().gun.weapon, 0x12, "the SMG must be Bond's gun after the hand-off");
     // The roster: the meet-scene guards (ch 0xE) are the level's live ones; the switch-held
     // guards (d#10/d#16 on ch 0x5) are NDrone2_Enable(0)-held and bullets pass through them in
     // the game itself [M NDrone2_DSTATE_WaitSwitch 0x15b960 enter → NDrone2_Enable(0) 0x149dd0
@@ -564,7 +584,16 @@ fn smg_rounds_damage_a_close_guard_and_the_pistol_sister() {
                     // hunting".
                     let mut exposed = false;
                     let mut died_waiting = false;
-                    for _ in 0..16 {
+                    for check in 0..16 {
+                        // A stand with geometry in between: the band follow stops at the 2 u
+                        // distance whatever lies between (the batch-3 run: Bond held at x -13.40
+                        // on the hall side of the corridor door, d#3 holding COMBAT_NO_SIGHT
+                        // 0x5c 1.93 away at the door, every eye-to-box ray blocked for all 16
+                        // checks, no round fired, so no damage could register). Once, after the
+                        // first few checks, re-stand on a ring spot at the leg's distance whose
+                        // eye-to-torso ray is clear (`clear_ring_stand`; that run: 0.56 east,
+                        // 3 player impacts).
+                        if check == 4 && dist < 6.0 { clear_ring_stand(&mut w, tg, dist); }
                         {
                             let sim = w.scene.sim.as_ref().unwrap();
                             let dr = &sim.drones.list[tg];
@@ -823,6 +852,34 @@ fn walk_leg(w: &mut Walker, at: [f32; 3], label: &str, arrive: f32) {
 
 /// Stand `dist` units from guard `gi` (horizontal), on the line from the guard to Bond's current
 /// spot, walked with real input.
+/// A floor spot `dist` from guard `gi` (16 bearings, nearest to Bond first) whose standing eye
+/// sees the guard's torso box through clear static geometry, walked to on the nav (real input).
+/// Used when the band follow left Bond on the far side of a wall from the guard.
+fn clear_ring_stand(w: &mut Walker, gi: usize, dist: f32) {
+    let spots: Vec<[f32; 3]> = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let gp = sim.drones.list[gi].pos;
+        let bp = sim.bond.pos;
+        let (chest, _, _) = torso_aim(sim, gi);
+        let mut v: Vec<(f32, [f32; 3])> = (0..16).filter_map(|k| {
+            let a = k as f32 * std::f32::consts::TAU / 16.0;
+            let p = [gp[0] + dist * a.sin(), gp[1], gp[2] + dist * a.cos()];
+            let floor = sim.world.floor_below([p[0], p[1] + 1.0, p[2]], 3.0)?;
+            if (floor + 1.0 - gp[1]).abs() > 0.3 { return None; }
+            let eye = [p[0], floor + 1.035 + sim.bond.eye, p[2]];
+            // The guard's own eye height check too: the spot itself must not sit in a wall.
+            if sim.world.segment([gp[0], gp[1] + 0.5, gp[2]], [p[0], floor + 0.5, p[2]]).is_some() { return None; }
+            sim.world.segment(eye, chest).is_none().then(|| (walker::dxz(p, bp), [p[0], floor + 1.035, p[2]]))
+        }).collect();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        v.into_iter().map(|(_, p)| p).collect()
+    };
+    eprintln!("[smg] clear_ring_stand d#{gi}: {} clear spots at {dist} u", spots.len());
+    if let Some(&p) = spots.first() {
+        walk_leg(w, p, &format!("clear ring stand {dist} u from d#{gi}"), 0.3);
+    }
+}
+
 fn stand_near(w: &mut Walker, gi: usize, dist: f32) {
     // walk_nav_to restores lenient=false on its way out; every stand_near leg runs lenient.
     w.lenient = true;

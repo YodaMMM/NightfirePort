@@ -138,7 +138,7 @@ fn run(w: &mut Walker, gi: usize, ticks: u32, input: Input, factor: f32) -> Trac
     t
 }
 
-fn hold_crouch() -> Input { Input { crouch: true, crouch_hold: true, ..Default::default() } }
+fn hold_crouch() -> Input { Input { crouch: true, crouch_held: true, crouch_hold: true, ..Default::default() } }
 
 /// The head-on distance where the decompile's visibility crosses 0.7 for a factor `f`:
 /// (1.7 − d/r)·sin(π/2 + 0.39)·f = 0.7 (alert 0, half FOV π/2).
@@ -206,7 +206,7 @@ fn vision_09_walk_in_crossing_standing_vs_crouched() {
         let mut w = setup("07000009.bin", G09);
         place(&mut w, G09, 14.0, 0.0, true);
         if crouch { w.tick(hold_crouch(), false); }
-        let input = Input { forward: 1.0, crouch, crouch_hold: crouch, ..Default::default() };
+        let input = Input { forward: 1.0, crouch, crouch_held: crouch, crouch_hold: crouch, ..Default::default() };
         let tr = run(&mut w, G09, 400, input, f);
         let want = crossing(12.0, f);
         eprintln!("crouch {crouch}: want {want:.3} {tr:?}");

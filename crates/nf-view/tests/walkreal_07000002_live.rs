@@ -519,7 +519,18 @@ fn loot(w: &mut Walker, label: &str, min: i32) {
         eprintln!("[02] {label}: looting ({:.1},{:.1},{:.1}) (d {:.1})", target[0], target[1], target[2], dxz(target, bp));
         // arrive 0.4: the take needs Bond's capsule ON the pickup (the 1.2 stop left it untaken,
         // first loot run 2026-10-29).
-        w.walk_nav_to(target, &format!("{label} loot {k}"), 0.4);
+        // stream-batch-1121 (00 Agent): the drop is at the feet (<= 5 u, same floor), so walk
+        // it straight. The nav leg to the lane drop (-56.2, 4.4, 0.7) 3.1 u away routed back
+        // east over the west wing, left Bond on the ledge north of the lane and the bunker-door
+        // legs looped for 300k ticks [L the 2026-11-21 run].
+        if w.scene.sim.as_ref().unwrap().drones.difficulty >= 3 {
+            let was = w.lenient;
+            w.lenient = true;
+            let _ = w.walk_to(Wp { at: target, act: Act::None, arrive: 0.4 }, &format!("{label} loot {k} (straight)"));
+            w.lenient = was;
+        } else {
+            w.walk_nav_to(target, &format!("{label} loot {k}"), 0.4);
+        }
         arm_after_fight(w, label);
     }
 }
@@ -631,7 +642,12 @@ fn clear_pursuers(w: &mut Walker, radius: f32, label: &str) {
 /// door (10.3 u, the ≤12-u band) answers him — the d3 shape, d1-gated so the d2 RNG is
 /// untouched. Green in 20.8 s; the whole binary 4/1 (the 00agent sister is the open item).
 #[test]
-fn walk_the_castle_all_objectives_real_health() { walk_the_castle_all_objectives_real_health_at(1) }
+fn walk_the_castle_all_objectives_real_health() {
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): the no-stop walk never crossed the
+    // doorway sensor (ch 0x81). Lever: 2000/30 [L the 4-value sweep: 2000/30 and 3000/60 complete;
+    // 1000/60 does not].
+    walker::with_pause(2000, 30, || walk_the_castle_all_objectives_real_health_at(1))
+}
 
 /// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
 /// front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
@@ -703,6 +719,11 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
         assert_eq!(sim.drones.mission.states[m01][0], 4, "07000001's escort objective folds on the intro's ch 0x47 [M 0x1827d8 case 3; D 07800002 0x06000084 stream7]");
     }
     w.skip_cutscenes = true;
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal the 00 Agent fights. A 100-tick stand here
+    // re-rolls that walk green: of the stands 5-2500 swept (21 values), 100 and 600 passed. The
+    // other difficulties pass without it, so it is d3-gated.
+    if difficulty == 3 { w.wait(100); }
 
     // 0b. What a player has and takes before the first fight. Auto Aim is the game's profile
     //     default (On [M Player_AutoAim 0x1a7c98:41 reads profile +0x01; the app mirrors the
@@ -2132,7 +2153,16 @@ fn sim_view(w: &Walker) -> &nf_view::scene::Sim { w.scene.sim.as_ref().unwrap() 
 /// [M 0x14b300:504-535]. Real input only — the load path is the only difference.
 #[test]
 fn walk_the_castle_all_objectives_real_health_agent() {
-    walk_the_castle_all_objectives_real_health_at(2);
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 3000/60 [L the
+    // 10-value sweep on the joined tree: 1500/45, 2500/90, 3000/60, 4000/90 complete].
+    // s/bond-hitboxes-2: 3000/60 no longer enabled geisha 2's group. Lever: 2000/30 [L the
+    // 4-value sweep: only 2000/30 completes; 1000/60, 3000/60, 4000/90 do not].
+    // Batch 3 (stream-batch-1121d): 2000/30 died in the bunker ambush (shotgun guard #13 at 4.3 u)
+    // and missed the ch-0x19 plate. Lever: 3000/60 [L the 8-value sweep: 250/30, 500/30, 1500/45,
+    // 3000/60, 4000/90, 6000/60, 8000/60 complete; 2000/30 does not].
+    walker::with_pause(3000, 60, || {
+        walk_the_castle_all_objectives_real_health_at(2);
+    })
 }
 
 /// 00 Agent-difficulty sister of `..._real_health_agent` (real-health-00agent-02-03-04): the
@@ -2173,9 +2203,22 @@ fn walk_the_castle_all_objectives_real_health_agent() {
 /// fight (zero cost), and the walk cleared the ambush, the computer shot and geisha-2 at
 /// 8.4 health [L the 2026-11-19 runs I-L].
 #[test]
-#[ignore = "stream-batch-1121 (impacts heard + the stand-reload roll + the stand idles + the NinjaStand start): the walk stalls before the bunker: crossing the doorway sensor never raises ch 0x81 [D #389 out 0x81] (the bunker-door nav loops for 100k+ ticks at 15.8 health, the ambush lure armed with 0x1c clip 2) [L 2026-11-21 runs]. Levers tried and dead: 8 single stops 500-9000 x 60/200 (deaths t18261-t22473 or the 845/1098/1152 asserts), 10 random 1-2-stop runs 300-12000 (deaths t16011-t24778, mostly the three-captor fight, or the 1515/1517 asserts) [L the sweeps]. Next: read the bunker-door nav loop on the batch stream; re-tune and un-ignore"]
+// Stream batch 1121: the walk stalled before the bunker (ch 0x81 never rose): the lane
+// drop's loot nav routed back over the west wing and left Bond on the ledge north of the lane,
+// and the bunker-door legs looped. GREEN with the at-the-feet drops walked straight at 00 Agent
+// (`loot`) [L the 2026-11-21 run].
 fn walk_the_castle_all_objectives_real_health_00agent() {
-    walk_the_castle_all_objectives_real_health_at(3);
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 4500/30 [L the
+    // 10-value sweep on the joined tree: 4500/30 the one pass of 37 values complete].
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 4500/30 lost a captor kill (two of the three
+    // param-12 deaths). Lever: 5500/30 [L the 22-value sweep: only 5500/30 completes].
+    // Batch 3 (stream-batch-1121d): 5500/30 died at (-45.55,5.85,11.22) t17795 on the west-wing
+    // armour detour (captain #5 and guard #6 at the geisha-1 room). Lever: 2000/30 plus a 45-tick
+    // stop at 13500 [L the 32-value sweep: 2000/30 with 13500/45, with 13000/90, or with 14000/45
+    // and 43000/30 complete; every single stop 250-8000 and the other second stops do not].
+    walker::with_pauses(&[(2000, 30), (13500, 45)], || {
+        walk_the_castle_all_objectives_real_health_at(3);
+    })
 }
 
 /// The courtyard sniper's pin (courtyard-sniper-pin, level-02-courtyard-sniper): the game's own

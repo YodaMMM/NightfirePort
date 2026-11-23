@@ -169,7 +169,7 @@ underwater (`surfaced == 0`) yaw ×0.4, pitch ×0.7. A third branch (weapon flag
 (multiplayer, `MPSettings`+384 ≠ 0); weapons 0x50/0x51 force it on. When enabled and not manually aiming it scans
 targets with `Check_AutoAim` (0x1a73f8) within `Autoaim_Range`; the crosshair offsets decay ×0.5 per update; while
 manually aiming, the smoothed cursor (+0x120/+0x124) moves halfway to the raw cursor per update. Details of
-`Check_AutoAim` and the lock-on (`Autoaim_LockOnMul`) are GAPS G-006.
+`Check_AutoAim` and the lock-on (`Autoaim_LockOnMul`): docs/systems/auto-aim.md.
 
 ## 8. Port design consequences
 

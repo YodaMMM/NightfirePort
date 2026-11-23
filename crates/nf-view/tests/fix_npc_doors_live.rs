@@ -93,6 +93,11 @@ fn doors_dump(w: &Walker, ci: usize) -> String {
 // the doors at +36031 — the new route takes ~2× the ticks) but all three can-fail asserts hold.
 // The 120k-tick follow cap still catches a re-deadlock as a failure, not a hang.
 fn the_escort_opens_the_interior_doors_on_his_route() {
+    // Room gate on 07000001 (the game's drawn rule on every level): the stream moved and guard #10
+    // stood within the escort's hide radius at the interior doors, the escort cowering in
+    // AllyLeadHide [M 0x15ec08] for the whole follow. Lever 500/30 [the sweep on the gated tree:
+    // 500/30 green; 1000/60, 1500/45, 2000/30 park the escort at (3.7, 6.3, 6.5)].
+    walker::with_pause(500, 30, || {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000001.bin", false).expect("load 07000001"));
     // The intro cut-scene writes ch 0xB (the contact's enable channel) ~tick 2119; the script tail
@@ -409,4 +414,5 @@ fn the_escort_opens_the_interior_doors_on_his_route() {
         .map(|(i, d)| format!("door #{i} state {:#x} at ({:.1},{:.1},{:.1})", d.state, d.pos[0], d.pos[1], d.pos[2]))
         .collect();
     assert!(blocking.is_empty(), "the escort settled against closed door(s): {}", blocking.join("; "));
+    })
 }

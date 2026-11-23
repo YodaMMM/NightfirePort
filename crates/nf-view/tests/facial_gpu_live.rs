@@ -10,6 +10,9 @@
 //! window live from tick 0 (fix-facial3); 07000007 carries morph-bearing characters (the Kimiko
 //! scene renders, fix-cutscene-faces). Opt-in via NF_ISO (the slim ISO is enough).
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_formats::placement::transform;
 use nf_game::player::Input;
 use nf_view::scene::{Scene, SkinAttr, ViewOpts};
@@ -63,6 +66,11 @@ fn the_kimiko_face_delta_is_beyond_the_gpu_oracle_tolerance() {
     // plays the face track. Ride until the guest's live weights are clearly mid-blend.
     {
         let sim = scene.sim.as_mut().unwrap();
+        // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+        // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+        // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+        // beats the pair's fail on a teleport.
+        reveal07::drakes_reveal(sim);
         sim.bond.pos = [94.2, 43.7, -45.9];
     }
     let mut found = None;
@@ -165,6 +173,11 @@ fn the_gpu_morph_buffers_reproduce_the_cpu_pose_mid_blend() {
         let mut scene = nf_view::load(&iso, lvl, false).expect("load");
         if place_bond {
             // The Kimiko scene's trigger (fix_cutscenes2_live's TouchOnce #412 volume).
+            // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+            // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+            // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+            // beats the pair's fail on a teleport.
+            reveal07::drakes_reveal(scene.sim.as_mut().unwrap());
             scene.sim.as_mut().unwrap().bond.pos = [94.2, 43.7, -45.9];
         }
         // The character with the strongest live blend over the ride.

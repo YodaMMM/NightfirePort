@@ -234,8 +234,10 @@ impl MpMatch {
     // ---------------------------------------------------------------- kill scoring
 
     /// `MP_PlayerKilled` 0x188f70 — the full scoring path. `killer` is the resolved credit slot
-    /// (the game walks `HitByList`; the caller resolves), `explosive` = the killing hurt type was
-    /// 4..7 [M 0x188f70:193-198] (preloads the carried objects' return counters), `golden_gun` =
+    /// (the game walks `HitByList`; the caller resolves), `explosive` = the dying body's hit list
+    /// held a hurt volume (class 0x27) whose `Hurt_GetType` is 5..7 (`4 < type < 8` [M
+    /// 0x188f70:190-195]; the arenas' kill floors are type 6 [D 0700004b/07000025/07000026]) —
+    /// preloads the carried objects' return counters [M :281-283], `golden_gun` =
     /// the bot golden-gun special (+2.0 [M :170-178]).
     /// `MPSound_Play` 0x18bee0 — queues the one-shot for the Sim's drain; a rig that never drains
     /// keeps the newest 64.
@@ -587,7 +589,16 @@ impl MpMatch {
         s.status_bits = 0;
         s.dead = false;
         s.spawn_tick = self.tick; // [M 0x185368:90 — obj+0xEC = GameState+0x52]
-        self.settings.players[slot].armor_bonus as f32 + 100.0
+        self.human_health(slot)
+    }
+
+    /// A human's spawn health: the slot's Health Handicap word + 100 [M `Player_Init` 0x1910f8:128-131
+    /// (the match start) and `MP_ReSpawn` 0x185368:71-72 (every respawn) both read
+    /// `(float)*(int *)(MPSettings + slot·0x30 + 0x2c) + 100.0`]. The word is SIGNED (the list is
+    /// -75..+100 [D 0x30d390..0x30d3c8]); `armor_bonus` keeps it as its u32 bit pattern for the
+    /// wire, so it is read back through i32 (-50 is 50 health, not 4.29e9).
+    pub fn human_health(&self, slot: usize) -> f32 {
+        self.settings.players.get(slot).map_or(0, |p| p.armor_bonus as i32) as f32 + 100.0
     }
 
     // --------------------------------------------------------------- who won / restart
@@ -1194,11 +1205,19 @@ impl MpMatch {
         // `sub == 1` here.
     }
 
-    fn flag_home(&mut self, ti: usize) {
+    /// The flag goes home (`Mat_Copy(MPOBJECT+0x10 → obj+0x90)`, state 0, carrier cleared).
+    /// `reset_counter`: the return counter (`MPOBJECT+0x04`) zeroes ONLY on the dropped-flag
+    /// returns — the teammate touch and the 30 s expiry [M 0x1861a8:195-197, :226-231]; the
+    /// capture's reset home leaves it alone [M :100-112], and so do the takes (state 0 / 2 →
+    /// 1 [M :170-190, :223-263]) and the drop [M :127-136]. So a flag dropped, re-taken and
+    /// dropped again resumes its old count (it comes home sooner), the game's own shape.
+    fn flag_home(&mut self, ti: usize, reset_counter: bool) {
         let f = self.objects_rt.flags[ti].as_mut().unwrap();
         f.state = 0;
         f.carrier = None;
-        f.counter = 0;
+        if reset_counter {
+            f.counter = 0;
+        }
         f.pos = f.home;
     }
 
@@ -1208,7 +1227,7 @@ impl MpMatch {
         let line = (if f.state == 0 { 0x200003a } else { 0x200003c }, team_label(f.team));
         f.state = 1;
         f.carrier = Some(slot);
-        f.counter = 0;
+        // no counter write: the take keeps `MPOBJECT+0x04` [M 0x1861a8:170-190, :223-263]
         self.game.slots[slot].status_bits |= 1; // [M 0x18a518:88-96]
         self.mp_sound(SND_CLAIM); // [M 0x1861a8:276]
         self.mp_msg(line.0, line.1);
@@ -1249,13 +1268,13 @@ impl MpMatch {
                         self.game.slots[c].score += 1.0; // [M :94-98]
                         self.mp_sound(SND_CAPTURE); // [M :124]
                         self.mp_msg(0x200003d, team_label(1 - fteam.min(1))); // the scorers [M :114-119]
-                        self.flag_home(ti);
+                        self.flag_home(ti, false); // the capture keeps the counter [M :100-112]
                         self.game.slots[c].status_bits &= !1; // the carrying bit clears [M :87-88]
                     }
                 }
                 2 => {
                     if self.obj_hit_by(self.objects_rt.flags[ti].as_ref().unwrap(), fteam as u32).is_some() {
-                        self.flag_home(ti); // the teammate return [M :195-221]
+                        self.flag_home(ti, true); // the teammate return [M :195-221]
                         self.mp_sound(SND_LOST); // [M :258]
                         self.mp_msg(0x200003b, team_label(fteam)); // [M :213-218]
                         continue;
@@ -1266,7 +1285,7 @@ impl MpMatch {
                     }
                     let t = counter;
                     if t > RETURN_FRAMES as u16 {
-                        self.flag_home(ti); // the 30 s return [M :226-259]
+                        self.flag_home(ti, true); // the 30 s return [M :226-259]
                         self.mp_sound(SND_LOST);
                         self.mp_msg(0x200003b, team_label(fteam)); // [M :248-257]
                     } else {
@@ -1292,7 +1311,7 @@ impl MpMatch {
                 None => continue,
             };
             if state == 2 && my_team == fteam as u32 {
-                self.flag_home(ti); // the teammate return [M :195-221]
+                self.flag_home(ti, true); // the teammate return [M :195-221]
                 self.mp_sound(SND_LOST);
                 self.mp_msg(0x200003b, team_label(fteam));
                 return;
@@ -1468,7 +1487,7 @@ impl MpMatch {
                 let it = self.objects_rt.ge[i].as_mut().unwrap();
                 it.state = 0;
                 it.carrier = None;
-                it.counter = 0;
+                // the completion's re-pick writes no counter [M 0x187568:120-179]
                 it.pos = pos;
                 it.home = pos;
             }
@@ -1486,7 +1505,8 @@ impl MpMatch {
         if it.state == 0 || it.state == 2 {
             it.state = 1;
             it.carrier = Some(slot);
-            it.counter = 0;
+            // no counter write: the take keeps `MPOBJECT+0x04` — only the 30 s re-pick zeroes
+            // it [M 0x187568:187-200 vs :231-253, :389-400]
             it.team = self.settings.players[slot].team as u16; // the MP_HitBy out-param [M :241]
             // MP_GoldenEyeUpdate 0x187568:231-236 — the item's kind word picks the bit:
             // kind 6 (the port's goldeneye[0], placement case 6 [M 0x185de8]) → 0x4 (msg 0x35),
@@ -1503,7 +1523,7 @@ impl MpMatch {
     /// team's base (the base's HITDATA list holding the carrier [M 0x1882d8:68-77] — the port's
     /// sphere contact with the base model when it has bounds, else the capture radius) scores
     /// team +1.0 and carrier +1.0 and respawns the blueprint at a random registered spawn [M
-    /// 0x188970:27-55]; the dropped item resets to free where it lies after 30 s [M
+    /// 0x188970:27-55]; the dropped item goes back to its spawn matrix after 30 s [M
     /// 0x1882d8:147-180].
     fn blueprint_update(&mut self, dt: f32, rng: &mut Rng) {
         if self.settings.scenario != scenario::BLUEPRINT {
@@ -1546,7 +1566,7 @@ impl MpMatch {
                     let bp = self.objects_rt.blueprint.as_mut().unwrap();
                     bp.state = 0;
                     bp.carrier = None;
-                    bp.counter = 0;
+                    // MP_BluePrintReachedBase writes no counter [M 0x188970:33-46]
                     if n > 0 {
                         let pick = rng.rand(n as u32) as usize;
                         bp.pos = MpObjectsRt::obj_at(&self.objects.blueprint_items, pick);
@@ -1561,9 +1581,14 @@ impl MpMatch {
                 }
                 if counter > RETURN_FRAMES as u16 {
                     let bp = self.objects_rt.blueprint.as_mut().unwrap();
-                    bp.state = 0; // resets to free where it lies [M 0x1882d8:147-180]
+                    // The 30 s expiry: `Mat_Copy(MPOBJECT+0x10 → obj+0x90)` — the blueprint
+                    // goes back to its spawn matrix (the create's placement or the last
+                    // ReachedBase pick [M 0x188970:33-34]), state 0, counter 0 [M
+                    // 0x1882d8:150-160]. (The port left it lying where it dropped.)
+                    bp.state = 0;
                     bp.carrier = None;
                     bp.counter = 0;
+                    bp.pos = bp.home;
                     self.mp_sound(SND_LOST); // [M :179]
                     self.mp_msg(0x2000048, None); // [M :175-178]
                 } else {
@@ -1584,7 +1609,7 @@ impl MpMatch {
         if bp.state == 0 || bp.state == 2 {
             bp.state = 1;
             bp.carrier = Some(slot);
-            bp.counter = 0;
+            // no counter write: the take keeps `MPOBJECT+0x04` [M 0x1882d8:124-145, :182-198]
             bp.team = self.settings.players[slot].team as u16;
             // MP_BluePrintUpdate 0x1882d8:126-129 — MP_setPlayerStatus(carrier, 2, 0x32, ..,
             // clear=0): the BLUEPRINT bit 0x2 sets (bit 0x1 is the CTF flag's [M 0x1861a8:178-179]).

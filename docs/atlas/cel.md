@@ -66,10 +66,22 @@ the separate tint, default white.
   copy for the B side) — one per side; *measured* [D/M]: the forward normal points into celA on
   137/137 resolvable records across 07000002/05/06/07 (one 07000002 record degenerate).
 - The **pCelList record index is the placement's own `index` field**: `parsemap_block_map_data_static`
-  @0x1d1998 computes `pCelList + placement.index * 0x50` for by-index placements [M] (the by-hash
-  path resolves through the entity hashtable — untraced; portals naming those records are
-  unresolvable in the port). *Measured* [D]: with `index`-keying, 0 of 37/21/44/34 portal endpoints
-  drop on 07000002/05/06/07; an ordinal-based indexing dropped 22 on 07000002.
+  @0x1d1998 computes `pCelList + placement.index * 0x50` for by-index placements; a by-hash
+  placement takes `hashtable_getitem(hash)`, the record `parsemap_block_entity_params` 0x1d1508
+  registered under that hash [M]. `pCelList` is per map file (`parsemap_block_map_header` 0x1d1430
+  allocates it), so an endpoint names a record of the map carrying the portal block. *Measured* [D,
+  all 34 `nf_view::dev::LEVELS` archives]: portal blocks sit only in main maps; every by-hash cel
+  placement's hash is in its own map only; no shared record (several cel placements on one
+  record) carries a portal endpoint.
+- **Unresolved endpoints keep the previous record's cel** [M disasm 0x1d160c-0x1d1780]: `s3`/`s4`
+  are zeroed once before the record loop and only `movz`-written on a match, so an endpoint that
+  names no cel reuses the last resolved one. The cel chain is newest-first (`build_alloc_cel`
+  0x1c93f8 prepends) and the last match wins, so a shared record resolves to the first parsed cel.
+  On the disc [D] only 07000012 has unresolved endpoints: records 35-52 (18 of 53) name record 552
+  on both sides, the "Sky bridge" script player (a 0xd9 placement, no cel bit), so all 18 quads
+  join record 34's pair, `corridors_a_8` (#203) and `Office-C` (#550). The quads lie in a ring
+  around the origin (x -11..11, z -3..5, y -1..1), away from both rooms. Port: `parse_cel_graph`
+  (`g016_portal_endpoints_live`).
 - Runtime **`portal_tag`** — `build_alloc_portal(plane_eq, next, dest_cel, flag)` @0x1c8928,
   malloc **0xa0**: +0x00 next portal; +0x04 **twin** (parser sets `P1↔P2`); +0x08 **destination
   cel**; +0x10 plane_equ (16B); +0x0C door object (0 until `build_LinkDoors2Portals`); +0x24 u16 =

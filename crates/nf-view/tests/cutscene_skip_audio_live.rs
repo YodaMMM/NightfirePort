@@ -17,6 +17,9 @@
 //! Headless through the real path (`nf_view::load` + `Sim::step_bond` + `nf_view::sound_tick`),
 //! silent (NF_SILENT). Opt-in via `NF_ISO`.
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_game::player::Input;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
@@ -143,6 +146,11 @@ fn the_kimiko_scene_skip_leaves_nothing_alive_and_the_music_resumes() {
     {
         let sim = scene.sim.as_mut().unwrap();
         // Inside TouchOnce placement 412's volume (the fix-cutscenes numbers).
+        // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+        // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+        // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+        // beats the pair's fail on a teleport.
+        reveal07::drakes_reveal(sim);
         sim.bond.pos = [94.3, 44.6, -45.9];
         for _ in 0..90 { tick(&mut scene, &mut snd); }
     }

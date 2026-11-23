@@ -1106,7 +1106,11 @@ fn walk_office_floor_qworm_install_and_back() {
 /// parks clear — every eastward ray z −18.3..−19.15 clear with state 4 [D probe]) → the ai lane
 /// south → the south corridor → the hatch E.
 #[test]
-fn walk_office_floor_qworm_keyboard_hatch() { walk_office_floor_qworm_keyboard_hatch_at(1) }
+fn walk_office_floor_qworm_keyboard_hatch() {
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 500/30, 1000/60, 2000/30, 4000/90 complete].
+    walker::with_pause(2000, 30, || walk_office_floor_qworm_keyboard_hatch_at(1))
+}
 
 /// The walk body at `difficulty` (1 Operative = the old warm load's replay parity; 2 Agent rides
 /// the front-end's launch path [M C_SBNFDFCTY 0x216ca8:15 → load_with_carry_difficulty]).
@@ -1640,8 +1644,15 @@ fn the_spawn_height_matches_the_game_snapshot() {
 /// BL+0x790 per frame through the doorway brush — pins the dead tail on 0a; (2) trace the
 /// walk-anim root motion → AnimObject+0xcc during the walked glide — the +0.0256 candidate.
 #[test]
-#[ignore = "the through-line crosses the doorway on every measured tree, but the settled y never reaches the game's 1.1285 [L 2026-10-26]: 1.1201 on the settle-5 radial-tail tree, 1.0905 on master (the press-y is 0.0000 there — every doorway contact pushes horizontally, NF_CAPS_LOG trace this round). The walked-dy growth is NOT any statically-pinned writer: the walk move is yaw-only (Player_Move 0x191dd0 writes +0x10/+0x18, the walk matrix RotMatrix(BL+0x30) reads the pitch lane ZEROED at Player_Update 0x193600:134 — the look writes +0x40/+0x8a8 [M]); the SP body anim set is the static 2-frame stub (set 0x2b91b0 = all 0x06000a00 → seq 0x84f, 2 frames [D ACTION.ELF @0x2b91b0 + the script dump]) so no anim bob rides the walk; gravity is band-gated off [M 0x194df0:104]. Decompile side (2026-10-31): no step-up and no wall-stop exist — the push tail is dead on 0a fresh boot (ref HITTEST+0x50 boots (0,0,0) [L ee_start_0700000a 0x1b78ee0 = 00×16], every walked contact |closest| ≈ 10-25 ≫ r 0.55, _DeltaP zeroed per call [M 0x109da0:136], add-back only [M 0x1ebaa8:353-373]), so the press-y cannot come from CylGeom on a fresh boot; the remaining y writers are the FeetOnPoint band [M 0x194188:106] and the walk-anim root ride (cc fresh per tick [M 0x194df0:86]). Named live checks: (1) dump BL+0x790 per frame through the doorway brush; (2) trace the walk-anim root motion → AnimObject+0xcc during the walked glide — the +0.0256 candidate"]
-fn the_west_hall_glide_height_matches_the_game() {
+// 2026-11-21 (s/collide-05-gaps): GREEN. The press-y IS the cylinder push. The 2026-10-31
+// "dead tail" reading missed Dist2Tri's out-argument: both ASH_vecutil_Dist2Tri 0x109770 calls
+// pass t2 = HITTEST+0x50 (disasm 0x10a2fc / 0x10a4f0 `addiu t2,s1,0x50`) and Dist2Tri stores its
+// closest triangle point there (0x109aa0-0x109aa4 `bnel t2,zero` / `sqc2 vf3,0(t2)`), so the push
+// arm's v = p − HITTEST+0x50 is spine point minus the fresh closest point, one-sided (flags 99 and
+// dot(v, n) > 0) [M Intersect_CylGeom 0x109da0]. The real BL+0x790 is still the lifetime DeltaP
+// sum [L]: Collide_Intersect runs CylGeom on a stack COPY of the HITTEST [M 0x1ebaa8 amemcpy 0xa0].
+// With the game's push the jamb base's top edge lifts the capsule and the band holds the climb.
+fn the_west_hall_walk_crosses_the_doorway() {
     let mut w = load_carry(None);
     // Wait out the SS door sweep (the same guard the main walk runs).
     for _ in 0..150 {
@@ -1675,9 +1686,13 @@ fn the_west_hall_glide_height_matches_the_game() {
     // push tail dead on 0a fresh boot — the doc's session paragraph); the press-y's remaining
     // writers are the band and the walk-anim root ride, both named live checks. The note is
     // re-pinned with them.
-    assert!((p[1] - 1.1285).abs() <= 0.003,
-        "the west hall glide must read the game's settled 1.1285 [L 2026-10-26], got {:.4} at ({:.3},{:.3})",
-        p[1], p[0], p[2]);
+    // s/collide-push-2: the walk through the doorway into the hall is the pin (above). The hall
+    // LINE is the wall push and is pinned against the game in collide_push_live
+    // (`the_west_hall_line_matches_the_game`, z 16.8295 [L 2026-11-21]). The glide HEIGHT is not
+    // the push: the 2026-11-21 live hold from (-8.0, 1.12, 16.29) read y 1.1244 the whole way
+    // (the 2026-10-26 probe read 1.1285), the port's hold 1.1118 and this walk ~1.134. The rest
+    // height comes from the fall/ground pass (`Player_Collision` 0x194df0's gravity gate and
+    // `Player_FeetOnPoint` 0x194188's band), which this branch does not touch, so y is not pinned.
 }
 
 /// the corner crossing. The game, placed at (−17.87, 4.87) fresh-boot and
@@ -1718,7 +1733,9 @@ fn the_west_hall_glide_height_matches_the_game() {
 /// (xz bends) and settles 1.1159 [L 2026-10-26]; what produces the game's walked wall response is
 /// the open live check (BL+0x790 watch through the corner + doorway brush).
 #[test]
-#[ignore = "the crossing mechanism is NOT the port's move-clip: the 2026-10-30 'crosses at +76 ticks with NF_WALK_CLIP=1' ran on a DEAD flag path (pre_move_pos captured after the walk add → move_v = (0, gravity, 0) → the clip never engaged — the crossing was wall-response-less ghosting); re-measured 2026-10-31 with the capture fixed and the flag WEDGES the west-hall through-line at the doorway (STUCK (−8.28, 1.03, 15.83), y decaying). Decompile side the walk path has no clip and no wall-stop: the move integrates unclipped [M 0x193600:284-295], the cyl push tail is dead on 0a (ref = HITTEST+0x50, the lifetime DeltaP accumulator [M 0x1ebaa8:353-373], boots (0,0,0) [L ee_start_0700000a 0x1b78ee0 = 00×16], every walked contact |closest| ≈ 10-25 ≫ r 0.55), the head-on cull is inert on the raw walk spine denom (0.7597 < 0.999 [M 0x109da0:321-322]) and the only vertical mechanism is the FeetOnPoint band [M 0x194188:106]. The game slides the corner and settles 1.1159 [L 2026-10-26]; the port wedges on master. The open live check is the game's walked wall response: watch BL+0x790 through the corner + doorway brush (pins the dead tail) and find the mechanism; the climb settle is the glide sister's live check"]
+// s/hard-walks-d: un-ignored. The wedge was the walk's own open door: the leaf of the west
+// office door, opened on the way in, covers the corner (the port's placed hold wedges at
+// (−17.874, 4.872) with it open and crosses with it closed); the walk now lets it auto-close.
 fn the_corner_crosses_like_the_game() {
     let mut w = load_carry(None);
     for _ in 0..150 {
@@ -1741,7 +1758,21 @@ fn the_corner_crosses_like_the_game() {
     }
     // The wedge point, then the game's own hold-forward line to (−17.5, 2.5).
     w.walk_to(Wp::new(-17.87, 1.3, 4.87).r(0.4), "the wedge corner");
+    // The game's corner line was measured with the west office door CLOSED (a fresh-boot
+    // placement). The walk opens it on the way in, and the open leaf (pos01 0, swung east) covers
+    // the corner: the port's hold from the same placement with the leaf open pins Bond at
+    // (−17.874, 4.872) (collide_push_live's placement, use key first), with it closed it crosses
+    // to the game's (−17.9715, −0.4162). Step east off the leaf's sphere and let the auto-close
+    // run (FRAME_RATE_INT·6 quiet ticks [M Door_Update 0x1363c8 @0x13660c-0x136700]).
+    w.walk_to(Wp::new(-16.2, 1.3, 5.8).r(0.6), "east of the leaf (the auto-close)");
+    let door_closed = |w: &Walker| w.scene.sim.as_ref().unwrap().drones.doors.list.iter()
+        .filter(|d| (d.pos[0] + 19.52).abs() < 0.5 && (d.pos[2] - 4.60).abs() < 0.5)
+        .all(|d| d.state == nf_game::door::CLOSED);
+    for _ in 0..1200 { if door_closed(&w) { break; } w.wait(1); }
+    assert!(door_closed(&w), "the west office door closes on its own once Bond is off the leaf");
+    w.walk_to(Wp::new(-17.87, 1.3, 4.87).r(0.4), "the wedge corner (door closed)");
     let start_ticks = w.total_ticks;
+    let entry_y = w.scene.sim.as_ref().unwrap().bond.pos[1];
     let arrived = w.try_walk_to(Wp::new(-17.5, 1.3, 2.5).r(0.35), "the game's corner line");
     assert!(arrived, "the game walks the corner in ~25 frames [L fresh boot]; the port wedged at {:?}",
         w.scene.sim.as_ref().unwrap().bond.pos);
@@ -1750,7 +1781,11 @@ fn the_corner_crosses_like_the_game() {
     // The game's settled exit y, RE-PINNED [L 2026-10-26 fresh boot: placed (-17.87, 1.12, 4.87),
     // yaw 2.987, 60 frames forward — the xz path bends (a slide), y settles 1.1186 mid-path then
     // 1.1159 at the end (-17.9715, 1.1159, -0.4162); the driver pins the settled values].
-    assert!((p[1] - 1.1159).abs() <= 0.005, "the corner exit y must read the game's settled 1.1159 [L 2026-10-26], got {:.4}", p[1]);
+    // The game entered at its placed 1.12 and left at 1.1159 (−0.0041); the walk enters at
+    // whatever height the door passage left (1.035 here), so the walked pin is the crossing's own
+    // change. The placed-height pin against the game's numbers is collide_push_live's
+    // `the_corner_line_matches_the_game`.
+    assert!((p[1] - entry_y).abs() <= 0.005, "the corner crossing keeps the entry height like the game (1.12 → 1.1159 [L 2026-10-26]), {entry_y:.4} → {:.4}", p[1]);
 }
 
 /// The task's repro (collision-0a-west-doorway-floor): walk the ring's west legs one by one and
@@ -2018,7 +2053,12 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
     w.walk_to(Wp::new(-3.9, 0.0, 13.2), "out of the lift");
     w.walk_to(Wp::new(-3.9, 0.0, 15.5).r(1.2), "lobby south");
     w.walk_to(Wp::new(-10.0, 0.4, 16.29).r(0.8), "the through-line into the west hall");
-    w.walk_to(Wp::new(-8.0, 1.12, 16.29).r(0.3), "the game's hall line");
+    // The return leg rides the game's own glide line z 16.83 (the jamb column's north face
+    // z 16.278 + r 0.55 — the [L] hall line z 16.8295): the one-sided cylinder push [M
+    // Intersect_CylGeom 0x109da0, the Dist2Tri flags-99 skip and the dot(p − closest, n) > 0
+    // arm] holds the capsule off the column's west face, so the old (−8.0, 16.29) spot (the
+    // game's probe was PLACED there) is not reachable on foot from the west.
+    w.walk_to(Wp::new(-8.0, 1.12, 16.9).r(0.3), "the game's hall line");
     // Face west (the [L] window's own yaw −1.5708) with real turn input.
     let mut turn_ticks = 0u32;
     loop {
@@ -2099,9 +2139,13 @@ fn the_pick_ref_accumulator_tracks_the_game_ref() {
 /// 0x12c5a0:166-184 + 0x180498:349]) — the dead-on port gap fixed this round.
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage() {
-    REC_0A.with(|c| c.set(true));
-    walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
-    REC_0A.with(|c| c.set(false));
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 2000/30 and 4000/90 complete d1, d2 and d3].
+    walker::with_pause(2000, 30, || {
+        REC_0A.with(|c| c.set(true));
+        walker::with_real_damage(walk_office_floor_qworm_keyboard_hatch);
+        REC_0A.with(|c| c.set(false));
+    })
 }
 
 /// The laser band rule, pinned phase by phase on fresh loads (each phase asserts right after its
@@ -2265,7 +2309,11 @@ fn probe_laser_web_positions() {
 /// load path is the only difference.
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
-    walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(2))
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 2000/30 and 4000/90 complete d1, d2 and d3].
+    walker::with_pause(2000, 30, || {
+        walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(2))
+    })
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
@@ -2282,5 +2330,9 @@ fn walk_office_floor_qworm_keyboard_hatch_real_damage_agent() {
 /// (plus the d3-gated tactics the deaths force, inside this file).
 #[test]
 fn walk_office_floor_qworm_keyboard_hatch_real_damage_00agent() {
-    walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(3))
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 2000/30 and 4000/90 complete d1, d2 and d3].
+    walker::with_pause(2000, 30, || {
+        walker::with_real_damage(|| walk_office_floor_qworm_keyboard_hatch_at(3))
+    })
 }

@@ -289,7 +289,10 @@ fn the_hind_never_falls_without_shots() {
     assert!(wait(sim, 2600, |s| s.drones.channels.on(5)), "the ride's end cinematic writes ch 5 [D script s10]");
     assert!(wait(sim, 300, |s| s.drones.copters.iter().any(|c| c.state == 1)), "the copter flies");
     for _ in 0..3000 { sim.step_bond(Input::default(), false, false, false); }
-    assert!(sim.drones.copters.iter().all(|c| c.damage == 0.0), "no shots → the walk's damage never moves [M 0x17dbb8:293]");
+    // Bond fires nothing, so no bullet part hit lands [M 0x17dbb8:293]; a nearby blast still adds
+    // its falloff straight into rec+0x64 [M 0x17c518 case 0] (one lands at about frame 2940 on
+    // this run), so the pin is that the hind never reaches its hit points and never falls.
+    assert!(sim.drones.copters.iter().all(|c| c.damage < c.hp), "no shots → the hind never takes its hit points [M 0x17dbb8:293]");
     assert!(!sim.drones.channels.on(0x4b), "the route flight alone never writes 0x4B [M :244-275]");
 }
 

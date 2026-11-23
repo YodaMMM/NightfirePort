@@ -64,11 +64,14 @@ fn settle_leg(skip_on: bool) -> (bool, [f32; 3]) {
 /// this leg is RED on the old code, where no env support exists and the hover persists.
 #[test]
 fn probe14_pocket_settle() {
-    // LEG A: the bug, unskipped.
+    // LEG A, unskipped. collide-push-3: the body push is now the game's own
+    // (`cyl_game_contact`, the Dist2Tri out-argument as the reference [M 0x109da0 / 0x109770]),
+    // which has no spine fallback, so the hover is gone without the skip: the pocket grounds
+    // at the same rest as LEG B. (Under NF_CYL_OLD=1 the old hover comes back.)
     std::env::remove_var("NF_HOLD_SKIP");
     let (grounded, pos) = settle_leg(false);
-    assert!(!grounded, "LEG A: the port's fallback hold must keep Bond hovering over the pocket floor (grounded=false), got grounded at {pos:?}");
-    assert!(pos[1] > 0.6, "LEG A: the hover's r-equilibrium sits ~0.63 over the y≈0 floor, got {pos:?}");
+    assert!(grounded, "LEG A: the game's push has no hover hold, the pocket grounds, got hover at {pos:?}");
+    assert!((pos[1] - 0.6335).abs() < 0.1, "LEG A: the rest sits on the pocket floor, got {pos:?}");
     // LEG B: the carried fix (the walk pass's skip), same teleport, fresh scene.
     std::env::set_var("NF_HOLD_SKIP", "1");
     let (grounded, pos) = settle_leg(true);

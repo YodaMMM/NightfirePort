@@ -17,13 +17,23 @@ pub fn game_exe() -> Result<PathBuf, String> {
 pub const LEGACY_GAME_EXE: &str = "NightfirePort-game.exe";
 
 /// Starts the game (`<exe> <iso> --game`) on `iso`. Its output goes to `log`; no window but the game's appears.
-pub fn launch(exe: &Path, iso: &Path, log: Option<&Path>, dev: bool) -> Result<Child, String> {
+/// `gpu` is the remembered `WGPU_BACKEND` (an explicit `WGPU_BACKEND` in the environment wins); `note` is written
+/// as the log's first line.
+pub fn launch(exe: &Path, iso: &Path, log: Option<&Path>, dev: bool, gpu: Option<&str>, note: Option<&str>) -> Result<Child, String> {
     let mut cmd = Command::new(exe);
     cmd.arg(iso).arg("--game").stdin(Stdio::null());
     if dev { cmd.arg("--dev"); }
     if let Some(dir) = exe.parent() { cmd.current_dir(dir); }
+    let gpu = gpu.filter(|_| std::env::var_os("WGPU_BACKEND").is_none());
+    if let Some(g) = gpu { cmd.env("WGPU_BACKEND", g); }
     match log.and_then(|p| { if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); } std::fs::File::create(p).ok() }) {
-        Some(f) => {
+        Some(mut f) => {
+            use std::io::Write;
+            match (note, gpu) {
+                (Some(n), _) => { let _ = writeln!(f, "{n}"); }
+                (None, Some(g)) => { let _ = writeln!(f, "launcher: WGPU_BACKEND={g} (remembered after a start that faulted before the GPU was ready)"); }
+                _ => {}
+            }
             let f2 = f.try_clone().map_err(|e| e.to_string())?;
             cmd.stdout(Stdio::from(f)).stderr(Stdio::from(f2));
         }

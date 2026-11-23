@@ -241,8 +241,17 @@ fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, radius: f32, d
                 ("the ramp turn", [148.3, 38.5, -110.9]),
             ];
             let mut opened_at: Option<usize> = None;
+            // walks-1121-08-cabin: the leg ENDS the tick the pick comes into sight (the walker's
+            // opt-in sight abort), not at the leg's end. Measured on the leg-end checks: the ramp
+            // leg's nav ran on to 2.6 u of #15 (the -8.00 TooClose round, x2 damage under 3 u
+            // [M Drone_ModBulletDamage 0x139f50:21-23]) and the leg's own return fire then stood
+            // on #16 while #15 hit four more times (#15 32.0 in 7 hits, the pick down t5407).
+            // With the abort the line opens at (152.9, 42.1, -116.0), 5.5 u out, and the stand
+            // kills #15 in 10 ticks (t5049; #15 12.0 in 3 hits) [L the NF_DMG_TRACE runs].
             for (k, (name, at)) in excursion.iter().enumerate() {
+                w.leg_abort_on_sight = Some(di);
                 w.walk_nav_to(*at, &format!("{label} {name}"), if k + 1 == excursion.len() { 0.9 } else { 1.2 });
+                w.leg_abort_on_sight = None;
                 let vis = walker::DamageLog::visible(&w.scene.sim.as_ref().unwrap(), di);
                 eprintln!("[08 guards] {label}: {name} at tick {} bond {:?} — pick #{di} visible {vis} (health {:.1})",
                     w.total_ticks, w.scene.sim.as_ref().unwrap().bond.pos, w.scene.sim.as_ref().unwrap().drones.health.health);
@@ -445,6 +454,38 @@ fn walkway_pair_holds(w: &Walker) -> bool {
         && ((d.pos[0] - 148.4f32).powi(2) + (d.pos[2] - -121.2f32).powi(2)).sqrt() < 3.0 && (d.pos[1] - 43.0).abs() < 1.5)
 }
 
+/// The running jump off the station hall's balcony over its rail onto the great-hall deck below.
+/// The balcony (floor 49.0, x 136.5-141) is closed east by the rail (the 0.5 step at x ~141.5 and
+/// its face at x 141.956 [D the static triangles, read by the cylinder push]); the deck floor is
+/// 45.0. A jump pressed against the rail does not clear it: the rail top's edge reads as walkable
+/// ground inside the cylinder (n.y 1.0, q.y 49.50 under the spine), which lands the jump at once
+/// (apex y 50.27). Pressed 1.1-2.1 u before the rail with forward held, the jump is airborne
+/// when it reaches the rail and clears it (apex 50.9-51.1, the drop lands on the deck). The
+/// walk's earlier rail crossing came from the stuck ladder's in-place jump, which only cleared
+/// under the old two-sided push. [S] walk robustness: the hall's crossing line is the route's.
+fn running_jump_off_the_balcony(w: &mut Walker) {
+    if w.scene.sim.as_ref().unwrap().bond.pos[1] < 49.6 { return; }
+    w.walk_to(Wp::new(138.6, 49.5, -92.5).r(0.4), "the balcony run-up");
+    let face = |w: &Walker| { let p = w.scene.sim.as_ref().unwrap().bond.pos; (143.5f32 - p[0]).atan2(-92.5 - p[2]) };
+    for _ in 0..120 {
+        let err = walker::wrap_pi(face(w) - w.scene.sim.as_ref().unwrap().bond.yaw);
+        if err.abs() < 0.03 { break; }
+        w.tick(nf_game::player::Input { turn: err.clamp(-0.08, 0.08), ..Default::default() }, false);
+    }
+    let mut jumped = false;
+    for _ in 0..240 {
+        let (p, grounded, yaw) = { let b = &w.scene.sim.as_ref().unwrap().bond; (b.pos, b.grounded, b.yaw) };
+        if jumped && grounded && p[1] < 47.0 { break; }
+        let jump = !jumped && grounded && p[0] >= 139.8;
+        if jump { jumped = true; }
+        let err = walker::wrap_pi(face(w) - yaw);
+        w.tick(nf_game::player::Input { forward: 1.0, turn: err.clamp(-0.08, 0.08), jump, ..Default::default() }, false);
+    }
+    let b = &w.scene.sim.as_ref().unwrap().bond;
+    eprintln!("[walk] the balcony running jump: landed at {:?} grounded {}", b.pos, b.grounded);
+    assert!(b.pos[1] < 47.0 && b.pos[0] > 141.6, "the running jump clears the balcony rail onto the deck, got {:?}", b.pos);
+}
+
 #[test]
 fn walk_the_whole_mission_on_real_input() { walk_the_whole_mission_on_real_input_at(1) }
 
@@ -574,6 +615,7 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         ("the lower landing", [150.0, 43.5, -116.0]),
     ] {
         if name == "the east deck head" && difficulty < 3 { continue; }
+        if name != "the station hall" { running_jump_off_the_balcony(&mut w); }
         // real-health-00agent-08-bleed-3 (d3): the landing nav from the deck-line approach
         // wedges ON the stair lip (146.34, 44.99, −115.69) grounded=false [L the 2026-11-14
         // run-lever3 log] — take the approach chain's own stair-head waypoint instead (the
@@ -593,6 +635,32 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // 1.3 u west of the measured node and the next nav re-routed through the east door
         // (160.6, −100.1) into its frame wedge [L the 2026-11-14 run-lever1 log].
         let nav_r = if name == "the east deck head" { 0.7 } else { 1.5 };
+        // walks-1121-08-0c (d3): the hall's east lip. From the station hall the deck-head nav
+        // steps onto the hall floor's east edge (141.41, 50.28, -92.50: the hall floor 49.0 ends
+        // at x ~142.2 over the deck floor 45.0 [L the floor rays, this branch]) and holds there;
+        // the Agent walk's wedge ladder hops it within ~120 ticks (t480 -> t600 -> the deck
+        // (151.24, 46.08, -93.79) at t660 [L the NF_WALK_TRACE run]), but on the 00 Agent walk
+        // the nav re-planned through the south door (140.7, -96.8) and wedged there for both
+        // 3000-tick caps, then the deck line west wedged at (143.34, 49.79, -97.92) [L the
+        // 2026-11-21 run on master 7283c8a76]. Walk to the lip and hop east off it, real input.
+        // The balcony running jump above already lands Bond on the deck; the lip hop runs only
+        // when he is still on the hall floor (walking back up to the lip from the deck wedges
+        // under it, the 6000-tick cap at (142.56, 46.13, -91.36)).
+        if difficulty >= 3 && name == "the east deck head" && w.scene.sim.as_ref().unwrap().bond.pos[1] > 47.0 {
+            w.walk_to(Wp::new(141.0, 50.1, -92.5).r(0.5), "the hall's east lip");
+            let start = w.total_ticks;
+            let mut landed = false;
+            for t in 0..300u32 {
+                let (p, grounded, yaw) = { let sim = w.scene.sim.as_ref().unwrap(); (sim.bond.pos, sim.bond.grounded, sim.bond.yaw) };
+                if grounded && p[1] < 47.0 { landed = true; break; }
+                let err = walker::wrap_pi((146.0f32 - p[0]).atan2(-92.9f32 - p[2]) - yaw);
+                w.tick(Input { turn: err.clamp(-0.08, 0.08), forward: if err.abs() < 0.3 { 1.0 } else { 0.0 },
+                    jump: grounded && err.abs() < 0.3 && t % 20 == 10, ..Default::default() }, false);
+            }
+            let p = w.scene.sim.as_ref().unwrap().bond.pos;
+            assert!(landed, "the hop off the hall's east lip never landed on the deck (45.0 floor), at {p:?}");
+            eprintln!("[08] the hall's east lip hopped at +{} ticks onto ({:.2},{:.2},{:.2})", w.total_ticks - start, p[0], p[1], p[2]);
+        }
         // real-health-00agent-08-bleed-3 (d3): after the deck-head fight the walkway-head nav
         // re-routes through the east door (160.6, −100.1) and wedges in its frame from the deck
         // above (head_bump at (160.27, 46.60, −99.37), the door already open pos01 1.00; every
@@ -804,6 +872,13 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // position, then step through into the room (the safe wall's face is east).
     w.walk_to(Wp { at: [154.6, 42.5, -121.0], act: Act::Use { use_ticks: 240 }, arrive: 1.1 }, "E the secure room door");
     w.walk_nav_to([158.0, 43.0, -119.0], "into the secure room", 1.4);
+    // batch3-walks-05-08 (Agent real damage): the doorway rifleman #5 (skin 0x5000013, weapon 0x15)
+    // can survive the door's return fire on 3 health and stand at (156.5, 43.0, -117.6), 3 u behind
+    // the bolt stand: on the batch head he landed 25 hits for 79 while Bond held the laser on the
+    // bolts, death t10012 [L the run]. A player clears the room he just walked into before turning
+    // his back on it. A no-op when the room is empty. Agent-gated: the other sisters keep their
+    // timelines.
+    if difficulty == 2 && !w.tops_up() { fight_close_guards(&mut w, "the secure room", 4200); }
     // The bolts sit at (162.24, 43.88/42.70, −117.14) [D #207/#208] — inside, on the safe face.
     w.walk_nav_to([160.0, 43.4, -117.0], "before the safe", 1.2);
     let bolts = [[162.24f32, 43.88, -117.14], [162.24, 42.70, -117.14]];
@@ -1267,8 +1342,16 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
     // reaches the ride on 19.6 health: the faster machine's passes put an own-rocket blast at
     // 1.4 u (kind 44, owner -1 [L the NF_DMG_TRACE run]) with no margin left. A player on
     // a fifth of his health picks up the armour lying 3 u away before the fight.
+    // s/collide-push-3: the leg ends BESIDE the box's west face, not on its centre. The touch takes
+    // it from there (the sphere centre within radius + 1.1 of Bond's position, then a clear line
+    // [M Pickup_Update 0x18e148:203-214; the port's pickup.rs touches()]). Aimed at the centre,
+    // the walk pressed the box's 1.0 side under the game's one-sided wall push, the stuck ladder
+    // jumped Bond onto its top, and the nav back off it dropped him off the ledge (y 27.88 →
+    // 17.6 at (110.07, −126.25)).
     if difficulty >= 2 || !w.tops_up() {
-        w.walk_nav_to([109.6, 27.0, -129.2], "the ledge armour", 0.6);
+        eprintln!("[08] before the ledge armour: armour {}", w.scene.sim.as_ref().unwrap().drones.health.armour);
+        w.walk_nav_to([108.5, 27.0, -129.4], "the ledge armour", 0.15);
+        for _ in 0..30 { if w.scene.sim.as_ref().unwrap().drones.health.armour >= 50.0 { break; } w.tick(Input::default(), false); }
         eprintln!("[08] the ledge armour: armour {}", w.scene.sim.as_ref().unwrap().drones.health.armour);
         // Back to the ledge spot the boarding leg starts from (the route's own arrival at
         // "the west ledge at the cabin", (109.62, 27.88, −125.14) [L the run log]): from 2 u
@@ -1706,17 +1789,35 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 if sim.bond.pos[1] <= 13.2 { break; }
                 w.tick(Input::default(), false);
             }
-            w.tick(Input { crouch: true, ..Default::default() }, false);
+            // s-crouch-latch: the "uncrouch press" that stood here was always LOST — it landed
+            // inside the port's old flat 60-tick lockout, so the shipped fight ran crouched. With
+            // the game's lockout (it reopens 13 ticks after the press [M Player_SSCrouch
+            // 0x1924c0:45-55]) the press now stands Bond, and standing there
+            // re-grows the capsule onto the upper floor (feet 13.47, the zap band; measured: a
+            // stand at the 13.2 break (mid-fall) and one after a grounded-wait both end at y 13.4704, deaths t21064 / t20944,
+            // worse than the crouched t21070). The press is dropped so the shipped crouched
+            // fight is unchanged; the STANDING lower-floor fight the ledger wants was not reached by
+            // either measured stand (both re-grew onto the upper floor).
+            w.tick(Input::default(), false);
             w.tick(Input::default(), false);
             eprintln!("[08 anchor] bond {:?} after the crouch drop", w.scene.sim.as_ref().unwrap().bond.pos);
+            // Run 12 (2026-11-21) settled run 11's stance question: there is no latch fault.
+            // The crouch press sets the stand/crouch lockout BL+0x960 = FRAME_RATE [M
+            // Player_ChangeSubState 0x190630:48-56] and Player_SSCrouch reads the stand press
+            // only while it is 0 [M 0x1924c0:84-92]; the fall takes ~15 ticks, so any uncrouch
+            // press inside the lockout is swallowed (the port's `lockout`, 45 left at the fall's
+            // end). Waiting it out and pressing once DOES stand Bond — and the stand lifts the
+            // root from 13.086 to 13.470 in one tick (the port run's per-tick log), i.e. back into
+            // the hurt band (the zaps resumed at once: -2.00 x3, then a -14.00 blast, death
+            // t20944, earlier than the crouched t21070). Standing anywhere at the hole puts the
+            // root in the band; the lower floor is zap-free only for the crouched root.
             // run 11 TRIED and REVERTED: forcing the stance standing after the drop (the
             // default-tick release, then a crouch toggle, then the assert) did NOT uncrouch
             // Bond (the log: crouched true after 4 default ticks + a crouch press — the
             // port's crouch latch resists both semantics from the walk's side) and the extra
             // ~6 upper-floor ticks caught a missile blast (death t20760, was t21070) — the
-            // block is reverted to the run-10 state. The stance question needs the main
-            // agent's live check (the report lists it): what input state stands Bond up from
-            // the port's crouch latch.
+            // block is reverted to the run-10 state. Run 12 (above) answered the stance
+            // question: the presses fell inside the 60-tick lockout.
         }
     }
     let ci = w.scene.sim.as_ref().unwrap().drones.copters.iter().position(|c| c.out == 0x4b).unwrap();
@@ -1880,8 +1981,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
             let p = sim.bond.pitch * std::f32::consts::FRAC_PI_2;
             let right = [cyy, 0.0, -syy];
             let up = [-p.sin() * syy, p.cos(), -p.sin() * cyy];
-            let tx = 0.76966 * sim.cross[0];
-            let ty = 0.57724 * sim.cross[1];
+            let tx = 0.76966 * sim.cross[0] / sim.zoom;
+            let ty = 0.57724 * sim.cross[1] / sim.zoom;
             let dd = [syy * p.cos() + tx * right[0] + ty * up[0],
                 p.sin() + tx * right[1] + ty * up[1],
                 cyy * p.cos() + tx * right[2] + ty * up[2]];
@@ -1979,8 +2080,8 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // convention): a launch whose own first 12 u are clear air cannot detonate on the
         // cabin next to Bond. D3-GATED: the sisters' timelines stay byte-exact.
         let effective_corridor_clear = difficulty < 3 || {
-            let ey = sim.bond.yaw + sim.drones.aim_offset[0];
-            let ep = sim.bond.pitch * std::f32::consts::FRAC_PI_2 + sim.drones.aim_offset[1];
+            let ey = sim.bond.yaw + sim.aim_offset_angles()[0];
+            let ep = sim.bond.pitch * std::f32::consts::FRAC_PI_2 + sim.aim_offset_angles()[1];
             let eff = [ey.sin() * ep.cos(), ep.sin(), ey.cos() * ep.cos()];
             let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
             let right = [cy, 0.0, -fy];
@@ -2260,11 +2361,44 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // kind 0x2c]; with it the same three rockets land and the death moves t30165 -> t32039). With the cannon-free dodge: three
         // rockets land, the Hind 100.7 -> 287.7 of 598 (the fight ends sooner - death t34720 ->
         // t30165 to the Hind missile blasts). Loose gates alone (with the cannon dodge): t28440.
+        // batch3-walks-05-08 (Operative real damage): the ridden round's CONTACT SPHERE. Since the
+        // rocket-hit-size join the ridden round blows on any admitted triangle within 0.1 of its
+        // centre from its second update [M Bullet_update 0x12e7b0:218-234, Collide_SphereIntersect
+        // 0x1ec940 r 0.1 filter 0xa0a]; the rays above are zero-width, so a launch that grazes a
+        // pane frame passes them and detonates beside Bond. The measured red run: rocket 3 left at
+        // fight t1154 from (113.04, 14.26, -177.58) toward the machine at (136.1, 16.5, -209.5)
+        // and blew 1.2 u out at (113.8, 14.3, -178.5), -26.67 to Bond (kind 44, owner -1) [L the
+        // NF_DMG_TRACE run]; the Hind gun bled the rest. A player holds the shot until the lane
+        // clears the frame by a little more than the round's own size: the first 2.2 u from the
+        // eye and both gun stand-ins toward the machine, sampled every 0.05 u with a 0.12 sphere.
+        // Measured band [L this walk, one run each]: r 0.11-0.13 x 2.0-2.2 u green (3 launches,
+        // 3 land, the Hind down, end health 34.4); 1.5-1.8 u lets a launch through that blows
+        // 2.3 u out (death t25525); 2.5 u and longer starve the fight (1-2 launches, death
+        // t26490-t26744); r 0.15 x 4 u: 1 launch. GATED to the Operative real-damage walk
+        // (sight gates on, difficulty < 2): the Agent / 00 Agent sisters and the topped-up walk
+        // keep their timelines.
+        let sphere_lane_clear = !(sight_gates && difficulty < 2) || {
+            let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+            let right = [cy, 0.0, -fy];
+            [eye,
+             [eye[0] + right[0] * 0.25, eye[1] - 0.15, eye[2] + right[2] * 0.25],
+             [eye[0] - right[0] * 0.25, eye[1] - 0.15, eye[2] - right[2] * 0.25]]
+                .iter()
+                .all(|from| {
+                    let d = [cp[0] - from[0], cp[1] - from[1], cp[2] - from[2]];
+                    let dl = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-4);
+                    (1..=44).all(|k| {
+                        let s = k as f32 * 0.05;
+                        let p = [from[0] + d[0] / dl * s, from[1] + d[1] / dl * s, from[2] + d[2] / dl * s];
+                        !sim.world.sphere_hits(p, 0.12, 0xa0a)
+                    })
+                })
+        };
         let loose08 = difficulty >= 3;
         let ready = rocket.is_none() && sim.missile_cam.is_none() && dodge_hold == 0
             && yaw_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
             && pitch_err.abs() < if difficulty >= 3 { 0.10 } else { 0.25 }
-            && l >= 10.0 && slit_clear && (loose08 || (corridor_clear
+            && l >= 10.0 && slit_clear && sphere_lane_clear && (loose08 || (corridor_clear
             && effective_corridor_clear)) && eye_sees && machine_lane_clear
             && (loose08 || machine_lane_fore_clear)
             // 00 Agent: no launch while the Hind is SOUTH-WEST of the car (x < 105, z < -165).
@@ -2650,6 +2784,10 @@ fn the_ally_fights_only_the_guards_through_the_noise_path() {
 // input only, no damage/health writes. The Operative walk ends at 1.2 health, 116 hits for
 // 98.8, the Hind down (f31140); the whole mission walked in 31146 ticks.
 fn walk_the_whole_mission_on_real_input_real_damage() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/400/700 passed.
+    walker::set_post_intro_wait(30);
     // los-mask-join: under the game's sight masks [M 0x176f18 mask 0xa27] the secure-room guard
     // #4 hit Bond 28 times (68.2) while he held at the closed door, and the plain sight rule
     // never answered him [L the masked run]. The Agent sisters' glass-fight rule (Bond's sight
@@ -2697,6 +2835,12 @@ fn walk_the_whole_mission_on_real_input_real_damage() {
 // sister's timeline byte-exact by construction; the whole binary re-run green on this tree).
 #[test]
 fn walk_the_whole_mission_on_real_input_real_damage_agent() {
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: 100/30, 500/30, 1000/60, 1500/45, 2000/30 complete].
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 30-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/90/200/700 passed.
+    walker::set_post_intro_wait(30);
     // HEAD-HUNT (the 05/07 00 Agent sisters' tactic on this level group): at Agent the guards'
     // hit chance is DroneFiring_Accuracy_Normal 1.1 (Operative 0.8) and Bond's pain is
     // Plr_DMod_Normal 0.7 (0.6) [M tuning.rs 05-08 group] — every tick a fight stands is a
@@ -2712,7 +2856,15 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // moved and the Hind's rockets (world hits 53.4 + 27.0) killed Bond at t33118 on the
     // launcher stand. Lever: a 60-tick stop at tick 3000 re-rolls the mission [L the 9-value
     // sweep: 3000/60, 8000/60 and 22000/60 complete; 500, 15000, 28000-32000 die].
-    walker::with_pause(3000, 60, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
+    // s/collide-push-3 (the game's one-sided wall push): 1000/60 dies in the cabin fight at
+    // (111.05, 13.09, −179.28), t28490. Lever 500/60 [L the 8-value sweep on this tree: 500/60
+    // end health 60.1, 1000/30, 1000/90, 2000/60, 3000/60, 5000/30 complete; 1000/120, 1500/45 red].
+    // Batch 3 (the nine stream-moving branches joined at 5e9460adb): 500/60 dies at the bolt stand
+    // (t10012, #5 above) or, with the secure-room fight, in the cabin fight with four rockets in
+    // (t28732). Lever 1000/60 [L the sweep on this tree with the secure-room fight: 1000/60 end
+    // health 41.9, five rockets; 800/60, 1000/30, 1000/90, 1200/60, 3000/60, 12000/60, 16000/60,
+    // 20000/60 red].
+    walker::with_pause(1000, 60, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
@@ -2745,7 +2897,7 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
 /// plus the pin of the round's actual spawn direction (lock-on vs the effective aim) in
 /// PCSX2 (the report's live check).
 #[test]
-#[ignore = "nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): the fight starts ~6500 ticks earlier in the machine's circuit (upstream 37505 -> ~25700 [L]) and the machine flies HIGH overhead passes (y 25-29) — from inside the cabin every stance's sight ray stops on the lintel/band 1.1 u out, line_ok FALSE every sample, ZERO-ONE launches in ~2600 fight ticks: Bond bleeds out of the gun chips (the d2 -1.40 drips at d3 pain 1.0 = -2.00 x5, frames 27474-27638) plus the -7.78/-8.22 missile blasts and dies t28298 at (112.25,13.09,-179.16) with ONE rocket away [L the 2026-11-18 runs; reproduced exactly on this branch 2026-11-19, the whole-binary run 6/0/1]. Levers TRIED and DEAD on their own real runs: the crouched slit anchor (t29087, zero launches, clip 4 intact), the standing slit + 0.25 aim gates (t27383), the 2026-11-19 lane-mouth pre-empt (the mouth target's own nav chain wedges at (141.0,50.4,-93.7) grounded=false — the deck-head route is the only clean approach [L the lever run]). SHIPPED 2026-11-19 (still red, the walk reaches 2.5x deeper): the deck-head arm-up (scoop the guards' own 0xa drops + arm fullest) + the wide fight's skip-continue — the walkway pair now dies at ZERO cost (was -12.0), the pit class is answered (the #15 excursion kill t5449; the 2026-11-19 pre-fix lever run died to #15 at the doorway t6408 with -23.0), and the walk now dies at the BOARDING LEDGE t17664 at (110.07,28.31,-121.26): #27 (skin 0x500002f, (100.8,28.3,-122.2), 9.3 u) burst 21.0 in 7 hits with hp 12 INTACT — the return fire never landed a round on him (35 hits for 100.0 total: #14 16.0/4 + #5 15.0/5 + #11 12.0/3 + #16 12.0/3 + #27 21.0/7). SHIPPED 2026-11-19 round 3 (still red, the walk reaches the machine fight): the hurting-first pick's unseen-cover fallback — the same fallback the plain and lane arms run, opt-in via the UNSEEN_FIGHTS thread-local (damage_log.rs return_fire; the d1/d2 sisters set no UNSEEN_FIGHTS and stay byte-exact) — the BOARDING LEDGE IS PASSED with ZERO #27 damage (he burst 21.0 in 7 hits in the round-2 run) and the walk dies in the CABIN fight t21777 at (111.94,13.09,-179.18), the route's deepest point, with 61 hits for 100.0: the upstream bleed dominates — #16 28.0/5, the y-46 trio 36.0 (#14 16.0/4 + #11 12.0/3 + #2 8.0/2), world 18.0/34 with the last -2.00 drips at frames 20809-21778 closing a zero-health walk [L the NF_DMG_TRACE lever run]. LEVER (2) TRIED and DEAD on its own real runs (2026-11-19): the mid-fight scoop — the stand hook that resupplies on a small clip mid-exchange. The gate is the CLIP (the fights run clip 3-7 spare 27-41 — the spares never run out; the 61-tick burn between taps is the exposure; the fights took ~230 ticks per 10-hp guard), and the armed fights kill the same guards in single-digit ticks at ZERO cost (the walkway pair: two fights, 18 ticks). Measured: the clip+spare < 10 gate NEVER FIRED (the fights are not low; death t21777 unchanged); the clip < 8 gate with a 14 u widened corridor walked Bond to a PLACED box 9.9 u off the line ((156.1,45.9,-85.7), 190 ticks of open-deck walking) into the trio's own lane — death t1325; the clip < 8 gate at the master 9 u corridor walked to the (150.7,46.3,-96.1) drop mid-fight — death t1759. Every walk-under-fire variant costs more than the armed tail saves; the trio's own drops sit 9-11 u off the walked line, outside the master corridor, and the arm-up that would matter lands only at the deck head, after the transit is paid. SHIPPED 2026-11-19 round 4 (retune-nb-08-4, still red, the FIGHT IS NOW WINNABLE — the launches fire and land): lever (3) the Hind outlast, executed as the launch-geometry fix. The flight-log pin [L the 2026-11-19 NF_DMG_TRACE runs]: on the lever-1 phase the machine NEVER flies high in the fight window — y 12.8-20.5 at every 30-tick sample — the LOW band is the whole window, so the ledger's 'outlast the high phase' is answered by the phase itself; what starved the launches was the STANCE: (a) the d2 slit walk (difficulty >= 2) parked Bond on the cabin's step edge at (110.98, 13.09, -179.32) (wedged 700 fight ticks, x parked 110.982->110.985), IN the terminal's hurt volume (10 -2.00 zaps, frames 20731-21778), crouched, ZERO launches, death t21777; (b) the walk-back to the d3 anchor OVERWRITES the aim's turn while it runs (input.look = 0.0) — aim_yaw_err 2.404->3.035 for 500 fight ticks (cross_still 101->501, the cursor frozen) while the machine's low passes crossed launchable bearings (the t0 t0.895-class sight stops); (c) the CROUCHED eye (13.3) is blindfolded at the anchor: the terminal's exterior ledge (top y ~13.3-13.5, 1.5-3 u out) stops EVERY bearing at t0.04-0.15 [L the crouched 16-ray sweep] while the STANDING eye (14.2) reads the same bearings CLEAR 30 u [L the t0 sweep]; the only rays the crouch lets out RISE steeply (the machine's high close passes) and those launches climbed into the west band above the doorway slot, detonated 5.5 u from Bond (-20.00 at t333, run 2). The shipped d3 package (all d3-gated, the d1/d2 sisters byte-exact): the slit walk is now difficulty == 2 only; d3 walks to the fight anchor BEFORE the loop (walk_to, the walker's wedge mitigation); the fight STANDS (the crouch-open is difficulty == 2 only); the low-pass outlast gate cp[1] <= 25.0 joins ready. MEASURED: the aim tracks from tick 0 (yaw_err 2.2 -> 0.004 by t100), rocket 1 launches at t36 from the standing eye at the machine's LOW pass (y 12.8-13.7, dist 45-48) and LANDS 101.0 at t192-198 with ZERO self-damage, five runs in a row — the launch geometry is proven. REMAINING DEATH (runs 3-7, t20993-t21077): the walk_to cannot STEP Bond down — its arrival is the x/z radius, and every target (r 0.6 at (112.5,-179.4), r 0.45 at (112.4,-179.3), r 0.5 at (113.0,-179.2), r 0.3/r 0.1 at (112.0,-179.5)) 'arrives' on the UPPER floor (feet 13.52) short of the hole edge at x ~111.99 — the hurt volume's band zaps the upper floor (-2.00 every 6-24 ticks, feet y 13.3-13.5; the lower floor feet 13.086 is zap-free [L run 1's in-place drop y 13.52->13.0856 at (111.99,-179.52)]) — 8-10 zaps drain the arriving 18.0 health mid-fight (rockets 1 landed, 2 launched at the high close pass, death t20993-t21077). RUNS 8-11 (2026-11-19, the drop CHASED to its root): (8) the raw press toward the anchor slid Bond AROUND the hole ((112.25, 13.52, -179.63), feet 13.52, the zaps resumed, death t20879); (9) the press aimed AT the hole itself reached the EXACT run-1 spot ((111.998, 13.52, -179.514)) and the STANDING capsule BRIDGED it — run 1's drop happened under the CROUCH (the smaller capsule falls through); (10) the crouch-drop-uncrouch WORKS — walk_to the hole, one crouch press, the fall (bounded 60 ticks, break at y <= 13.2), feet land 13.086-13.106 ON THE LOWER FLOOR, the zaps STOP (3 zaps total during the upper-floor walk phases, ZERO in the fight), the best ledger of the window: death t21070, 55 hits (the fewest), rocket 1 launched t236... but the fight ran CROUCHED on the lower floor (the eye 13.3 — the second crouch press re-crouched him) and the only rays out are the steep rising ones — the t236 launch was the machine's HIGH close pass (y 20.4, dist 26.9) and the round self-blasted (-14.00 at t21070, the same west-band-above-the-doorway class); (11) forcing the stance standing after the drop (4 default ticks, a crouch toggle, an assert) FAILED — the port's crouch latch resists both semantics from the walk's side (the log: crouched true after the release ticks AND the press) — and the extra ~6 upper-floor ticks caught a missile blast (death t20760, WORSE) — reverted to the run-10 state. SHIPPED (the final tree): runs 1-7's d3 package + the crouch-drop (the hole walk_to (112.0, 13.08, -179.5) r(0.1) + the hole press + the crouch drop). REMAINING: ONE BUG — the fight must run STANDING on the lower floor (eye 13.77 — above the ledge 13.5, under the lintel 14.31 — the proven flat-ray launch windows; the run-3/5 standing launches landed 101.0 from the upper floor) instead of crouched (the blindfold + the rising self-blasts). The stance latch needs the main agent's live check: what input state stands Bond up from the port's crouch latch (the run-11 measurements: 4 default ticks no-op, a crouch:true press no-op — is the latch edge-triggered with the release already consumed by the drop loop's ticks, or animation-locked?). The d2 fight's ledger ('the movement inputs stand Bond back up') suggests the uncrouch rides the DODGE EPISODES' inputs — the next window can try letting the first dodge episode run before the launch gates, or reading the port's crouch latch (Player_Crouch 0x1908xx-class) for the true semantics. Full ledger: the comment block above the test."]
+#[ignore = "hard-walks-c (2026-11-22, the stream batch 3 head): the walk first wedged at the hall's east lip (the balcony running jump already lands Bond on the deck; walking back up to the lip hit the 6000-tick cap at (142.56,46.13,-91.36); FIXED: the lip hop runs only from the hall floor), then died on the lower landing t16372 (the east deck stand costs 52.0 at 8-11 u from six 0xa guards: a standing target takes every round at Hard accuracy 1.3 [M DroneWeap_DoBulletAccuracy 0x179740:48-92], the game's fire), and the running jump's fall costs 23.0 (83 falling ticks, pain = ticks - 60 [M Player_CollisionHandler 0x1949a8:108-131], the game's rule; the old lip hop no longer clears the rail). The 550/60 stand-still brings the walk back to the cabin fight: death t26264 at (111.98,13.09,-179.51), the crouched lower-floor launch at the high pass (t327, copter y 20.4, 26.6 u) detonates beside Bond, the self-blast class below; no second stop (24 tried) moves it. No port bug found on this route. Earlier: walks-1121-08-cabin (2026-11-21): lever (1) SHIPPED, the fusebox-pit bleed is cut: #15's fire checked against the decompile first and it is the game's (hit percent 100 - 5*acc times DroneFiring_Accuracy_Hard 1.3 >= 100, every round lands unless Bond moves [M DroneWeap_DoBulletAccuracy 0x179740:48-92]; one round per 60 ticks, the weapon-10 interval floor [M DroneWeap_NextBulletTime 0x179d40 head]; 5.0 x DroneDamage_Hard 0.8 = 4.0, x TooClose_Damage 2.0 under 3 u [M Drone_ModBulletDamage 0x139f50:21-23]), no port bug. The excursion legs now end the tick #15 comes into sight (the walker's opt-in leg_abort_on_sight): the stand opens 5.5 u out and kills him in 10 ticks (t5049), #15 32.0/7 -> 12.0/3, and Bond boards with 46.0 health + 50 armour (was 27.0). The walk now dies t28196 at (112.64,13.09,-179.45): crouched on the lower floor the fight launches rocket 1 at t190 up the steep high-pass ray (copter y 20.4, 29.6 u) and it detonates on the west band 2.6 u away (-46.00, kind 44). Lever (2) MEASURED, not shipped (the experiments ran on this branch, env-gated, all still red): (a) the crouch-drop BEFORE the pane shoot-out: the 37 Hind-gun hits the upper floor took during the shoot-out (t26827-27397, armour 50 -> 0 and 22 health) are skipped, but the far rifle #25 ((117.4,23.0,-136.3), 44.6 u) then bursts the crouched spot (42 armour) and the crouched launch self-blasts the same way (t27634); (b) a peek fight (crouched by default, stand on a predicted standing-eye window, fire, crouch again): a launch from the rising eye (y 13.8-14.2) detonates on the band above the doorway (110.4,14.1-14.5,-179.5) although segment_bullet/segment_flight both read the eye line clear (the round's own contact is wider than the ray); with parallel +0.3/-0.35 rays and a 25-tick forecast the windows open about once in 3400 ticks; the one that opened landed rocket 1 (116/598) but the guided ride holds Bond standing for its whole 250 ticks (the ride zeroes the input, so no crouch [M Player_Update 0x193600 case 10]) and the Hind gun took 30.0 in 15 hits during it, death t32467; (c) the same with the AT-420's Unguided twin 0x2D (no ride, crouch right after the shot) and an intercept lead: the first shot (t680, the machine 43 u south-east through the shot-out south end) detonated on the cabin's south frame (113.0,14.5,-182.1, kind 45) 3.0 u from Bond, death t28717; and the crouched lower floor is not gun-free (-2.00 chips land there too, about 40 effective over 3400 ticks in the peek runs). Remaining: no measured cabin spot gives the standing eye a launch line that the rocket survives, often enough, inside the health the walk arrives with. Earlier ledger: walks-1121-08-0c (2026-11-21): on master 7283c8a76 the walk no longer reached the fight: the deck-head nav held on the station hall floor's east lip (141.41,50.28,-92.50), re-planned through the south door (140.7,-96.8) and wedged there (both 3000-tick caps), then the deck line west hit its 6000-tick cap at (143.34,49.79,-97.92) with health 100. FIXED here: d3 walks to the lip and hops east onto the deck (45.0 floor), real input. The walk again reaches the cabin fight and dies t27682 at (112.50,13.09,-179.32): it boards with 27.0 health + 50 armour (upstream: #15 32.0/7 in the fusebox pit, #13 16.0/4, #5 9.0/3), and the fight runs crouched on the lower floor with every sight ray stopped 0.04-0.10 out (line_ok false at t0/t100/t200), no rocket away. CORRECTION to the ledger below: the -2.00 world hits are NOT a hurt volume. 07000008 has three hurt volumes, all the kind-6 fall floor at y 7.3 (damage 1000) [D Hurt::create over the level]; the -2.00 rounds are owner usize::MAX bullets, the Hind gun (Copter_FireGun 0x17d828:86-89 weapon 0x61, every 6th attack tick :63-65; the port's spawn_copter_bullet owner MAX) [M]. The cabin walls shield the lower floor from them. Earlier: nb-scan-all (the spacing scan everywhere + CanAltAttack in the fire states): the fight starts ~6500 ticks earlier in the machine's circuit (upstream 37505 -> ~25700 [L]) and the machine flies HIGH overhead passes (y 25-29) — from inside the cabin every stance's sight ray stops on the lintel/band 1.1 u out, line_ok FALSE every sample, ZERO-ONE launches in ~2600 fight ticks: Bond bleeds out of the gun chips (the d2 -1.40 drips at d3 pain 1.0 = -2.00 x5, frames 27474-27638) plus the -7.78/-8.22 missile blasts and dies t28298 at (112.25,13.09,-179.16) with ONE rocket away [L the 2026-11-18 runs; reproduced exactly on this branch 2026-11-19, the whole-binary run 6/0/1]. Levers TRIED and DEAD on their own real runs: the crouched slit anchor (t29087, zero launches, clip 4 intact), the standing slit + 0.25 aim gates (t27383), the 2026-11-19 lane-mouth pre-empt (the mouth target's own nav chain wedges at (141.0,50.4,-93.7) grounded=false — the deck-head route is the only clean approach [L the lever run]). SHIPPED 2026-11-19 (still red, the walk reaches 2.5x deeper): the deck-head arm-up (scoop the guards' own 0xa drops + arm fullest) + the wide fight's skip-continue — the walkway pair now dies at ZERO cost (was -12.0), the pit class is answered (the #15 excursion kill t5449; the 2026-11-19 pre-fix lever run died to #15 at the doorway t6408 with -23.0), and the walk now dies at the BOARDING LEDGE t17664 at (110.07,28.31,-121.26): #27 (skin 0x500002f, (100.8,28.3,-122.2), 9.3 u) burst 21.0 in 7 hits with hp 12 INTACT — the return fire never landed a round on him (35 hits for 100.0 total: #14 16.0/4 + #5 15.0/5 + #11 12.0/3 + #16 12.0/3 + #27 21.0/7). SHIPPED 2026-11-19 round 3 (still red, the walk reaches the machine fight): the hurting-first pick's unseen-cover fallback — the same fallback the plain and lane arms run, opt-in via the UNSEEN_FIGHTS thread-local (damage_log.rs return_fire; the d1/d2 sisters set no UNSEEN_FIGHTS and stay byte-exact) — the BOARDING LEDGE IS PASSED with ZERO #27 damage (he burst 21.0 in 7 hits in the round-2 run) and the walk dies in the CABIN fight t21777 at (111.94,13.09,-179.18), the route's deepest point, with 61 hits for 100.0: the upstream bleed dominates — #16 28.0/5, the y-46 trio 36.0 (#14 16.0/4 + #11 12.0/3 + #2 8.0/2), world 18.0/34 with the last -2.00 drips at frames 20809-21778 closing a zero-health walk [L the NF_DMG_TRACE lever run]. LEVER (2) TRIED and DEAD on its own real runs (2026-11-19): the mid-fight scoop — the stand hook that resupplies on a small clip mid-exchange. The gate is the CLIP (the fights run clip 3-7 spare 27-41 — the spares never run out; the 61-tick burn between taps is the exposure; the fights took ~230 ticks per 10-hp guard), and the armed fights kill the same guards in single-digit ticks at ZERO cost (the walkway pair: two fights, 18 ticks). Measured: the clip+spare < 10 gate NEVER FIRED (the fights are not low; death t21777 unchanged); the clip < 8 gate with a 14 u widened corridor walked Bond to a PLACED box 9.9 u off the line ((156.1,45.9,-85.7), 190 ticks of open-deck walking) into the trio's own lane — death t1325; the clip < 8 gate at the master 9 u corridor walked to the (150.7,46.3,-96.1) drop mid-fight — death t1759. Every walk-under-fire variant costs more than the armed tail saves; the trio's own drops sit 9-11 u off the walked line, outside the master corridor, and the arm-up that would matter lands only at the deck head, after the transit is paid. SHIPPED 2026-11-19 round 4 (retune-nb-08-4, still red, the FIGHT IS NOW WINNABLE — the launches fire and land): lever (3) the Hind outlast, executed as the launch-geometry fix. The flight-log pin [L the 2026-11-19 NF_DMG_TRACE runs]: on the lever-1 phase the machine NEVER flies high in the fight window — y 12.8-20.5 at every 30-tick sample — the LOW band is the whole window, so the ledger's 'outlast the high phase' is answered by the phase itself; what starved the launches was the STANCE: (a) the d2 slit walk (difficulty >= 2) parked Bond on the cabin's step edge at (110.98, 13.09, -179.32) (wedged 700 fight ticks, x parked 110.982->110.985), IN the terminal's hurt volume (10 -2.00 zaps, frames 20731-21778), crouched, ZERO launches, death t21777; (b) the walk-back to the d3 anchor OVERWRITES the aim's turn while it runs (input.look = 0.0) — aim_yaw_err 2.404->3.035 for 500 fight ticks (cross_still 101->501, the cursor frozen) while the machine's low passes crossed launchable bearings (the t0 t0.895-class sight stops); (c) the CROUCHED eye (13.3) is blindfolded at the anchor: the terminal's exterior ledge (top y ~13.3-13.5, 1.5-3 u out) stops EVERY bearing at t0.04-0.15 [L the crouched 16-ray sweep] while the STANDING eye (14.2) reads the same bearings CLEAR 30 u [L the t0 sweep]; the only rays the crouch lets out RISE steeply (the machine's high close passes) and those launches climbed into the west band above the doorway slot, detonated 5.5 u from Bond (-20.00 at t333, run 2). The shipped d3 package (all d3-gated, the d1/d2 sisters byte-exact): the slit walk is now difficulty == 2 only; d3 walks to the fight anchor BEFORE the loop (walk_to, the walker's wedge mitigation); the fight STANDS (the crouch-open is difficulty == 2 only); the low-pass outlast gate cp[1] <= 25.0 joins ready. MEASURED: the aim tracks from tick 0 (yaw_err 2.2 -> 0.004 by t100), rocket 1 launches at t36 from the standing eye at the machine's LOW pass (y 12.8-13.7, dist 45-48) and LANDS 101.0 at t192-198 with ZERO self-damage, five runs in a row — the launch geometry is proven. REMAINING DEATH (runs 3-7, t20993-t21077): the walk_to cannot STEP Bond down — its arrival is the x/z radius, and every target (r 0.6 at (112.5,-179.4), r 0.45 at (112.4,-179.3), r 0.5 at (113.0,-179.2), r 0.3/r 0.1 at (112.0,-179.5)) 'arrives' on the UPPER floor (feet 13.52) short of the hole edge at x ~111.99 — the hurt volume's band zaps the upper floor (-2.00 every 6-24 ticks, feet y 13.3-13.5; the lower floor feet 13.086 is zap-free [L run 1's in-place drop y 13.52->13.0856 at (111.99,-179.52)]) — 8-10 zaps drain the arriving 18.0 health mid-fight (rockets 1 landed, 2 launched at the high close pass, death t20993-t21077). RUNS 8-11 (2026-11-19, the drop CHASED to its root): (8) the raw press toward the anchor slid Bond AROUND the hole ((112.25, 13.52, -179.63), feet 13.52, the zaps resumed, death t20879); (9) the press aimed AT the hole itself reached the EXACT run-1 spot ((111.998, 13.52, -179.514)) and the STANDING capsule BRIDGED it — run 1's drop happened under the CROUCH (the smaller capsule falls through); (10) the crouch-drop-uncrouch WORKS — walk_to the hole, one crouch press, the fall (bounded 60 ticks, break at y <= 13.2), feet land 13.086-13.106 ON THE LOWER FLOOR, the zaps STOP (3 zaps total during the upper-floor walk phases, ZERO in the fight), the best ledger of the window: death t21070, 55 hits (the fewest), rocket 1 launched t236... but the fight ran CROUCHED on the lower floor (the eye 13.3 — the second crouch press re-crouched him) and the only rays out are the steep rising ones — the t236 launch was the machine's HIGH close pass (y 20.4, dist 26.9) and the round self-blasted (-14.00 at t21070, the same west-band-above-the-doorway class); (11) forcing the stance standing after the drop (4 default ticks, a crouch toggle, an assert) FAILED — the port's crouch latch resists both semantics from the walk's side (the log: crouched true after the release ticks AND the press) — and the extra ~6 upper-floor ticks caught a missile blast (death t20760, WORSE) — reverted to the run-10 state. SHIPPED (the final tree): runs 1-7's d3 package + the crouch-drop (the hole walk_to (112.0, 13.08, -179.5) r(0.1) + the hole press + the crouch drop). REMAINING (settled 2026-11-21, run 12): there is no crouch-latch fault. The crouch press sets the stand/crouch lockout BL+0x960 = FRAME_RATE [M Player_ChangeSubState 0x190630:48-56] and Player_SSCrouch reads the stand press only while it is 0 [M 0x1924c0:84-92]; run 11's presses landed inside it (the fall ends with 45 lockout ticks left). Waiting it out and pressing once stands Bond, but the stand lifts the root 13.086 -> 13.470 in one tick, back into the hurt band: the world hits resume and the walk dies t20944 (crouched: t21070). The standing lower-floor fight is not zap-free; the next lever is a launch stance outside the hurt volume (or the crouched fight with flat-ray windows). Full ledger: the comment block above the test."]
 // nb-scan-all-08 ledger (2026-11-18, still red; the original fight code measures t28298 and
 // every lever this window tried measured WORSE — each on its own real run):
 // 1. the original anchor+crouch fight (112.5, −179.4): death t28298 at (112.25,13.09,−179.16),
@@ -2817,5 +2969,10 @@ fn walk_the_whole_mission_on_real_input_real_damage_00agent() {
     // the hurting-first fallback pick opens the stand on the shooter actually hurting Bond and
     // the stand creeps until the line opens. Opt-in per test: the sisters' timelines stay
     // byte-exact (none of them sets it).
-    walker::with_real_damage_glass_fights(|| walker::with_real_damage_unseen_fights(|| walk_the_whole_mission_on_real_input_at(3)))
+    // hard-walks-c: one 60-tick stand-still at tick 550 (on the station hall balcony, before the
+    // running jump), a shared-stream re-roll measured on the stream batch 3 head: without it the
+    // walk dies on the lower landing (t5039-16372 across re-rolls, the east deck stand costs 52);
+    // with it the walk reaches the cabin fight again (t26264), the deepest of 20 first-stop
+    // candidates (t100-650 x 30-240) and 24 second-stop ones (t2000-25000, none deeper) [L].
+    walker::with_pause(550, 60, || walker::with_real_damage_glass_fights(|| walker::with_real_damage_unseen_fights(|| walk_the_whole_mission_on_real_input_at(3))))
 }

@@ -73,11 +73,15 @@ fn a_live_grenade_through_the_07000006_plate_fires_it() {
 fn a_grenade_nowhere_near_the_plates_fires_nothing() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000006.bin", false).expect("load 07000006");
-    let outs: Vec<u8> = {
+    // The mask-2 plates' own channels, minus the ones another plate also writes: ch 0xc is shared
+    // with the player plate #486 and the drone plate #722 [D trigger dump], and a guard walking
+    // into #722 raises it with no bullet anywhere. The plates themselves are checked below too.
+    let (outs, plates): (Vec<u8>, Vec<usize>) = {
         let sim = scene.sim.as_ref().unwrap();
-        sim.drones.triggers.iter()
-            .filter(|t| t.kind == nf_game::triggers::kind::TOUCH_ONCE && t.mask == 2)
-            .map(|t| t.out).collect()
+        let m2: Vec<&nf_game::triggers::Trigger> = sim.drones.triggers.iter()
+            .filter(|t| t.kind == nf_game::triggers::kind::TOUCH_ONCE && t.mask == 2).collect();
+        let shared = |o: u8| sim.drones.triggers.iter().any(|t| t.out == o && t.mask != 2);
+        (m2.iter().map(|t| t.out).filter(|&o| !shared(o)).collect(), m2.iter().map(|t| t.placement).collect())
     };
     {
         let sim = scene.sim.as_mut().unwrap();
@@ -99,6 +103,11 @@ fn a_grenade_nowhere_near_the_plates_fires_nothing() {
         sim.step_bond(Input::default(), false, false, false);
         for &o in &outs {
             assert!(!sim.drones.channels.on(o as u32), "tick {t}: plate {o:#x} fired with no bullet near it");
+        }
+        // A fired TouchOnce deletes itself [M Trigger_Update 0x1b1d78-0x1b1d90]: every mask-2
+        // plate is still in the list.
+        for &p in &plates {
+            assert!(sim.drones.triggers.iter().any(|t| t.placement == p), "tick {t}: mask-2 plate #{p} fired with no bullet near it");
         }
         if sim.drones.grenades.is_empty() { break; }
     }

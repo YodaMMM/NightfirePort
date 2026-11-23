@@ -53,6 +53,22 @@ pub struct Wire {
     /// `inst+0x06` = placement param 3: the switch channel — set 1 every tick Bond is on the wire, 0 on
     /// drop (0 on both live wires) [M `Player_Wire` 0x1976bc, `Player_Zipline` 0x19806c].
     pub channel: u16,
+    /// The object's 0x2E collision triangles in WORLD space (`MapObject.collision`, through the
+    /// object matrix `Wire_Create` builds: `RotMatrix` of the placement rotation with rot.z negated
+    /// [M 0x198208-0x198214], the per-axis scale, the translation). The walk-in pick refines against
+    /// THESE [M Collide_Update 0x1ea398:84-93 → Collide_Intersect 0x1ebaa8:106 Mat_Copy(obj+0x90) →
+    /// Intersect_CylGeom 0x109da0]. Every shipped wire object carries them (8-60 triangles [D the
+    /// census in tests/wire_live.rs]); empty = no walk-in grab (the candidate distance stays 1e8).
+    pub tris: Vec<[V3; 3]>,
+    /// The runtime cel the wire is linked to (`build_LinkToRoom` 0x1c9680 → `build_FindCel` at the
+    /// world-sphere centre), resolved by the scene at load. `None` = unresolved.
+    pub cell: Option<u32>,
+    /// The wire's world sphere straddles two or more cels: `Controls_StraddleTest` 0x134778 (called
+    /// by `Wire_Create` @0x198268) puts it on the ForcedList and sets `obj+0xF0 |= 0x10000000`, so
+    /// `Collide_Pick` 0x1eb320 skips it on the cel chains (`F0 & 0x30000000`) and picks it from the
+    /// ForcedList for EVERY query, whatever cels the player straddles [M 0x1eb320:312-330, 0x1eba38].
+    /// Resolved by the scene at load.
+    pub forced: bool,
 }
 
 impl Wire {
@@ -74,6 +90,15 @@ impl Wire {
         let s_max = scale.iter().fold(1.0f32, |a, &v| a * v.max(1e-6).abs());
         // The wire-only rot.z negation [M 0x198208-0x198214].
         let pitch = -p.rotation[2];
+        let m = nf_formats::placement::object_matrix([p.rotation[0], p.rotation[1], -p.rotation[2]], p.translation);
+        let sc = [scale[0].abs(), scale[1].abs(), scale[2].abs()];
+        let tris = o.collision.as_ref().map(|col| {
+            col.triangles().into_iter().map(|t| t.map(|v| {
+                let v = [v[0] * sc[0], v[1] * sc[1], v[2] * sc[2]];
+                // Row-vector: v' = v·M + row 3.
+                [0, 1, 2].map(|k| v[0] * m[0][k] + v[1] * m[1][k] + v[2] * m[2][k] + m[3][k])
+            })).collect()
+        }).unwrap_or_default();
         Some(Wire {
             centre,
             origin: p.translation,
@@ -84,7 +109,38 @@ impl Wire {
             param0: param(p, 0) as u16,
             param2: param(p, 2) as u16,
             channel: param(p, 3) as u16,
+            tris,
+            cell: None,
+            forced: false,
         })
+    }
+
+    /// The walk-in pick: the player's HITTEST capsule (`pos + up·a_off` .. `pos + up·b_off`, radius
+    /// `capsule_radius` — `player::pick_arm`'s arm for the substate) against this wire, in the
+    /// game's two stages:
+    ///
+    /// 1. `Collide_PickObj` 0x1eae80, mode word BLData+0x7D4 = 0x800 (every arm of
+    ///    `Player_Collision` 0x194df0 writes 0x800): the closest point on the capsule segment to the
+    ///    world sphere centre, strictly inside `radius·1.5 + capsule_radius` [M 0x1eae80:152-168].
+    ///    The wire's other gates there pass: `obj+0xF0` = glist+0x44 = 0x40 [L ee_start_05 016dc4f0]
+    ///    holds none of the walk query's reject bits (0x20; the arm flags BLData+0x7D8 are 0), and
+    ///    the glist has a collision tree.
+    /// 2. The refine: `Collide_Intersect` 0x1ebaa8 → `Intersect_CylGeom` 0x109da0 over the object's
+    ///    collision triangles — a triangle counts only while its distance is strictly under the
+    ///    capsule radius [M 0x109da0:447,524]; none → the candidate stays 1e8 and `Collide_Update`
+    ///    0x1ea398 drops it. The surviving hit (marked non-solid: `obj+0xF0 & 0x40` sets the hit's
+    ///    +0x51 bit 2 [M 0x1ebaa8:33-38]) reaches `Player_CollisionHandler` 0x1949a8's
+    ///    `Player_DealWithObjHit` loop, which sends class 0x2C to `Player_CollWire` 0x197130 [M
+    ///    0x194458:104-107].
+    pub fn pick_hit(&self, pos: V3, a_off: f32, b_off: f32, capsule_radius: f32) -> bool {
+        if self.tris.is_empty() { return false; }
+        let a = [pos[0], pos[1] + a_off, pos[2]];
+        let b = [pos[0], pos[1] + b_off, pos[2]];
+        let c = Self::closest_point(a, b, self.centre);
+        let d = [c[0] - self.centre[0], c[1] - self.centre[1], c[2] - self.centre[2]];
+        let reach = self.radius * 1.5 + capsule_radius;
+        if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= reach * reach { return false; }
+        crate::triggers::capsule_hits_tris_strict(a, b, capsule_radius, &self.tris)
     }
 
     /// The grab segment (`Player_CollWire` 0x1971f8–0x197208): centre ± `spherical(radius − 2.0,
@@ -325,7 +381,7 @@ mod tests {
     /// The segment geometry against the game's own numbers [L ee_start_05.bin 016dc430 + atlas snapshot
     /// check]: 07000005's wire — centre (−23.4855, 34.4676, 6.26292), yaw −1.5708, radius 4.04, pitch 0.
     fn wire05() -> Wire {
-        Wire { centre: [-23.4855, 34.4676, 6.26292], origin: [-23.4855, 34.4676, 6.26292], radius: 4.039, yaw: -1.5708, pitch: 0.0, wire_type: 0, param0: 2, param2: 0, channel: 0 }
+        Wire { centre: [-23.4855, 34.4676, 6.26292], origin: [-23.4855, 34.4676, 6.26292], radius: 4.039, yaw: -1.5708, pitch: 0.0, wire_type: 0, param0: 2, param2: 0, channel: 0, tris: Vec::new(), cell: None, forced: false }
     }
 
     #[test]

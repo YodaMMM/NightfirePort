@@ -20,6 +20,9 @@
 //!
 //! Opt-in via NF_ISO.
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_game::player::Input;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
@@ -32,6 +35,11 @@ fn kimiko_scene() -> Option<nf_view::scene::Scene> {
     };
     {
         let sim = scene.sim.as_mut().unwrap();
+        // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+        // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+        // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+        // beats the pair's fail on a teleport.
+        reveal07::drakes_reveal(sim);
         sim.bond.pos = [94.2, 43.7, -45.9];
         for _ in 0..90 { sim.step_bond(Input::default(), false, false, false); }
     }

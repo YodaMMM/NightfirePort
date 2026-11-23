@@ -705,7 +705,7 @@ impl Doors {
             // NF_DOORTRACE=1 per-tick diagnostic (level-0b-waiting-room-doors): a moving door's
             // (index, state, pos01, dir, speed, flags) each tick, so a stalled swing shows its
             // last-advancing tick and the gate that stopped it.
-            if std::env::var_os("NF_DOORTRACE").is_some() {
+            if crate::env_flag!("NF_DOORTRACE") {
                 let d = &self.list[i];
                 eprintln!("[doortrace] #{} f{} state {:#x} pos01 {:.4} dir {:.1} speed {:.4} flags {:#x}",
                     i, frame, d.state, d.pos01, d.dir, d.speed, d.flags);
@@ -896,7 +896,7 @@ impl Doors {
                 let local = transform(&rigid_inverse(&self.list[i].matrix), hit);
                 let mut f = local[2] * self.list[i].swing;
                 if self.list[i].pos01 > 0.5 { f = -f; }
-                if std::env::var_os("NF_DOORTRACE").is_some() {
+                if crate::env_flag!("NF_DOORTRACE") {
                     eprintln!("[doorreact] #{} state {:#x} pos01 {:.4} dir {:.1} swing {:.1} lz {:.4} f {:.4} hit ({:.2},{:.2},{:.2})",
                         i, state, self.list[i].pos01, dir, self.list[i].swing, local[2], f, hit[0], hit[1], hit[2]);
                 }

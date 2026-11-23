@@ -520,6 +520,16 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
     band(&w, 30.4, 32.7, "flight C's bottom");
     w.walk_to(Wp::new(22.4, 31.3, -3.0).r(1.0), "the north strip 31.1 east");
     loot_the_drops(&mut w, "the 31.1 strip");
+    if difficulty == 3 {
+        // pickup-pushout-walks (00 Agent): with the dropped guns pushed out of the geometry
+        // (Pickup_Create 0x18dda0:166-183) Bond's first hit on the connector-1 descent comes
+        // 26 ticks earlier (his legs tick-identical to master up to there,
+        // first hit t6429 vs t6455) and the run reached the 18.9 strip with 4 health instead
+        // of 14.5 (#18's 4.0 at t7307 [L the branch run]). A player catches his breath at the
+        // 31.1 strip's east end before the descent: a 285-tick idle (the wait sweep 15..600
+        // step 15: 225, 285, 330 and 585 complete, the rest die between t6613 and t7654).
+        w.wait(285);
+    }
     w.walk_to(Wp::new(23.0, 27.4, 3.8).r(1.0), "the east connector down (31.1→27.1)");
     band(&w, 26.4, 29.5, "connector 1's bottom");
     w.walk_to(Wp::new(15.0, 27.4, 4.8).r(1.0), "the south strip 27.1 west");
@@ -750,6 +760,10 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
         w2.dmg.lane_floor_drops = true;
         w2.dmg.back_off = Some(3.0);
         if difficulty >= 2 { tower2::EAST_WING_WEST_SIDE.with(|c| c.set(true)); }
+        // batch 3 (the game's one-sided cylinder push): the d1 543 diagonal's stuck sidestep dug
+        // into the wall's east dead-end (10.62, -15.73) and held the 6000-tick cap. The 12 walk's
+        // own d1 answer: the sidestep decays (walkreal_07000012_live's d1 setter).
+        if difficulty == 1 { w2.sidestep_decays = true; }
     }
     w2.wait_enabled(3000, "07000012's intro");
     w2.wait(90);
@@ -838,10 +852,13 @@ fn walk_spawn_to_the_lower_floor_load_point() {
 /// NDrone2_HitDamage 0x145558 × DroneDamage_Head]). One head hit drops a 12-health guard.
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
-    walker::with_real_damage_head_hunting(||
+    // Batch 3 (stream batch 1121d): with the 543 sidestep decay on 12's legs (see the w2 kit) the
+    // no-stop walk died t5720 on 12's lower floor. Lever 3000/60 [L the 8-value sweep: 2000/60,
+    // 3000/60, 4000/60 complete; 1/60, 1/90, 100/60, 1/200, 1/400 die].
+    walker::with_pause(3000, 60, || walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
-                walk_spawn_to_the_lower_floor_load_point_at(1))))
+                walk_spawn_to_the_lower_floor_load_point_at(1)))))
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-00agent-11): the same walked
@@ -856,10 +873,15 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
 /// only other difference.
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
-    walker::with_real_damage_head_hunting(||
+    // Batch 3 (stream batch 1121d): with no stop the spawn fight's guard #5 shot the civilian
+    // (placement 131, team 3) at t217 and the mission failed "Killed Civilians" (0x4000034, the
+    // game's any-killer arm for a prop-0x53 civilian [M DroneFunc_OnInitDeath 0x145bd0]) before
+    // the armour take. A 90-tick stand after the intro re-rolls the fight [L the 8-value sweep:
+    // 1/60, 1/90, 100/60, 1/400 complete; 1/30, 50/30 die t41498, 1/200 misses the 545 E, 1/700 wedges].
+    walker::with_pause(1, 90, || walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
-                walk_spawn_to_the_lower_floor_load_point_at(2))))
+                walk_spawn_to_the_lower_floor_load_point_at(2)))))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage_agent`: the same walked route at the menu's
@@ -902,6 +924,10 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
 ///    second measured run died at d 1.1 of #19 that way); a player reloads between guards.
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
+    // s-g028-cover-walks: the cover runs' goal radius (0.5) and the route end (the move target is the
+    // dest past the last node [M 0x159668]) re-deal this walk's fights. A 90-tick stand after the
+    // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 90/200 passed.
+    walker::set_post_intro_wait(90);
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||

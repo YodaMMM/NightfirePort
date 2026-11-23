@@ -12,12 +12,17 @@ Tags: [M] decompile, [D] disc, [L] snapshot, [S] suggested.
 
 ## Identification [L ee_start_05.bin + ELF strings]
 
+This survey table was shifted; the settled ids (fix-qclaw, `nf_game::gadget`'s header, docs/systems/decryptor.md) are:
+0x4A/0x4C Stunner, 0x4E/0x4F Laser, 0x50/0x51 Grapple (Q-Claw), 0x54/0x55 Micro-Camera, 0x56/0x57 Q-Decryptor. For the
+Stunner, Laser and Q-Decryptor the second id is the gold-medal upgrade `Upgrade_Weapon` 0x1a8f30 returns; 0x54 keeps
+its id and the upgrade doubles its zoom (docs/systems/pickups.md).
+
 | Id | Gadget | Evidence |
 |---|---|---|
-| 0x4A/0x4C | Q-Claw (grapple) | `Player_SSGrapple` 0x192860, `Player_InitGrapple` 0x195d10, `Player_GrappleSetRope` 0x192728; sounds SFX_GADGET_GRAPPLE_* |
-| 0x4E/0x4F | Q-Decryptor | `Player_SSScanMode` 0x193098; sounds SFX_GADGET_DECRYPTOR_* |
-| 0x50 | Q-Laser (watch laser) | `Player_LaserPointer` 0x1a65d8, `Draw_LaserBeam` 0x1a4560; sounds SFX_GADGET_WATCH_LASER_* |
-| 0x54 | Laser Watch (scoped) | `weapon_data[0x54]+0x68` flag 0x40 (scoped); sounds SFX_GADGET_WATCH_LASER_* / WATCH_TASER |
+| 0x50/0x51 | Grapple (Q-Claw) | `Player_SSGrapple` 0x192860, `Player_InitGrapple` 0x195d10, `Player_GrappleSetRope` 0x192728; sounds SFX_GADGET_GRAPPLE_* |
+| 0x56/0x57 | Q-Decryptor | `Player_SSScanMode` 0x193098; sounds SFX_GADGET_DECRYPTOR_* |
+| 0x4E/0x4F | Laser (watch laser) | `Player_LaserPointer` 0x1a65d8, `Draw_LaserBeam` 0x1a4560; sounds SFX_GADGET_WATCH_LASER_* |
+| 0x54 | Micro-Camera (scoped) | `weapon_data[0x54]+0x68` flag 0x40 (scoped); sounds SFX_GADGET_WATCH_LASER_* / WATCH_TASER |
 
 ## Status (fix-gadgets2, 2026-10-13)
 
@@ -27,8 +32,8 @@ Tags: [M] decompile, [D] disc, [L] snapshot, [S] suggested.
 | 0x195d10 | `Player_InitGrapple` | **stand-in** | The rope object (mesh 0x2000138) is not created (the renderer's item). |
 | 0x192728 | `Player_GrappleSetRope` | **stand-in** | The rope endpoints are not drawn. |
 | 0x195da0 | `Player_SetGrapplePoint` | **ported (logic)** | The enter path in scene.rs (the aim ray vs the point's sphere; the exact selection cone [S]). |
-| 0x193098 | `Player_SSScanMode` | **partial** | The decryptor's lock burn works through the beam path (`runs_beam` — 0x4E/0x4F in `Lock_Update` 0x1ae3d8's contact scan); the scan-mode camera/UI is not ported. |
-| 0x1a65d8 | `Player_LaserPointer` | **the GUNS' laser sight** | fix-gadgets2 re-read: this is the GUNS' laser-sight ray (+0x68 & 0x8 weapons, drawn every tick while equipped) — the gadget beams draw from the per-shot `Player_MuzzleFlash` 0x1a4298 → `Draw_LaserBeam` 0x1a4560 (weapdef+0x6c bit 0x100 — the decryptor 0x4E/0x4F) / `Draw_TaserBeam` 0x1a46a8 (bit 0x80 — the claw) path, spawned by the HELD fire's refire loop [M 0x1a5460:442-694]. The port's burn runs while the fire is held (the watch also aimed [M 0x1a5460:512-514]). The Q-Laser 0x50/0x51's SP `+0x95f == 2` ThirdIcon gate [M :523] is not ported. |
+| 0x193098 | `Player_SSScanMode` | **partial** | The decryptor's decode is `Lock_Update` 0x1ae3d8's 0x56/0x57 contact arm (docs/systems/decryptor.md); the 0x4E/0x4F laser beam burns kind-1 locks only; the scan-mode camera/UI is not ported. |
+| 0x1a65d8 | `Player_LaserPointer` | **the GUNS' laser sight** | fix-gadgets2 re-read: this is the GUNS' laser-sight ray (+0x68 & 0x8 weapons, drawn every tick while equipped) — the gadget beams draw from the per-shot `Player_MuzzleFlash` 0x1a4298 → `Draw_LaserBeam` 0x1a4560 (weapdef+0x6c bit 0x100 — the laser 0x4E/0x4F) / `Draw_TaserBeam` 0x1a46a8 (bit 0x80 — the claw) path, spawned by the HELD fire's refire loop [M 0x1a5460:442-694]. The port's burn runs while the fire is held (the watch also aimed [M 0x1a5460:512-514]). The Grapple 0x50/0x51's SP `+0x95f == 2` ThirdIcon gate [M :523] is not ported. |
 | 0x1a4560 | `Draw_LaserBeam` | **render item** | The beam's endpoints are parked on `Sim::laser_beam` for the renderer (the meshes 0x2000131/0x2000133). |
 | 0x198298 | `Grapple_Create` | **ported** | The grapple points parse (placement 0x3A — this page's 0x3E was the WIRE's type; corrected). `drones.grapple_points`. |
 
@@ -49,12 +54,12 @@ pick up and equip; their fire-side functions are the mission layer's (not ported
 - Release: Bond detaches and enters walk substate.
 - Sounds: SFX_GADGET_GRAPPLE_FIRE (0x600-ish), GRAPPLE_ATTACH, GRAPPLE_OPEN/CLOSE.
 
-### Q-Decryptor (0x4E/0x4F) — `Player_SSScanMode` 0x193098
+### Q-Decryptor (0x56/0x57) — `Player_SSScanMode` 0x193098
 - On select: Bond enters substate 5 (scan mode). The camera changes to a scanning view.
 - On fire: decodes a digit of a lock's code; when all digits are decoded, the lock opens.
 - Sounds: SFX_GADGET_DECRYPTOR_DECODE_LOOP, DECODE_DIGIT, CODE_COMPLETE, DECRYPT, ABORT, BUTTON_PRESS.
 
-### Q-Laser (0x50) — `Player_LaserPointer` 0x1a65d8
+### Laser (0x4E/0x4F) — `Player_LaserPointer` 0x1a65d8
 - On fire (held): casts a ray from Bond's head; `Draw_LaserBeam` draws the beam; if the ray hits a lock/object
   with flag 0x8, it burns through. The beam object (0x2000131 or 0x2000133) is positioned and scaled.
 - `Collide_RayIntersect` finds the hit; `Mat_Align2Dir` orients the beam.

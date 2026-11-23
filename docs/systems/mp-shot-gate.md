@@ -68,9 +68,13 @@ the game's fire tick, minus the view-anim half that stays the sender's.
 `clip_size·2` rounds into the spawn weapon [M nf-game::mp::equip]), updated by:
 
 - the gate's own spends (every machine, identically);
-- the shared pickup takes (`step_net_world` runs `Inventory::take` on the taker slot's gate —
-  the same call the local inventory gets, same clock/skin flags, so a remote slot's ammo pickups
-  land in the shared state too);
+- the shared pickup takes (`step_net_world` runs `Inventory::take_ex` on the taker slot's gate,
+  the same call the local inventory gets, so a remote slot's ammo pickups land in the shared state
+  too). The id is the match take id (`Inventory::take_id`): no `Upgrade_Weapon`, the character
+  row's 10/0xD swap, then `Upgrade_MPWeapon` [M Pickup_Handler 0x18e650:141-160]. mp-drops: this
+  passed the tick count as the game-complete byte before, so every weapon-10 take became 0xC;
+- the death tick: the slot's held weapon and clip from this gate make the dropped gun
+  (`Player_CheckForDeath` 0x190810:42-56; docs/systems/pickups.md);
 - the shared respawn re-running `mp_equip_player` (the game's `MP_ReSpawn` 0x185368 →
   `MP_EquipPlayer` 0x1855f8 re-equip).
 - **A weapon the gate never saw** (never equipped, never taken — the test rows' directly-claimed

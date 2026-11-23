@@ -22,6 +22,18 @@
 // GoToGoalPosition (0x63) arms to the ally's 0x28, freezing guards on their way to a goal, and only this lint saw it.
 #![deny(unreachable_patterns)]
 
+/// A debug env switch read once per call site (frame-cost-1122): `std::env::var_os` takes a
+/// process-wide lock and, on Windows, a `GetEnvironmentVariableW` call (~1 µs), which the
+/// per-tick diagnostic gates were paying on every pass. Only for switches no test toggles while
+/// the process runs (NF_DOORLOG, NF_HOLD_SKIP and NF_SCRIPTLOG are, so they keep live reads).
+#[macro_export]
+macro_rules! env_flag {
+    ($name:literal) => {{
+        static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *F.get_or_init(|| std::env::var_os($name).is_some())
+    }};
+}
+
 pub mod aipoint;
 pub mod aivolume;
 pub mod celgraph;
@@ -94,6 +106,7 @@ pub mod sound;
 pub mod spawners;
 pub mod space_missile;
 pub mod trig;
+pub mod autoaim;
 pub mod triggers;
 pub mod tuning;
 pub mod useobj;

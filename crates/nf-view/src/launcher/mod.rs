@@ -10,8 +10,9 @@
 //! command-line tools and logs need the console), so double-clicking it would always flash one; and winit allows
 //! one event loop per process, so the launcher hands over to a fresh game process instead of reusing its own.
 //!
-//! The screen is drawn on the CPU (canvas.rs) and shown through a one-texture wgpu blit; `--shot out.png` renders
-//! the same frame headless:
+//! The screen is drawn on the CPU (canvas.rs) and copied to the window as is: with GDI on Windows (gdi.rs; no GPU,
+//! so a driver that faults while a device opens can't take the launcher down; `NF_LAUNCHER_GPU=1` uses wgpu
+//! instead), through a one-texture wgpu blit elsewhere. `--shot out.png` renders the same frame headless:
 //! ```text
 //! NightfirePort [<iso>]                       open the launcher (an <iso> argument is checked and remembered)
 //! NightfirePort --shot out.png [--state first|ready|error|drop|starting] [--iso <path>] [--scale S] [--t SEC]
@@ -19,6 +20,8 @@
 
 pub mod canvas;
 pub mod config;
+#[cfg(windows)]
+pub mod gdi;
 pub mod platform;
 pub mod ui;
 pub mod update;
@@ -42,6 +45,20 @@ use ui::{Btn, Disc, Ui};
 const TITLE: &str = "007: Nightfire \u{2014} NightfirePort";
 /// Close anyway if the game never shows a window this long after PLAY.
 const START_TIMEOUT: Duration = Duration::from_secs(60);
+/// The game's log line once its GPU device is open (lib.rs `device`).
+const GPU_READY: &str = "gpu: device ready";
+/// The backend a start that faulted before [`GPU_READY`] is retried with (and remembered).
+const FALLBACK_GPU: &str = "dx12";
+
+/// A Windows native fault exit code (an NTSTATUS error, `0xC...`: 0xC0000005 access violation, 0xC0000409 fast
+/// fail, ...), not a normal exit or a panic's code 1.
+fn native_fault(code: Option<i32>) -> Option<u32> { code.map(|c| c as u32).filter(|c| c >> 30 == 0b11) }
+
+/// Retry the game once on [`FALLBACK_GPU`]? Only when it died of a native fault before its log reached
+/// [`GPU_READY`] (a driver faulting while the device opens) and that backend isn't already the one it ran on.
+fn gpu_fallback(code: Option<i32>, log: &str, gpu: Option<&str>) -> bool {
+    native_fault(code).is_some() && !log.contains(GPU_READY) && !gpu.is_some_and(|g| g.trim().eq_ignore_ascii_case(FALLBACK_GPU))
+}
 
 /// The game's console log (`<config dir>/nf-view.log`).
 fn game_log_path() -> Option<PathBuf> { crate::settings::config_dir().map(|d| d.join("nf-view.log")) }
@@ -112,7 +129,10 @@ pub fn run() -> Result<()> {
         spawn_update()
     });
     let el = EventLoop::new()?;
-    let mut app = App { fonts, ui, gfx: None, canvas: Canvas::new(1, 1), bg: Canvas::new(1, 1), bg_key: (0, 0, 0), rgba: Vec::new(), cursor: (0.0, 0.0), start: Instant::now(), child: None, launched_at: None, shown: false, update_rx, autoplayed: false };
+    let gpu = config::default_path().and_then(|p| LauncherConfig::load(&p).gpu);
+    let fixed_t = std::env::var("NF_LAUNCHER_T").ok().and_then(|v| v.parse().ok());
+    let shot_out = std::env::var_os("NF_LAUNCHER_SHOT").map(PathBuf::from);
+    let mut app = App { fonts, ui, gpu, fixed_t, shot_out, frames: 0, gpu_ready: false, ready_checked: None, gfx: None, canvas: Canvas::new(1, 1), bg: Canvas::new(1, 1), bg_key: (0, 0, 0), rgba: Vec::new(), cursor: (0.0, 0.0), start: Instant::now(), child: None, launched_at: None, shown: false, update_rx, autoplayed: false };
     el.run_app(&mut app)?;
     Ok(())
 }
@@ -192,7 +212,60 @@ fn shot(args: &[String], out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The launcher window and how its frames reach it.
 struct Gfx {
+    window: Arc<Window>,
+    width: u32,
+    height: u32,
+    out: Present,
+}
+
+enum Present {
+    #[cfg(windows)]
+    Gdi(gdi::Gdi),
+    Gpu(GpuBlit),
+}
+
+impl Gfx {
+    fn new(window: Arc<Window>) -> Result<Gfx> {
+        let size = window.inner_size();
+        let (width, height) = (size.width.max(1), size.height.max(1));
+        #[cfg(windows)]
+        if std::env::var_os("NF_LAUNCHER_GPU").is_none() {
+            if let Some(hwnd) = window_hwnd(&window) {
+                eprintln!("launcher: drawing with GDI (no GPU)");
+                return Ok(Gfx { window, width, height, out: Present::Gdi(gdi::Gdi::new(hwnd)) });
+            }
+        }
+        let g = GpuBlit::new(window.clone(), width, height)?;
+        Ok(Gfx { window, width, height, out: Present::Gpu(g) })
+    }
+
+    fn resize(&mut self, w: u32, h: u32) {
+        if w == 0 || h == 0 { return; }
+        (self.width, self.height) = (w, h);
+        if let Present::Gpu(g) = &mut self.out { g.resize(w, h); }
+    }
+
+    fn present(&mut self, rgba: &[u8], w: u32, h: u32) {
+        match &mut self.out {
+            #[cfg(windows)]
+            Present::Gdi(g) => g.present(rgba, w, h),
+            Present::Gpu(g) => g.present(rgba, w, h),
+        }
+    }
+}
+
+fn window_hwnd(window: &Window) -> Option<*mut std::ffi::c_void> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get() as *mut std::ffi::c_void),
+        _ => None,
+    }
+}
+
+/// The wgpu path: the canvas as one texture, drawn 1:1 onto the surface.
+struct GpuBlit {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -219,15 +292,15 @@ struct VO { @builtin(position) p: vec4<f32> };
 }
 "#;
 
-impl Gfx {
-    fn new(window: Arc<Window>) -> Result<Gfx> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+impl GpuBlit {
+    fn new(window: Arc<Window>, width: u32, height: u32) -> Result<GpuBlit> {
+        let instance = wgpu::Instance::new(crate::instance_desc());
         let surface = instance.create_surface(window.clone())?;
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: Some(&surface), power_preference: wgpu::PowerPreference::LowPower, ..Default::default() }))?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
         device.on_uncaptured_error(Arc::new(|e| eprintln!("launcher GPU error: {e}")));
-        let size = window.inner_size();
-        let mut config = surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)).context("surface config")?;
+        eprintln!("launcher: drawing with wgpu ({})", adapter.get_info().name);
+        let mut config = surface.get_default_config(&adapter, width, height).context("surface config")?;
         // The canvas bytes are display values (no gamma step), like the game's own non-sRGB surface.
         config.format = config.format.remove_srgb_suffix();
         config.present_mode = wgpu::PresentMode::AutoVsync;
@@ -249,7 +322,7 @@ impl Gfx {
             multiview_mask: None,
             cache: None,
         });
-        Ok(Gfx { window, surface, config, device, queue, pipeline, layout, tex: None })
+        Ok(GpuBlit { window, surface, config, device, queue, pipeline, layout, tex: None })
     }
 
     fn resize(&mut self, w: u32, h: u32) {
@@ -297,6 +370,16 @@ impl Gfx {
 struct App {
     fonts: Fonts,
     ui: Ui,
+    /// The remembered `WGPU_BACKEND` the game starts with (launcher.toml `gpu`).
+    gpu: Option<String>,
+    /// NF_LAUNCHER_T: a fixed animation time (the screenshot check).
+    fixed_t: Option<f32>,
+    /// NF_LAUNCHER_SHOT: read the window back through PrintWindow to this PNG after a second, then exit.
+    shot_out: Option<PathBuf>,
+    frames: u32,
+    /// The running game's log reached GPU_READY; when it was last read.
+    gpu_ready: bool,
+    ready_checked: Option<Instant>,
     gfx: Option<Gfx>,
     canvas: Canvas,
     bg: Canvas,
@@ -316,14 +399,7 @@ struct App {
 impl App {
     fn scale(&self) -> f32 { self.gfx.as_ref().map_or(1.0, |g| g.window.scale_factor() as f32) }
 
-    fn hwnd(&self) -> Option<*mut std::ffi::c_void> {
-        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let g = self.gfx.as_ref()?;
-        match g.window.window_handle().ok()?.as_raw() {
-            RawWindowHandle::Win32(h) => Some(h.hwnd.get() as *mut std::ffi::c_void),
-            _ => None,
-        }
-    }
+    fn hwnd(&self) -> Option<*mut std::ffi::c_void> { window_hwnd(&self.gfx.as_ref()?.window) }
 
     /// Checks a picked/dropped image; a good one replaces the disc and is remembered.
     fn take_iso(&mut self, p: &Path) {
@@ -346,10 +422,32 @@ impl App {
         let Some(d) = &self.ui.disc else { return self.select() };
         let iso = d.path.clone();
         let exe = match platform::game_exe() { Ok(e) => e, Err(e) => { self.ui.error = Some(e); return; } };
-        match platform::launch(&exe, &iso, game_log_path().as_deref(), self.ui.dev) {
-            Ok(child) => { self.child = Some(child); self.launched_at = Some(Instant::now()); self.ui.launching = true; self.ui.error = None; self.ui.hover = None; }
-            Err(e) => self.ui.error = Some(e),
+        self.start_game(&exe, &iso, None);
+    }
+
+    fn start_game(&mut self, exe: &Path, iso: &Path, note: Option<&str>) {
+        match platform::launch(exe, iso, game_log_path().as_deref(), self.ui.dev, self.gpu.as_deref(), note) {
+            Ok(child) => { self.child = Some(child); self.launched_at = Some(Instant::now()); self.gpu_ready = false; self.ready_checked = None; self.ui.launching = true; self.ui.error = None; self.ui.hover = None; }
+            Err(e) => { self.ui.launching = false; self.ui.error = Some(e); }
         }
+    }
+
+    /// The game faulted before its GPU was ready: start it once more on FALLBACK_GPU and remember that.
+    fn try_gpu_fallback(&mut self, code: Option<i32>, log: &str) -> bool {
+        let effective = std::env::var("WGPU_BACKEND").ok().or_else(|| self.gpu.clone());
+        if !gpu_fallback(code, log, effective.as_deref()) { return false; }
+        let (Some(d), Ok(exe)) = (&self.ui.disc, platform::game_exe()) else { return false };
+        let iso = d.path.clone();
+        let line = format!("launcher: the game stopped with 0x{:08X} before the GPU was ready; starting it again with WGPU_BACKEND={FALLBACK_GPU} (remembered)", native_fault(code).unwrap_or(0));
+        eprintln!("{line}");
+        self.gpu = Some(FALLBACK_GPU.into());
+        if let Some(p) = config::default_path() {
+            let mut cfg = LauncherConfig::load(&p);
+            cfg.gpu = self.gpu.clone();
+            let _ = cfg.save(&p);
+        }
+        self.start_game(&exe, &iso, Some(&line));
+        self.child.is_some()
     }
 
     fn act(&mut self, el: &ActiveEventLoop, b: Btn) {
@@ -381,7 +479,7 @@ impl App {
 
     fn redraw(&mut self) {
         let Some(g) = self.gfx.as_mut() else { return };
-        let (w, h) = (g.config.width, g.config.height);
+        let (w, h) = (g.width, g.height);
         let s = g.window.scale_factor() as f32;
         if self.bg_key != (w, h, s.to_bits()) {
             self.bg.resize(w, h);
@@ -389,11 +487,33 @@ impl App {
             self.bg_key = (w, h, s.to_bits());
         }
         self.canvas.resize(w, h);
-        self.ui.t = self.start.elapsed().as_secs_f32();
+        self.ui.t = self.fixed_t.unwrap_or_else(|| self.start.elapsed().as_secs_f32());
         ui::paint(&mut self.canvas, &self.bg, &self.fonts, &self.ui, s);
         self.canvas.to_rgba(&mut self.rgba);
         g.present(&self.rgba, w, h);
         if !self.shown { g.window.set_visible(true); g.window.focus_window(); self.shown = true; }
+        self.frames += 1;
+    }
+
+    /// NF_LAUNCHER_SHOT: what the window really shows, read back after ~1 s of frames; then the launcher closes.
+    fn shot_check(&mut self, el: &ActiveEventLoop) {
+        if self.shot_out.is_none() || self.frames < 60 { return; }
+        let (Some(out), Some(g)) = (self.shot_out.take(), &self.gfx) else { return };
+        #[cfg(windows)]
+        {
+            let (w, h) = (g.width, g.height);
+            match window_hwnd(&g.window).and_then(|hwnd| gdi::capture_client(hwnd, w, h)) {
+                Some(px) => {
+                    let same = px == self.rgba;
+                    let _ = std::fs::write(&out, nf_formats::png::encode_rgba(w, h, &px));
+                    eprintln!("launcher: window read back to {} ({w}x{h}); {} the last presented frame", out.display(), if same { "identical to" } else { "differs from" });
+                }
+                None => eprintln!("launcher: window read-back failed"),
+            }
+        }
+        #[cfg(not(windows))]
+        { let _ = (out, g); }
+        el.exit();
     }
 
     /// "Report crash" (bugreport.rs): opens the GitHub bug form for the waiting crash report and shows its zip.
@@ -442,6 +562,8 @@ impl App {
                 self.ui.launching = false;
                 self.child = None;
                 if status.success() { el.exit(); return; }
+                let log = game_log_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+                if self.try_gpu_fallback(status.code(), &log) { return; }
                 self.check_crash();
                 if self.ui.crash.is_some() { return; }
                 let log = game_log_path().map(|p| p.display().to_string()).unwrap_or_default();
@@ -453,7 +575,15 @@ impl App {
             Ok(None) => {
                 let up = platform::game_window_up(child.id());
                 let waited = at.elapsed();
-                if up == Some(true) || (up.is_none() && waited > Duration::from_secs(3)) || waited > START_TIMEOUT { el.exit(); }
+                // Stay until the game's GPU is up too, so a fault while its device opens is still caught here.
+                if !self.gpu_ready && self.ready_checked.is_none_or(|t| t.elapsed() > Duration::from_millis(250)) {
+                    self.ready_checked = Some(Instant::now());
+                    self.gpu_ready = match game_log_path() {
+                        Some(p) => std::fs::read_to_string(p).map_or(true, |t| t.contains(GPU_READY)),
+                        None => true,
+                    };
+                }
+                if (up == Some(true) && self.gpu_ready) || (up.is_none() && waited > Duration::from_secs(3)) || waited > START_TIMEOUT { el.exit(); }
             }
             Err(e) => { self.ui.error = Some(format!("The game couldn't be watched: {e}")); self.ui.launching = false; self.child = None; }
         }
@@ -531,6 +661,7 @@ impl ApplicationHandler for App {
             self.play();
         }
         self.poll_child(el);
+        self.shot_check(el);
         let Some(g) = &self.gfx else { return };
         if g.window.is_minimized().unwrap_or(false) {
             el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(250)));
@@ -561,6 +692,24 @@ mod tests {
         assert_eq!(ui.disc.as_ref().unwrap().details(), "SLUS-20579  \u{b7}  NTSC-U  \u{b7}  v1.00  \u{b7}  2.27 GB");
         ui.launching = true;
         assert_eq!(ui.hit(r.x + 5.0, r.y + 5.0), None, "no clicks while the game starts");
+    }
+
+    #[test]
+    fn gpu_fallback_only_for_a_fault_before_the_device() {
+        let av = Some(0xC000_0005u32 as i32);
+        let early = "start: game mode\ngpu: adapter Intel(R) UHD Graphics (Vulkan; driver x)\ngpu: requesting the device (features x)\n";
+        assert!(gpu_fallback(av, early, None), "access violation while the device opens: retry");
+        assert!(gpu_fallback(Some(0xC000_0409u32 as i32), "", None), "fast fail before any GPU line: retry");
+        assert!(gpu_fallback(av, early, Some("vulkan")), "another backend set: dx12 is still untried");
+        assert!(!gpu_fallback(av, early, Some("dx12")), "already on dx12: no loop");
+        assert!(!gpu_fallback(av, early, Some(" DX12 ")));
+        let later = format!("{early}gpu: device ready\nlevel 01 loaded\n");
+        assert!(!gpu_fallback(av, &later, None), "a fault after the device opened is not a device-open fault");
+        assert!(!gpu_fallback(Some(1), early, None), "an error exit (code 1) is not a native fault");
+        assert!(!gpu_fallback(Some(101), early, None), "a panic is not a native fault");
+        assert!(!gpu_fallback(None, early, None), "killed by a signal (no code)");
+        assert!(!gpu_fallback(Some(0x8000_0003u32 as i32), early, None), "a warning-class status (breakpoint) is not an error fault");
+        assert_eq!(native_fault(av), Some(0xC000_0005));
     }
 
     #[test]

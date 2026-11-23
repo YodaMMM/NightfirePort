@@ -16,9 +16,14 @@
 //! | 0xfc | `FUN_001bf3d8` | `R(v/256 · frame degrees, +y) · own` |
 //! | 0xfb | `FUN_001bf458` | `R(v/256 · frame degrees, +z) · own` |
 //! | 0xef | `FUN_001bf598` | `R(dials[v] degrees, +z) · own` (`FUN_001befc8`: v past 12 → dials[0]) |
-//! | 0xf3 | `FUN_001bf338` → `FUN_001a30c0` | own (the animated branch needs `+0x0d` < 100) |
+//! | 0xf3 | `FUN_001bf338` → `FUN_001a30c0` | own (the keyframe branch needs `+0x0d` < 100) |
+//! | 0..0x63 | `FUN_001bf318` → `FUN_001a30c0` | [`keyframe_matrix`] when the `as` set has an animation, else own |
 //! | 0x64 | `FUN_001bf5f8` | not drawn (returns 0) |
-//! | 0xee | `FUN_001bfc20` | camera-facing; not ported |
+//! | 0xee | `FUN_001bfc20` | [`facing_matrix`]: turned about +y to face the camera, rocked about +z |
+//!
+//! The other entries of the 256-entry table (0x65, 0x66-0xec, 0xed, 0xf0-0xf2, 0xf4-0xf7, 0xf9,
+//! 0xfa, 0xfd) belong to kinds no car file uses [D: `carpose_disc.rs`, `carpose_vehicles_disc.rs`]
+//! and are [`PartMatrix::Unported`].
 //!
 //! `v` is the item's `+0x0e`, or the u16 at `+2` of its run-time entry when `+0x0c & 0x10`
 //! [M FUN_001bf048]; the entry table is not decoded, so such items are [`PartMatrix::Unported`].
@@ -81,6 +86,38 @@ pub fn rot_y_turns(turns: f32) -> Mat4 { rot(turns * std::f32::consts::TAU, [0.0
 
 /// `FUN_002cc510(turns, out)`: about +x, turns, translation zero [M 0x2cc510].
 pub fn rot_x_turns(turns: f32) -> Mat4 { rot(turns * std::f32::consts::TAU, [1.0, 0.0, 0.0]) }
+
+/// `FUN_002cc610(turns, out)`: about +z, turns: row 0 = (c, s, 0), row 1 = (−s, c, 0), row 2 =
+/// (0, 0, 1), row 3 = (0, 0, 0, 1) [M 0x2cc610].
+pub fn rot_z_turns(turns: f32) -> Mat4 { rot(turns * std::f32::consts::TAU, [0.0, 0.0, 1.0]) }
+
+/// `FUN_002cc0c8`: quaternion (x, y, z, w) to rows, row 3 = (0, 0, 0, 1) [M, the broadcast fields
+/// read from the VU words; the same function `nf_game::driving::flight::quat_rows` ports].
+pub fn quat_rows(q: [f32; 4]) -> Mat4 {
+    let [x, y, z, w] = q;
+    let (xx, xy, xz, xw) = (2.0 * x * x, 2.0 * x * y, 2.0 * x * z, 2.0 * x * w);
+    let (yy, yz, yw) = (2.0 * y * y, 2.0 * y * z, 2.0 * y * w);
+    let (zz, zw) = (2.0 * z * z, 2.0 * z * w);
+    [
+        [1.0 - yy - zz, xy + zw, xz - yw, 0.0],
+        [xy - zw, 1.0 - xx - zz, yz + xw, 0.0],
+        [xz + yw, yz - xw, 1.0 - xx - yy, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+}
+
+/// `FUN_002cc018(t, a, b, out)`: `a·(1 − t) + b·t` when `|b − a|² − |b + a|² <= 0`, else
+/// `b·t − a·(1 − t)`, scaled to unit length over four lanes [M; the same function
+/// `nf_game::driving::flight::nlerp` ports].
+pub fn nlerp(t: f32, a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let d: f32 = (0..4).map(|k| (b[k] - a[k]) * (b[k] - a[k])).sum();
+    let s: f32 = (0..4).map(|k| (b[k] + a[k]) * (b[k] + a[k])).sum();
+    let pa: [f32; 4] = std::array::from_fn(|k| a[k] * (1.0 - t));
+    let pb: [f32; 4] = std::array::from_fn(|k| b[k] * t);
+    let q: [f32; 4] = if d - s <= 0.0 { std::array::from_fn(|k| pa[k] + pb[k]) } else { std::array::from_fn(|k| pb[k] - pa[k]) };
+    let n = q.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if n > 0.0 { q.map(|v| v / n) } else { q }
+}
 
 // ---------------------------------------------------------------------------------------------
 // The draw list.
@@ -363,14 +400,26 @@ pub struct CarPose {
     pub skel: Vec<Mat4>,
     /// `car + 0x40`: [`dials`].
     pub dials: [f32; 12],
+    /// `DAT_00333ff4 = 1 / FUN_002d6b90()`: one over the video mode's rate (the table at 0x3c1a38,
+    /// 60 / 60 / 50 / 60) [M FUN_001d1ec0]. The 0xee rock reads it.
+    pub inv_fps: f32,
+    /// Row 3 of the car's matrix (its position): `FUN_001ad498` hands `car + 0x30` to the kind
+    /// function, which the 0xee item adds to its own origin [M 0x1ad498, 0x1bfd04].
+    pub car_pos: [f32; 3],
+    /// The camera position `*(DAT_00333760) + 0x40` the 0xee item turns towards [M 0x1bfd18].
+    pub camera: [f32; 3],
 }
+
+/// `DAT_00333ff4` under the 60 Hz video modes [M FUN_001d1ec0 + D the 0x3c1a38 table].
+pub const INV_FPS_60: f32 = 1.0 / 60.0;
 
 impl CarPose {
     /// The pose after setup: identity `Skel` matrices (one per `Skel` entry, 4 without one), zero
-    /// dials [M FUN_001cc8e8, FUN_001cc568, FUN_001d2648].
+    /// dials [M FUN_001cc8e8, FUN_001cc568, FUN_001d2648]; the 60 Hz rate, car and camera at the
+    /// origin.
     pub fn rest(mesh: &CarMesh) -> CarPose {
         let n = if mesh.skel.is_empty() { 4 } else { mesh.skel.len() };
-        CarPose { frame: 0.0, skel: vec![IDENTITY; n], dials: [0.0; 12] }
+        CarPose { frame: 0.0, skel: vec![IDENTITY; n], dials: [0.0; 12], inv_fps: INV_FPS_60, car_pos: [0.0; 3], camera: [0.0; 3] }
     }
 }
 
@@ -381,8 +430,8 @@ pub enum PartMatrix {
     Drawn(Mat4),
     /// Skipped: `+0x0c & 1`, or a kind whose function returns 0.
     NotDrawn,
-    /// A kind or flag this module does not evaluate (the camera-facing 0xee, the run-time
-    /// entry of `+0x0c & 0x10`, the kinds no disc file uses).
+    /// A kind or flag this module does not evaluate (the run-time entry of `+0x0c & 0x10`, a
+    /// keyframe track, the kinds no disc file uses).
     Unported(u8),
 }
 
@@ -412,6 +461,11 @@ pub fn part_matrix(p: &CarPart, pose: &CarPose) -> PartMatrix {
     if p.flags & 0x10 != 0 && matches!(kind, 0xef | 0xfb | 0xfc | 0xee) {
         return PartMatrix::Unported(kind);
     }
+    if kind < 100 {
+        // FUN_001bf318 → FUN_001a30c0: the keyframe track needs the `as` set's animation
+        // reference; without one, the item's own matrix [M 0x1a30c0 :63-66, the else branch].
+        return if p.anim == 0 { PartMatrix::Drawn(own) } else { PartMatrix::Unported(kind) };
+    }
     match kind {
         0xfe => {
             // FUN_001bef68(link − 1): an index past the count reads matrix 0; with no matrices
@@ -433,9 +487,91 @@ pub fn part_matrix(p: &CarPart, pose: &CarPose) -> PartMatrix {
             PartMatrix::Drawn(mul(&rot_axis_degrees(v, [0.0, 0.0, 1.0]), &own))
         }
         0xf3 => PartMatrix::Drawn(own),
+        0xee => PartMatrix::Drawn(facing_matrix(p, link, pose)),
         0x64 => PartMatrix::NotDrawn,
         k => PartMatrix::Unported(k),
     }
+}
+
+/// `FUN_001bfc20`, the camera-facing item (kind 0xee) [M 0x1bfc20-0x1bfef8, disassembled]:
+///
+/// 1. rock phase `x = v · (1/65535) · frame · inv_fps` (`v` the unsigned `+0x0e`, the constant
+///    0x37800080), `f = x − floor(x)`, triangle `w = 2(1 − f)` above 0.5 else `2f`;
+/// 2. `d` = (item origin + car position − camera) with y = 0, normalised; the facing rows are
+///    `[up × d, up, d, (0, 0, 0, 1)]` with up = (0, 1, 0) (`VOPMULA`/`VOPMSUB` cross, normalised),
+///    so the item's +z points from the camera through the item, level;
+/// 3. `R_z((w − 0.5) · 0.1 turns) · facing` (`FUN_002cc610`, `FUN_002cbb88`), then row 3 xyz =
+///    the item's origin.
+///
+/// The result is then multiplied by the car's matrix like every other kind (`FUN_001ad498`), so
+/// the item faces the camera only while the car's rotation is the identity: the direction is
+/// taken in world space without the car's rotation [M]. A camera straight above the item gives
+/// `d` = 0, where the VU's rsqrt of 0 decides the rows; this keeps zero rows instead [S].
+pub fn facing_matrix(p: &CarPart, v: u16, pose: &CarPose) -> Mat4 {
+    let x = v as f32 * f32::from_bits(0x3780_0080) * pose.frame * pose.inv_fps;
+    let f = x - x.floor();
+    let w = if 0.5 < f { (1.0 - f) + (1.0 - f) } else { f + f };
+    let turns = (w - 0.5) * f32::from_bits(0x3dcc_cccd);
+    let mut d = [p.origin[0] + pose.car_pos[0] - pose.camera[0], 0.0, p.origin[2] + pose.car_pos[2] - pose.camera[2]];
+    let n2 = d[0] * d[0] + d[2] * d[2];
+    if n2 > 0.0 {
+        let q = 1.0 / n2.sqrt();
+        d = [d[0] * q, 0.0, d[2] * q];
+    }
+    // up × d = (up.y·d.z − up.z·d.y, up.z·d.x − up.x·d.z, up.x·d.y − up.y·d.x) = (d.z, 0, −d.x).
+    let facing = [[d[2], 0.0, -d[0], 0.0], [0.0, 1.0, 0.0, 0.0], [d[0], 0.0, d[2], 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let mut m = mul(&rot_z_turns(turns), &facing);
+    m[3][0] = p.origin[0];
+    m[3][1] = p.origin[1];
+    m[3][2] = p.origin[2];
+    m
+}
+
+/// One keyframe of a part track: rotation quaternion (x, y, z, w) and position (`+0x10`), 0x20
+/// bytes [M FUN_001a30c0: keys at `track[0] + k·0x20`, the position lane at `+0x10`].
+pub type Key = ([f32; 4], [f32; 4]);
+
+/// A part track as `FUN_001a30c0` reads it: the 16-byte entry `anim + kind·0x10` holds the keys
+/// pointer (+0), the key count (u16 +8) and a rate byte (+0xf) [M 0x1a30c0]. No item on the disc
+/// has a kind below 100 [D], so the branch never runs and the `an` / `qa` records the `as`
+/// payloads name are not decoded here; this takes the keys as values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyTrack {
+    pub keys: Vec<Key>,
+    pub rate: u8,
+}
+
+/// `FUN_001a30c0`'s keyframe branch [M 0x1a3124-0x1a3288, disassembled]: `t = (v · rate) ·
+/// 0.016666668` (an integer product, then f32), key `i = floor(t)` held below the count, `j = i +
+/// 1` held the same way, `f = t − i` (not clamped; once `i` is held at the last key `j` = `i`, so it has no effect), rows 0-2
+/// = `quat_rows(nlerp(f, key[i].q, key[j].q))`, row 3 xyz = `pos[i] + (pos[j] − pos[i])·f` with
+/// w = 1; a mirrored item (`+0x0c & 0x80`) then negates column 0 (words 0, 4, 8, 12). An empty
+/// track returns the identity [S: the game would read below the keys].
+pub fn keyframe_matrix(track: &KeyTrack, v: u16, mirrored: bool) -> Mat4 {
+    let n = track.keys.len();
+    if n == 0 {
+        return IDENTITY;
+    }
+    let t = (v as u32 * track.rate as u32) as i32 as f32 * f32::from_bits(0x3c88_8889);
+    let fl = t.floor();
+    let mut i = (fl + if fl < 0.0 { -0.5 } else { 0.5 }) as i32 as u32 as usize;
+    if i >= n {
+        i = n - 1;
+    }
+    let j = if i + 1 >= n { n - 1 } else { i + 1 };
+    let f = t - i as f32;
+    let (a, b) = (track.keys[i], track.keys[j]);
+    let mut m = quat_rows(nlerp(f, a.0, b.0));
+    for k in 0..3 {
+        m[3][k] = a.1[k] + (b.1[k] - a.1[k]) * f;
+    }
+    m[3][3] = 1.0;
+    if mirrored {
+        for r in m.iter_mut() {
+            r[0] = -r[0];
+        }
+    }
+    m
 }
 
 /// The LOD `FUN_001ad2e0` draws for `measure` (`FUN_001ad0b8`: `max(0, |camera − car| − 5) · K`,
@@ -454,7 +590,7 @@ mod tests {
     const ID3: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
     fn part(index: usize, attach: Attach, origin: [f32; 3], flags: u8) -> CarPart {
-        CarPart { index, flags, attach, axes: ID3, origin, set: 0, pass: 2, lods: vec![], strips: vec![] }
+        CarPart { index, flags, attach, axes: ID3, origin, set: 0, pass: 2, anim: 0, lods: vec![], strips: vec![] }
     }
 
     fn near(a: [f32; 3], b: [f32; 3]) -> bool { a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5) }
@@ -510,7 +646,7 @@ mod tests {
 
     #[test]
     fn each_kind_gets_its_run_time_matrix() {
-        let mut pose = CarPose { frame: 10.0, skel: vec![IDENTITY; 3], dials: [0.0; 12] };
+        let mut pose = CarPose { frame: 10.0, skel: vec![IDENTITY; 3], dials: [0.0; 12], inv_fps: INV_FPS_60, car_pos: [0.0; 3], camera: [0.0; 3] };
         pose.skel[2] = rot_x_turns(0.25);
         let o = [0.5, 0.25, 1.0];
         let tip = |p: &CarPart| match part_matrix(p, &pose) {
@@ -549,7 +685,14 @@ mod tests {
         assert!(near(dial(40), [0.0, -1.0, 0.0]));
         assert_eq!(part_matrix(&part(0, Attach::Fixed, o, 1), &pose), PartMatrix::NotDrawn);
         assert_eq!(part_matrix(&part(0, Attach::Other(0x64, 0), o, 0), &pose), PartMatrix::NotDrawn);
-        assert_eq!(part_matrix(&part(0, Attach::Other(0xee, 1024), o, 0), &pose), PartMatrix::Unported(0xee));
+        assert!(matches!(part_matrix(&part(0, Attach::Other(0xee, 1024), o, 0), &pose), PartMatrix::Drawn(_)));
+        assert_eq!(part_matrix(&part(0, Attach::Other(0xee, 1024), o, 0x10), &pose), PartMatrix::Unported(0xee));
+        // Kinds below 100 without an animation reference: the own matrix; with one, unported.
+        assert_eq!(part_matrix(&part(0, Attach::Other(7, 3), o, 0), &pose), PartMatrix::Drawn(own_matrix(&part(0, Attach::Other(7, 3), o, 0))));
+        let mut animated = part(0, Attach::Other(7, 3), o, 0);
+        animated.anim = 0x6e74_0001;
+        assert_eq!(part_matrix(&animated, &pose), PartMatrix::Unported(7));
+        assert_eq!(part_matrix(&part(0, Attach::Other(0xf0, 3), o, 0), &pose), PartMatrix::Unported(0xf0));
         assert_eq!(part_matrix(&part(0, Attach::Other(0xfc, 1), o, 0x10), &pose), PartMatrix::Unported(0xfc));
     }
 
@@ -658,6 +801,69 @@ mod tests {
         let mut mem2 = WheelMemory { fin_yaw: 0.05, ..Default::default() };
         rig.update(&attrs, &WheelInput { fins: Some((0.0, 0.05, true)), ..inp }, &mut mem2, &mut skel);
         assert_eq!(mem2.fin_yaw, 0.0);
+    }
+
+    #[test]
+    fn the_camera_facing_item_turns_level_towards_the_camera_and_rocks_eighteen_degrees() {
+        let pose = |frame: f32, car_pos: [f32; 3], camera: [f32; 3]| CarPose { frame, skel: vec![], dials: [0.0; 12], inv_fps: INV_FPS_60, car_pos, camera };
+        let p = part(6, Attach::Other(0xee, 1024), [1.0, 2.0, 0.0], 0);
+        let drawn = |p: &CarPart, ps: &CarPose| match part_matrix(p, ps) {
+            PartMatrix::Drawn(m) => m,
+            other => panic!("{other:?}"),
+        };
+        // Frame 0: phase 0, triangle 0, rock (0 − 0.5)·0.1 = −0.05 turn about z; the camera sits
+        // on −z of the item (item at car (0,0,5) + (1,2,0), camera (1,10,0): y is dropped), so
+        // the facing rows are the identity and only the rock remains.
+        let m = drawn(&p, &pose(0.0, [0.0, 0.0, 5.0], [1.0, 10.0, 0.0]));
+        let a = -0.05 * std::f32::consts::TAU;
+        assert!(near(transform(&m, [1.0, 0.0, 0.0]), [1.0 + a.cos(), 2.0 + a.sin(), 0.0]), "{m:?}");
+        assert!(near(transform(&m, [0.0, 0.0, 1.0]), [1.0, 2.0, 1.0]), "local +z points away from the camera");
+        assert!(near(transform(&m, [0.0; 3]), [1.0, 2.0, 0.0]), "row 3 = the item origin, not the world point");
+        // v = 65535 turns one rock cycle per second: frame 15 at 60 Hz = phase 0.25, triangle
+        // 0.5, no rock; the camera on +x of the item: local +z = −x, local x = +z.
+        let p2 = part(6, Attach::Other(0xee, 65535), [1.0, 2.0, 0.0], 0);
+        let m = drawn(&p2, &pose(15.0, [0.0, 0.0, 5.0], [6.0, 0.0, 5.0]));
+        assert!(near(transform(&m, [0.0, 0.0, 1.0]), [0.0, 2.0, 0.0]), "{m:?}");
+        assert!(near(transform(&m, [1.0, 0.0, 0.0]), [1.0, 2.0, 1.0]), "{m:?}");
+        assert!(near(transform(&m, [0.0, 1.0, 0.0]), [1.0, 3.0, 0.0]), "up stays up");
+        // Frame 30: phase 0.5 (not above 0.5) → triangle 1.0 → +0.05 turn; frame 45: phase 0.75
+        // → 2·0.25 = 0.5 → no rock again.
+        let tilt = |frame: f32| {
+            let m = drawn(&p2, &pose(frame, [0.0; 3], [1.0, 0.0, -5.0]));
+            let x = transform(&m, [1.0, 0.0, 0.0]);
+            (x[1] - 2.0).atan2(x[0] - 1.0) / std::f32::consts::TAU
+        };
+        assert!((tilt(30.0) - 0.05).abs() < 1e-5, "{}", tilt(30.0));
+        assert!(tilt(45.0).abs() < 1e-5, "{}", tilt(45.0));
+        assert!((tilt(0.0) + 0.05).abs() < 1e-5);
+        // 50 Hz video mode: the same frame count is a later phase.
+        let p50 = CarPose { inv_fps: 1.0 / 50.0, ..pose(15.0, [0.0; 3], [1.0, 0.0, -5.0]) };
+        let x = transform(&drawn(&p2, &p50), [1.0, 0.0, 0.0]);
+        assert!(((x[1] - 2.0).atan2(x[0] - 1.0) / std::f32::consts::TAU - 0.01).abs() < 1e-5, "phase 0.3 → triangle 0.6 → +0.01 turn");
+    }
+
+    #[test]
+    fn the_keyframe_branch_blends_two_keys_and_mirrors_column_zero() {
+        let (s, c) = (std::f32::consts::FRAC_PI_4.sin(), std::f32::consts::FRAC_PI_4.cos());
+        let track = KeyTrack { keys: vec![([0.0, 0.0, 0.0, 1.0], [0.0; 4]), ([0.0, s, 0.0, c], [2.0, 4.0, 6.0, 1.0])], rate: 30 };
+        // v = 1, rate 30: t = 0.5 → halfway: 45° about y, position (1, 2, 3).
+        let m = keyframe_matrix(&track, 1, false);
+        let h = std::f32::consts::FRAC_PI_8;
+        let want = quat_rows([0.0, h.sin(), 0.0, h.cos()]);
+        assert!((0..3).all(|i| (0..3).all(|k| (m[i][k] - want[i][k]).abs() < 1e-6)), "{m:?}");
+        assert_eq!([m[3][0], m[3][1], m[3][2], m[3][3]], [1.0, 2.0, 3.0, 1.0]);
+        // Mirrored: column 0 negated, rows otherwise the same.
+        let mm = keyframe_matrix(&track, 1, true);
+        assert!((0..4).all(|i| (mm[i][0] + m[i][0]).abs() < 1e-7 && mm[i][1] == m[i][1] && mm[i][2] == m[i][2]));
+        // Past the last key both indices hold the last key.
+        let end = keyframe_matrix(&track, 9, false);
+        assert_eq!([end[3][0], end[3][1], end[3][2]], [2.0, 4.0, 6.0]);
+        assert!((end[0][0] - (1.0 - 2.0 * s * s)).abs() < 1e-6);
+        // The blend takes the short way: a key and its negative are the same rotation.
+        assert_eq!(nlerp(0.25, [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, -1.0]), [0.0, 0.0, 0.0, -1.0]);
+        assert_eq!(keyframe_matrix(&KeyTrack { keys: vec![], rate: 1 }, 3, false), IDENTITY);
+        // FUN_002cc610: x → (c, s, 0).
+        assert!(near(transform(&rot_z_turns(0.25), [1.0, 0.0, 0.0]), [0.0, 1.0, 0.0]));
     }
 
     #[test]

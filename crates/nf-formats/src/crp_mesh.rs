@@ -206,6 +206,55 @@ fn item_local_to_world(item: &[u8]) -> Result<([[f32; 3]; 3], [f32; 3])> {
 
 /// Appends the world triangles of one `ca` record placed by `to_world` (the layout and its
 /// evidence: `Crp::extract_collision_tris`).
+/// One 2-D wall of a collision article (`ca` +0x02 u16 list offset from +0x20, +0x04 u16
+/// count, 32-byte records) [M FUN_00219a50: `iVar2 + *(u16*)(iVar2+2) + 0x20`, the count
+/// `*(u16*)(iVar2+4)`, stride `pfVar9 + 8`]: +0x00 end A (x, y, z), +0x0c the surface byte,
+/// +0x0d the class byte (tested against the query's class mask), +0x10 end B (x, y, z), +0x1c
+/// `1/|AB|` in xz (squared in the projection) [M 0x219a50 the distance term, FUN_0021a248's
+/// normal `((B.z − A.z)·w, 0, −(B.x − A.x)·w)`]. A wall is a vertical sheet over the segment
+/// A→B in xz spanning the two ends' heights [M FUN_00219328: a crossing counts when
+/// `lo.y < y < hi.y`, the gather FUN_00219a50 swaps the ends' y to sort them].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CollisionWall {
+    /// World-space ends (the item's local-to-world transform applied); `a[1] <= b[1]`.
+    pub a: [f32; 3],
+    pub b: [f32; 3],
+    /// +0x0c surface byte, +0x0d class byte.
+    pub surface: u8,
+    pub class: u8,
+}
+
+fn ca_walls(ca: &[u8], to_world: &([[f32; 3]; 3], [f32; 3]), out: &mut Vec<CollisionWall>) -> std::result::Result<(), String> {
+    let (inv, t) = to_world;
+    let xf = |p: [f32; 3]| -> [f32; 3] {
+        let d = [p[0] - t[0], p[1] - t[1], p[2] - t[2]];
+        [
+            d[0] * inv[0][0] + d[1] * inv[1][0] + d[2] * inv[2][0],
+            d[0] * inv[0][1] + d[1] * inv[1][1] + d[2] * inv[2][1],
+            d[0] * inv[0][2] + d[1] * inv[1][2] + d[2] * inv[2][2],
+        ]
+    };
+    if ca.len() < 0x20 {
+        return Err(format!("ca record {} B < the 0x20-byte header", ca.len()));
+    }
+    let off = u16::from_le_bytes([ca[2], ca[3]]) as usize;
+    let count = u16::from_le_bytes([ca[4], ca[5]]) as usize;
+    let f = |o: usize| -> std::result::Result<f32, String> {
+        ca.get(o..o + 4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).ok_or_else(|| format!("wall read at {o:#x} past the end ({} B)", ca.len()))
+    };
+    for k in 0..count {
+        let o = 0x20 + off + 32 * k;
+        let a = [f(o)?, f(o + 4)?, f(o + 8)?];
+        let b = [f(o + 0x10)?, f(o + 0x14)?, f(o + 0x18)?];
+        let (mut a, mut b) = (xf(a), xf(b));
+        if b[1] < a[1] {
+            std::mem::swap(&mut a[1], &mut b[1]);
+        }
+        out.push(CollisionWall { a, b, surface: ca[o + 0x0c], class: ca[o + 0x0d] });
+    }
+    Ok(())
+}
+
 fn ca_triangles(
     ca: &[u8],
     to_world: &([[f32; 3]; 3], [f32; 3]),
@@ -500,6 +549,20 @@ impl<'a> Crp<'a> {
     /// functions ≥ 0) [M 0x2138b0]. A `ci` item whose `sr` does not reach an article `ca` record
     /// is an error: every item on the disc resolves [D crp_mesh_disc test].
     pub fn extract_collision_tris(&self) -> Result<Vec<CollisionTri>> {
+        let mut tris = Vec::new();
+        self.for_each_ci_item(|ca, xf| ca_triangles(ca, xf, &mut tris))?;
+        Ok(tris)
+    }
+
+    /// Every `ci` item's 2-D walls (`CollisionWall`) in world space — the list the land cars'
+    /// wall query gathers [M FUN_00219a50 over the same `ci` items as the triangles].
+    pub fn extract_collision_walls(&self) -> Result<Vec<CollisionWall>> {
+        let mut walls = Vec::new();
+        self.for_each_ci_item(|ca, xf| ca_walls(ca, xf, &mut walls))?;
+        Ok(walls)
+    }
+
+    fn for_each_ci_item(&self, mut each: impl FnMut(&[u8], &([[f32; 3]; 3], [f32; 3])) -> std::result::Result<(), String>) -> Result<()> {
         use std::collections::HashMap;
         let mut arti_ca: HashMap<String, &[u8]> = HashMap::new();
         let mut cdat_sr: HashMap<u16, String> = HashMap::new();
@@ -538,7 +601,6 @@ impl<'a> Crp<'a> {
             }
         }
 
-        let mut tris = Vec::new();
         for ci_data in ci_payloads {
             if ci_data.len() % 64 != 0 {
                 return invalid(format!(
@@ -559,11 +621,11 @@ impl<'a> Crp<'a> {
                     FormatError::Invalid(format!("ci item {ii}: article {aname} has no ca record"))
                 })?;
                 let to_world = item_local_to_world(item)?;
-                ca_triangles(ca, &to_world, &mut tris)
+                each(ca, &to_world)
                     .map_err(|e| FormatError::Invalid(format!("ci item {ii} ({aname}): {e}")))?;
             }
         }
-        Ok(tris)
+        Ok(())
     }
 
     /// Extract all placed world article instances from `Map` (`in#0` 64-byte world-to-local

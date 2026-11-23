@@ -22,8 +22,24 @@ Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] read in our decomp export (work/decom
 - `DroneFunc_OnInitDeath` (0x145bd0): a captain (`Drone+0x19` ≠ 0) drops grenades at its own matrix (`obj+0x90`) by
   `DroneFunc_DropGrenade` → `Pickup_CreateSimple(…, id, n, 0)`: 07000001–08 → weapon 0x35 with 2; 07000009–0B,
   11–16, 4A → weapon 0x34 with 1 (`a2` = 1, read in the disassembly at 0x145de8).
+- `Player_CheckForDeath` (0x190810:42-56), multiplayer only (`MPSettings+0x180` set): a human whose health runs out
+  drops the gun in hand before `Player_WeaponNone` (:61). Gates: `weapon_data[held]+0x80` ≠ 0 (the held record has a
+  world model) and `BLData+0x7E8` ≠ 0 (the view model). `Pickup_CreateSimple(view model +0x90, weapon_data[held]+0x02
+  (the base), BLData+0x1B8 + base·0xC (the rounds in the base's clip slot), type 0)`: the drop carries the clip only,
+  not the carried reserve, so an empty clip drops nothing; no RNG draw. Base 0x1A also drops 0x1B as type 1 with the
+  rounds of `weapon_data[0x1B].id`'s clip slot, hidden (`obj+0xF0 |= 0x10`). No scenario word is read on this arm.
+  With the MP lifetime below the drop lasts 1800 ticks (30 s) and spins. Anyone alive takes it: the players' loop
+  (the dropper too once respawned), then the bots.
+- MP bots die through `NDrone2_DSTATE_BotDeathAnim` 0x175508 (update case 3) / `BotDeathByExplosion` 0x1755a8, which
+  call `DroneWeap_DropWeapon` like the guards (with its `Rand_FRand` draws). A round's or a punch's death enters 0xF2
+  (`NDrone2_DealWithObjHit` 0x13fff0 case 0x27's MP arm, `NDrone2_PunchImpact`/`BulletImpact`), and its UPDATE drops;
+  a blast death enters 0xF3 (`NDrone2_ExplosiveImpact` 0x146480's MP arm, `param_3 = 0xf3`), whose ENTER drops right
+  after `MP_PlayerKilled`. `Drone_SM_SetState` 0x1758c0 only queues the state; the route applies it (EXIT, ENTER).
+  The held byte is `anim+0x62`, written with `Drone+0x768` by `BOTWEAP_changeWeapon` 0x12a028. Ported (mp-bot-drops):
+  `Sim::mp_bot_death_drop`; the shot death drops on the next tick's bot pass, the blast death on the kill; the gun's
+  matrix is the bot body's resting gun matrix (the human drop's stand-in), not the posed datum.
 - Level placements (`parsemap_create_dynamic_objects`), scripts (`Script_CreateEntity`), `GT_Update`,
-  `Player_CheckForDeath`, `Pickup_CreateFromSet` (types 7–11): not read yet (G-029).
+  `Pickup_CreateFromSet` (types 7–11): see the port's loaders.
 
 ## `Pickup_CreateSimple` (0x18f348) [M, disassembly]
 
@@ -31,7 +47,8 @@ Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] read in our decomp export (work/decom
 - `Pickup_Create(NULL, NULL, M, glist(weapon_data[id]+0x80), type, weapon_data[id]+0x00, rounds, switch 0,
   sound 0xF5, rest 0 (drop to the floor), respawn 0, lifetime FRAME_RATE_INT · (MP ? 30 : 120), label 0)` — the stack
   arguments read at 0x18f43c–0x18f488. FRAME_RATE_INT = 60 in the snapshot [L], so a dropped gun lasts **7200 ticks**
-  (2 minutes) [L+M].
+  (2 minutes) [L+M]. The MP test is `MPSettings+0x184` (0x2a4924, the master copy `MP_Start` writes): in a match
+  the lifetime is **1800 ticks** (30 s) [M 0x18f440-0x18f47c].
 
 ## `Pickup_Create` (0x18dda0) [M]
 
@@ -53,8 +70,9 @@ Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] read in our decomp export (work/decom
   translation is below the hit: position = hit + `HIT+0x30` · (−|centre y|) + info `+0x10` (see U-036), velocity
   zeroed, state 1. Hits on moving objects (types other than 2, 5, 0x11, 0x1A) give the pickup their velocity
   (`Control_InheritVelocity`, 3.0) and keep it falling.
-- State 2 (taken, respawning): after `FRAME_RATE_INT · respawn · 10` ticks it shows again (`obj+0xF0 &= ~0x10`),
-  state 1; nothing else that tick.
+- State 2 (taken, respawning): it returns while `GameState+0x34 − obj+0xEC ≤ FRAME_RATE_INT · respawn · 10`, so it
+  shows again (`obj+0xF0 &= ~0x10`, state 1) on the tick after the limit: limit + 1 ticks after the take [M
+  0x18e148:183-189]. Nothing else that tick.
 - Spin (`+0x38`): about +Y by `REC_FRAME_RATE` radians per tick.
 - Touch: for each player (`glb_players`, alive `obj+0xF4` = 1, not type 0x12): squared distance from the pickup's
   sphere centre (`obj+0x80`) to the player's position (`obj+0x30`) < (radius `obj+0x8C` + 1.1)² and
@@ -66,6 +84,10 @@ Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] read in our decomp export (work/decom
 
 - Id: `Upgrade_Weapon(id)` in single player (6 → the upgraded handgun, 0x1E / 0x24 snipers, 0x43, 0x4A, 0x4E, 0x56 by
   the upgrade bytes `0x2BEEAA…`; 10 → 0xC with `GameState+0x52`; others unchanged).
+- In a match there is no `Upgrade_Weapon` [M 0x18e650:141-160]: when the taker's character row
+  (`BOT_getDefaultStats(MPSettings[slot·0x30+0x24])`, byte 9) is 1, a 10 becomes 0xD if the taker already owns 10
+  (`BLData+0x232`); otherwise a 0xD becomes 10; then `Upgrade_MPWeapon(slot, id)` (2/4 → 2, 6/8 → 6, the snipers to
+  their base, 0x50). So a P99 (6) pickup stays record 6 and a finished game does not turn 10 into 0xC.
 - Type 0 (weapon): Bond without it (`BLData+0x1BA + id·0xC` = 0) → `Player_EquipWeapon`; with it →
   `Player_EquipAmmo` (message as ammo). Type 1 (ammo) → `Player_EquipAmmo`. Either returning 0 leaves the pickup
   where it is. Type 2 → `Player_EquipKey`; 3 → armour 50 (`+0x8B0`, only when below 50); 5, 6: special.
@@ -110,6 +132,12 @@ Build: ACTION.ELF `e7ffdcb3…`. Tags: [M] read in our decomp export (work/decom
 - Every level whose kit holds a handgun ships the four handgun first-person models 0x05000088 / 0x050000a9 /
   0x05000047 / 0x050000a8 [D the archives' skin tables, all of `dev::LEVELS`], so the upgraded kits load.
 
+## Level kit [M]
+
+- `Player_InitWeapon` 0x1a7ef8's equips go through the single-player `Player_EquipWeapon`, which runs
+  `Upgrade_Weapon` on the id [M 0x1a8a58:24-30]. On a finished game (`GameState[0x52]`) the default arm's
+  `EquipWeapon(10, 999)` therefore grants record 0xC.
+
 ## Port
 
 `nf_game::pickup` (WORKLOG 0040 and later): drops from Death_Anim / Dead, captain grenades, falling, resting, touch,
@@ -122,7 +150,29 @@ auto-switch, the level kit (`player::init_level_loadout`, whose `equip` runs the
 equip. The health-pane fade reset happens on the armour take only [M 0x18e650:220-226].
 
 *Deviations / not ported*: the rest height (U-036), no sphere push-out at creation, static world only (no moving
-platforms), `hashtable_getitem` taken as the level skin table. Multiplayer: `Player_CheckForDeath`'s MP arm drops the
-dead player's held gun (and the 0x1B launcher for 0x1A) through `Pickup_CreateSimple` with the MP 30 s lifetime and
-spin [M 0x190810:42-56, 0x18f348] - the port creates no pickup on an MP player death. The MP respawn wait in
-`update_pickups_net` restores one tick earlier than the game's `elapsed > limit` test (the SP path has the +1).
+platforms), `hashtable_getitem` taken as the level skin table.
+mp-drops:
+- `Pickup::player_death_drops` / `create_simple_mp` (nf-game pickup.rs) build the `Player_CheckForDeath` drop; the
+  scene calls them on the death tick: offline from the local player's death start (`Sim::step_bond`), online from
+  `step_net_combat`'s dead-wait loop on the slot's first dead tick, using only shared state (the slot's shot gate:
+  held weapon and inventory, and its body), so every machine creates the same pickup.
+- The drop's start matrix is `Sim::rest_gun_matrix`: the `Player_PositionGun` pose without the bob and the crosshair
+  tilt [S] (those are per-machine view state). The fall then puts it on the floor.
+- The bots' pickup rows append a new pickup instead of rebuilding (older visit stamps survive), and a falling row
+  is not available until it lands (the game registers on landing).
+- Drawing (mp-drops-draw): the renderer draws pickups per index from slots built at load, so the match load
+  reserves inert (`gone`) slots for the drops after the placed and script pickups: every weapon a human can hold
+  (the set row, its spawn column through `Upgrade_MPWeapon`, the arena's weapon pickups, the grapple, 0x3B, with
+  the take remaps), each through `player_death_drops` itself, 2 per human per weapon (`Drones::mp_drop_slots`). A
+  death fills a free slot of its id (never-used first; `Drones::mp_drop_used` keeps the bots' row order); no free
+  slot falls back to the old undrawn push and logs it. The AR's hidden launcher rounds still push (never drawn).
+- The match take id is `Inventory::take_id(raw, Some(dual), _)`; the local take, the online take and the shared gate
+  use it. The online path used to pass the tick count as the game-complete byte (every 10 became 0xC) and ran the
+  single-player handgun table (6 became 2).
+- The online respawn wait is limit + 1 ticks like the offline one.
+- The kit's 10 → 0xC on a finished game: `init_level_loadout_ex(.., game_complete)`, fed by the app's level loads
+  (`load_front_end_gc`). The other `Upgrade_Weapon` tables need the `Upgrades` row (not in this tree).
+- The bots' own death drops (mp-bot-drops): `Sim::mp_bot_death_drop` from the bot death states (one `Rand_FRand`
+  per drop, two for the AR, on the shared stream), through the reserved draw slots (2 per body per weapon, humans
+  and bots). Not ported: `MP_RegisterPickup`'s 64-slot cap and its eviction of the shortest-lived
+  registered pickup; the Professional Mode one-gun swap in the match take (`MPSettings+0x1BC`, 0x18e650:168-200).

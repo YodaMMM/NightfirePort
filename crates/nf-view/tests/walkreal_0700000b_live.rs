@@ -39,6 +39,7 @@ mod walker;
 use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
+fn env_u32(name: &str, default: u32) -> u32 { std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default) }
 
 fn load_warm() -> Walker {
     // Single load: the level's own boot state IS the carried state (health 100, the 0a
@@ -871,6 +872,18 @@ fn walk_to_the_mission_end(mut w: &mut Walker, fresh: bool, real: bool, rocket_p
             }
         }
         w.walk_to(Wp::new(-14.3, 47.4, 6.5).r(1.0), "E-plate #166 side (walked)");
+    }
+    // g031-object-order-walks: the Agent / 00 Agent walks stand at the plate before the use. The
+    // same-tick lift carry (G-031) moved Bond's cab ride by under 0.0001 u, which re-rolled the
+    // exec-floor and roof fights; both sisters then died on the deck (d2 t17712 at the jump
+    // edge, d3 t17433 at the deck key to #4's 0x18 rounds) [L]. The wait re-times the roof
+    // cut-scene and the deck fight: d2 waits 120 (60 also completes; 30/200/300 die), d3 waits
+    // 300 (30/60/200 also complete; 120 dies) [L the 2026-11-21 sweep]. The Operative walk keeps
+    // no wait (its recording is pinned). NF_0B_PLATE_WAIT2/3 override for a re-tune.
+    if real && w.scene.sim.as_ref().unwrap().drones.difficulty >= 2 {
+        let d = w.scene.sim.as_ref().unwrap().drones.difficulty;
+        let n = env_u32(&format!("NF_0B_PLATE_WAIT{d}"), if d >= 3 { 300 } else { 120 });
+        if n > 0 { w.wait(n); }
     }
     eprintln!("[0b] at E-plate #166 — the real use");
     for _ in 0..80 {
@@ -1900,14 +1913,23 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage() {
 /// 66.4 hp, mission complete t16926, stuck 0, falls 1.
 #[test]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
-    walker::with_real_damage(|| {
-        let mut w = load_fresh_at(2);
-        w.dmg.lane_fights = true;
-        w.dmg.back_off = Some(3.0);
-        w.dmg.tranq_fights = true;
-        fresh_boot_asserts(&w);
-        walk_to_the_mission_end(&mut w, true, true, false);
-    });
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1800/60 [L the
+    // 10-value sweep on the joined tree: 1800/60, 250/200, 3500/200 of 24 values complete].
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 1800/60 died on the roof near (0.4,58.1,32.6)
+    // t17519. Lever: 2200/45 [L the 14-value sweep: only 2200/45 completes].
+    // Batch 3 (guard aim bone, burst latch, wall push joined): 2200/45 died on the roof at (3.93,58.07,41.16)
+    // t17742. Lever: 2600/45 [port 12-value sweep at 5e9460adb: 2600/45, 2000/45, 2200/30, 1000/60, 3500/200
+    // complete; 2600/45 ends with the most health, 28.4].
+    walker::with_pause(2600, 45, || {
+        walker::with_real_damage(|| {
+            let mut w = load_fresh_at(2);
+            w.dmg.lane_fights = true;
+            w.dmg.back_off = Some(3.0);
+            w.dmg.tranq_fights = true;
+            fresh_boot_asserts(&w);
+            walk_to_the_mission_end(&mut w, true, true, false);
+        });
+    })
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same
@@ -1990,17 +2012,26 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
 /// prints the census columns (visible + the world-ray spine aim) beside the world ray.
 #[test]
 fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
-    walker::with_real_damage(|| {
-        let mut w = load_fresh_at(3);
-        w.dmg.lane_fights = true;
-        w.dmg.back_off = Some(3.0);
-        w.dmg.tranq_fights = true;
-        // real-health-00agent-0b-deck-2: the deck crossing's fight lever (d3 only — the d1/d2
-        // sisters do not set it, their streams stay byte-identical).
-        w.dmg.world_ray_fights = true;
-        fresh_boot_asserts(&w);
-        walk_to_the_mission_end(&mut w, true, true, false);
-    });
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 1000/60 [L the
+    // 10-value sweep on the joined tree: 1000/60, 6000/60 complete].
+    // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): 1000/60 died at (-10.31,57.85,8.06) t18052 on the
+    // roof. Lever: 2000/30 [L the 3-value sweep: only 2000/30 completes; 1000/60, 3000/60 do not].
+    // Batch 3 (guard aim bone, burst latch, wall push joined): 2000/30 died on the roof at (-7.23,58.07,18.67)
+    // t17983. Lever: 2200/30 [port 12-value sweep at 5e9460adb: 2200/30, 2000/60, 1800/30, 1500/60, 6000/60
+    // complete; 2200/30 ends with the most health, 41.5].
+    walker::with_pause(2200, 30, || {
+        walker::with_real_damage(|| {
+            let mut w = load_fresh_at(3);
+            w.dmg.lane_fights = true;
+            w.dmg.back_off = Some(3.0);
+            w.dmg.tranq_fights = true;
+            // real-health-00agent-0b-deck-2: the deck crossing's fight lever (d3 only — the d1/d2
+            // sisters do not set it, their streams stay byte-identical).
+            w.dmg.world_ray_fights = true;
+            fresh_boot_asserts(&w);
+            walk_to_the_mission_end(&mut w, true, true, false);
+        });
+    })
 }
 
 /// The roof cut-scene's channel tail, alone: the disc's writer of objective 10's ch 0x59, the

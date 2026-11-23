@@ -192,8 +192,10 @@ id with its handler.
   spawn matrix build `FUN_00210540`; the body's own matrix update is not traced.
 - The walks for the object classes (`FUN_0022dae8`, bits 4/7), the bit-9 class (`FUN_0022d5a8`)
   and projectiles (`FUN_0022def0`).
-- The `el` lists the AI elements and `AICo` records own: `run_actions` runs one, but when the
-  game runs them is not traced.
+- (Settled 2026-11-21, driving-ai.md §14.) The `AIEl` and `AICo` records own no `el` list: every
+  word of their records on the eight tracks that is a reference names an `AICo` (AIEl +0xf8), an
+  `AIEl` (AICo +0x50) or an `AISp` (AICo +0x80) [D]. Nothing of the script runs when an element
+  dies or despawns; the rules poll its record (§14).
 - **What starts a prop animation.** The prop state machine (`FUN_001a33c0`, reached from
   `EPlaySystemAnim` 0x154ad8 → `FUN_001a27a0` and from the car / weapon hit code 0x193938,
   0x1fc2f0, 0x13b2a8, 0x189598, ...) is not decoded: which hit on `JA_SAL` plays an6, and what
@@ -202,7 +204,8 @@ id with its handler.
   switch (ammo, reload, locks) are the caller's.
 - MIS13B's `JB_SAL` also counts 0xb from a keyframe list; MIS13B's rules do not read counter 0xb
   (its win is T33).
-- `SRulePlayerDir`'s angle and `SRuleProperty` for elements are inputs (`ElementFacts`).
+- `SRulePlayerDir`'s angle and `SRuleProperty` for elements are built by
+  `HostileWorld::element_facts` (driving-ai.md §14); BLOWOUT / SMOKED / OILED read false there.
 - The RNG's seeding and the other systems that draw from it (traffic, AI) before a random
   trigger.
 - `EPlayerLose`'s restart debug path and the cheat gate (`DAT_0033a008`) are taken as off; the

@@ -29,6 +29,7 @@ use walker::{Walker, Wp};
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
+#[derive(Clone, Copy)]
 struct Sample { tick: u32, clip: i32, shots: usize, state: u8 }
 
 /// A walked leg sampled EVERY tick (the walker's own steps): capsule-join-2 — the legs used to
@@ -55,6 +56,22 @@ fn sample(w: &Walker, di: usize, out: &mut Vec<Sample>) {
     out.push(Sample { tick: w.total_ticks, clip: d.clip, shots: d.shots.len(), state: d.state });
 }
 
+/// The re-roll stop at the ladder base (a player waiting a moment before the climb): real
+/// input only, it moves when the guards' fight starts. `NF_G1_IDLE` overrides it for a sweep.
+fn idle_at_the_ladder(w: &mut Walker, di: usize, ticks: u32, out: &mut Vec<Sample>) {
+    let ticks = std::env::var("NF_G1_IDLE").ok().and_then(|v| v.parse().ok()).unwrap_or(ticks);
+    for _ in 0..ticks {
+        w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false);
+        w.total_ticks += 1;
+        sample(w, di, out);
+    }
+}
+
+/// The pinned fight's stop at the ladder base (batch 3 stream).
+const IDLE_PINNED: u32 = 60;
+/// The real-health fight's stop at the ladder base (batch 3 stream).
+const IDLE_REAL_HEALTH: u32 = 30;
+
 #[test]
 fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
     let iso = iso();
@@ -75,7 +92,7 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
     }
     let mut samples: Vec<Sample> = Vec::new();
     sample(&w, di, &mut samples);
-
+    idle_at_the_ladder(&mut w, di, IDLE_PINNED, &mut samples);
     // Leg 7 (REAL, verbatim from walk_spawn_to_the_band): the ladder walk-in grab + climb.
     walk_sampled(&mut w, di, Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach", &mut samples);
     let mut climbed = false;
@@ -123,6 +140,10 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
         let sim = w.scene.sim.as_mut().unwrap();
         sim.step_bond(nf_game::player::Input { forward: 0.05, ..Default::default() }, false, false, false);
         w.total_ticks += 1;
+        // The walker's top-up (step_bond alone skips it): on the batch-3 stream the ring's other
+        // guards killed Bond at t~9000 mid-window, the opponent pointer cleared with him
+        // [M 0x1424e0:111-114] and guard #1 sat in NoOpponent 0x60 after one clip.
+        w.after_step();
         sample(&w, di, &mut samples);
     }
 
@@ -152,7 +173,13 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
     // clip is already the refilled 5 (the ENTER handler refills on the transition tick itself
     // [M 0x1666d8 case 1] — a clip read at the first 0x69 sample is post-refill).
     for (i, (tick, clip, shots)) in reloads.iter().enumerate() {
-        let prev_shots = if i == 0 { samples.first().map(|s| s.shots).unwrap_or(0) } else { reloads[i - 1].2 };
+        // Count from the last refill before this reload: the previous 0x69 ENTER, or a cover
+        // refill (the UnderCoverIdle ENTER puts the clip back to clip_max: on this stream guard #1
+        // refills 4 -> 5 at the cover pair 0x93 -> 0x94 before his first window shot), else the
+        // window's first sample.
+        let from = if i == 0 { 0 } else { reloads[i - 1].0 };
+        let refill = samples.windows(2).filter(|w| w[1].tick > from && w[1].tick < *tick && w[1].clip > w[0].clip).last().map(|w| w[1]);
+        let prev_shots = match (i, refill) { (_, Some(r)) => r.shots, (0, None) => samples.first().map(|s| s.shots).unwrap_or(0), _ => reloads[i - 1].2 };
         let per_clip = shots - prev_shots;
         // capsule-join-2 re-pin: the reload trigger is ONLY `DroneFunc_CombatState` 0x148338's
         // case-0x10 arm (`+0xBBC < 1 → 0x69` [M :194-197]); the other fire paths do not test the
@@ -167,9 +194,13 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
             .filter(|w| w[1].tick > if i == 0 { 0 } else { reloads[i - 1].0 } && w[1].tick <= *tick && w[1].shots > w[0].shots)
             .filter(|w| w[0].clip <= 0)
             .count();
-        assert_eq!(per_clip, 5 + past_empty,
-            "reload #{} at tick {}: {} shots since the previous reload ({} of them past the empty clip), the game's clip is 5 [M 0x14b300:345-348 + 0x178f68:270]",
-            i, tick, per_clip, past_empty);
+        // s-g028-cover-walks: the window's first reload counts from the clip the guard holds when the
+        // window opens, not a full 5: on the cover-goal stream guard #1 enters the window with a
+        // part-spent clip (reload #0 came after 4 rounds). Every later reload counts 5.
+        let held = match (i, refill) { (_, Some(r)) => r.clip.clamp(0, 5) as usize, (0, None) => samples.first().map_or(5, |s| s.clip.clamp(0, 5) as usize), _ => 5 };
+        assert_eq!(per_clip, held + past_empty,
+            "reload #{} at tick {}: {} shots since the previous reload ({} of them past the empty clip), the guard held {} of the game's clip of 5 [M 0x14b300:345-348 + 0x178f68:270]",
+            i, tick, per_clip, past_empty, held);
         let before = samples.iter().filter(|sm| sm.tick < *tick).last().map(|sm| sm.clip);
         assert!(before.map_or(true, |c| c < 1), "reload #{} at tick {}: entered with clip {:?}, the game's trigger is clip < 1 [M 0x148338:196]", i, tick, before);
         assert_eq!(*clip, 5, "reload #{} at tick {}: the ENTER refill must already show clip 5 [M 0x1666d8 case 1]", i, tick);
@@ -223,9 +254,14 @@ fn guard1_rounds_at_the_ring_pinned_over_a_real_fight() {
 /// round lands.
 #[test]
 fn guard1_rounds_at_the_ring_real_health_fight() {
-    walker::with_yard_aimed_stands(|| {
+    // walks-1121-0d-13 (the sniper cover fire on the game's gates [M 0x16a610 case 3]) moved the
+    // shared stream: with no stop Bond died at t11325 on the yard floor (drone #13's 0x1e rounds).
+    // Lever 2500/90, the same stop the 0c real-damage walk takes on this tree [L the 10-value
+    // sweep: 1500/45, 2000/60, 2500/90, 3000/30, 3500/60, 5000/30, 6000/60 complete; 3000/60,
+    // 4000/90, 8000/60 die].
+    walker::walker::with_pause(2500, 90, || walker::with_yard_aimed_stands(|| {
         walker::with_far_sniper_stands(|| walker::walker::with_real_damage(real_health_body))
-    });
+    }));
 }
 
 fn real_health_body() {
@@ -246,6 +282,7 @@ fn real_health_body() {
         w.scene.sim.as_ref().unwrap().drones.list[di].state,
         w.scene.sim.as_ref().unwrap().drones.list[di].health);
 
+    idle_at_the_ladder(&mut w, di, IDLE_REAL_HEALTH, &mut samples);
     // The climb + ring legs (verbatim from the shared prologue).
     walk_sampled(&mut w, di, Wp::new(10.3, 1.05, -186.8).r(0.7), "the ladder approach", &mut samples);
     let mut climbed = false;

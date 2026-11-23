@@ -1,6 +1,9 @@
 //! The 07000007 Kimiko scene's hand-back (after it finished, the screen faded to black and play
 //! could not continue). The scene fades its cut-scene viewer to black near its end (`Camera_SetFade(.., 0)`,
 //! the script viewer); when the script camera hands back, the gameplay view must not stay black.
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_game::player::Input;
 
 #[test]
@@ -8,6 +11,11 @@ fn the_kimiko_scene_hands_back_a_visible_view() {
     let Ok(iso) = std::env::var("NF_ISO") else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load 07000007");
     let sim = scene.sim.as_mut().unwrap();
+    // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+    // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+    // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+    // beats the pair's fail on a teleport.
+    reveal07::drakes_reveal(sim);
     sim.bond = nf_game::player::Bond::new([94.2, 44.6, -45.9], 0.0); // TouchOnce #412's volume (fix-cutscene-letterbox)
     let (mut started, mut black_before_end, mut handed_back) = (false, false, None);
     for t in 0..6000u32 {

@@ -40,12 +40,34 @@ fn carry(on: &[u32]) -> RamSave {
     RamSave::capture(&Default::default(), 0, &nf_game::pickup::Inventory::level_start(0x73, 240), &ch)
 }
 
+/// The dock guard beside the driver (skin 0x500002e at (68.8, 27.3); the driver (66.1, 28.9), hp 1,
+/// stands between him and the south dismount): he opens fire as Bond reaches the dismount and his
+/// rounds aimed there pass ~0.8 u from the driver - the driver dies and ch 0x60 fails the mission,
+/// in the game too [L PCSX2 07000006 d1: Bond held at the dismount, the driver dies at frame 384,
+/// ch 0x60 = 1]. With the room gate on 06 the port's guard draws and fights like the game's, so the
+/// walk answers him first from the bed's west edge (58.2, 25.3), where the line clears the driver
+/// by ~2.3 u (walkreal_07000006's own opening).
+fn answer_the_dock_guard(w: &mut Walker) {
+    w.walk_nav_to([58.2, 38.3, 25.3], "the truck bed's west edge", 1.0);
+    let dock = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.list.iter().position(|d| d.present && d.health > 0.0 && d.team == 1 && d.skin == 0x0500_002e
+            && dxz(d.pos, [68.8, 39.0, 27.3]) < 3.0)
+    };
+    if let Some(di) = dock {
+        w.switch_to_armed("the dock guard by the driver");
+        let killed = w.shoot_bounded(di, "the dock guard by the driver", 1500);
+        eprintln!("[06] the dock guard #{di} from the bed: killed {killed}");
+    }
+}
+
 /// The walked lane from the truck-ride spawn to just short of the idle guard at
 /// (27.51, 39.18, −10.19) [D census: placement #438] — the walkreal's own proven legs, stopped
 /// before the guard's body-block.
 fn walk_to_the_guard_site(w: &mut Walker) {
     w.wait_enabled(3000, "the intro NIS");
     w.wait(30);
+    answer_the_dock_guard(w);
     w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
     w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
     w.walk_nav_to([24.3, 38.3, 27.6], "the dock's west end", 1.6);

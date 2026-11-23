@@ -24,6 +24,7 @@ pub mod dev;
 #[cfg(not(target_os = "android"))]
 pub mod devwin;
 pub mod driving;
+pub mod drive_reflection;
 pub mod hud;
 pub mod credits;
 pub mod fe_pages;
@@ -33,6 +34,7 @@ pub mod mp_lobby;
 pub mod menu_music;
 pub mod settings;
 pub mod stdio_guard;
+pub mod native_crash;
 pub mod movie;
 pub mod mpnet;
 pub mod mpfx;
@@ -489,7 +491,13 @@ pub fn build_sound(scene: &mut scene::Scene) -> Option<nf_audio::sfx::Sound> {
         // ids it carries resolve exactly as the one-bank driver did [M `Sound_Ready` 0x1dceb8].
         for (slot, bank, sbf) in std::mem::take(&mut scene.sound_spares) { driver.load_spare_bank(slot, bank, sbf); }
         if let Some((lut, bin)) = scene.streams.take() { driver.load_streams(lut, std::sync::Arc::new(bin)); }
+        // frame-hitches: the level bank's samples and its effects' streams decode on a worker now,
+        // not in the frame that first plays them (the same PCM; a miss before it ends decodes as before).
+        driver.predecode_in_background();
+        eprintln!("audio: opening the output device");
         let output = nf_audio::Output::open();
+        eprintln!("audio: {}", if output.is_some() { "output open" } else { "no output (silent)" });
+        native_crash::rearm();
         // Diagnostic sink note (unported-misc-10): the game's printf output sinks into
         // `deci2Putchar` 0x23cc90 — `_putchar` (OBJECT 0x2e7a58) swapped in by `scePrintf`
         // 0x23d570, emitting the boot banner "NFSV = 0x%\n" from `PS2FreshBoot` 0x120ab0 [M
@@ -616,12 +624,65 @@ fn face_other_aid(sim: &mut scene::Sim) -> bool {
     true
 }
 
+/// Test aid (NF_MP_PLACE="<slot>:x,y,z[;…]", mp-drops two-window check): at the online match start
+/// those slots' bodies stand at those points — identically on every machine (the env rides every
+/// window; the positions are in the lockstep hash), so a pickup across the arena is a short walk.
+fn place_aid(sim: &mut scene::Sim) {
+    let v = std::env::var("NF_MP_PLACE").unwrap_or_default();
+    let local = sim.mp_local_slot;
+    for part in v.split(';').filter(|p| !p.is_empty()) {
+        let Some((sl, xyz)) = part.split_once(':') else { continue };
+        let Ok(sl) = sl.trim().parse::<usize>() else { continue };
+        let c: Vec<f32> = xyz.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        if c.len() != 3 || sl >= sim.mp_bonds.len() { continue; }
+        let yaw = if sl == local { sim.bond.yaw } else { sim.mp_bonds[sl].as_ref().map_or(0.0, |b| b.yaw) };
+        let b = nf_game::player::Bond::stand_at(&sim.world, [c[0], c[1], c[2]], yaw);
+        let bp = b.pos;
+        if sl == local { sim.bond = b; } else { sim.mp_bonds[sl] = Some(b); }
+        if let Some(m) = sim.mp.as_mut() { m.set_slot(sl, bp); }
+        eprintln!("[net] place aid: slot {sl} at {bp:?}");
+    }
+    // NF_MP_PLACE_OBJ="<slot>:<obj>:dx,dz[;…]" (mp-scenarios-full): the same, at a scenario
+    // object's position plus (dx, dz), obj = site | hill | bp | ge0 | ge1 | flag0 | flag1 |
+    // base0 | base1 | esp0 | esp1 | up<n>. The objects' places come from the shared seed, so a
+    // fixed point would miss them.
+    let Ok(v) = std::env::var("NF_MP_PLACE_OBJ") else { return };
+    for part in v.split(';') {
+        let mut it = part.split(':');
+        let (Some(sl), Some(obj), Some(off)) = (it.next(), it.next(), it.next()) else { continue };
+        let Ok(sl) = sl.trim().parse::<usize>() else { continue };
+        let d: Vec<f32> = off.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        if d.len() != 2 || sl >= sim.mp_bonds.len() { continue; }
+        let Some(m) = sim.mp.as_ref() else { return };
+        let o = &m.objects_rt;
+        let p = match obj.trim() {
+            "site" => o.site.as_ref().map(|x| x.pos),
+            "hill" => o.hill.as_ref().map(|x| x.pos),
+            "bp" => o.blueprint.as_ref().map(|x| x.pos),
+            "ge0" | "ge1" => o.ge[(obj.trim() == "ge1") as usize].as_ref().map(|x| x.pos),
+            "flag0" | "flag1" => o.flags[(obj.trim() == "flag1") as usize].as_ref().map(|x| x.pos),
+            "base0" | "base1" => o.bases[(obj.trim() == "base1") as usize],
+            "esp0" | "esp1" => o.esp_bases[(obj.trim() == "esp1") as usize],
+            u => u.strip_prefix("up").and_then(|n| n.parse::<usize>().ok()).and_then(|n| o.uplinks.get(n)).map(|x| x.pos),
+        };
+        let Some(p) = p else { eprintln!("[net] place aid: no {obj}"); continue };
+        let local = sim.mp_local_slot;
+        let yaw = if sl == local { sim.bond.yaw } else { sim.mp_bonds[sl].as_ref().map_or(0.0, |b| b.yaw) };
+        let b = nf_game::player::Bond::stand_at(&sim.world, [p[0] + d[0], p[1], p[2] + d[1]], yaw);
+        let bp = b.pos;
+        if sl == local { sim.bond = b; } else { sim.mp_bonds[sl] = Some(b); }
+        if let Some(m) = sim.mp.as_mut() { m.set_slot(sl, bp); }
+        eprintln!("[net] place aid: slot {sl} at {obj} {p:?} + {d:?} -> {bp:?}");
+    }
+}
+
 /// Test aid (NF_MP_DUEL=<dist>, mp-combat-weapons): at the online match start slot 1's body is
 /// moved onto the first spot `dist` from slot 0 (16 headings) on the same floor with a clear line
 /// between the eyes — identically on every machine (the positions are in the lockstep hash, every
 /// window runs it with the same env) — so the two-window weapon check fires across open ground.
 /// Combine with NF_MP_FACE_OTHER=1.
 fn duel_aid(sim: &mut scene::Sim) {
+    place_aid(sim);
     let Some(dist) = std::env::var("NF_MP_DUEL").ok().and_then(|v| v.parse::<f32>().ok()) else { return };
     let local = sim.mp_local_slot;
     let body = |sim: &scene::Sim, s: usize| if s == local { Some(sim.bond.clone()) } else { sim.mp_bonds[s].clone() };
@@ -817,6 +878,14 @@ pub fn load_front_end(iso: &str, archive: &str, all: bool, save: Option<&nf_game
     load_impl(iso, archive, all, save, dev, &[], false, None, difficulty, bonus)
 }
 
+/// [`load_front_end`] with the profile's game-complete byte: on a finished game the level kit's
+/// weapon 10 is record 0xC (`Player_EquipWeapon` → `Upgrade_Weapon` case 10 [M 0x1a8a58:24-30,
+/// 0x1a8f30]). The app's level loads run this one.
+#[allow(clippy::too_many_arguments)]
+pub fn load_front_end_gc(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, difficulty: u32, bonus: u64, game_complete: bool) -> Result<scene::Scene> {
+    load_impl_gc(iso, archive, all, save, dev, &[], false, None, difficulty, bonus, game_complete)
+}
+
 /// difficulty-effects: the warm reload with a weapon-asset set at the selected difficulty.
 pub fn load_with_carry_weapons_difficulty(iso: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, wids: &[u8], difficulty: u32) -> Result<scene::Scene> {
     load_impl(iso, archive, all, save, false, wids, false, None, difficulty, 0)
@@ -936,6 +1005,13 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
 }
 
 fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
+    load_impl_gc(iso_path, archive, all, save, dev, give, mp, mp_settings, difficulty, bonus, false)
+}
+
+/// [`load_impl`] with the profile's game-complete byte (`GameState[0x52]`), which the level kit's
+/// `Upgrade_Weapon` reads [M 0x1a8f30 case 10] (mp-drops).
+#[allow(clippy::too_many_arguments)]
+fn load_impl_gc(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64, game_complete: bool) -> Result<scene::Scene> {
     use nf_formats::{anim::Sequence, character, levelbin::LevelBin};
     use std::collections::HashMap;
     let mut t = std::time::Instant::now();
@@ -1822,9 +1898,14 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
                 let sp = m.get_spawn_point(m.settings.players[slot].team as u16, slot, &mut sim.drones.rng) as usize;
                 let sp_ent = m.spawns.points[sp];
                 let b = nf_game::player::Bond::stand_at(&sim.world, [sp_ent.pos[0], sp_ent.pos[1], sp_ent.pos[2]], sp_ent.facing[1]);
+                // `Player_Init`'s health: the slot's Health Handicap + 100 [M 0x1910f8:128-131]:
+                // the online combat's per-slot word and this machine's own health.
+                let hp = m.human_health(slot);
+                if let Some(h) = sim.mp_hp.get_mut(slot) { *h = hp; }
                 if slot == 0 {
                     first_spawn = sp;
                     sim.bond = b;
+                    sim.drones.health.health = hp;
                     m.set_slot(0, sim.bond.pos);
                 } else {
                     m.set_slot(slot, b.pos);
@@ -1906,8 +1987,8 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             // (the save load, the results award), so it is already live when `Player_InitWeapon`
             // runs [M 0x1ff898:73-98, 0x1a7ef8:126-133].
             sim.drones.inventory.upgrades = nf_game::progress::upgrades_from_bonus(bonus);
-            nf_game::player::init_level_loadout(level_id, save, &mut sim.drones.health,
-                &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded)
+            nf_game::player::init_level_loadout_ex(level_id, save, &mut sim.drones.health,
+                &mut sim.drones.inventory, &mut sim.drones.channels, &sim.weapons, loaded, game_complete)
         };
         // The switch request is the game's `M_CONTROL+0x63`; the draw machine holsters and draws it
         // (`Player_WeaponSelect` 0x1a2cc0). 0x47 (none) draws nothing.
@@ -1936,8 +2017,11 @@ fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::pl
             };
             if differs { sim.hud.weapon_label_timer = 60; }
         }
-        eprintln!("loadout: level {level_id:08x} switch request {req} ({} owned weapons, health {:.0}, armour {:.0})",
-            sim.drones.inventory.owned.iter().filter(|&&o| o).count(), sim.drones.health.health, sim.drones.health.armour);
+        // The owned ids and the upgrade row ride the line so a menu-driven run can show the kit
+        // (gold-medal-realpath); the prefix is what the smoke checks grep.
+        let owned_ids: Vec<String> = sim.drones.inventory.owned.iter().enumerate().filter(|(_, &o)| o).map(|(i, _)| format!("{i:#x}")).collect();
+        eprintln!("loadout: level {level_id:08x} switch request {req} ({} owned weapons, health {:.0}, armour {:.0}) owned [{}] upgrades {:?}",
+            owned_ids.len(), sim.drones.health.health, sim.drones.health.armour, owned_ids.join(" "), sim.drones.inventory.upgrades);
     }
     phase_mark("10 music + starts + loadout", t);
     Ok(scene)
@@ -2237,6 +2321,13 @@ pub fn snow_for(scene: &scene::Scene, cam: &Camera) -> Vec<scene::Vertex> {
     sim.snow_quads(right, up)
 }
 
+/// `snow_for` into a reused buffer (the window's per-frame call; frame-hitches).
+pub fn snow_for_into(scene: &scene::Scene, cam: &Camera, out: &mut Vec<scene::Vertex>) {
+    let Some(sim) = scene.sim.as_ref() else { out.clear(); return };
+    let (right, up) = billboard_axes(cam);
+    sim.snow_quads_into(right, up, out);
+}
+
 /// The emitter sprites facing the camera, grouped by def texture and blend (`Emitter_Draw` 0x17b708
 /// path A → `psiDrawParticleList` 0x122d50 with def+0x04 bound; `Scene::particle_draws`).
 fn particles_for(scene: &scene::Scene, cam: &Camera) -> Vec<(Option<usize>, bool, Vec<scene::Vertex>)> {
@@ -2331,16 +2422,25 @@ pub fn sound_tick(s: &mut nf_audio::sfx::Sound, sim: &mut scene::Sim) {
     });
 }
 
+/// The instance options every port instance starts from: wgpu's defaults, except that `WGPU_BACKEND`
+/// (`vulkan`, `dx12`, `gl`, comma-separated) limits the backends tried. Unset, nothing changes; set, a PC whose
+/// driver faults while one backend starts can run on another.
+pub fn instance_desc() -> wgpu::InstanceDescriptor {
+    let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+    d.backends = d.backends.with_env();
+    d
+}
+
 /// Headless `wgpu::Instance` (no window), matching `gpu_instance`'s Vulkan indirect-validation opt-out.
 pub fn gpu_instance_headless() -> wgpu::Instance {
-    let default = || wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let default = || wgpu::Instance::new(instance_desc());
     let inst = default();
     if std::env::var_os("NF_INDIRECT_VALIDATION").is_some() { return inst; }
     let info = |i: &wgpu::Instance| pollster::block_on(i.request_adapter(&wgpu::RequestAdapterOptions::default()))
         .ok().map(|a| { let i = a.get_info(); (i.backend, i.name, i.vendor, i.device) });
     let Some(want) = info(&inst) else { return inst };
     if want.0 != wgpu::Backend::Vulkan { return inst; }
-    let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+    let mut d = instance_desc();
     d.backends = wgpu::Backends::VULKAN;
     d.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
     let inst2 = wgpu::Instance::new(d);
@@ -2360,7 +2460,7 @@ pub fn gpu_instance_headless() -> wgpu::Instance {
 /// `NF_INDIRECT_VALIDATION=1` keeps the check everywhere.
 pub fn gpu_instance(window: Option<&Arc<Window>>) -> (wgpu::Instance, Option<wgpu::Surface<'static>>) {
     let default = || {
-        let inst = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let inst = wgpu::Instance::new(instance_desc());
         let surf = window.map(|w| inst.create_surface(w.clone()).expect("create surface"));
         (inst, surf)
     };
@@ -2371,7 +2471,7 @@ pub fn gpu_instance(window: Option<&Arc<Window>>) -> (wgpu::Instance, Option<wgp
     let Some(want) = info(&inst, surf.as_ref()) else { return (inst, surf) };
     if want.0 != wgpu::Backend::Vulkan { return (inst, surf); }
     drop(surf);
-    let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+    let mut d = instance_desc();
     d.backends = wgpu::Backends::VULKAN;
     d.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
     let inst2 = wgpu::Instance::new(d);
@@ -2398,6 +2498,9 @@ pub async fn device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_
     eprintln!("gpu: requesting the device (features {:?})", desc.required_features);
     let (device, queue) = adapter.request_device(&desc).await?;
     eprintln!("gpu: device ready");
+    // A driver may have put its own unhandled-exception filter in place while the device opened: ours goes back
+    // on top and chains to it (native_crash.rs).
+    native_crash::rearm();
     Ok((adapter, device, queue))
 }
 
@@ -3066,6 +3169,7 @@ fn shot(scene: &scene::Scene, cam: &Camera, out: &str, choice: Option<usize>, ti
     let movie_arg = movie.map(|(w, h, rgba)| (*w, *h, rgba.as_slice()));
     r.set_shards(&queue, &scene.shard_draws());
     r.set_particles(&queue, &particles_for(scene, cam));
+    r.set_reflection(&queue, scene.drive_reflection.as_ref().map(|m| &m.frame));
     let mut enc = r.render(&device, &queue, &view, &depth, vp, vp_rot, cam.pos.to_array(), time as u32, &snow, hud, movie_arg, if cut { Some(band) } else { None });
     let row = (4 * w).next_multiple_of(256);
     let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
@@ -3250,6 +3354,8 @@ struct App {
     /// The gadget-beam palette entries (`Scene::beam_entries`), refreshed when the palette is
     /// rebuilt.
     beam_entries: Vec<usize>,
+    /// frame-hitches: the snow quads' per-frame buffer (`snow_for_into`), reused across frames.
+    snow_buf: Vec<scene::Vertex>,
     /// `--fps N`: a frame-rate cap (vsync off); None = vsync.
     fps_cap: Option<f32>,
     /// The always-on frame counter (top right): frames actually presented, counted over half-second
@@ -4142,9 +4248,14 @@ impl App {
         // zero word [L ee_start_05 0x2e1b88]. A part-to-part load runs with no front end up: the
         // word comes from the stashed session.
         let bonus = self.fe.as_ref().map_or_else(|| self.profile_session.bonus_bits(), |fe| fe.bonus_bits());
+        // mp-drops: the game-complete byte the kit's `Upgrade_Weapon(10)` reads [M 0x1a8f30 case 10]
+        // (the same single store the post-load restore below seeds `Progress::game_complete` from).
+        let game_complete = self.fe.as_ref().map_or(self.profile_session.saved_progress(), |fe| fe.saved_progress()).is_some_and(|p| p.game_complete);
         let job = async_load::Job::spawn(move || {
             if let Some(viv) = driving::driving_viv_for_level(next) {
-                driving::load_driving_scene(&iso, viv)
+                // The pick rides the DRIVING handover too (PTP+0x984 ← GameState+0x28
+                // [M Boot_GetPTPData 0x1c8198:13-21]).
+                driving::load_driving_scene_at(&iso, viv, difficulty)
                     .map(|(sc, drv)| (sc, Some(drv)))
                     .map_err(|e| e.to_string())
             } else if let Some(st) = mp_settings {
@@ -4152,7 +4263,7 @@ impl App {
                     .map(|sc| (sc, None))
                     .map_err(|e| e.to_string())
             } else {
-                load_front_end(&iso, &name, all, save.as_ref(), dev, difficulty, bonus)
+                load_front_end_gc(&iso, &name, all, save.as_ref(), dev, difficulty, bonus, game_complete)
                     .map(|sc| (sc, None))
                     .map_err(|e| e.to_string())
             }
@@ -5673,15 +5784,13 @@ impl App {
                                     // delta (mouse + pad merge) flips sign here.
                                     look: std::mem::take(&mut self.look) * if self.look_inverted { -1.0 } else { 1.0 },
                                     jump: self.just.remove(&KeyCode::Space),
-                                    // options-census: the Crouch row picks the feed [M
-                                    // Player_SSCrouch 0x1924c0:84-105] — Toggle reads press edges
-                                    // (the game's Input_Action(8/7, 4)), Hold reads the level
-                                    // (Input_Action(8, 1)).
-                                    crouch: if self.crouch_toggle_opt {
-                                        self.just.remove(&KeyCode::KeyC) | self.just.remove(&KeyCode::ControlLeft)
-                                    } else {
-                                        self.keys.contains(&KeyCode::KeyC) || self.keys.contains(&KeyCode::ControlLeft)
-                                    },
+                                    // The crouch press EDGE in both Crouch modes: the walk crouches
+                                    // on `Input_Action(8, 4)` whatever the option [M Player_HandleJump
+                                    // 0x1916b0:89-95] and Toggle stands on it; Hold's stand test reads
+                                    // the HELD level (`Input_Action(8, 1)`) [M Player_SSCrouch
+                                    // 0x1924c0:84-87] from `crouch_held`.
+                                    crouch: self.just.remove(&KeyCode::KeyC) | self.just.remove(&KeyCode::ControlLeft),
+                                    crouch_held: self.keys.contains(&KeyCode::KeyC) || self.keys.contains(&KeyCode::ControlLeft),
                                     crouch_hold: !self.crouch_toggle_opt,
                                     aiming: self.aiming,
                                     weapon_cycle: std::mem::take(&mut self.weapon_cycle),
@@ -5747,7 +5856,18 @@ impl App {
                                 .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick))
                             {
                                 let b = &sim.bond;
-                                let mut live: Vec<[f32; 3]> = sim.drones.pickups.iter().filter(|p| !p.gone && !p.hidden)
+                                // NF_NET_AUTOPICK_ONLY="drop" | "<id>[,<id>…]" (mp-drops two-window check):
+                                // steer only at a dead player's drop (lifetime running, no respawn) or at
+                                // pickups of those weapon ids.
+                                let only = std::env::var("NF_NET_AUTOPICK_ONLY").ok();
+                                let ids: Vec<u16> = only.as_deref().unwrap_or("").split(',')
+                                    .filter_map(|t| { let t = t.trim(); t.strip_prefix("0x").map_or_else(|| t.parse().ok(), |h| u16::from_str_radix(h, 16).ok()) }).collect();
+                                let wanted = |p: &nf_game::pickup::Pickup| match only.as_deref() {
+                                    None => true,
+                                    Some("drop") => p.lifetime > 0 && p.respawn == 0,
+                                    Some(_) => ids.contains(&p.weapon),
+                                };
+                                let mut live: Vec<[f32; 3]> = sim.drones.pickups.iter().filter(|p| !p.gone && !p.hidden && wanted(p))
                                     .map(|p| [p.m[3][0], p.m[3][1], p.m[3][2]]).collect();
                                 let d2 = |p: &[f32; 3]| (p[0] - b.pos[0]).powi(2) + (p[2] - b.pos[2]).powi(2);
                                 live.sort_by(|x, y| d2(x).total_cmp(&d2(y)));
@@ -5759,8 +5879,79 @@ impl App {
                                     if dy < -std::f32::consts::PI { dy += std::f32::consts::TAU; }
                                     input.turn = dy.clamp(-0.08, 0.08);
                                     input.forward = if dy.abs() < 0.8 { 1.0 } else { 0.2 };
-                                    input.look = (-b.pitch).clamp(-0.05, 0.05);
+                                    // A small gain: the lockstep input delay turned the full-gain correction into a swing.
+                                    input.look = (-0.1 * b.pitch).clamp(-0.02, 0.02);
                                     input.jump = self.net_tick % 97 == 0;
+                                }
+                            }
+                            // Test aid (NF_NET_AUTOOBJ="a-b", mp-scenarios-full): on match ticks a..=b steer
+                            // this player at the scenario's objective the way the bots' objective scan
+                            // picks one (CTF: a carried own flag's carrier, a dropped own flag, else the enemy
+                            // flag, carrying → the own base; Uplink: the nearest
+                            // terminal the team does not own; KOTH: the hill; Demolition/Protection: the
+                            // site, fired at when close; Espionage: the blueprint, carrying → the own base;
+                            // GoldenEye: an item the team does not hold; the kill scenarios: the nearest
+                            // live opponent, fired at when close). Input only; the sim is untouched.
+                            if self.net.is_some() && std::env::var("NF_NET_AUTOOBJ").ok()
+                                .and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
+                                .is_some_and(|(a, b)| (a..=b).contains(&self.net_tick))
+                            {
+                                if let Some(m) = sim.mp.as_ref() {
+                                    use nf_game::mp::scenario as sc;
+                                    let b = &sim.bond;
+                                    let me = self.net_local_slot;
+                                    let team = m.settings.players[me].team;
+                                    let o = &m.objects_rt;
+                                    let d2 = |p: &[f32; 3]| (p[0] - b.pos[0]).powi(2) + (p[2] - b.pos[2]).powi(2);
+                                    let nearest = |v: Vec<[f32; 3]>| v.into_iter().min_by(|x, y| d2(x).total_cmp(&d2(y)));
+                                    let used = (m.settings.human_count + m.settings.bot_count) as usize;
+                                    let foe = |s: usize| s != me && s < used && !m.game.slots[s].dead
+                                        && (m.settings.team_game == 0 || m.settings.players[s].team != team)
+                                        // Assassination: the assassin hunts the target, everyone else the assassin.
+                                        && (m.settings.scenario != sc::ASSASSIN
+                                            || if m.assassin == Some(me) { m.assassin_target == Some(s) } else { m.assassin == Some(s) });
+                                    let opponent = || nearest((0..used).filter(|&s| foe(s)).filter_map(|s| m.game.slots[s].pos).collect());
+                                    let (tg, shoot) = match m.settings.scenario {
+                                        sc::CAPTURE_THE_FLAG => {
+                                            // The own flag first: carried → hunt the carrier, dropped → touch it (the return).
+                                            let carrying = o.flags.iter().flatten().any(|f| f.state == 1 && f.carrier == Some(me));
+                                            let own = o.flags[team as usize % 2].as_ref();
+                                            if let Some(c) = own.filter(|f| f.state == 1).and_then(|f| f.carrier).and_then(|c| m.game.slots[c].pos) { (Some(c), true) }
+                                            else if let Some(f) = own.filter(|f| f.state == 2) { (Some(f.pos), false) }
+                                            else if carrying { (o.bases[team as usize % 2], false) }
+                                            else { (o.flags[1 - team as usize % 2].as_ref().map(|f| f.pos), false) }
+                                        }
+                                        sc::UPLINK => (nearest(o.uplinks.iter().filter(|u| u.state as u32 != team).map(|u| u.pos).collect()), false),
+                                        sc::KOTH_FFA | sc::KOTH_TEAM => (o.hill.as_ref().map(|h| h.pos), false),
+                                        sc::DEMOLITION | sc::PROTECTION => {
+                                            let attacker = (m.settings.scenario == sc::DEMOLITION) == (team == 1);
+                                            let site = o.site.as_ref().filter(|s| s.sub == 0).map(|s| s.pos);
+                                            if attacker { (site, true) } else { (opponent().or(site), true) }
+                                        }
+                                        sc::BLUEPRINT => {
+                                            let carrying = o.blueprint.as_ref().is_some_and(|x| x.state == 1 && x.carrier == Some(me));
+                                            if carrying { (o.esp_bases[team as usize % 2], false) } else { (o.blueprint.as_ref().map(|x| x.pos), false) }
+                                        }
+                                        sc::GOLDENEYE => (nearest(o.ge.iter().flatten().filter(|g| g.state != 3
+                                            && g.carrier.map_or(true, |c| m.settings.players[c].team != team)).map(|g| g.pos).collect()), false),
+                                        _ => (opponent(), true),
+                                    };
+                                    if let Some(tg) = tg {
+                                        let want = (tg[0] - b.pos[0]).atan2(tg[2] - b.pos[2]);
+                                        let mut dy = (want - b.yaw) % std::f32::consts::TAU;
+                                        if dy > std::f32::consts::PI { dy -= std::f32::consts::TAU; }
+                                        if dy < -std::f32::consts::PI { dy += std::f32::consts::TAU; }
+                                        let dist = d2(&tg).sqrt();
+                                        input.turn = dy.clamp(-0.08, 0.08);
+                                        input.forward = if shoot && dist < 9.0 { 0.0 } else if dy.abs() < 0.8 { 1.0 } else { 0.2 };
+                                        input.look = (-0.1 * b.pitch).clamp(-0.02, 0.02);
+                                        input.jump = self.net_tick % 97 == 0;
+                                        if shoot && dist < 12.0 && dy.abs() < 0.12 && self.net_tick % 12 < 6 { input.fire = true; }
+                                        if self.net_tick % 120 == 0 {
+                                            eprintln!("[net] autoobj tick {} pos ({:.2},{:.2},{:.2}) target ({:.2},{:.2},{:.2}) dist {dist:.2}",
+                                                self.net_tick, b.pos[0], b.pos[1], b.pos[2], tg[0], tg[1], tg[2]);
+                                        }
+                                    }
                                 }
                             }
                             // Test aid (NF_NET_SWITCH="tick:id,tick:id,…", ids hex 0x.. or decimal):
@@ -6050,6 +6241,46 @@ impl App {
                                     let (rtt, delay, bytes, pkts) = session.0.borrow().net_stats();
                                     eprintln!("[netrate] tick {} at {:.1} s ({:.1}/s), stalls {}, rtt {} ms, delay {} ticks, sent {} B / {} pkts", self.net_tick, c, self.net_tick as f64 / c.max(1e-3), NET_STALLS.swap(0, std::sync::atomic::Ordering::Relaxed), rtt.map_or("-".to_string(), |r| format!("{r:.0}")), delay, bytes, pkts);
                                 }
+                                // Test aid (NF_NET_DROPLOG=<n>, mp-drops two-window check): every pickup on
+                                // match tick 1; then every n ticks, and on any state / gone change, each dead
+                                // player's drop (lifetime running, no respawn): index, id, kind, rounds,
+                                // state, lifetime left, position, the spin heading; plus each human slot's
+                                // shared gate (held record, owned ids). Read-only.
+                                if let Some(n) = std::env::var("NF_NET_DROPLOG").ok().and_then(|v| v.parse::<u32>().ok()).filter(|&n| n > 0) {
+                                    static SEEN: std::sync::Mutex<Vec<(usize, u8, bool)>> = std::sync::Mutex::new(Vec::new());
+                                    let tick = self.net_tick;
+                                    if tick == 1 {
+                                        for (k, p) in sim.drones.pickups.iter().enumerate() {
+                                            eprintln!("[droplog] t {tick} arena pickup {k}: id {:#x} kind {} rounds {} respawn {} at ({:.2},{:.2},{:.2})", p.weapon, p.kind, p.rounds, p.respawn, p.m[3][0], p.m[3][1], p.m[3][2]);
+                                        }
+                                    }
+                                    let mut seen = SEEN.lock().unwrap();
+                                    let mut changed = false;
+                                    for (k, p) in sim.drones.pickups.iter().enumerate() {
+                                        if p.respawn != 0 || p.from.is_some() { continue; }
+                                        let is_drop = (p.lifetime > 0 && !p.gone) || seen.iter().any(|e| e.0 == k);
+                                        if !is_drop { continue; }
+                                        let prev = seen.iter().position(|e| e.0 == k);
+                                        let now = (k, p.state, p.gone);
+                                        let first = prev.is_none();
+                                        if prev.map_or(true, |i| seen[i] != now) {
+                                            changed = true;
+                                            match prev { Some(i) => seen[i] = now, None => seen.push(now) }
+                                        }
+                                        if first || changed || tick % n == 0 {
+                                            eprintln!("[droplog] t {tick} frame {} drop {k}: id {:#x} kind {} rounds {} state {} lifetime {} gone {} hidden {} spin {} at ({:.3},{:.3},{:.3}) heading {:.3}",
+                                                sim.drones.frame, p.weapon, p.kind, p.rounds, p.state, p.lifetime, p.gone, p.hidden, p.spin, p.m[3][0], p.m[3][1], p.m[3][2], p.m[2][0].atan2(p.m[2][2]));
+                                        }
+                                    }
+                                    if changed || tick % n == 0 {
+                                        for (s, g) in sim.mp_combat.gates.iter().enumerate().take(2) {
+                                            let owned: Vec<usize> = (0..g.inv.owned.len()).filter(|&i| g.inv.owned[i]).collect();
+                                            let carried: Vec<(usize, i32)> = g.inv.carried.iter().enumerate().filter(|(_, &c)| c != 0).map(|(i, &c)| (i, c as i32)).collect();
+                                            let clip: Vec<(usize, i32)> = g.inv.clip.iter().enumerate().filter(|(_, &c)| c != 0).map(|(i, &c)| (i, c as i32)).collect();
+                                            eprintln!("[droplog] t {tick} gate {s}: held {:#x} owned {:x?} clip {clip:x?} carried {carried:?} hp {:.0}", g.weapon, owned, sim.mp_hp.get(s).copied().unwrap_or(0.0));
+                                        }
+                                    }
+                                }
                                 // Render-check aid (NF_NET_SHOT=<tick>[,<tick>…] or <a>-<b>): the F12 capture at
                                 // those match ticks (a range catches the 2-tick muzzle flashes, mp-remote-fx).
                                 let tick = self.net_tick;
@@ -6116,6 +6347,13 @@ impl App {
                                 if fresh_fe {
                                     let session = self.profile_session.clone();
                                     session.apply_to(fe);
+                                }
+                                // Test aid (NF_MP_OBJLOG=1, mp-scenarios-full): the board this window opens.
+                                if std::env::var_os("NF_MP_OBJLOG").is_some() {
+                                    let b = m.debriefing();
+                                    eprintln!("[mp-debrief] f{} result {:?} end {:?} hash {:#x} rows {:?}", sim.drones.frame, b.result, m.game.end_status,
+                                        nf_game::mp::debrief::board_hash(&b),
+                                        b.rows.iter().map(|r| (r.slot, r.rank, r.points, r.victories, r.deaths, r.total)).collect::<Vec<_>>());
                                 }
                                 fe.open_mp_debriefing(m);
                                 debrief_opened = true; // the grab waits for the sim borrow (below)
@@ -6297,7 +6535,7 @@ impl App {
                         self.cam.yaw = yaw;
                         self.cam.pitch = pitch;
                     }
-                    { let (r, u) = billboard_axes(&self.cam); self.scene.drive_particles = drv.particle_groups(r, u); }
+                    { let (r, u) = billboard_axes(&self.cam); self.scene.drive_particles = drv.particle_groups(r, u); drv.reflection_frame(&mut self.scene, r, u); }
                     { let a = self.gfx.as_ref().map_or(16.0 / 9.0, |g| g.config.width as f32 / g.config.height.max(1) as f32); let h = drv.hud_frame(&self.scene, a); self.scene.drive_hud = h; }
                     if matches!(
                         drv.mission_state,
@@ -6523,7 +6761,8 @@ impl App {
                 let aspect = proj_aspect;
                 let (_, vp_rot) = draw_cam.view_proj_for(aspect, self.scene.mirror_x);
                 let vp = vp0;
-                let snow = snow_for(&self.scene, &draw_cam);
+                snow_for_into(&self.scene, &draw_cam, &mut self.snow_buf);
+                let snow = &self.snow_buf;
                 // fix-menus: a menu page up → the menu overlay replaces the HUD. fix-menu-movies2:
                 // the ONE movie plane (gpu.rs) serves every movie — the state-6 briefing/outro
                 // (fix-movie-playback), the P_INTRO pair and the page's looping backdrop
@@ -6635,7 +6874,8 @@ impl App {
                 let fp_enc = std::time::Instant::now();
                 g.renderer.set_shards(&g.queue, &self.scene.shard_draws());
                 g.renderer.set_particles(&g.queue, &particles_for(&self.scene, &draw_cam));
-                let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
+                g.renderer.set_reflection(&g.queue, self.scene.drive_reflection.as_ref().map(|m| &m.frame));
+                let enc = g.renderer.render(&g.device, &g.queue, &view, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
                 if let Some(path) = self.capture_req.take() {
                     let (w, h) = (g.config.width.max(1), g.config.height.max(1));
                     let target = g.device.create_texture(&wgpu::TextureDescriptor {
@@ -6644,7 +6884,7 @@ impl App {
                         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
                     });
                     let tview = target.create_view(&Default::default());
-                    let mut senc = g.renderer.render(&g.device, &g.queue, &tview, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, &snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
+                    let mut senc = g.renderer.render(&g.device, &g.queue, &tview, &g.depth, vp, vp_rot, draw_cam.pos.to_array(), self.anim_time as u32, snow, &hud, movie_frame, if cutscene { Some(band) } else { None });
                     let row = (4 * w).next_multiple_of(256);
                     let buf = g.device.create_buffer(&wgpu::BufferDescriptor { label: Some("spot shot"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
                     senc.copy_texture_to_buffer(
@@ -7071,6 +7311,7 @@ impl App {
             decal_cells: Vec::new(),
             pal_hidden: Vec::new(),
             beam_entries: Vec::new(),
+            snow_buf: Vec::new(),
             fps_cap: None,
             fps_meter: FpsMeter::default(),
             frame_start: std::time::Instant::now(),
@@ -7139,7 +7380,9 @@ impl ApplicationHandler for App {
             .with_fullscreen(disp.fullscreen.then_some(winit::window::Fullscreen::Borderless(None)));
         // The saved windowed size (Alt+PageUp/PageDown presets or a dragged edge, kept on close).
         if let Some((w, h)) = disp.size { attrs = attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h)); }
+        eprintln!("start: creating the window");
         let window = Arc::new(el.create_window(attrs).expect("create window"));
+        eprintln!("gpu: creating the instance and choosing an adapter");
         let (instance, surface) = gpu_instance(Some(&window));
         let surface = surface.expect("create surface");
         let (adapter, device, queue) = pollster::block_on(device(&instance, Some(&surface))).expect("GPU device");
@@ -7504,6 +7747,8 @@ pub fn run() -> Result<()> {
     let (iso, level) = match pos.as_slice() {
         [iso, level] => (iso.to_string(), level.to_string()),
         [iso] if lone_iso => (iso.to_string(), "07000048".to_string()),
+        // A lone path that names no file is a missing disc image, not a level (another front end may pass a stale path).
+        [p] if p.contains(['/', '\\']) || p.to_ascii_lowercase().ends_with(".iso") => bail!("the disc image {p} was not found"),
         [level] => (std::env::var("NF_ISO").map_err(|_| anyhow::anyhow!("NF_ISO is not set and no <iso> was given\n{USAGE}"))?, level.to_string()),
         [] => (std::env::var("NF_ISO").map_err(|_| anyhow::anyhow!("NF_ISO is not set and no <iso> was given\n{USAGE}"))?, "07000048".to_string()),
         _ => bail!("{USAGE}"),
@@ -7545,9 +7790,28 @@ pub fn run() -> Result<()> {
     if let Some(viv) = u32::from_str_radix(level.trim_end_matches(".bin"), 16).ok().and_then(driving::driving_viv_for_level) {
         let out = args.iter().position(|a| a == "--shot").and_then(|i| args.get(i + 1))
             .context("a driving mission starts from the mission list; headless needs --shot <out.png>")?;
-        let (mut scene, mut drv) = driving::load_driving_scene(&iso, viv)?;
+        // `--difficulty N` (the GameState+0x28 pick, 1..4) as on foot; the boot default 2 otherwise.
+        let game_difficulty: u32 = match args.iter().position(|a| a == "--difficulty") {
+            Some(i) => args.get(i + 1).context("--difficulty needs N")?.parse()?,
+            None => 2,
+        };
+        let (mut scene, mut drv) = driving::load_driving_scene_at(&iso, viv, game_difficulty)?;
         let ticks: u32 = args.iter().position(|a| a == "--frame").and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0) as u32;
-        for _ in 0..ticks { drv.step(0.0, 0.0, 0.0, false); }
+        // Render aid: `--drive-throttle T` holds the throttle at T for the run (the hostiles a
+        // mission releases on the road ahead need the car to move).
+        let throttle: f32 = args.iter().position(|a| a == "--drive-throttle").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        // Render aid: `--drive-near-element NAME` releases the first AIEl element of that vehicle
+        // name and holds the car 40 units beside its spawn point (a helicopter spawns in range).
+        let near = args.iter().position(|a| a == "--drive-near-element").and_then(|i| args.get(i + 1)).and_then(|name| {
+            let h = drv.hostiles.as_mut()?;
+            let (i, p) = h.world.db.elements.iter().enumerate().find(|(_, e)| e.rec.name.eq_ignore_ascii_case(name)).map(|(i, e)| (i, e.rec.pos))?;
+            h.world.activate(i);
+            Some([p[0] + 40.0, p[1] + 5.0, p[2]])
+        });
+        for _ in 0..ticks {
+            if let Some(p) = near { drv.car.pos = p; drv.car.vel = [0.0; 3]; }
+            drv.step(throttle, 0.0, 0.0, false);
+        }
         let (p, yaw, pitch) = drv.chase_camera();
         let mut cam = Camera { pos: Vec3::new(p[0], p[1], p[2]), yaw, pitch, fov: GAME_FOV };
         if let Some(i) = args.iter().position(|a| a == "--cam") {
@@ -7555,15 +7819,17 @@ pub fn run() -> Result<()> {
             cam = Camera { pos: Vec3::new(v[0], v[1], v[2]), yaw: v[3], pitch: v[4], fov: GAME_FOV };
         }
         let opts = scene::ViewOpts { reinforcements: false, firing: false, right: [1.0, 0.0, 0.0], up: [0.0, 1.0, 0.0] };
-        { let (r, u) = billboard_axes(&cam); scene.drive_particles = drv.particle_groups(r, u); }
+        { let (r, u) = billboard_axes(&cam); scene.drive_particles = drv.particle_groups(r, u); drv.reflection_frame(&mut scene, r, u); }
         { let a = 1280.0 / 720.0; let h = drv.hud_frame(&scene, a); scene.drive_hud = h; }
         let (layout, _) = scene.skin_layout();
         let (mut pal, _) = scene.skin_palette(&layout, None, ticks as f32, opts, None);
-        drv.apply_to_palette(layout.attach_base as usize, &mut pal);
+        drv.apply_to_palette_eye(layout.attach_base as usize, &mut pal, [cam.pos.x, cam.pos.y, cam.pos.z]);
         *SHOT_PALETTE.lock().unwrap() = Some(pal);
         eprintln!("[driving] {viv}: {} ticks, car at {:?} yaw {:.3}, state {:?}, {} vertices, {} draws", drv.ticks, drv.car.pos, drv.car.yaw, drv.mission_state, scene.vertices.len(), scene.materials.len());
+        for (d, slot) in drv.hostile_draws() { eprintln!("[driving] hostile element {} {} ({}) slot {slot} at {:?}", d.element, d.name, d.model, d.matrix[3]); }
         return shot(&scene, &cam, out, None, ticks as f32, opts, args.iter().any(|a| a == "--no-tex"), args.iter().any(|a| a == "--no-fog"), None, None);
     }
+    eprintln!("start: loading {level} from the disc image");
     let scene = if dev { load_dev(&iso, &level, all)? }
         else if !give_ids.is_empty() { load_weapons(&iso, &level, all, &give_ids)? }
         else if let Some(i) = args.iter().position(|a| a == "--mp-match") {
@@ -8682,6 +8948,10 @@ static NET_STALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 #[cfg(test)]
 mod flow_audit;
 #[cfg(test)]
+mod hitch_probe;
+#[cfg(test)]
+mod mp_local_bot_damage;
+#[cfg(test)]
 mod headless_app_harness {
     use super::*;
     use winit::keyboard::KeyCode;
@@ -9356,28 +9626,29 @@ mod headless_app_harness {
 
     // options-census: the Crouch option picks the stand condition [M Player_SSCrouch
     // 0x1924c0:84-105]. Toggle stands on the crouch/jump press edge; Hold stands when the
-    // crouch action is not held. The transitions carry a 60-tick lockout [M 0x1924c0], so each
-    // waits it out before the next press.
+    // crouch action is not held. Both crouch on the press edge [M Player_HandleJump
+    // 0x1916b0:89-95]. The transitions carry the stance lockout (13 ticks with the 50-frame
+    // transition script [M 0x1924c0:45-55, D 0x060001dc/dd]), so each waits it out first.
     #[test]
     fn the_crouch_option_picks_the_stand_condition() {
         let Ok(iso) = std::env::var("NF_ISO") else { return };
         let mut h = HeadlessApp::mission(&iso, "07000005.bin");
-        let inp = |crouch: bool, toggle: bool| nf_game::player::Input { crouch, crouch_hold: !toggle, ..Default::default() };
+        let inp = |edge: bool, held: bool, toggle: bool| nf_game::player::Input { crouch: edge, crouch_held: held, crouch_hold: !toggle, ..Default::default() };
         let sim = h.app.scene.sim.as_mut().unwrap();
         sim.drones.crouch_toggle = true;
-        sim.step_bond(inp(true, true), false, false, false);
+        sim.step_bond(inp(true, true, true), false, false, false);
         assert!(sim.bond.crouched, "toggle: a crouch edge crouches");
-        for _ in 0..61 { sim.step_bond(inp(false, true), false, false, false); }
+        for _ in 0..61 { sim.step_bond(inp(false, false, true), false, false, false); }
         assert!(sim.bond.crouched, "toggle: no edge holds the crouch");
-        sim.step_bond(inp(true, true), false, false, false);
-        assert!(!sim.bond.crouched, "toggle: the second edge stands [M 0x1924c0:99-105]");
-        for _ in 0..61 { sim.step_bond(inp(false, false), false, false, false); }
-        sim.step_bond(inp(true, false), false, false, false);
-        assert!(sim.bond.crouched, "hold: the held action crouches [M 0x1924c0:84-88]");
-        for _ in 0..61 { sim.step_bond(inp(true, false), false, false, false); }
+        sim.step_bond(inp(true, true, true), false, false, false);
+        assert!(!sim.bond.crouched, "toggle: the second edge stands [M 0x1924c0:89-105]");
+        for _ in 0..61 { sim.step_bond(inp(false, false, false), false, false, false); }
+        sim.step_bond(inp(true, true, false), false, false, false);
+        assert!(sim.bond.crouched, "hold: the press edge crouches [M 0x1916b0:89-95]");
+        for _ in 0..61 { sim.step_bond(inp(false, true, false), false, false, false); }
         assert!(sim.bond.crouched, "hold: still held, still crouched");
-        sim.step_bond(inp(false, false), false, false, false);
-        assert!(!sim.bond.crouched, "hold: released stands [M 0x1924c0:84-88]");
+        sim.step_bond(inp(false, false, false), false, false, false);
+        assert!(!sim.bond.crouched, "hold: released stands [M 0x1924c0:84-87]");
     }
 
     // The goggles key: V is the keyboard's action-13 press [M HUD_MonitorNightSight 0x19e9d8:74

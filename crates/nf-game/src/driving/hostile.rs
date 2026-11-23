@@ -347,8 +347,8 @@ impl ElementDb {
     /// every vehicle's health and rider healths (+0x14) by the difficulty health factor
     /// (`FUN_002084a8`: MSet f32 +0x2c4/+0x2c8/+0x2cc by difficulty 0/1/2, +0x2c4 otherwise),
     /// runtime records next = now, period 1 [M]. The snow2a_mis4 `paris_hench` → `junglesnow`
-    /// swap (when the PTP word 0x100984 == 2) is the caller's: it needs the attribute's
-    /// rendername [M 0x12b8b0:85-107].
+    /// swap (when the PTP word 0x100984 == 2) runs on the map before this:
+    /// `hostiles::snow_hench_swap` (it needs the attribute's rendername) [M 0x12b8b0:96-125].
     pub fn new(map: &MapAi, slots: [i32; 3], difficulty: u32, health_factor: f32, now: i32) -> ElementDb {
         let elements = map
             .elements

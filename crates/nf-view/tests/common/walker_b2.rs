@@ -418,7 +418,22 @@ impl Walker {
                 let along = (rel[0] * bu.dir[0] + rel[1] * bu.dir[1] + rel[2] * bu.dir[2]) / (d * vm);
                 if along > 0.0 && d * (1.0 - along * along).max(0.0).sqrt() < 3.0 { Some([bu.dir[0] / vm, bu.dir[2] / vm]) } else { None }
             }) };
-            if let Some(dv) = threat {
+            // walks-1121-14: a live guard grenade within its blast radius makes Bond step straight
+            // away from it, hostile near or not (the walk's legs walked onto #33's resting 0x34 —
+            // damage 100, radius 8 — and its blast took 42.5 at d 1.0 [L this branch's grenade
+            // trace]); a player backs off a grenade on the floor and goes on once it is spent.
+            let gren = sim.drones.grenades.iter()
+                .filter(|g| sim.drones.list.get(g.owner).is_some_and(|o| o.team == 1))
+                .filter(|g| dz(g.pos, bp) < g.radius && (g.pos[1] - bp[1]).abs() < 3.0)
+                .min_by(|a, b| dz(a.pos, bp).total_cmp(&dz(b.pos, bp)))
+                .map(|g| g.pos);
+            if let Some(gp) = gren {
+                let (ax, az) = (bp[0] - gp[0], bp[2] - gp[2]);
+                let n = (ax * ax + az * az).sqrt().max(0.01);
+                let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
+                let away = [ax / n, az / n];
+                Input { forward: (away[0] * fy + away[1] * cy).clamp(-1.0, 1.0), strafe: (away[0] * cy - away[1] * fy).clamp(-1.0, 1.0), ..input }
+            } else if let Some(dv) = threat {
                 let perp = [-dv[1], dv[0]];
                 let (fy, cy) = (sim.bond.yaw.sin(), sim.bond.yaw.cos());
                 Input { forward: (perp[0] * fy + perp[1] * cy).clamp(-1.0, 1.0), strafe: (perp[0] * cy - perp[1] * fy).clamp(-1.0, 1.0), ..input }
@@ -509,7 +524,11 @@ impl Walker {
     pub fn wait_enabled(&mut self, max_ticks: u32, what: &str) -> bool {
         for _ in 0..max_ticks {
             self.tick(Input::default(), false);
-            if !self.scene.sim.as_ref().unwrap().disabled { return true; }
+            if !self.scene.sim.as_ref().unwrap().disabled {
+                let n = take_post_intro_wait();
+                for _ in 0..n { self.tick(Input::default(), false); }
+                return true;
+            }
         }
         panic!("Bond still disabled after {max_ticks} ticks ({what})");
     }

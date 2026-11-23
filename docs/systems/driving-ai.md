@@ -1,6 +1,6 @@
 # The driving missions' AI cars — road network, path following, speed, spawn
 
-Status: **§12 (2026-11-21) adds the road network logic: curves, the chase/follow choosers, the lights and the yield, traffic spawn and respawn.** **Reviewed against the decompile 2026-11-20 — §9 is the per-function table and
+Status: **§12 (2026-11-21) adds the road network logic: curves, the chase/follow choosers, the lights and the yield, traffic spawn and respawn; §12.5 the nearest-road join, the chasers' lane pick and the car box.** **Reviewed against the decompile 2026-11-20 — §9 is the per-function table and
 supersedes §3.1, §5 and §8 wherever they differ** (first port 2026-10-15). The port lives in
 supersedes §3.1, §5 and §8 wherever they differ; §10 (2026-11-21) adds the hostile AI and the
 AI vehicle lifecycle and supersedes §3.3 and §4** (first port 2026-10-15). The port lives in
@@ -749,8 +749,8 @@ On Paris all 105 curved pieces are the junction connectors (flag bit 0) [D].
 | state-4 tick | 0x132d80 | **added** (route count) | `TrafficDirector::count_route`. The +0xe4 stop-and-wait needs the actor's vtbl+0x17c query (not read). |
 | traffic create | 0x13f868 | reviewed | state 4, enabled, nav kind 1, +0xd8 = 4 (3 for one model list), and parked at once (0x132ba8): `TrafficWorld::new` starts every car parked. |
 | pedestrian spawn | 0x13d3f0 / 0x14eea8 / 0x126c98 | reviewed | the other user of the list (rr+0x2d/+0x2f); not traffic. |
-| lane pick | 0x135f70 | reviewed, **not ported** | see 12.4. |
-| lane pick helpers | 0x135d88 / 0x135cf0 / 0x135b10 / 0x1351d0 / 0x222060 | reviewed, not ported | see 12.4. |
+| lane pick | 0x135f70 | **added** (§12.5) | `join::lane_pick`. |
+| lane pick helpers | 0x135d88 / 0x135cf0 / 0x135b10 / 0x1351d0 / 0x222060 | **added** (§12.5) | `lane_costs` / `best_window` / `makes_room_for` / `scratch_join` / `lane_mask`. |
 
 ### 12.3 The headless traffic world [S where noted]
 
@@ -760,9 +760,10 @@ profile-0xc car the brain (with the yield) and `Car::step`. Parked cars are not 
 drive is not ported). The vehicle list the yield and the spacing read is updated car by car, as
 the game's list walk sees it. Stand-ins: the view test of the respawn (`FUN_001c65b0`, a sphere
 against the view frustum) is a caller closure; the two world flags (+0x350 view test, +0x3cc
-spawning off) are inputs; the vehicle extents +0x4c0/+0x4c8 keep the 0.001 floor. In
-`FUN_001862c0` the argument `FUN_001f6e98` copies them from is the output of `FUN_00210938`, an
-inverse-inertia triple, so they may well be that small in the game, but no live read backs it.
+spawning off) are inputs; the vehicle extents +0x4c0/+0x4c8 are the model's `Base` half box once
+`TrafficWorld::set_extents` is called (§12.5; the earlier reading of them as `FUN_00210938`'s
+inverse inertia was wrong: that triple (sp+0x90, copied to sp+0x20) is param_9; param_10 is sp+0x30, which
+`FUN_001c9778` fills).
 
 Disc runs (Paris, 3600 ticks): with the director live and a player driving the network at 20/s,
 9 cars were placed (all outside 150 and out of view) and drove 249 units; with 20 cars put on
@@ -777,19 +778,229 @@ road logic.
 
 ### 12.4 Not ported / unproven
 
-- The lane pick `FUN_00135f70` (pattern 3 off state 4 and pattern 4; not traffic): a 64-slot
-  lateral occupancy histogram at AI +0x98 (window width +0xd8), seeded from the road's lane
-  masks (`FUN_00222060`, 32 tables of 32 bytes at .data 0x33a6d8 / 0x33a818 chosen by the same
-  track test as the lane tables), decayed by distance from the current offset (`FUN_00135d88`),
-  marked by every conflicting car (`FUN_00135b10`: within 20..35, 15 when overtaking, and in
-  front) at its projected lateral offset (`FUN_001351d0`, a nearest-road join refreshed every 15
-  ticks), then the lowest-sum window (`FUN_00135cf0`) and a lane change of length `|Δ|·|v|·0.1`
-  (`FUN_00226f18`). It needs the nearest-road join (`FUN_00225c48` / `FUN_00225490`) and several
-  actor queries, none of which are ported. The blend it drives (`FUN_00226f18` /
-  `FUN_00227058`) is ported.
-- The caller side of the kind-3/4 choosers (which brain sets +0xb0/+0xb1/+0xb2 and +0x1fc).
+- The lane pick and the nearest-road join are ported in §12.5. The caller side of the kind-3/4
+  choosers is ported there in part: +0xb0/+0xb1/+0xb2 come from the AICo command (+0x7e/+0x84/
+  +0x85, `FUN_00145ff8`), +0x1fc from `FUN_00131770` (`chase_target_piece`); the rest of
+  `FUN_00131770` (its tracking flag) is not.
 - The `DAT_003339a8` objects the lights check; `FUN_001c65b0`; the world flags +0x350 / +0x3cc;
   the actor query vtbl+0x17c; AI +0x94 (gates the respawn and the lane pick; taken as 0).
 - `DAT_00339f54` (the world tick) and `DAT_00339f4c` (ticks per second) were not read live.
 - Live checks worth doing: in Paris, read DAT_003c828c / DAT_003c8290 over a few seconds (expect
   +1 every 300 ticks), and break on FUN_0013c798 to see a placement distance (expect > 150).
+
+### 12.5 The nearest-road join, the lane pick and the car box (branch `s/drive-road-join`)
+
+Port: `crates/nf-game/src/driving/join.rs`; tests `crates/nf-game/tests/driving_road_join.rs`
+(27; four read the disc). Verdicts as §9. Nothing here draws a random number. The disassembly was
+read wherever the decompile drops VU lanes or `max.s`/`min.s` (R5900 words `4601xx28` / `29`).
+
+| function | address | verdict | port / note |
+|---|---|---|---|
+| nearest piece | 0x225490 | **added** | `nearest_piece`: one grid cell only (`nearest_cell`: x on the columns, z on the rows, truncation, a negative or overflowed index to 0, past the end to the last cell); pieces below the RNhd count, once each; 0x100 never; kind 4 only flag-8 pieces of its group (nav +0x04 against rs+0x5a), other kinds never flag 8; kind 5 only flag-0x8000 pieces, other kinds never; the clamped chord projection, moved onto the Bezier on a curved piece; 3-D distance, first of equals. An empty cell returns piece **0** with no point (the game then joins piece 0 with a stale t; the port reports `EmptyCell`). |
+| chord point | 0x222968 / 0x222a30 / 0x2223b0 / 0x221888 | **added** | `project_clamped`. |
+| join | 0x225c48 | **added** | `RoadNav::join_nearest`: the end by `dot(dir, rs+0x40) ≥ 0` (a zero dir counts as 1; kind 4 without +0xb1/+0xb2 always toward B); the offset = the distance to the piece (lateral only when behind P0), signed against `(d.z, d.y, −d.x)`; kind 1 `snap_lane(max(2.5, off))` (`max.s` at 0x2263e8), so traffic always joins a lane on its own side; kind 2 past the outer lane; kind 4 clamped to the road widths (`max.s` 0x22627c, `min.s` 0x226294); kinds 3/5 keep the offset; param_4 = 1 keeps the centre line. Then the lane points, the controls, t on the lane line, the carrot. |
+| lane snap | 0x221f20 | **added** | `snap_lane`. |
+| road widths | 0x221ac8 / 0x221cb0 | **added** | `road_width`: flag 0x8008 reads rs+0x00 / +0x04; a connector takes the widest plain link at either node; else 5 (0x10) + 2.5 (0x800) + 5 (0x200 / 0x400) + 5 per lane (0x1000: 2.5 per lane of both sides); 0 becomes 5. |
+| cleared nav | 0x2233d0 | **added** | `RoadNav::cleared`. |
+| reverse | 0x225358 | **added** | `RoadNav::reverse`. |
+| pattern set-up | 0x12e468 | **added** | `nav_for_pattern`: state 4 → kind 1 (pattern 1 → 0); pattern 3 → kind 3 + join; pattern 4 → kind 4 + join, on the centre line when +0x154 is off; 1 / 5 → kind 0; 2 leaves the kind. The +0x124/+0x128 writes and the pattern-5 path `FUN_0013dfd8` are not ported. |
+| target piece | 0x131770 (lines 466-517) | **added** | `chase_target_piece`: −1 unless tracking, pattern 3 and a profile other than 0xe/0xf; unchanged while +0x94 holds; no target car: the scratch nav +0x114 (kind 3, or 4 for a kind-4 car) joins the goal +0x1c0; with one: that car's kind-3 scratch piece. The `FUN_00226c88` rejoin when the piece differs from the car's own is not ported. `chase_hint` = +0x1e0 = n(+0x1c0 − own position). |
+| nav slot / hints | 0x145ff8 | reviewed | AICo +0x7e → nav +0xb0 (when ≥ 0), +0x7f → nav +0x04 (the group), +0x84 → +0xb1, +0x85 → +0xb2; no other writer of +0xb1/+0xb2 in the decompile besides the clear in 0x2233d0. |
+| other car's road | 0x1351d0 | **added** | `scratch_join`: re-joined at `pos + vel·0.25` when the stamp is 0 or 15 ticks old (kind 4: or a new group), turned to the asker's heading, and kept turned. |
+| lane mask | 0x222060 | **added** | `lane_mask` / `lane_mask_index`; the tables [D .data 0x33a6d8 snow2a, 0x33a818 the other tracks, ten of 32 bytes; the test reads them from the disc ELF]. |
+| cost map | 0x135d88 | **added** | `lane_costs`: the mask + `round(5·|slot − c|)`, capped at 255; 0xff slots kept. |
+| best window | 0x135cf0 | **added** | `best_window` (its second argument is dead). |
+| room test | 0x135b10 | **added** | `makes_room_for`: 3-D distance within clamp(2v, 20, 35), 15 for a car at least 1 faster, height within 5 unless both overtake, not behind. |
+| lane pick | 0x135f70 | **added** | `lane_pick` (the doc comment lists every weight). The speeds are horizontal (`vmul.xz` at 0x136058). The other car's offset rounds half away from zero (`floorf` 0x2bfb50, `ceilf` 0x2bf970, the double floor 0x2bf460). AI +0xb7..+0xb9 are cost-map slots 31..33. |
+| car box | 0x1862c0 / 0x1c9778 / 0x1f6e98 / 0x1c7940 | **fixed** | `car_half_extents` + `floored_extents`; `TrafficWorld::set_extents`. +0x4c0/+0x4c4/+0x4c8 are half the model box (min +0x10, max +0x20 of the object at model +0xc = `*in#0[+0x1c]`), floored at 0.001. On the disc that reference is the article's `Base` record [D every car: the `as` payload +0x00 is the `Base` tag]; that the loader resolves it to the `Base` payload is read from the layout, not from the loader. Traffic: hatchback (0.817, 0.776, 1.952) [D]. |
+
+Disc: 200 points near Paris roads (DriveRng picks a piece, t, a side offset within ±12 and a
+heading), each joined as kind 1 and as kind 3: all 400 join; each lands on a lane line of the
+piece that a brute-force search of the cell also names; every traffic offset is a table lane of
+the piece's own side; 138 of the 400 land on another piece than the one the point was made from
+(a parallel piece or a connector nearer at that offset).
+
+Unproven / not ported here: whether the player's own controller answers the lane pick's AI reads
+(the vehicle list holds every vehicle); the actor queries vtbl+0x14c / +0x9c the weights read;
+the writers of AI +0x148 / +0x204 / +0x208 / +0x118 / +0xd8; the tracking flag of
+`FUN_00131770`; `FUN_00226c88`; nav +0x96. No live capture backs any of §12.5. Nothing in the
+port calls `lane_pick` or `nav_for_pattern` per frame yet (no chase brain drives a kind-3/4
+navigator).
+
+## 13. The hostile runtime (2026-11-21, branch `s/drive-hostile-runtime`)
+
+Port: `crates/nf-game/src/driving/hostiles.rs` (`HostileWorld`), plus AICo +0x93 / +0x94 in
+`crates/nf-formats/src/driveai.rs`. Tests: `crates/nf-game/tests/driving_hostiles_runtime.rs`
+(12; the last reads the disc). The runtime adds no game rule of its own: it owns the element
+database (§10) and, per live element, the controller the game attaches, and calls the ported
+functions of §10-§12 and `weapons.rs` in turn. Driving generator only.
+
+### 13.1 What one `step` does
+
+1. `ElementDb::tick` (FUN_0012bec8) with the player's position and velocity, the live elements'
+   positions and health. Each Spawn becomes a live object as `FUN_0012cb08` creates it [M
+   0x12cb08:152-260]: a ground vehicle is a `Car` from its own pvehicle `.atr`, at the record's
+   +0x30 facing its +0x20 row, with an AIVehicle chase brain for sim kind 2 (flag 8) and none for
+   kind 4 (`FUN_0013f118` has no kind-4 arm); a helicopter (+0x77) is a `heli::Heli`, attached
+   (`FUN_0013fa28`); a henchman is held at its record. The health starts at AIEl +0x4c
+   (`FUN_00195a08`). The spawn command +0xf8 is applied (`FUN_00145fc8` → `FUN_00145ff8`) and the
+   vehicle spawn asks for the traffic within box + 6 to be parked.
+2. Each live ground vehicle with a brain: `sight_tick`, `ram_tick`, `aim_point`, the profile-0xd
+   `pursue_switch` / `finish_rejoin`, the pattern 3/4 `road_heading_latch`,
+   `chase_target_speed`, the road carrot (`RoadNav::advance_with`, kinds 3/4 as `FUN_0012e468`
+   joins them, with the 0x130140 hint), `dispatch`, `avoid_chase`, `chase_drive` (or
+   `gated_stop`), then `Car::step`; the turret `turret_step`, `line_clear` and `fire_step`.
+3. Each helicopter: `Heli::update`. Each seated rider: the window / snowmobile / sunroof sight
+   and fire cadence (`riders.rs`), the window class with its `gunner_sweep`.
+4. Shots: a gun / cannon burst is one shell (`weapons::delivery` damage with
+   `ai_damage_scale(AI +0x131)`, the aim roll `aim_is_exact(AI +0x130)`, one draw); a rocket or
+   missile channel (0x33a0b0 barrel lists: 5/6 Rocket, 7/8 Missile, 9 Gun, 0x48 Cannon) launches a
+   `Projectile` (`launch_params` with an AI launcher) that `Projectile::step` flies at the player.
+   A shell that lands and a projectile that reaches the player return a `damage::Hit` (kind 2;
+   dent 0.25 for the shell as `FUN_0015de48`, 0 for the projectile) for `damage::inflict`.
+
+`command(element, record)` applies a script's `EAICommand`; `activate` / `deactivate` are
+`EActivateAIElement` (clear HELD, 0x1476b8) and `EDeactivateAIElement` (set HELD and despawn,
+0x14b510). `draw_list()` gives per live element the model stem, the world matrix (rows right /
+up / forward, translation row 3), the wheel centres, steer angle and roll angle, and a
+helicopter's +0x74 spin; `projectiles` the rounds in flight. `models_needed(map, set)` lists each
+vehicle of the track's set with its `RENDER_FILENAME`.
+
+### 13.2 Read for this branch [M]
+
+- `FUN_00145ff8` tail: +0x93 → AI +0x130, +0x94 → AI +0x131 (now `AiCommand::accuracy` /
+  `damage_mod`); +0x86 → +0x119, +0x88/+0x8c → +0x11c/+0x120 (the flying car's hold, ceiling,
+  floor: not used by the runtime; +0x118 is the actor's +0xbc byte, whose writer was not traced); +0x7b also puts the car at
+  the record's +0x40 facing its +0x20 row (vtbl+0x164) after parking the overlapping traffic
+  (radius = both boxes); +0x70 (unless 0 or 1.5) sets the velocity along the forward row; the
+  same record is not re-applied (+0x88).
+- `FUN_001476b8` (`EActivateAIElement`): clears HELD unless `DAT_00327c2c` is set, the element is
+  a non-persistent vehicle and `FUN_0012c5d0` (db+0x50 < db+4) is false. No writer of
+  DAT_00327c2c was found; the port clears HELD.
+- `FUN_0014b510` (`EDeactivateAIElement`): sets HELD; a vehicle is despawned through
+  `FUN_0012da78` → `FUN_0012c740`.
+- `FUN_0012e468`: pattern 3 → navigator kind 3 joined at the car along its forward row
+  (`FUN_00225c48(…, 0)`); pattern 4 → kind 4 (last argument 1 when +0x154 is clear) and the bob
+  height 2.5 with `IS_HELI` (string 0x36b528) else 10, the phase from DAT_00327c38 stepping 0.25;
+  pattern 5 → kind 0 and the path follower.
+- `FUN_00182978`: a projectile's contact with the player's car calls only `FUN_00200088` (the
+  explosion with the projectile's +0x718 damage, kind 2); the direct `vtbl+0x1ac` / `vtbl+0x1c(32,
+  0, …)` pair runs only when the projectile is the player's (`FUN_00195c70`).
+
+### 13.3 Stand-ins [S]
+
+- The nearest-road join `FUN_00225c48` / `FUN_00225490`: the nearest of five samples per piece.
+- The shell's flight (`FUN_001fffa8`): an exact shot hits; a wobbled one hits when its line passes
+  within the player's box half length. The explosion's radius rule (`FUN_00159fb8` →
+  `FUN_001847e8`): a projectile that comes within the player's box half length + 0.5 books its
+  full damage once.
+- The launcher channel busy test (`FUN_001a2d10`): 30 ticks after a shot.
+- The helicopter physics class: the integration of §12.6; the EAGL path pose: none.
+- The rider round is not traced: rider shots are events with no damage.
+- `FUN_001351d0` (the road under the target): pattern 2 re-joins only when the target is lost.
+  The bump probe's contact flag, the avoidance's side rays and the element target (AICo +0x50)
+  are not used. The order of the element manager against the controllers in `FUN_00159d10`.
+- On the rail stand-in (`FlatWorld`) the land controller's reverse rule (0x18cef8 brake-hold) is
+  applied by the runtime and the steer mirrored while reversing; a `surface` ground gives the
+  height (as the view does for its traffic).
+
+### 13.4 The disc test
+
+`mis01_and_mis4_for_3600_ticks`: a scripted player drives the road network at 20 u/s from the
+track's start for 3600 ticks; each element is released when the player first comes within 200
+of it (the mission triggers are not run). Checked every tick: a spawn is within 200 (+ the
+1..4-tick range period) unless PERSISTENT; a despawn is beyond 220, a slot lost to priority or
+HELD; live vehicles ≤ max(`VEHICLE_SLOTS_AVAIL`, live persistent) (the 0x12bec8 rule: persistent
+elements keep their slots even past the budget), helicopters ≤ the heli budget, henchmen +
+riders ≤ the hench budget; the database's live count equals the live list. Results on the rail
+stand-in: MIS01 5 spawns (all persistent, the pursuers end within 2-36 of the player), worst
+stray from the road 1.5 past the spawn's own distance, 113 rider shots, no vehicle weapon (no
+MIS01 hostile `.atr` declares one [D]); MIS4 8 spawns, 4 despawns, worst stray 15.9, 494 shells,
+240 damage calls of 2.5 (gun 10 × `ai_damage_scale(−75)` [D AICo +0x94]).
+
+On the land physics (`CollisionGround`) the same run is reported, not asserted: a MIS01 pursuer
+hits a kerb or wall about 4 s in, is thrown up (v.y 7.5), rolls over and falls through the
+ground mesh (y −2400 by the end); a MIS4 car strays 140 (cause not traced). The MIS01 case is the
+`Car::step` land model under AI inputs, not the runtime.
+
+## 14. The elements in the mission script (2026-11-21, branch `s/drive-hostile-facts-2`)
+
+Port: `HostileWorld::element_facts` / `script_elements` / `elements_for` / `trigger_cars` and
+`hostiles::element_refs` (crates/nf-game/src/driving/hostiles.rs); the view fills
+`script::Facts::elements` and `Facts::cars` from them every tick (crates/nf-view/src/driving.rs).
+Tests: `crates/nf-game/tests/driving_hostile_facts.rs` (7), the script unit tests
+`speed_condition_reads_the_car_that_ran_the_trigger` and
+`element_rules_fire_from_the_element_facts`, `crates/nf-view/tests/driving_hostile_facts_live.rs`
+(2, NF_ISO).
+
+### 14.1 What the rules read about an element [M]
+
+- A kind-4 selector holds the element's record pointer; `FUN_0012c640(DAT_00327c30, id)` turns it
+  into the runtime record `db+0x14 + |id - db+0x10| / 0x100 · 0x50` with no state test.
+  `FUN_0012af48` stores the AIEl record pointer at rt +0x20.
+- Health (`FUN_00209820`): `*(rt+0x20) + 0x4c`, the AIEl record's health. The spawn points the
+  actor's hit points at that float (`FUN_00195a08(actor, rec + 0x4c)`), `FUN_00195a58` subtracts
+  and floors at 0, and the despawn `FUN_0012c740` never rewrites it: an idle element reads its
+  loaded health, a live one its actor's, a wreck 0 for the rest of the mission.
+- Position (`FUN_002098a0`) rt +0x30 and speed (`FUN_00209758`) rt +0x3c, written by
+  `FUN_0012b440`: the live actor's position and |velocity|, else the record's +0x30 and 0.
+- Properties (`FUN_00209aa0` → `FUN_0012b138`, strings 0x36b098..0x36b0b8): EMPTY = a vehicle whose
+  riders' +0x14 healths sum to 0 (any state; no riders counts); BLOWOUT = live vehicle, not a
+  helicopter, `vtbl+0x13c` (wheels on) ≤ 3 and no rider at health ≤ 0; SMOKED / OILED = the live
+  vehicle's AIVehicle +0x168 / +0x16c; AWAKE = live, and for a vehicle health > 0 (a henchman by
+  its character's vtbl+0x14). The port has no wheel loss and no smoke / oil writer: BLOWOUT,
+  SMOKED and OILED read false [S]; the port's henchmen are held at their record and read AWAKE
+  while live.
+- Bearing (`FUN_0020ac70`, `FUN_00209958` for the matrix): only a live ground vehicle; d =
+  normalised (player − rt +0x30), angle = acos(row 2 · d) in degrees, negated when
+  cross(row 2, d).y < 0, then `FUN_0020abe0`'s window. That the libm call pair is acos is
+  read from the call shape.
+
+### 14.2 Deaths and removals
+
+Nothing of the script runs when an element dies or is removed [M, D]:
+- The AIEl / AICo records carry no `el` list (every reference word of the eight tracks' records
+  names `AICo` at AIEl +0xf8, `AIEl` at AICo +0x50 or `AISp` at AICo +0x80) [D].
+- The damage virtual `FUN_00189598` at the wreck only books mission statistics
+  (`FUN_00206900` mgr +0x3c0, `FUN_00206960` mgr +0x3c4) [M]; no rule reads those words
+  (`SRuleProgCounter` reads mgr +0x3e4 + 4·id).
+- `FUN_00188200` despawns a wreck at once (`FUN_0012da78`) only for vehicles named "tunnel",
+  "openheli" or "redheli" (with car +0x2c8 = 2 and `FUN_001a2cc0` false); other wrecks stay
+  until the range manager drops them (state 2, gone) [M].
+- The mission learns of a death by polling: `SRuleDeath` (health int == 0), `SRuleDamage` (lost
+  more than the threshold since the last test) and `SRuleHealth` (crossing) on the element's
+  record every frame they are evaluated.
+
+Rule counts with an element selector [D]: MIS01 Death 13, Damage 4, Health 3, Property 11;
+MIS4 Death 8, Damage 2, Range 14, Property 10; MIS11 Death 6, Health 4, Range 30, Property 1,
+PlayerDir 3; MIS13A Death 7; MIS13B Death 12, Range 7, Property 1; MIS13C Death 10, Property 1;
+MIS3 Death 7, Health 2, Property 3; RACE Death 1, Range 3.
+
+### 14.3 The trigger walk
+
+`FUN_0022f0c0` walks the 0x30 vehicle-manager slots whose +0x6e is 2 (set at creation,
+`FUN_001f6e98`; a parked traffic car is 3, `FUN_00132ba8`). `FUN_001862c0` maps the creation type
+to the kind byte +0x6d: 0 and 1 → 1, 2 → 2, 3 → 3, 4 and above (and below 0) → 2. The hostile
+spawn `FUN_0012cb08` creates its ground vehicles as type 2 (flag 8) or 4, the traffic
+`FUN_0013fae0` as type 3: so every AI element's car fires the flag-bit-3 triggers and the traffic
+the bit-6 ones. `EFireTriggerSpeedCondition` reads the speed of the car in the event's walk slot
+(`FUN_001ff088(0x339190, event+0x14)` +0x20), now ported. MIS01 has 615 bit-3 triggers, MIS4
+240 [D]; many are the pursuers' route points (`EAICommand`, `EAIKill`, `EDeactivateAIElement`).
+
+Not traced: the car-slot order (+0x46) the game gives the player, the traffic and the elements
+(the port walks the player, the traffic, then the elements in element order); whether the
+helicopter objects (`FUN_002003c8`) sit in the 0x30 car slots (the port leaves helicopters and
+henchmen out of the walk).
+
+### 14.4 MIS01's fail at the end of the sniper run
+
+List 686 (trigger 685) changes to stage 19. Stage 19's R105 / R107 are `SRuleDeath` on elements 3
+and 11 (AIEl 768 / 2816, the two henchman cars that start on the road): each disables trigger 644
+and starts timer 4 (2 s); R113 (timer 4 below 1 s) calls stage 39, whose R106 fires trigger 712.
+Trigger 644 (player, at (555, 0, 445) on the flight path) calls stage 42, whose R5
+(`SRuleDifficulty` mask 6: difficulty 1 or 2) runs `EAIKill(element 23)`, `EPlayerLose` and
+disables trigger 712 [D]. So on difficulty 1 or 2 the run fails when the flight reaches trigger
+644 with both pursuers alive. Before this branch the view gave the rules no element facts, so
+R105 / R107 could never fire and the view always lost there (tick 424 with the flight's own
+speed).
+

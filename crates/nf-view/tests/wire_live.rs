@@ -15,23 +15,20 @@ fn read_archive(iso: &str, archive: &str) -> Vec<u8> {
     img.read_bytes(bin.lba as u64 * 2048 + fe.offset as u64, fe.size as u64).expect("read")
 }
 
-/// The real play, end to end (at the cable left of the castle gate, E played the falling-to-death
-/// animation instead of the hand-over-hand crossing): Bond walks into
-/// 07000005's cable's grab zone (the wire placement −23.4855, 34.4676, 6.2629 [D placements probe],
-/// yaw −1.5708, sphere radius 4.039 [L ee_start_05.bin 016dc430]) and crosses it hand over hand to the
-/// far end, alive. The grab here is the COLLISION path [M Player_DealWithObjHit 0x194458 — the
-/// walking capsule against the wire's world sphere]; fix-wire2 corrected the record: E (the use key)
-/// NEVER grabs wires — `Player_Activate` 0x1a5170 has no class-0x2C arm — the other real grab is the
-/// jump grab (see tests/fix_wire2_live.rs).
+/// The walk-in grab on 07000005's cable (the wire placement −23.4855, 34.4676, 6.2629 [D placements
+/// probe], yaw −1.5708, sphere radius 4.039 [L ee_start_05.bin 016dc430]), then the hand-over-hand
+/// crossing to the far end, alive. The grab is the COLLISION path: the walking HITTEST (mode 0x800,
+/// r 0.55, A = pos + up·0.275, B = pos + up·(0.55 − cc) [M Player_Collision 0x194df0 default arm])
+/// passes `Collide_PickObj` 0x1eae80's ×1.5 sphere test, `Intersect_CylGeom` 0x109da0 finds the
+/// cable's collision triangles strictly inside 0.55, and `Player_DealWithObjHit` 0x194458:104 sends
+/// class 0x2C to `Player_CollWire` 0x197130 [M]. No key is involved: E never grabs a wire
+/// (`Player_Activate` 0x1a5170 has no class-0x2C arm); the other grab is the jump grab
+/// (tests/fix_wire2_live.rs).
 ///
-/// Sister (the no-input control leg): without the strafe input Bond stays at his end of the wire —
-/// the movement below comes from the input, not from the grab itself.
+/// Sisters: 1.4 under the cable the capsule (top reach −1.4 + 0.275 + 0.55 = −0.575) misses the
+/// mesh although it sits deep inside the world sphere — no grab (the old whole-sphere grab took
+/// it); and without the strafe input Bond stays at his end of the wire.
 #[test]
-// Ignored: a walk-in grab swallows Bond in 07000002's secret
-// bunker (walkreal_07000002 goes red; the real game walks that bunker ungrabbed), and the walking
-// query does not reach Collide_PickObj's world-sphere branch (versions 0x200/0x201 only [M 0x1eae80]). The certain
-// grab is the jump grab with the icon context (fix_wire2_live). Re-enable if a live census shows a walk-in grab.
-#[ignore = "walk-in wire grab not modelled: see the comment"]
 fn walking_into_the_07000005_cable_grabs_it_and_crosses_it_hand_over_hand() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000005.bin", false).expect("load");
@@ -40,9 +37,14 @@ fn walking_into_the_07000005_cable_grabs_it_and_crosses_it_hand_over_hand() {
     assert_eq!((w.wire_type, w.param0, w.channel), (0, 2, 0), "the live instance bytes [L ee_start_05 016dc510]");
     // The wire runs along Z: A = the +Z end, B = the −Z end (yaw −1.5708 → spherical(yaw+π/2) = (0,0,r)).
     let (a_t, b_t) = w.travel_segment();
-    // Bond at the B end of the grab span, standing 1.1 under the cable — inside the world sphere.
-    sim.bond.pos = [w.centre[0], w.centre[1] - 1.1, b_t[2] + 0.2];
-    sim.bond.yaw = 0.0;
+    assert!(w.tris.len() >= 8, "the cable carries its collision triangles [D census]: {}", w.tris.len());
+    // Sister: 1.4 under the cable, deep inside the world sphere, the capsule misses the mesh.
+    sim.bond = nf_game::player::Bond::new([w.centre[0], w.centre[1] - 1.4, b_t[2] + 0.2], 0.0);
+    sim.step_bond(Default::default(), false, false, true);
+    assert_eq!(sim.bond.substate, nf_game::player::SS_WALK, "a capsule clear of the cable mesh does not grab");
+    // Bond at the B end of the grab span, 0.7 under the cable (a leap into it): the capsule top
+    // (pos + 0.275, radius 0.55) reaches the cable mesh.
+    sim.bond = nf_game::player::Bond::new([w.centre[0], w.centre[1] - 0.7, b_t[2] + 0.2], 0.0);
     let health0 = sim.drones.health.health;
     // The walking collision grab [M Player_DealWithObjHit 0x194458] — E is NOT involved (no arm [M
     // 0x1a5170]); the E press here is inert input proving the grab does not need it.
@@ -102,11 +104,6 @@ fn walking_into_the_07000005_cable_grabs_it_and_crosses_it_hand_over_hand() {
 /// grab → cross → dismount chain must work there (the world sphere is offset from the translation, so
 /// this also pins `Wire::create`'s centre rotation).
 #[test]
-// Ignored: a walk-in grab swallows Bond in 07000002's secret
-// bunker (walkreal_07000002 goes red; the real game walks that bunker ungrabbed), and the walking
-// query does not reach Collide_PickObj's world-sphere branch (versions 0x200/0x201 only [M 0x1eae80]). The certain
-// grab is the jump grab with the icon context (fix_wire2_live). Re-enable if a live census shows a walk-in grab.
-#[ignore = "walk-in wire grab not modelled: see the comment"]
 fn the_07000002_wire_crosses_too() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
     let mut scene = nf_view::load(&iso, "07000002.bin", false).expect("load");
@@ -122,12 +119,20 @@ fn the_07000002_wire_crosses_too() {
     ];
     for k in 0..3 { assert!((w.centre[k] - want_c[k]).abs() < 1e-3, "centre[{k}] {} vs {}", w.centre[k], want_c[k]); }
     let (a_t, b_t) = w.travel_segment();
-    // Bond under the wire's midpoint, 1.1 below — inside the world sphere. (The wire's ends sit in
-    // trigger volumes on this level — a touch trigger at the B end starts a cut-scene that disables
-    // Bond — so the test grabs mid-wire, clear of them.)
-    sim.bond.pos = [w.centre[0], w.centre[1] - 1.1, w.centre[2]];
-    sim.bond.yaw = 0.0;
-    sim.step_bond(Default::default(), false, false, true);
+    // Bond under the wire's midpoint, 0.7 below: the capsule top reaches the wire mesh. (The wire's
+    // ends sit in trigger volumes on this level — a touch trigger at the B end starts a cut-scene
+    // that disables Bond — so the test grabs mid-wire, clear of them.)
+    assert!(w.tris.len() >= 8, "the wire carries its collision triangles [D census]: {}", w.tris.len());
+    // The level-start cut-scene disables Bond on this level's first tick; let it play out.
+    let mut t0 = 0;
+    loop {
+        sim.step_bond(Default::default(), false, false, false);
+        t0 += 1;
+        if !sim.disabled { break; }
+        assert!(t0 < 4000, "the level-start cut-scene ends");
+    }
+    sim.bond = nf_game::player::Bond::new([w.centre[0], w.centre[1] - 0.7, w.centre[2]], 0.0);
+    sim.step_bond(Default::default(), false, false, false);
     assert_eq!(sim.bond.substate, nf_game::player::SS_WIRE, "the grab works on 07000002's wire");
     for _ in 0..140 { sim.step_bond(Default::default(), false, false, false); }
     let idle = (sim.bond.pos[0], sim.bond.pos[2]);
@@ -159,7 +164,7 @@ fn zipline_rides_down_and_dismounts_at_the_lower_end() {
     // A sloped wire: yaw −π/2 → the segment runs along Z; pitch 0.3 tilts it.
     let wire = nf_game::wire::Wire {
         centre: [0.0, 10.0, 0.0], origin: [0.0, 10.0, 0.0], radius: 8.0, yaw: -std::f32::consts::FRAC_PI_2, pitch: 0.3,
-        wire_type: 2, param0: 0, param2: 0, channel: 0,
+        wire_type: 2, param0: 0, param2: 0, channel: 0, tris: Vec::new(), cell: None, forced: false,
     };
     let (a, b) = wire.zipline_segment();
     let high = if a[1] > b[1] { a } else { b };
@@ -202,4 +207,38 @@ fn probe_wire_placements() {
         }
         assert!(n > 0, "{name} carries a wire placement");
     }
+}
+
+/// The wire census over every level (`Level::parse` over `nf_view::dev::LEVELS`): each wire's
+/// placement, its object's name, its world sphere and its 0x2E collision triangle count — the walk-in
+/// pick's refine measures the capsule against those triangles [M Collide_Intersect 0x1ebaa8 →
+/// Intersect_CylGeom 0x109da0], so a wire object without them can only be taken by the jump grab.
+#[test]
+fn wire_census_all_levels() {
+    let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
+    let mut total = 0;
+    let mut with = Vec::new();
+    for &lv in nf_view::dev::LEVELS {
+        let name = format!("{lv:08x}.bin");
+        let data = read_archive(&iso, &name);
+        let level = Level::parse(&data).expect("parse");
+        let mut n = 0;
+        for (mi, m) in level.maps.iter().enumerate() {
+            for p in m.placements.iter().filter(|p| p.flags & 0xff == 0x3e) {
+                let obj = if p.by_hash() { level.by_hash.get(&p.hashcode).copied() }
+                    else if (p.index as usize) < m.objects.len() { Some((mi, p.index as usize)) } else { None };
+                let o = obj.and_then(|(om, oi)| level.maps.get(om).and_then(|map| map.objects.get(oi)));
+                let tris = o.and_then(|o| o.collision.as_ref()).map_or(0, |c| c.triangles().len());
+                let w = nf_game::wire::Wire::create(p, o);
+                eprintln!("{name}: wire at ({:.3},{:.3},{:.3}) yaw {:.4} obj {:?} r {:?} type {:?} tris {tris}",
+                    p.translation[0], p.translation[1], p.translation[2], p.rotation[1],
+                    o.map(|o| o.name.clone()), w.as_ref().map(|w| w.radius), w.as_ref().map(|w| w.wire_type));
+                n += 1;
+            }
+        }
+        if n > 0 { with.push((name, n)); }
+        total += n;
+    }
+    eprintln!("total wires {total}: {with:?}");
+    assert!(total > 0);
 }

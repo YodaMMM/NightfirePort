@@ -122,7 +122,19 @@ fn doors_open_on_the_walk_and_stay_shut_untouched() {
         (8.50, -13.50, 1.0, "through door plc 543"), (6.50, -15.50, 1.0, "the south passage"), (6.50, -19.50, 1.0, "the south passage 2"),
         (5.75, -22.75, 1.0, "the south hall"), (-9.75, -22.25, 1.0, "the south hall west"),
     ];
-    for &(x, z, r, label) in legs { w.walk_to(Wp::new(x, 1.1, z).r(r), label); }
+    for &(x, z, r, label) in legs {
+        w.walk_to(Wp::new(x, 1.1, z).r(r), label);
+        // master-reds-1121: the east wing guard (drone #4, hp 12) fires at Bond down the wing from
+        // (24.7, 4.2), and on the batch-3 stream (the guards aim at Bond's body) the fleeing
+        // civilian plc 24 (drone #14, CivilianMission 0x64) runs into his line at (24.77, -2.19):
+        // the round kills him (hit_by_drone 4, 5.25) and the mission fails on Killed Civilians
+        // 0x4000034 before the south corridor [measured this branch]. Bond answers the guard from
+        // the east lobby, as a player would, before walking the wing.
+        if label == "the east lobby east" {
+            let live = { let d = &w.scene.sim.as_ref().unwrap().drones.list[4]; d.present && !d.corpse && d.health > 0.0 && d.team == 1 };
+            if live { assert!(w.shoot(4, "the east wing guard"), "the east wing guard #4 falls to Bond's fire"); }
+        }
+    }
     w.walk_to(Wp::new(-9.90, 1.1, -20.60).r(0.4), "door plc 545, the approach");
     let d545 = door(&w, 545);
     w.use_door(d545, "door plc 545");
@@ -359,8 +371,10 @@ fn the_exit_is_not_used_through_the_security_room_wall() {
     // crouched head puts the use point 0.53 above the exit's horizontal plane. Crouch held here.
     let mut w = load();
     place(&mut w, 2.26, 9.6);
-    let crouch = nf_game::player::Input { crouch: true, ..Default::default() };
-    for _ in 0..60 { w.tick(crouch, false); }
+    // One Toggle press, then still (a press every tick re-toggles once the 13-tick stance
+    // lockout reopens [M Player_SSCrouch 0x1924c0:45-55]).
+    w.tick(nf_game::player::Input { crouch: true, ..Default::default() }, false);
+    for _ in 0..59 { w.tick(nf_game::player::Input::default(), false); }
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert!(sim.bond.crouch_drop > 0.3 && (sim.bond.pos[2] - 9.905).abs() < 0.1,
@@ -368,7 +382,7 @@ fn the_exit_is_not_used_through_the_security_room_wall() {
     }
     let mut fired = false;
     for _ in 0..10 {
-        w.tick(crouch, true);
+        w.tick(nf_game::player::Input::default(), true);
         if w.scene.sim.as_ref().unwrap().drones.level_exit.is_some() { fired = true; break; }
     }
     assert!(fired, "E beside the exit in the lobby loads the next level [M Trigger_Activate 0x1b2318; L PCSX2]");

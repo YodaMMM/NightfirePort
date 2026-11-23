@@ -25,8 +25,8 @@
 //!   `max(0, |camera − item origin| − radius) × view[+0x30]`; the view word is not traced, so
 //!   callers pass it ([`TrackFx::glares`] `lod_scale`);
 //! - which way the camera's row 2 points (the one-sided test uses it as given);
-//! - the Giotto `gg` (animated glare), `gd` (debris/decal bursts) and `gs` (sound) elements,
-//!   and every scene-object effect that starts on an object event (smash sparks, glass);
+//! - the Giotto `gg` (animated glare), `gd` (debris burst) and `gs` (sound) elements and the
+//!   event-started scene-object effects are in `smashfx`, not here;
 //! - how the particle manager ticks the emitters it owns (`FUN_001e65c0` has no direct caller;
 //!   it is reached through a vtable): here every emitter ticks once per call, like the vehicle
 //!   slots; the tick rate of the instance frame counter is not traced either.
@@ -88,6 +88,31 @@ pub struct GlareSprite {
 /// The glare bucket's GS state [M `FUN_001f14b0`: `DAT_00339050 = 0x8000000048` (ALPHA: Cs×As +
 /// Cd, FIX 0x80), `FUN_001a0f30(…, 0x70)` (TEST: alpha test GEQUAL 0x70, AFAIL = RGB only)].
 pub const GLARE_GS_ALPHA: u64 = 0x80_0000_0048;
+
+/// `FUN_001f2058` for one glare instance [M]: a halo then a spike from the type entry, each
+/// pulled towards the camera by `ZBias x size`, width `size x 1.4`, colour = the type colour's
+/// low 24 bits with alpha 0x20 (flag 0x20: `trunc(size x 32)`), rotation
+/// `frac(spin x distance / 2pi) x 2pi - 3.93`. An unknown type adds nothing.
+pub fn glare_sprites(pos: [f32; 3], size: f32, flags: u32, gtype: u32, camera: [f32; 3], types: &[GlareType], out: &mut Vec<GlareSprite>) {
+    let Some(t) = types.get(gtype as usize) else { return };
+    let to = sub(pos, camera);
+    let dist = len(to);
+    let n = if dist == 0.0 { [0.0; 3] } else { [to[0] / dist, to[1] / dist, to[2] / dist] };
+    let alpha: u32 = if flags & eflag::ONE_SIDED != 0 { ((size * 32.0).max(0.0) as u32) << 24 } else { 0x2000_0000 };
+    for layer in 0..2 {
+        let s = t.size[layer] * size;
+        let k = -t.zbias * s;
+        let f = t.spin[layer] * dist / 6.283185;
+        out.push(GlareSprite {
+            layer: layer as u8,
+            centre: [pos[0] + n[0] * k, pos[1] + n[1] * k, pos[2] + n[2] * k],
+            width: s * 1.4,
+            rgba: (t.colour[layer] & 0x00ff_ffff) | alpha,
+            cell: t.cell[layer],
+            rotation: (f - f.trunc()) * 6.283185 - 3.93,
+        });
+    }
+}
 
 /// A placed glare (type 2 entry) in world space.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -267,24 +292,7 @@ impl TrackFx {
         }
         for &(i, size) in &out.kept {
             let g = &self.glares[i];
-            let Some(t) = types.get(g.gtype as usize) else { continue };
-            let to = sub(g.pos, camera);
-            let dist = len(to);
-            let n = if dist == 0.0 { [0.0; 3] } else { [to[0] / dist, to[1] / dist, to[2] / dist] };
-            let alpha: u32 = if g.flags & eflag::ONE_SIDED != 0 { ((size * 32.0).max(0.0) as u32) << 24 } else { 0x2000_0000 };
-            for layer in 0..2 {
-                let s = t.size[layer] * size;
-                let k = -t.zbias * s;
-                let f = t.spin[layer] * dist / 6.283185;
-                out.sprites.push(GlareSprite {
-                    layer: layer as u8,
-                    centre: [g.pos[0] + n[0] * k, g.pos[1] + n[1] * k, g.pos[2] + n[2] * k],
-                    width: s * 1.4,
-                    rgba: (t.colour[layer] & 0x00ff_ffff) | alpha,
-                    cell: t.cell[layer],
-                    rotation: (f - f.trunc()) * 6.283185 - 3.93,
-                });
-            }
+            glare_sprites(g.pos, size, g.flags, g.gtype, camera, types, &mut out.sprites);
         }
         out
     }
@@ -438,6 +446,7 @@ mod tests {
             nump: 1,
             life: 3,
             emitters: vec![GiottoEmitter { element: "wrldsmok".into(), offset: [0.0, 1.0, 0.0], quat: [0.0, 0.0, 0.0, 1.0], ptype: t, links_previous: false, start_frame: 0, start_override: 0 }],
+            elements: vec![nf_formats::trackfx::GiottoElement::Emitter(0)],
             others: vec![],
         }
     }
@@ -447,7 +456,7 @@ mod tests {
         b[0x14] = 6;
         b[0x10] = 0x10;
         b[0x18..0x1c].copy_from_slice(&0x7372_0001u32.to_le_bytes());
-        PlacedEffect { item: 3, article: "P_Building".into(), part: 0, source_part: 0, entry: 0, scene_object: false, e: EfEntry::parse(&b), name: Some("GIOT::wd_smoke".into()), world: [5.0, 0.0, 5.0], world_dir: [0.0; 3], item_origin: [5.0, 0.0, 5.0], item_word15: 0 }
+        PlacedEffect { item: 3, article: "P_Building".into(), part: 0, source_part: 0, entry: 0, scene_object: false, e: EfEntry::parse(&b), name: Some("GIOT::wd_smoke".into()), world: [5.0, 0.0, 5.0], world_dir: [0.0; 3], item_origin: [5.0, 0.0, 5.0], item_word15: 0, sub_bit7: false, sub_index: 0 }
     }
 
     #[test]

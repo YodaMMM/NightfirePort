@@ -19,11 +19,11 @@ use nf_game::player::Input;
 
 fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
-/// 07000007: a voice-0x10 civilian in CivilianPatrol sees ARMED Bond within the 6.0 scare radius
-/// (0x40c00000 [M 0x15d610:33]) → the game flips her team byte to 1 and Attacks. The old port set
+/// 07000007: a voice-0x10 civilian in CivilianPatrol sees ARMED Bond (the 6.0 arg 0x40c00000
+/// [M 0x15d610:33] is dead inside `NearArmedPerson` [M 0x1787c8]: prop 0x3c + the sight bit
+/// `+0x228 & 4` + the armed opponent) → the game flips her team byte to 1 and Attacks. The old port set
 /// the prop-0x33 once-bit instead — the team stayed 3.
 #[test]
-#[ignore = "on this tree the guest never sees Bond (seen false at 2.5 u ahead, Bond armed, vision on) so the near-armed arm is not reached; the sight side is not traced"]
 fn civilian_patrol_voice10_flips_team() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load 07000007");
@@ -42,6 +42,25 @@ fn civilian_patrol_voice10_flips_team() {
         let p = sim.drones.list[i].pos;
         (i, p)
     };
+    // Both voice-0x10 guests boot in WaitSwitch (switch channels 23 / 21 [D placements]) with the
+    // drone-enable bit +0x4F8 & 0x100 clear, and `DroneVision_ProcessDroneSight` skips a drone
+    // without that bit in all three of its loops [M 0x176a28:81, :165, :188] (the port:
+    // `Drone_GetOpponentInfo` 0x138f68:16-18 never refreshes her distance either). The game only
+    // reaches her patrol after the channel enables her [M 0x15b960:21-36], so the arrangement
+    // raises her own switch channel and lets the real WaitSwitch UPDATE run the enable.
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        let ch = sim.drones.list[idx].switch_channel as u32;
+        assert!(!sim.drones.list[idx].enabled && sim.drones.list[idx].state == state::WAIT_SWITCH,
+            "the guest boots disabled in WaitSwitch [D placements]");
+        let f = sim.drones.frame;
+        sim.drones.channels.set(ch, 1, f);
+    }
+    for _ in 0..10 {
+        if scene.sim.as_ref().unwrap().drones.list[idx].enabled { break; }
+        scene.sim.as_mut().unwrap().step_bond(Input::default(), false, false, false);
+    }
+    assert!(scene.sim.as_ref().unwrap().drones.list[idx].enabled, "her switch channel enables her [M 0x15b960:21-36]");
     {
         let sim = scene.sim.as_mut().unwrap();
         // The arrangement drives the REAL transition (the poke field alone would skip the ENTER's
@@ -75,12 +94,9 @@ fn civilian_patrol_voice10_flips_team() {
 /// The HostageIdle↔HostageHide pair [M 0x15ce60:28-33 / 0x15cfe0:23-29]: a HOSTAGE_IDLE drone
 /// hides when an armed team-1 drone stands within 20.0 and is seen from her head, and returns to
 /// HostageIdle when none is. The old port had no UPDATE arm for either.
-/// IGNORED this round: the poll is landed and gated (HOSTAGE_POLL_LIVE = false in Drones::tick —
-/// the 07000003 rescued captives poll too and the real-damage full-route walks regress 6/6 → 4/6
-/// until their re-tune round). The test is RED on the pre-fix code (verified at 01a1dc901) and
-/// GREEN with the poll live (measured this session); flip the gate and this runs.
+/// The poll is the `armed_drone_near` pre-pass in `Drones::tick` read by the two states' UPDATE
+/// arms; with that flag held false this test is RED (both asserts: she never hides).
 #[test]
-#[ignore = "HOSTAGE_POLL_LIVE is gated off pending the 07000003 walk re-tune"]
 fn hostage_idle_hides_from_armed_team1() {
     let iso = iso();
     let mut scene = nf_view::load(&iso, "07000007.bin", false).expect("load 07000007");

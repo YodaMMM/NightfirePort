@@ -187,12 +187,12 @@ pub enum BulletEvent {
     Object(V3),
 }
 
-/// Bond's hit volume: an upright cylinder from his feet to above his eye (*deviation*: the game tests 16 boxes on
-/// his skeleton, `HumanCollisionBones` 0x2c6be8 via `Collide_Jointy`; the viewer's Bond has no skeleton).
+/// Bond's hit volume when his body boxes are not available: an upright cylinder from his feet to
+/// above his eye. The game tests the 16 `HumanCollisionBones` 0x2c6be8 boxes on his posed skeleton
+/// (`Collide_Jointy` 0x1ec180); the drones' rounds take those boxes (`update_with_boxes`, built by
+/// `Drones::bond_hit_boxes`), the cylinder stays for fixtures without Bond's skin and for the MP bodies.
 #[derive(Clone, Copy, Debug)]
 pub struct PlayerVolume { pub feet: V3, pub height: f32, pub radius: f32 }
-
-fn norm(v: V3) -> V3 { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); if l > 0.0 { [v[0] / l, v[1] / l, v[2] / l] } else { v } }
 
 /// `Bullet_init` direction: normalise(normalise(dir) + spherical→cartesian(r, FRand 2π, FRand π)) with
 /// r = (FRand(2s) − s) · 0.0014, s = spread `+0x24` × (0 when `weapon_data+0x68 & 0x400000`, else `Drone+0xC0` = 1);
@@ -227,8 +227,11 @@ pub fn cone(dir: V3, s: f32, rng: &mut crate::drone::Rng) -> V3 {
     let (sth, cth) = (crate::trig::sinf(th), crate::trig::cosf(th));
     let (sph, cph) = (crate::trig::sinf(ph), crate::trig::cosf(ph));
     let off = [nf_formats::ps2float::mul(nf_formats::ps2float::mul(r, sth), cph), nf_formats::ps2float::mul(r, sph), nf_formats::ps2float::mul(nf_formats::ps2float::mul(r, cth), cph)];
-    let d = norm(dir);
-    norm([d[0] + off[0], d[1] + off[2], d[2] + off[1]])
+    // G-046: both normalises are the game's `Vec_Normalise` 0x1e3000 (`trig::vec_normalise`: VU0
+    // squares, EE add.s sum, sqrt.s, div.s, chopped lane products) and the three adds are EE add.s
+    // [M 0x12c5a0:180-184]; the old IEEE `norm` differed in the last bits of most bullet directions.
+    let d = crate::trig::vec_normalise(dir);
+    crate::trig::vec_normalise([crate::trig::ee_add(d[0], off[0]), crate::trig::ee_add(d[1], off[2]), crate::trig::ee_add(d[2], off[1])])
 }
 
 /// First hit of the segment `a → b` with Bond's cylinder, as a fraction.
@@ -270,6 +273,17 @@ impl Bullet {
     pub fn update_with(&mut self, world: &CollisionWorld, player: &PlayerVolume, viewer: V3, rng: &mut crate::drone::Rng,
             pick: &mut dyn FnMut(V3, V3) -> Option<(usize, i16, f32)>,
             objects: &mut dyn FnMut(V3, V3, f32) -> Option<f32>) -> Option<BulletEvent> {
+        self.update_with_boxes(world, player, &[], viewer, rng, pick, objects)
+    }
+
+    /// `update_with` against Bond's body boxes: when `boxes` is not empty the Bond node is
+    /// `Collide_Jointy` 0x1ec180's ray arm over them (the FIRST box in list order the segment
+    /// enters, `Intersect_RayBox` per box, not the nearest [M 0x1ec180: the 0x201 loop returns on
+    /// the first hit]) instead of the `player` cylinder.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_with_boxes(&mut self, world: &CollisionWorld, player: &PlayerVolume, boxes: &[crate::damage::HitBox], viewer: V3, rng: &mut crate::drone::Rng,
+            pick: &mut dyn FnMut(V3, V3) -> Option<(usize, i16, f32)>,
+            objects: &mut dyn FnMut(V3, V3, f32) -> Option<f32>) -> Option<BulletEvent> {
         if self.state >= 2 { return None; }
         if self.travelled > self.range { self.state = 2; return None; }
         let mut step = if self.state == 0 { (rng.frand(0.5) + 0.5) * self.speed } else { self.speed };
@@ -296,7 +310,9 @@ impl Bullet {
         // re-derives the cel with build_FindCel 0x1c8cb0 each tick, exactly like the PlayerBullet
         // flight next door; the no-scope fallback is the flat ray.
         let (tw, tw_pass) = world.segment_flight_contacts_scoped(world.find_cel(self.pos), self.pos, end, self.glass_pass);
-        let tp = segment_cylinder(self.pos, end, player);
+        let tp = if boxes.is_empty() { segment_cylinder(self.pos, end, player) } else {
+            crate::damage::first_box_hit(self.pos, [end[0] - self.pos[0], end[1] - self.pos[1], end[2] - self.pos[2]], boxes).map(|(_, t)| t)
+        };
         let at = |t: f32| [self.pos[0] + (end[0] - self.pos[0]) * t, self.pos[1] + (end[1] - self.pos[1]) * t, self.pos[2] + (end[2] - self.pos[2]) * t];
         // CompHitData 0x1d33c0 [M] — QuickSort comparator id 2 (Collide_Update 0x1ea398 / Collide_RayIntersect 0x1ec690 / Collide_SphereIntersect 0x1ec940 / Collide_CylinderIntersect 0x1ecc00 / Collide_FilterBullets 0x1ece30 sort their hit lists by the f32 at HITDATA+0xc, ascending); the port keeps no hit list — the nearest-of comparison below replaces the sort.
         // The drone node of the same sorted list [M Collide_Update 0x1ea398:120-158]: nearest wins.
@@ -524,6 +540,38 @@ mod tests {
         let mut rng = crate::drone::Rng::new(1);
         let d = spread([0.0, 0.0, 1.0], 100.0, 0x4080d0, &mut rng);
         assert_eq!(d, [0.0, 0.0, 1.0]);
+    }
+
+    /// G-046: a bullet's travel direction is `Bullet_init` 0x12c5a0:180-184's two `Vec_Normalise`
+    /// 0x1e3000 calls, op for op [M disasm 0x1e3008-0x1e3058: vmul squares, add.s x+y then +z,
+    /// sqrt.s, div.s 1/len, vmulx lanes]. Written out here from the primitives; the old IEEE
+    /// `sqrt` + three divides gave other bits on most of these aims (a guard's aim at Bond, the
+    /// turret's barrel row), so every shot's direction moved in its last bits.
+    #[test]
+    fn the_bullet_direction_is_the_games_vec_normalise() {
+        use nf_formats::ps2float::{add_noguard, div, mul, sqrt};
+        let game_norm = |v: V3| {
+            let l = sqrt(add_noguard(add_noguard(mul(v[0], v[0]), mul(v[1], v[1]), true), mul(v[2], v[2]), true));
+            let i = div(1.0, l);
+            [mul(v[0], i), mul(v[1], i), mul(v[2], i)]
+        };
+        let ieee_norm = |v: V3| { let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); [v[0] / l, v[1] / l, v[2] / l] };
+        let mut differs = 0;
+        for k in 0..64u32 {
+            // Guard-to-Bond style aims: metres apart, mostly level, a few steep.
+            let f = k as f32;
+            let dir = [3.7 + f * 0.913, -0.42 + (f * 0.37).fract() * 2.0, -11.3 + f * 0.61];
+            // Spread 0 (the turret laser 0x67's +0x24 [L]): the cone offset is zero, so the shot is
+            // normalise(normalise(dir)).
+            let mut rng = crate::drone::Rng::new(7);
+            let got = cone(dir, 0.0, &mut rng);
+            let want = game_norm(game_norm(dir));
+            assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits), "aim {dir:?}");
+            if ieee_norm(ieee_norm(dir)).map(f32::to_bits) != want.map(f32::to_bits) { differs += 1; }
+        }
+        assert!(differs > 0, "the inputs must include aims where the IEEE form gives other bits");
+        // A zero direction normalises to zero (the c.eq.s arm), not to itself.
+        assert_eq!(crate::trig::vec_normalise([0.0, 0.0, 0.0]), [0.0; 3]);
     }
 
     #[test]

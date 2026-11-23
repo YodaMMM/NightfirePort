@@ -3,6 +3,9 @@
 //! came through); the Drake fly-through drew the live party AND the script's guests; the mouths never
 //! moved (the face tracks were not played); no voice lines fired.
 
+#[path = "common/reveal07.rs"]
+mod reveal07;
+
 use nf_game::nis::Request;
 use nf_game::player::Input;
 
@@ -62,14 +65,23 @@ fn the_drake_flythrough_hides_the_live_party_and_restores_it() {
     // the party, each anim restarted at script time 1 [M NDrone2_Enable(1) 0x149dd0:16-28].
     let sim = scene.sim.as_mut().unwrap();
     sim.drones.scripts.skip_request = true;
-    for _ in 0..120 { sim.step_bond(Input::default(), false, false, false); }
+    // The restart is read on the tick the party comes back: from then on a drawn drone's anim runs
+    // on (the room gate draws the ones in Bond's view [M View_AddObjects 0x1e62d8]), so a read 120
+    // ticks later measures the playback, not the restart.
+    let mut back: Option<Vec<f32>> = None;
+    for _ in 0..120 {
+        sim.step_bond(Input::default(), false, false, false);
+        if back.is_none() && sim.drones.npc_enabled {
+            back = Some(sim.drones.list.iter().filter(|d| d.present && d.enabled).map(|d| d.anim.time as f32).collect());
+        }
+    }
     assert!(!playing(&scene, 0x0600_0072), "the game's skip action must end the fly-through");
     let sim = scene.sim.as_ref().unwrap();
     assert!(sim.drones.npc_enabled, "Script_Free's 0x80 flag re-enables the drones");
     let shown: Vec<usize> = sim.drones.list.iter().enumerate().filter(|(_, d)| d.present && d.enabled).map(|(i, _)| i).collect();
     assert!(!shown.is_empty(), "the re-enabled party must be shown again");
-    let back: Vec<f32> = shown.iter().map(|&i| sim.drones.list[i].anim.time as f32).collect();
-    assert!(back.iter().all(|t| *t <= 2.0), "re-shown drones replay from script time 1, got {back:?}");
+    let back = back.expect("the party came back within the 120 ticks");
+    assert!(!back.is_empty() && back.iter().all(|t| *t <= 2.0), "re-shown drones replay from script time 1, got {back:?}");
 }
 
 /// 07000007: Bond walks into TouchOnce #412 (out 0x48) → SP #420 plays 0x06000073 (the Kimiko scene,
@@ -83,6 +95,11 @@ fn movement_input_leaves_the_kimiko_scene_playing_and_the_objective_held() {
     let Some(mut scene) = load("07000007.bin") else { return };
     {
         let sim = scene.sim.as_mut().unwrap();
+        // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+        // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+        // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+        // beats the pair's fail on a teleport.
+        reveal07::drakes_reveal(sim);
         sim.bond.pos = [94.2, 43.7, -45.9]; // TouchOnce #412's volume
         for _ in 0..90 { sim.step_bond(Input::default(), false, false, false); }
     }
@@ -105,6 +122,11 @@ fn the_kimiko_scene_fires_its_voice_lines() {
     let Some(mut scene) = load("07000007.bin") else { return };
     {
         let sim = scene.sim.as_mut().unwrap();
+        // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+        // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+        // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+        // beats the pair's fail on a teleport.
+        reveal07::drakes_reveal(sim);
         sim.bond.pos = [94.2, 43.7, -45.9];
         for _ in 0..90 { sim.step_bond(Input::default(), false, false, false); }
     }
@@ -157,6 +179,11 @@ fn the_kimiko_scene_characters_play_their_face_tracks() {
     let Some(mut scene) = load("07000007.bin") else { return };
     {
         let sim = scene.sim.as_mut().unwrap();
+        // Drake's reveal first (the real path's order): the library door pair's zone-3 band covers
+        // plate #412 and fails the mission the tick Bond appears there [M 0x160648:89-94]; the plate
+        // writes its channel one tick after the contact [L g031_object_order_live], so it no longer
+        // beats the pair's fail on a teleport.
+        reveal07::drakes_reveal(sim);
         sim.bond.pos = [94.2, 43.7, -45.9];
         for _ in 0..400 { sim.step_bond(Input::default(), false, false, false); }
     }

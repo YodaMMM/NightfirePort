@@ -330,7 +330,13 @@ fn the_3x3_hit_rate_and_damage_matrix_matches_the_game() {
             // The upper bound is harness sanity only (no falloff, above): 07000005's SG-5 guard 2
             // ended its 200-shot diff-1 run at 12.95 u on the merged placement-stats tree, its
             // roll rate on the model (119/200 vs 0.60).
-            assert!(dist > 3.05 && dist < 15.0, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
+            // master-reds-1121: on the batch-3 stream (the one-sided wall push moves the guards'
+            // routes) 07000005's diff-2 SG-5 guard 2 opens at 12.2-6.5 u, then climbs to
+            // (28.95, 37.38, 70.40), 10 u above Bond, and fires the cell's last shots from 42.55 u
+            // in CombatOutOfRange 0x5a, roll rate still on the model (125/200 vs 0.675) and every
+            // per-hit 1.925 exact [measured this branch]. The model has no distance falloff, so
+            // the bound only rejects a guard that is not engaging at all; 50 u covers that run.
+            assert!(dist > 3.05 && dist < 50.0, "guard {guard} ended inside the TooClose band or far off the engagement (dist {dist})");
             // 952: the pin is the ROLL rate — `DroneWeap_DoBulletAccuracy` 0x179740 applies
             // p = (100 − 5·acc) × level accuracy to the shared RNG for every gate-clean shot
             // [M 0x179740:100-110], and the port's fire_weapon applies the same p to the same

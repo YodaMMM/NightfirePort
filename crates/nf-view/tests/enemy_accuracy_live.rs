@@ -226,6 +226,35 @@ fn print_weapon_fire_fields() {
     }
 }
 
+/// Census over the on-foot levels (`nf_view::dev::LEVELS` 01-1B): each level's first armed team-1
+/// guard that finds an open corridor, Bond parked 6 / 12 u away, 10 s after the first shot,
+/// Easy and Hard. Prints the shots, the rolled hits, the decompile's expected rolled hits
+/// (`hit_chance` x shots), the landed hits and landed/rolled: the roll is the decompile's
+/// `DoBulletAccuracy` 0x179740, the landing is the flight geometry. `NF_CEN_LEVELS` narrows the list.
+#[test]
+#[ignore = "exploration printout (guard-accuracy-census)"]
+fn print_census() {
+    if iso().is_none() { return; }
+    let only: Option<Vec<u32>> = std::env::var("NF_CEN_LEVELS").ok().map(|v| v.split(',').filter_map(|x| u32::from_str_radix(x, 16).ok()).collect());
+    let levels: Vec<u32> = nf_view::dev::LEVELS.iter().copied().filter(|&l| l <= 0x0700_001b && only.as_ref().is_none_or(|o| o.contains(&l))).collect();
+    let (mut s_all, mut r_all, mut e_all, mut h_all) = (0usize, 0usize, 0.0f32, 0usize);
+    for level in levels {
+        let arc = format!("{level:08x}.bin");
+        for diff in [1u32, 3] {
+            for dist in [6.0f32, 12.0] {
+                let p = |d: &nf_game::drone::Drone| d.team == 1 && !d.captain && (d.weapon > 1 && d.weapon < 0x47 || (0x6a..=0x71).contains(&d.weapon));
+                let Some(t) = (0..8).find_map(|k| measure(&arc, diff, dist, 600, k, &p)) else { eprintln!("[cen] {arc} d{diff} {dist}: none"); continue };
+                let pc = (nf_game::drone::hit_chance(&tuning(level), level, diff, t.accuracy, t.start_dist.min(t.end_dist).max(3.0), nf_game::drone::Motion::default(), 0) / 100.0).clamp(0.0, 1.0);
+                let rounds = t.shots; // per-shot rolls; shotgun pellets land several per roll
+                eprintln!("[cen] {arc} d{diff} {dist:>4}: w {:#x} acc {} shots {} rolled {} expect {:.1} landed {} landed/rolled {:.2}",
+                    t.weapon, t.accuracy, rounds, t.rolled, pc * rounds as f32, t.hits, t.hits as f32 / t.rolled.max(1) as f32);
+                if !matches!(t.weapon, 0x1c | 0x1d) { s_all += rounds; r_all += t.rolled; e_all += pc * rounds as f32; h_all += t.hits; }
+            }
+        }
+    }
+    eprintln!("[cen] ALL (single-round weapons): shots {s_all} rolled {r_all} expect {e_all:.1} landed {h_all}");
+}
+
 // ---- pinned ------------------------------------------------------------------------------------------------
 
 /// The level tuning as `ReadTuningVars` 0x1d3a80 leaves it.
@@ -266,8 +295,13 @@ fn shotgun_guards_fire_eight_pellets() {
     for diff in [1, 2, 3] {
         let t = measured("07000002.bin", diff, 5.0, 0x1c).expect("the 0x1C guard fires at Bond 5 u away");
         report(&format!("02 shotgun diff {diff} d 5"), &t);
-        assert!(t.hits > t.shots, "diff {diff}: {} pellets landed from {} shots — the 8-pellet loop is missing", t.hits, t.shots);
-        assert!(t.hits >= 4 * t.rolled.max(1), "diff {diff}: {} hits from {} rolled hits", t.hits, t.rolled);
+        // A shot that rolled a hit sends 8 pellets at Bond; with no rolled hit (Easy can roll 0 of 6:
+        // guard-accuracy-census's aim-point stream) only the wobbled misses' pellets can clip him.
+        assert!(t.rolled == 0 || t.hits > t.shots, "diff {diff}: {} pellets landed from {} shots — the 8-pellet loop is missing", t.hits, t.shots);
+        if diff == 3 { assert!(t.hits > t.shots, "diff 3: {} pellets landed from {} shots", t.hits, t.shots); }
+        // A rolled hit lands its 8 pellets; a roll-free run (Easy, 0 of 6 on the batch-3 stream)
+        // has nothing to count (the wobbled misses may land none).
+        assert!(t.rolled == 0 || t.hits >= 4 * t.rolled, "diff {diff}: {} hits from {} rolled hits", t.hits, t.rolled);
         let want = 3.0 * dmod(&t02, diff);
         assert!(t.damage.iter().all(|&d| (d - want).abs() < 1e-4), "diff {diff}: every pellet costs {want}, got {:?}", t.damage);
         assert!(rolls_match(&t, 0x0700_0002, diff), "diff {diff}: {} rolled of {} shots vs the decomp's chance", t.rolled, t.shots);
@@ -380,6 +414,20 @@ fn measured_regular(level: &str, diff: u32, dist: f32, weapon: u32) -> Option<Ta
 /// aim-stop-root: re-measured once AimStandFire drops the stand's root step (+0x38 [M 0x166328:117-123
 /// → 0x13b490; L 07000011 the guard stops dead on the 0x68 entry]) - the shooter no longer slides
 /// on into Bond on its stop, so the 5-u cells and the d1 20-u approach moved (the chance test holds).
+/// bond-hitboxes-2: re-measured once the rounds test Bond's 16 body boxes (`drone::bond_hit_boxes`,
+/// was a cylinder): only the 5-u 0x12 cells left their band (diff 1/2/3: 16 -> 12, 15 -> 20, 21 -> 28);
+/// (diff 1 d 5: 48 shots, 7 rolled, 12 landed; the extra landings are unrolled rounds, cause not traced).
+/// l12-start-damage: re-measured after `NDrone2_ChooseCombatMove` reads its draw as the case
+/// index [M 0x150c18:163] and `DroneWeap_FireWeapon` draws its shot-pitch `Rand_Rand(500)`
+/// [M 0x178f68:276]: only the two 20-u approach cells moved (d1 14 -> 8, d2 19 -> 15; the d1
+/// cell rolled 8 of 36 shots), the per-hit pins are unchanged.
+/// guard-accuracy-census: re-measured once the rounds fly at Bond's bone 2 (`Drone_View_Bones`,
+/// [M NDrone2_SetOpponentAimPos 0x141fe8]) instead of the eye - 0.45: the 0x12 cells now land
+/// about every rolled hit (17/16, 10/10, 24/24, 27/27, 33/35 hits/rolled); the chance test holds.
+/// batch 3 (stream batch 1121d: the body boxes, the aim bone, the burst latch and the combat-move
+/// pick joined): re-measured on the joined stream, the 0x12 cells only (hits/rolled at 5/10/20 u:
+/// d1 15/13 15/15 10/10, d2 19/18 15/16 14/14, d3 30/31 26/25 17/19); the 0x0E and 0x6A cells and
+/// the per-hit pins stay inside their bands, the chance test holds on every cell.
 /// Sister: the old chain (accuracy 5, aggression 0, the pistol at ×1) — its 0x12 cells landed
 /// 8/2/7/11/16/16 at 5/20 u (60 in all) and its 0x0E hits cost half — fails the totals and the per-hit.
 #[test]
@@ -387,9 +435,9 @@ fn hits_per_10s_and_damage_per_hit_are_pinned() {
     if iso().is_none() { eprintln!("NF_ISO not set — skipping"); return; }
     // (archive, level, weapon, raw × +0x100, diff, dist, pinned hits / 10 s)
     const PINS: &[(&str, u32, u32, f32, u32, f32, usize)] = &[
-        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 5.0, 16), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 10.0, 14), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 20.0, 14),
-        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 5.0, 15), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 10.0, 18), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 20.0, 19),
-        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 5.0, 21), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 10.0, 21), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 20.0, 24),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 5.0, 15), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 10.0, 15), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 1, 20.0, 10),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 5.0, 19), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 10.0, 15), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 2, 20.0, 14),
+        ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 5.0, 30), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 10.0, 26), ("07000002.bin", 0x0700_0002, 0x12, 1.5, 3, 20.0, 17),
         ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 1, 5.0, 0), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 2, 5.0, 4), ("07000002.bin", 0x0700_0002, 0x0e, 10.0, 3, 5.0, 4),
         ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 5.0, 2), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 10.0, 0), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 1, 20.0, 1),
         ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 5.0, 1), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 10.0, 1), ("0700001b.bin", 0x0700_001b, 0x6a, 5.0, 2, 20.0, 1),

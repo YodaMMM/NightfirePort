@@ -27,6 +27,27 @@ fn carry(on: &[u32]) -> nf_game::player::RamSave {
     nf_game::player::RamSave::capture(&Default::default(), 0, &nf_game::pickup::Inventory::level_start(0x73, 240), &ch)
 }
 
+/// The dock guard beside the driver (skin 0x500002e at (68.8, 27.3); the driver (66.1, 28.9), hp 1,
+/// stands between him and the south dismount): he opens fire as Bond reaches the dismount and his
+/// rounds aimed there pass ~0.8 u from the driver - the driver dies and ch 0x60 fails the mission,
+/// in the game too [L PCSX2 07000006 d1: Bond held at the dismount, the driver dies at frame 384,
+/// ch 0x60 = 1]. With the room gate on 06 the port's guard draws and fights like the game's, so the
+/// walk answers him first from the bed's west edge (58.2, 25.3), where the line clears the driver
+/// by ~2.3 u (walkreal_07000006's own opening).
+fn answer_the_dock_guard(w: &mut Walker) {
+    w.walk_nav_to([58.2, 38.3, 25.3], "the truck bed's west edge", 1.0);
+    let dock = {
+        let sim = w.scene.sim.as_ref().unwrap();
+        sim.drones.list.iter().position(|d| d.present && d.health > 0.0 && d.team == 1 && d.skin == 0x0500_002e
+            && dxz(d.pos, [68.8, 39.0, 27.3]) < 3.0)
+    };
+    if let Some(di) = dock {
+        w.switch_to_armed("the dock guard by the driver");
+        let killed = w.shoot_bounded(di, "the dock guard by the driver", 1500);
+        eprintln!("[06] the dock guard #{di} from the bed: killed {killed}");
+    }
+}
+
 /// The kill of the lane-blocking idle scripted guard #438 ONLY (27.51, 39.18, −10.19 [D census];
 /// the walkreal fight kills any enabled guard within 8 — that would shoot the disabled switch-16
 /// pair this test watches).
@@ -72,113 +93,118 @@ fn kill_438(w: &mut Walker) {
 /// the whole 1800-tick watch.]
 #[test]
 fn the_switch16_guard_fights_through_the_door47_doorway() {
-    let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000006.bin", false, Some(&carry(&[0x1d, 0x45, 0x70]))).expect("load 07000006"));
-    w.wait_enabled(4000, "the intro NIS");
-    w.wait(30);
+    // Stream batch 1121b (every stream-moving branch joined, one re-pin): lever 2000/30 [L the
+    // 10-value sweep on the joined tree: 500/30, 1000/60, 1500/45, 2000/30, 2500/90, 3000/60, 6000/60, 8000/60; 4000/90 parks the guard at the door plane, 100/30 misses the lane guard complete].
+    walker::with_pause(2000, 30, || {
+        let iso = iso();
+        let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000006.bin", false, Some(&carry(&[0x1d, 0x45, 0x70]))).expect("load 07000006"));
+        w.wait_enabled(4000, "the intro NIS");
+        w.wait(30);
 
-    w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
-    w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
-    w.walk_nav_to([24.3, 38.3, 27.6], "the dock's west end", 1.6);
-    w.walk_nav_to([24.6, 38.5, 21.5], "down the west lane", 1.6);
-    w.walk_nav_to([26.5, 39.1, 13.1], "the well courtyard's west side", 1.6);
-    w.walk_to(Wp::new(23.2, 39.1, 7.0), "the hedge gap");
-    w.walk_to(Wp::new(27.2, 39.1, -2.4), "around the hedge end");
-    w.walk_to(Wp::new(33.7, 39.1, -8.9), "the guardhouse court");
-    kill_438(&mut w);
-    w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47");
-    {
-        // ch 16 (the guard pair's wake switch) rises on the interior step triggers as the route
-        // is walked [D #514-#523 the step-trigger bank]; both pair members are enabled here.
-        let sim = w.scene.sim.as_ref().unwrap();
-        assert!(sim.drones.channels.on(16), "the step trigger raised ch 16 (the guard pair's wake) [D #514-#523]");
-        let d3 = &sim.drones.list[3];
-        assert_eq!((d3.skin, d3.switch_channel), (0x0500_002e, 16),
-            "d#3 is the switch-16 guard [D census (30.3, 41.1, −16.8)]");
-        // His mode here depends on whether he has already had his first attack: the placement's
-        // mode 0, or — once FirstSightState's prop-0x1b coin falls to the alt tail — the game's
-        // ChangeToAttackMode flush to the stationary 0x19 with the second block in
-        // [M 0x148010:100-131 + 0x14a648:7-36]. Which one is a shared-RNG draw, not a disc fact,
-        // so both are accepted (the same pair the watch below pins). [S] which one ran:
-        eprintln!("[rook06] d#3 before door #47: mode {:#x} using_2nd {} state {:#x}", d3.mode, d3.using_2nd, d3.state);
-        assert!(d3.corpse || d3.mode == 0 || (d3.mode == 0x19 && d3.using_2nd),
-            "d#3 is in the placement mode 0 or the FirstAttack flush 0x19 [M 0x148010:100-131], got mode {:#x} 2nd {}", d3.mode, d3.using_2nd);
-    }
-    {
-        let (pos, di) = walker::door_near(w.scene.sim.as_ref().unwrap(), [36.5, 40.0, -16.25]).expect("door #47 present");
-        eprintln!("[door47] using door {di} at {pos:?}");
-        w.use_door(di, "door #47");
-    }
-    w.walk_nav_to([29.9, 40.5, -17.5], "the guardroom fusebox nook", 1.4);
-    // Stand in the guardroom 3600 ticks: the pair wakes and engages (combat states in the watch).
-    let mut lastpos: Vec<[f32; 3]> = w.scene.sim.as_ref().unwrap().drones.list.iter().map(|d| d.pos).collect();
-    for _ in 0..3600 {
-        w.tick(Default::default(), false);
-        let sim = w.scene.sim.as_ref().unwrap();
-        let d3 = &sim.drones.list[3];
-        // Pin 1: mode 0 until the first attack; the game's FirstAttack alt tail [M 0x148010:100-131]
-        // then flushes the p21=2 guard to the mode-0x19 stationary sniper with the second block in
-        // (+0x5A4 = DroneTypeSettings[row 2].alt = 0x2a [M 0x14cbd8:103-114, D #439 p21=2];
-        // FirstAlertState returns 0 on 07000006 for every alert arm [M 0x147f58:8-58]; p5=100 [D
-        // #439]) — and re-entries never re-flush [M 0x148010:17-19], so the OLD every-re-entry
-        // flush (rook-door-06's jamb park) stays impossible.
-        assert!(d3.corpse || d3.mode == 0 || (d3.mode == 0x19 && d3.using_2nd), "the ch-16 guard keeps his placement mode 0 until his first attack, where the game's FirstAttack alt tail flushes him to the mode-0x19 sniper with the second block [M 0x148010:100-131 + 0x14cbd8:103-114 + D #439 p21/p5/p8]; got mode {:#x} using_2nd {}", d3.mode, d3.using_2nd);
-        for (i, dr) in sim.drones.list.iter().enumerate() { lastpos[i] = dr.pos; }
-    }
-    // Out west through the auto-closing door #59, up to the searchlight-courtyard mouth — the leg
-    // during which the pre-fix build ran the guard to the door #47 pair and parked him there.
-    w.walk_nav_to([27.9, 40.0, -21.0], "before door #59", 1.4);
-    {
-        let (pos, di) = walker::door_near(w.scene.sim.as_ref().unwrap(), [27.88, 40.0, -23.0]).expect("door #59 present");
-        w.use_door(di, "door #59");
-        let _ = pos;
-    }
-    w.walk_to(Wp::new(26.6, 40.6, -23.6), "through door #59");
-    w.walk_nav_to([8.4, 42.0, -12.0], "the searchlight courtyard mouth", 1.6);
-
-    // The doorway watch: 1800 ticks at the mouth. The guard may legally chase through the door
-    // #47 pair (his own 0x81 OpenDoor path — the ported route_reached_special + DSTATE_OpenDoor
-    // [M 0x153358 + 0x1681f8]); what he must NOT do is park in the jamb as the flush sniper.
-    let sim = w.scene.sim.as_ref().unwrap();
-    let d3_alive = !sim.drones.list[3].corpse && sim.drones.list[3].health > 0.0;
-    let mut crossed_north = false;
-    for t in 0..1800u32 {
-        w.tick(Default::default(), false);
-        let sim = w.scene.sim.as_ref().unwrap();
-        for (i, dr) in sim.drones.list.iter().enumerate() {
-            if !dr.present || dr.corpse || !dr.enabled { continue; }
-            if i == 3 && d3_alive {
-                assert!(dr.mode == 0 || (dr.mode == 0x19 && dr.using_2nd), "watch +{t}: the ch-16 guard's mode is {:#x} — only the game's first-attack flush shape (0x19 + the second block, [M 0x148010:100-131]) or the placement 0 is legal", dr.mode);
-                if dr.pos[2] > -15.2 { crossed_north = true; }
-            }
-            let in_jamb = dr.pos[0] > 34.6 && dr.pos[0] < 36.6 && dr.pos[2] > -17.3 && dr.pos[2] < -15.2;
-            if in_jamb && dr.hit_door == Some(1) {
-                // A drone working the door from the node pair is legal for a few ticks; parked
-                // forever is the stall. Allow the pass-through: fail only on a 600-tick sit.
-                eprintln!("[doorway +{t}] d#{i} st {:#x} in the jamb, bound", dr.state);
-            }
-        }
-    }
-    {
-        let sim = w.scene.sim.as_ref().unwrap();
-        if d3_alive {
+        answer_the_dock_guard(&mut w);
+        w.walk_nav_to([60.0, 38.3, 31.5], "off the truck, south", 1.6);
+        w.walk_nav_to([45.0, 38.3, 24.0], "across the greeting plates", 1.6);
+        w.walk_nav_to([24.3, 38.3, 27.6], "the dock's west end", 1.6);
+        w.walk_nav_to([24.6, 38.5, 21.5], "down the west lane", 1.6);
+        w.walk_nav_to([26.5, 39.1, 13.1], "the well courtyard's west side", 1.6);
+        w.walk_to(Wp::new(23.2, 39.1, 7.0), "the hedge gap");
+        w.walk_to(Wp::new(27.2, 39.1, -2.4), "around the hedge end");
+        w.walk_to(Wp::new(33.7, 39.1, -8.9), "the guardhouse court");
+        kill_438(&mut w);
+        w.walk_to(Wp::new(36.0, 39.1, -13.4), "before door #47");
+        {
+            // ch 16 (the guard pair's wake switch) rises on the interior step triggers as the route
+            // is walked [D #514-#523 the step-trigger bank]; both pair members are enabled here.
+            let sim = w.scene.sim.as_ref().unwrap();
+            assert!(sim.drones.channels.on(16), "the step trigger raised ch 16 (the guard pair's wake) [D #514-#523]");
             let d3 = &sim.drones.list[3];
-            assert!(crossed_north || dxz(d3.pos, [35.47, 41.0, -16.93]) > 2.0,
-                "the ch-16 guard must not end parked at the door #47 plane (pre-fix freeze spot \
-                (35.47, 41.00, −16.93)), got {:?} st {:#x}", d3.pos, d3.state);
-            // The game's first-attack flush leaves him a stationary sniper AT HIS POST; the jamb
-            // and door-plane asserts carry the no-park pin (the old re-entry flush's stall is what
-            // this replaces).
+            assert_eq!((d3.skin, d3.switch_channel), (0x0500_002e, 16),
+                "d#3 is the switch-16 guard [D census (30.3, 41.1, −16.8)]");
+            // His mode here depends on whether he has already had his first attack: the placement's
+            // mode 0, or — once FirstSightState's prop-0x1b coin falls to the alt tail — the game's
+            // ChangeToAttackMode flush to the stationary 0x19 with the second block in
+            // [M 0x148010:100-131 + 0x14a648:7-36]. Which one is a shared-RNG draw, not a disc fact,
+            // so both are accepted (the same pair the watch below pins). [S] which one ran:
+            eprintln!("[rook06] d#3 before door #47: mode {:#x} using_2nd {} state {:#x}", d3.mode, d3.using_2nd, d3.state);
+            assert!(d3.corpse || d3.mode == 0 || (d3.mode == 0x19 && d3.using_2nd),
+                "d#3 is in the placement mode 0 or the FirstAttack flush 0x19 [M 0x148010:100-131], got mode {:#x} 2nd {}", d3.mode, d3.using_2nd);
         }
-        // The door itself: back to the shut idle, not held at the blocked 0x4.
-        assert_eq!(sim.drones.doors.list[1].state, 0x2,
-            "door #47 ends at the shut idle 0x2 (the broken build held 0x4 with the guard bound)");
-        for (i, dr) in sim.drones.list.iter().enumerate() {
-            if !dr.present || dr.corpse || !dr.enabled { continue; }
-            let in_jamb = dr.pos[0] > 34.6 && dr.pos[0] < 36.6 && dr.pos[2] > -17.3 && dr.pos[2] < -15.2;
-            assert!(!(in_jamb && dr.hit_door == Some(1)),
-                "d#{i} still stands in the door #47 jamb bound to it — the stall");
+        {
+            let (pos, di) = walker::door_near(w.scene.sim.as_ref().unwrap(), [36.5, 40.0, -16.25]).expect("door #47 present");
+            eprintln!("[door47] using door {di} at {pos:?}");
+            w.use_door(di, "door #47");
         }
-    }
-    eprintln!("[06] the doorway watch ended clean at tick {}", w.total_ticks);
+        w.walk_nav_to([29.9, 40.5, -17.5], "the guardroom fusebox nook", 1.4);
+        // Stand in the guardroom 3600 ticks: the pair wakes and engages (combat states in the watch).
+        let mut lastpos: Vec<[f32; 3]> = w.scene.sim.as_ref().unwrap().drones.list.iter().map(|d| d.pos).collect();
+        for _ in 0..3600 {
+            w.tick(Default::default(), false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            let d3 = &sim.drones.list[3];
+            // Pin 1: mode 0 until the first attack; the game's FirstAttack alt tail [M 0x148010:100-131]
+            // then flushes the p21=2 guard to the mode-0x19 stationary sniper with the second block in
+            // (+0x5A4 = DroneTypeSettings[row 2].alt = 0x2a [M 0x14cbd8:103-114, D #439 p21=2];
+            // FirstAlertState returns 0 on 07000006 for every alert arm [M 0x147f58:8-58]; p5=100 [D
+            // #439]) — and re-entries never re-flush [M 0x148010:17-19], so the OLD every-re-entry
+            // flush (rook-door-06's jamb park) stays impossible.
+            assert!(d3.corpse || d3.mode == 0 || (d3.mode == 0x19 && d3.using_2nd), "the ch-16 guard keeps his placement mode 0 until his first attack, where the game's FirstAttack alt tail flushes him to the mode-0x19 sniper with the second block [M 0x148010:100-131 + 0x14cbd8:103-114 + D #439 p21/p5/p8]; got mode {:#x} using_2nd {}", d3.mode, d3.using_2nd);
+            for (i, dr) in sim.drones.list.iter().enumerate() { lastpos[i] = dr.pos; }
+        }
+        // Out west through the auto-closing door #59, up to the searchlight-courtyard mouth — the leg
+        // during which the pre-fix build ran the guard to the door #47 pair and parked him there.
+        w.walk_nav_to([27.9, 40.0, -21.0], "before door #59", 1.4);
+        {
+            let (pos, di) = walker::door_near(w.scene.sim.as_ref().unwrap(), [27.88, 40.0, -23.0]).expect("door #59 present");
+            w.use_door(di, "door #59");
+            let _ = pos;
+        }
+        w.walk_to(Wp::new(26.6, 40.6, -23.6), "through door #59");
+        w.walk_nav_to([8.4, 42.0, -12.0], "the searchlight courtyard mouth", 1.6);
+
+        // The doorway watch: 1800 ticks at the mouth. The guard may legally chase through the door
+        // #47 pair (his own 0x81 OpenDoor path — the ported route_reached_special + DSTATE_OpenDoor
+        // [M 0x153358 + 0x1681f8]); what he must NOT do is park in the jamb as the flush sniper.
+        let sim = w.scene.sim.as_ref().unwrap();
+        let d3_alive = !sim.drones.list[3].corpse && sim.drones.list[3].health > 0.0;
+        let mut crossed_north = false;
+        for t in 0..1800u32 {
+            w.tick(Default::default(), false);
+            let sim = w.scene.sim.as_ref().unwrap();
+            for (i, dr) in sim.drones.list.iter().enumerate() {
+                if !dr.present || dr.corpse || !dr.enabled { continue; }
+                if i == 3 && d3_alive {
+                    assert!(dr.mode == 0 || (dr.mode == 0x19 && dr.using_2nd), "watch +{t}: the ch-16 guard's mode is {:#x} — only the game's first-attack flush shape (0x19 + the second block, [M 0x148010:100-131]) or the placement 0 is legal", dr.mode);
+                    if dr.pos[2] > -15.2 { crossed_north = true; }
+                }
+                let in_jamb = dr.pos[0] > 34.6 && dr.pos[0] < 36.6 && dr.pos[2] > -17.3 && dr.pos[2] < -15.2;
+                if in_jamb && dr.hit_door == Some(1) {
+                    // A drone working the door from the node pair is legal for a few ticks; parked
+                    // forever is the stall. Allow the pass-through: fail only on a 600-tick sit.
+                    eprintln!("[doorway +{t}] d#{i} st {:#x} in the jamb, bound", dr.state);
+                }
+            }
+        }
+        {
+            let sim = w.scene.sim.as_ref().unwrap();
+            if d3_alive {
+                let d3 = &sim.drones.list[3];
+                assert!(crossed_north || dxz(d3.pos, [35.47, 41.0, -16.93]) > 2.0,
+                    "the ch-16 guard must not end parked at the door #47 plane (pre-fix freeze spot \
+                    (35.47, 41.00, −16.93)), got {:?} st {:#x}", d3.pos, d3.state);
+                // The game's first-attack flush leaves him a stationary sniper AT HIS POST; the jamb
+                // and door-plane asserts carry the no-park pin (the old re-entry flush's stall is what
+                // this replaces).
+            }
+            // The door itself: back to the shut idle, not held at the blocked 0x4.
+            assert_eq!(sim.drones.doors.list[1].state, 0x2,
+                "door #47 ends at the shut idle 0x2 (the broken build held 0x4 with the guard bound)");
+            for (i, dr) in sim.drones.list.iter().enumerate() {
+                if !dr.present || dr.corpse || !dr.enabled { continue; }
+                let in_jamb = dr.pos[0] > 34.6 && dr.pos[0] < 36.6 && dr.pos[2] > -17.3 && dr.pos[2] < -15.2;
+                assert!(!(in_jamb && dr.hit_door == Some(1)),
+                    "d#{i} still stands in the door #47 jamb bound to it — the stall");
+            }
+        }
+        eprintln!("[06] the doorway watch ended clean at tick {}", w.total_ticks);
+    })
 }

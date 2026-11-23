@@ -400,7 +400,9 @@ fn the_garden_ladder_climbs_to_its_top() {
     // the climb is the real hold-forward.
     // The garden floor at the ladder's base stands at y ≈ 5.25 (the probe: floor_below 5.247 at
     // (31.3..37.3, 15.2..18.2); z ≥ 19.7 falls away — the moat); the climb grabs at bottom 6.23.
-    w.scene.sim.as_mut().unwrap().bond.pos = [c[0], 5.6, c[2] - 1.0];
+    // obj+0x30 at the standing rest, floor + 1.1 (6.35): at 5.6 the spine sat through the floor,
+    // which the game's one-sided push [M Intersect_CylGeom 0x109da0, flags 99] never lifts.
+    w.scene.sim.as_mut().unwrap().bond.pos = [c[0], 6.35, c[2] - 1.0];
     w.scene.sim.as_mut().unwrap().bond.vel = [0.0; 3];
     w.wait(10);
     assert!(w.scene.sim.as_ref().unwrap().bond.grounded, "the base spot stands");

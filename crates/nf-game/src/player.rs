@@ -23,6 +23,13 @@ pub const ROOT_HEIGHT: f32 = 1.0347183;
 /// (gated on flags2 bit 4), NOT a root-height write (fields-player correction: the earlier
 /// `obj+0xCC = obj+0x3C` reading mistook it). The port models the two stances as constants.
 pub const CROUCH_ROOT_HEIGHT: f32 = 0.55;
+/// The SP stance transition scripts' length: `PlayerAnimStand2Crouch` 0x190198 /
+/// `PlayerAnimCrouch2Stand` 0x190068 pick class 3 outside MP (0x060001dc / 0x060001dd) [M], both
+/// 50 frames, non-looping on every SP level that carries them [D the scripts table, all of
+/// `dev::LEVELS` except 07000048, which carries neither].
+pub const STANCE_SCRIPT_FRAMES: f32 = 50.0;
+/// Their playback speed (`script+0x98 = 0x40800000`) [M 0x190068:40-44 / 0x190198:40-44].
+pub const STANCE_SCRIPT_SPEED: f32 = 4.0;
 /// Capsule radius (`HITTEST+0x8C`).
 pub const RADIUS: f32 = 0.55;
 /// The CLIMB/CREEP hittest arm's radius: `Player_Collision` 0x194df0's substate switch maps the
@@ -248,7 +255,14 @@ pub struct Input {
     pub turn: f32,
     pub look: f32,
     pub jump: bool,
+    /// The crouch action's newly-pressed edge (`Input_Action(p, 8, 4)`) — what crouches Bond from
+    /// the walk in BOTH Crouch modes [M Player_HandleJump 0x1916b0:89-95] and what stands him in
+    /// Toggle mode [M Player_SSCrouch 0x1924c0:89-91].
     pub crouch: bool,
+    /// The crouch action HELD (`Input_Action(p, 8, 1)`): read only by the Hold mode's stand test,
+    /// which stands Bond once it is NOT held [M Player_SSCrouch 0x1924c0:84-87]. Local view state,
+    /// not net-encoded (the `zoom_cycle` precedent; remotes and replays run Toggle).
+    pub crouch_held: bool,
     pub aiming: bool,
     /// ±1: next/prev weapon (`Player_WeaponChange` mode=0, bounds 1..0x47).
     pub weapon_cycle: i8,
@@ -390,6 +404,14 @@ pub struct Bond {
     /// Substate 4 and the stand / crouch lockout `BL+0x960`.
     pub crouched: bool,
     pub lockout: u32,
+    /// The stance transition script's clock (`PlayerAnimStand2Crouch` 0x190198 /
+    /// `PlayerAnimCrouch2Stand` 0x190068: SP class 3 → 0x060001dc / 0x060001dd, both 50 frames,
+    /// non-looping [D every SP level's script table], added at speed 4 [M 0x190068:40-44 / 0x190198:40-44]).
+    /// 0.0 = none playing. `AnimScriptIsStopped` [M 0x1c70d8] on it ends the lockout early
+    /// [M Player_SSWalk 0x192310:34-44 / Player_SSCrouch 0x1924c0:45-55]. See `stance_change`.
+    pub stance_clock: f32,
+    /// The transition script ran past its last frame (the script's 0x10000000 stopped flag).
+    pub stance_stopped: bool,
     /// `obj+0xCC` (= `obj+0x3C` [M Player_Update 0x193600:449]): the current stance's root height
     /// above the feet. The capsule ends and the floor ray hang off this, so a crouched Bond is a
     /// shorter capsule resting closer to his feet (the truck ride parks him at floor + 0.607).
@@ -603,7 +625,7 @@ impl Bond {
     /// Standing at `pos` (`Player_StandAtNewPosition`: the floor point + 1.1) facing `yaw`.
     pub fn new(pos: V3, yaw: f32) -> Bond {
         Bond { pos, yaw, pitch: 0.0, local: [0.0; 2], vel: [0.0; 3], grounded: true, floor_ny: 1.0, grounded_history: 8, jump: 0, land_delay: 0,
-            crouched: false, lockout: 0, cc: ROOT_HEIGHT, crouch_drop: 0.0, eye: EYE, fall_timer: 0, head_bump: false, fall_damage: None,
+            crouched: false, lockout: 0, stance_clock: 0.0, stance_stopped: false, cc: ROOT_HEIGHT, crouch_drop: 0.0, eye: EYE, fall_timer: 0, head_bump: false, fall_damage: None,
             substate: SS_WALK, ladder: None, climb_top: 0.0, climb_bottom: 0.0, regrab: 0, mode: 0, saved_sub: 0, air: 100.0, drown_damage: None, underwater: false,
             water_fade: 0.0, air_tick: 0, push_fwd: 0.0, wire: None, auto_drop: 0.0, wire_anim: 0, wire_anim_time: 0.0, wire_anim_rate: 1.0, cam_mode: 0, grapple: None,
             icon_ctx: 0xff,
@@ -793,6 +815,17 @@ impl Bond {
             SS_ZEROG_8 | SS_ZEROG_9 => self.zerog_tick(world, ctx, input),
             _ => self.walk_tick(world, ctx, input),
         }
+        // `AnimObjectUpdate` at the end of `Player_Update` [M 0x193600:358, every substate]: the
+        // stance transition script advances 4 frames a tick and stops past its 50th frame (holds
+        // the end, flag 0x10000000) [M AnimScriptTick 0x1c2630 / AnimScriptEnd 0x1c1930 — the same
+        // clock `mp::body_anim::MpBodyAnim::script_tick` runs; D: 0x060001dc/dd length 50].
+        if self.stance_clock > 0.0 && !self.stance_stopped {
+            self.stance_clock += STANCE_SCRIPT_SPEED;
+            if self.stance_clock > STANCE_SCRIPT_FRAMES {
+                self.stance_clock = STANCE_SCRIPT_FRAMES;
+                self.stance_stopped = true;
+            }
+        }
         if !(SS_ZEROG_8..=SS_ZEROG_9).contains(&self.substate) {
             self.zero_g_active = false;
         }
@@ -912,6 +945,7 @@ impl Bond {
         if self.enter_water(ctx) { return; }
         self.physics_tick(world, ctx, input, false, false);
         self.ladder_grab(ctx);
+        self.wire_walk_grab(ctx);
     }
 
     /// `Player_SSGrapple` 0x192860 through `gadget::grapple_tick`: the reel toward the grapple
@@ -1014,6 +1048,38 @@ impl Bond {
         // The grab scan runs from the swim substate too — `Player_CollLadder` excludes only substates 1
         // and 2, and `Player_CollisionHandler`'s grab dispatch follows every substate update [M 0x196118].
         self.ladder_grab(ctx);
+        self.wire_walk_grab(ctx);
+    }
+
+    /// The walk-in wire grab: `Player_CollisionHandler` 0x1949a8 walks the player's hit list every
+    /// non-climb tick and `Player_DealWithObjHit` 0x194458:104-107 hands a class-0x2C hit to
+    /// `Player_CollWire` 0x197130 (`grab_wire`). The hit exists when the tick's HITTEST capsule
+    /// (`pick_arm`, built at the integrated spot before the push-out — `pre_collide`) passes
+    /// `Wire::pick_hit` (the ×1.5 sphere pick, then the strict capsule-vs-collision-triangle refine).
+    /// Pick scoping [M Collide_Pick 0x1eb320]: a ForcedList wire (`forced`, its sphere spans ≥2 cels)
+    /// is picked from every spot; any other only while the player straddles its own cel. The pick
+    /// needs no input: E plays no part (`Player_Activate` 0x1a5170 has no class-0x2C arm). Runs after
+    /// the ladder grab; a tick that just grabbed a ladder skips it [S — the game walks the hit list
+    /// in distance order and `Player_CollWire` would still run on a climbing player; whether any
+    /// shipped ladder sits within reach of a wire mesh is unmeasured]. The wire/zipline riders skip
+    /// it [S — the riding HITTEST excludes only the ridden wire (BLData+0x7B8 = +0x884 [M
+    /// Player_Collision 0x194df0 case 5])].
+    fn wire_walk_grab(&mut self, ctx: &LadderCtx) {
+        if matches!(self.substate, SS_CLIMB | SS_WIRE | SS_ZIPLINE) || self.regrab != 0 { return; }
+        let (ao, bo, r) = pick_arm(self.substate, self.crouched, self.cc);
+        let pick = self.pre_collide;
+        for (i, w) in ctx.wires.iter().enumerate() {
+            if !w.forced && !ctx.straddle.is_empty() {
+                match w.cell {
+                    Some(c) if ctx.straddle.contains(&(c as usize)) => {}
+                    _ => continue,
+                }
+            }
+            if !w.pick_hit(pick, ao, bo, r) { continue; }
+            let before = self.substate;
+            self.grab_wire(i, ctx);
+            if self.substate != before { break; }
+        }
     }
 
     /// `Player_CollLadder` 0x196118, fed by the `Player_DealWithObjHit` 0x194458 class-0x2D dispatch over
@@ -1326,7 +1392,30 @@ impl Bond {
         if matches!(new, 1..=3 | 5..=0x10) {
             self.substate_stops.extend_from_slice(&[0x12, 0x3d, 0xf0]);
         }
+        // The port folds the game's crouch substate 4 into the walk (substate 0 + `crouched`), so
+        // a change OUT of the crouch is any change while `crouched` is set: `ChangeSubState(0)`
+        // from 4 stands Bond with the crouch→stand transition and the lockout [M 0x190630 case 0:
+        // `sVar1 == 4` → Crouch2Stand + `+0x960 = FRAME_RATE` :42-49] (the cut-scene hand-back
+        // `Player_Cam2Mode` 0x195fc8:11-16 is the port's caller); any other substate (ladder,
+        // wire, zipline, grapple, swim, creep, zero-g) leaves the crouch with NO transition and
+        // NO lockout [M 0x190630: only cases 0/4 touch +0x960] — the climb/wire/swim exits then
+        // hand back a STANDING walk [M Player_Climb 0x196310:97 et al. `ChangeSubState(0)` from
+        // a non-4 substate].
+        if self.crouched {
+            self.crouched = false;
+            self.cc = ROOT_HEIGHT;
+            if new == SS_WALK { self.stance_change(); }
+        }
         self.substate = new;
+    }
+
+    /// `Player_ChangeSubState` 0x190630's stance arm (case 0 from 4, case 4 from 0): the transition
+    /// script replaces every playing script (`AnimScriptAdd` 0x1c6d40 deletes the list first) at
+    /// clock 1, and `BLData+0x960 = (u8)FRAME_RATE` (60 in play) [M 0x190630:42-56].
+    fn stance_change(&mut self) {
+        self.lockout = 60;
+        self.stance_clock = 1.0;
+        self.stance_stopped = false;
     }
 
     /// `Player_CollWire` 0x197130 — the grab. Guards [M 0x19716c-0x1971a8]: the regrab lockout
@@ -1799,9 +1888,18 @@ impl Bond {
             self.settle_hold -= 1;
             (self.settle_hold > 0, self.settle_hold == 0)
         } else { (false, false) };
-        // `Player_SSWalk` / `Player_SSCrouch`: the lockout runs down (*deviation*: the transition animation that may
-        // end it early is not played).
-        self.lockout = self.lockout.saturating_sub(1);
+        // `Player_SSWalk` / `Player_SSCrouch` [M 0x192310:34-44 / 0x1924c0:45-55]: a running lockout
+        // counts down and ENDS when the transition script has stopped (`AnimScriptIsStopped`) or
+        // when the count reaches 1 — 50 frames at speed 4 stop on the 13th script tick, so the
+        // stand/crouch test reopens on the 13th tick after the change (the 59-tick count is the
+        // fallback). Only the walk/crouch handlers run it: swim (case 3) and zero-g (8/9) leave
+        // it frozen [M Player_Update 0x193600 dispatch].
+        if self.lockout != 0 && !swimming && !zero_g {
+            self.lockout -= 1;
+            if self.stance_stopped || self.lockout == 1 {
+                self.lockout = 0;
+            }
+        }
         // Case 3 calls `Player_Move(1.0, …)` [M 0x193600:181-182] — the swim multiplier is ALWAYS 1.0
         // (the 0.75 is `Player_SSCrouch`'s own call argument 0x1924c0:58, not a crouched flag read).
         let k = if swimming { 1.0 } else if self.crouched { 0.75 } else { 1.0 };
@@ -1839,17 +1937,20 @@ impl Bond {
             // and the headroom checks are walk-only [M 0x193600 dispatch — HandleJump is
             // SSWalk's; case 8/9 reads none of it].
         } else if !self.crouched && self.jump == 0 && input.crouch && self.lockout == 0 {
+            // [M Player_HandleJump 0x1916b0:89-95]: the crouch EDGE (`Input_Action(8, 4)`, both
+            // Crouch modes) with the lockout clear → `ChangeSubState(4)`. A press inside the
+            // lockout is lost (no buffering) and falls through to the jump test.
             self.crouched = true;
             self.cc = CROUCH_ROOT_HEIGHT;
-            self.lockout = 60;
+            self.stance_change();
         } else if self.crouched && self.lockout == 0 && !self.head_bump && headroom(world)
             // options-census: the stand condition follows the Crouch option [M Player_SSCrouch
             // 0x1924c0:84-105] — Toggle (byte +0x04 != 0) stands on a press edge of action 8
             // (crouch) or 7 (jump); Hold stands when the crouch action is NOT held.
-            && (if !input.crouch_hold { input.crouch || input.jump } else { !input.crouch }) {
+            && (if !input.crouch_hold { input.crouch || input.jump } else { !input.crouch_held }) {
             self.crouched = false;
             self.cc = ROOT_HEIGHT;
-            self.lockout = 60;
+            self.stance_change();
         } else if !self.crouched && self.jump == 0 && input.jump && self.grounded_history != 0 && !self.head_bump && self.jump_locked {
             self.jump_refused = true;
         } else if !self.crouched && self.jump == 0 && input.jump && self.grounded_history != 0 && !self.head_bump && headroom(world) {
@@ -2728,6 +2829,25 @@ pub fn init_level_loadout(
     w: &nf_formats::weapon::WeaponData,
     loaded: impl Fn(u8) -> bool + Copy,
 ) -> u8 {
+    init_level_loadout_ex(level, save, health, inv, ch, w, loaded, false)
+}
+
+/// [`init_level_loadout`] with the game-complete byte `GameState[0x52]` (`Progress::game_complete`).
+/// The single-player `Player_EquipWeapon` runs `Upgrade_Weapon` on its id [M 0x1a8a58:24-30, the
+/// `MPSettings+0x180 == 0` arm], and `Upgrade_Weapon`'s case 10 returns 0xC while that byte is set
+/// [M 0x1a8f30 case 10]: on a finished game the default arm's `EquipWeapon(10, 999)` lands on
+/// record 0xC (the stronger record of 10). The other tables read `inv.upgrades` as before.
+#[allow(clippy::too_many_arguments)]
+pub fn init_level_loadout_ex(
+    level: u32,
+    save: Option<&RamSave>,
+    health: &mut crate::bullet::PlayerHealth,
+    inv: &mut crate::pickup::Inventory,
+    ch: &mut Channels,
+    w: &nf_formats::weapon::WeaponData,
+    loaded: impl Fn(u8) -> bool + Copy,
+    game_complete: bool,
+) -> u8 {
     // `Upgrade_Weapon(6)` (0x1a8f30 case 6 → `UpgradedHandguns[Upgrades[0]]`: 2 on a fresh profile
     // [L], 4/6/8 with the handgun gold-medal rewards) — `iVar8` at 0x1a7ef8:126, the handgun every
     // kit equips, the request of the 01/05/default arms and the RamLoad cases' continuation gate.
@@ -2888,6 +3008,12 @@ pub fn init_level_loadout(
                 (0xe, 999), (0x10, 999), (0x54, 0), (0x1c, 999), (0x15, 999), (10, 999), (0xd, 999),
                 (0x56, 0), (0x58, 0), (0x41, 999), (0x59, 999), (0x3b, 999), (0x1a, 999),
                 (0x33, 999), (0x11, 999), (2, 999), (0x2a, 999), (0x42, 999), (0x43, 999), (0x45, 999)] {
+                // `Upgrade_Weapon(10)` = 0xC on a finished game [M 0x1a8a58:24-30 → 0x1a8f30 case
+                // 10]. The model check reads the raw id's record first [M 0x1a8a58:19-21].
+                if id == 10 && game_complete {
+                    inv.equip_weapon(w, 0xC, rounds, loaded(id as u8));
+                    continue;
+                }
                 equip(inv, w, id, rounds, loaded);
             }
             inv.equip_ammo(w, 0x1f, 10);
@@ -3275,6 +3401,107 @@ mod tests {
         t.extend(q([3.0, 0.3, -20.0], [3.0, 0.3, 4.0], [20.0, 0.3, 4.0], [20.0, 0.3, -20.0]));
         t.extend(q([3.0, 0.0, -20.0], [3.0, 0.0, 4.0], [3.0, 0.3, 4.0], [3.0, 0.3, -20.0]));
         CollisionWorld::from_triangles(t)
+    }
+
+    /// s-crouch-latch: the stance lockout `BL+0x960` ends when the transition script stops, not
+    /// after the full 60 [M Player_SSWalk 0x192310:34-44 / Player_SSCrouch 0x1924c0:45-55 —
+    /// `AnimScriptIsStopped` zeroes it; the 60 only runs out on the `== 1` fallback]. The SP
+    /// scripts are 50 frames at speed 4 [D 0x060001dc/dd, M 0x190068/0x190198:40-44], so a stand
+    /// press on the 13th tick after the crouch stands Bond and one on the 12th is lost (edges are
+    /// not buffered). Pre-fix the port held the stance for 60 ticks: the 13th-tick press was a
+    /// no-op and Bond stayed crouched.
+    #[test]
+    fn the_stance_lockout_ends_with_the_transition_script() {
+        let w = room();
+        let press = Input { crouch: true, ..Default::default() };
+        let idle = Input::default();
+        // Crouch, then a press on the 12th tick: still inside the lockout, lost.
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        b.tick(&w, &press);
+        assert!(b.crouched && b.lockout == 60);
+        for _ in 0..11 { b.tick(&w, &idle); }
+        b.tick(&w, &press);
+        assert!(b.crouched, "a press on the 12th tick must be lost (lockout {})", b.lockout);
+        // The same press on the 13th tick stands him.
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        b.tick(&w, &press);
+        for _ in 0..12 { b.tick(&w, &idle); }
+        assert!(b.stance_stopped, "the 50-frame script stops on its 13th clock tick");
+        b.tick(&w, &press);
+        assert!(!b.crouched, "the 13th-tick press must stand Bond (lockout {})", b.lockout);
+        assert_eq!(b.lockout, 60, "standing re-arms the lockout");
+        // Standing back up is symmetric: a crouch press 13 ticks later crouches again, 12 does not.
+        for _ in 0..11 { b.tick(&w, &idle); }
+        b.tick(&w, &press);
+        assert!(!b.crouched, "a crouch press on the 12th tick after standing is lost");
+        b.tick(&w, &press);
+        assert!(b.crouched, "the 13th-tick crouch press crouches");
+        // The jump edge stands in Toggle mode too [M 0x1924c0:89-91], after the same 13 ticks.
+        for _ in 0..12 { b.tick(&w, &idle); }
+        b.tick(&w, &Input { jump: true, ..Default::default() });
+        assert!(!b.crouched, "the jump press stands a crouched Bond");
+        assert_eq!(b.jump, 0, "the standing press does not also jump (SSCrouch has no HandleJump)");
+    }
+
+    /// s-crouch-latch: the Hold option. The walk still crouches on the press EDGE only
+    /// [M Player_HandleJump 0x1916b0:89-95 `Input_Action(8, 4)` in both modes]; Hold stands once
+    /// the action is no longer HELD [M Player_SSCrouch 0x1924c0:84-87 `Input_Action(8, 1) == 0`].
+    /// A key held through the post-stand lockout does not re-crouch Bond when it runs out (the
+    /// edge was lost) — pre-fix the keyboard fed the held level into the walk's crouch test and
+    /// a held key re-crouched him at the lockout's end.
+    #[test]
+    fn the_hold_option_crouches_on_the_edge_and_stands_on_release() {
+        let w = room();
+        let held = |edge: bool| Input { crouch: edge, crouch_held: true, crouch_hold: true, ..Default::default() };
+        let released = Input { crouch_hold: true, ..Default::default() };
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        // Held without a fresh edge never crouches.
+        for _ in 0..5 { b.tick(&w, &held(false)); }
+        assert!(!b.crouched, "a held key with no press edge crouched Bond");
+        b.tick(&w, &held(true));
+        assert!(b.crouched, "the press edge crouches");
+        for _ in 0..40 { b.tick(&w, &held(false)); }
+        assert!(b.crouched, "Hold: still held, still crouched");
+        b.tick(&w, &released);
+        assert!(!b.crouched, "Hold: the release stands Bond once the lockout is over");
+        // A press inside the post-stand lockout, held on past its end: no re-crouch.
+        b.tick(&w, &held(true));
+        for _ in 0..40 { b.tick(&w, &held(false)); }
+        assert!(!b.crouched, "a press lost to the lockout re-crouched Bond while held");
+    }
+
+    /// s-crouch-latch: leaving the crouch through another substate. The port folds the game's
+    /// substate 4 into the walk, so the crouch flag must drop on every `ChangeSubState`:
+    /// `ChangeSubState(0)` from 4 (the cut-scene hand-back `Player_Cam2Mode` 0x195fc8:11-16)
+    /// stands Bond with the lockout [M 0x190630:42-49]; a ladder grab from the crouch
+    /// (`Player_CollLadder` 0x196118:44 `ChangeSubState(1)`) leaves it with no lockout, and the
+    /// climb hands back a STANDING walk [M Player_Climb 0x196310:97 `ChangeSubState(0)` from 1 —
+    /// no Crouch2Stand]. Pre-fix the flag survived both: Bond came off a ladder still crouched.
+    #[test]
+    fn a_substate_change_leaves_the_crouch() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        b.tick(&w, &Input { crouch: true, ..Default::default() });
+        for _ in 0..20 { b.tick(&w, &Input::default()); }
+        assert!(b.crouched && b.lockout == 0);
+        b.change_substate(SS_WALK);
+        assert!(!b.crouched, "ChangeSubState(0) from the crouch stands Bond");
+        assert_eq!(b.cc, ROOT_HEIGHT);
+        assert_eq!(b.lockout, 60, "the crouch→stand transition arms the lockout");
+        // The ladder: crouched grab, then the climb's exit to the walk.
+        let world = CollisionWorld::from_triangles(Vec::new());
+        let lad = Ladder::simple([10.0, 3.0, 20.0], 2.0, 0.0);
+        let ctx = LadderCtx { ladders: &[lad.clone()], wires: &[], wire_anims: None, water: None, sink: false, creepwalls: &[], straddle: &[], bot_capsules: &[], ground_bots: 0 };
+        let mut c = Bond::new([10.0, 3.0, 20.5], lad.yaw + std::f32::consts::PI);
+        c.crouched = true;
+        c.cc = CROUCH_ROOT_HEIGHT;
+        c.tick_ctx(&world, &ctx, &Input { forward: 1.0, ..Default::default() });
+        assert_eq!(c.substate, SS_CLIMB, "the crouched grab attached");
+        assert!(!c.crouched, "the ladder grab left Bond flagged crouched");
+        assert_eq!(c.cc, ROOT_HEIGHT);
+        assert_eq!(c.lockout, 0, "a non-walk substate change arms no lockout");
+        c.change_substate(SS_WALK);
+        assert!(!c.crouched && c.lockout == 0, "the climb exit hands back a standing walk, no lockout");
     }
 
     #[test]
