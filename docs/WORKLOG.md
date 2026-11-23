@@ -126,3 +126,22 @@ ON), (b) trimming the #20 re-pick-grind exposure (the duel stalls ~100+ ticks at
 #20 deals 32.5), (c) moving the east-floor grenade answer leg before the corner. None is
 ledgered dead; the measured-dead round-3 probes stay skipped. Progress logged as the round
 runs.
+
+### walk-06-00agent-4 progress (2026-11-23, round 4, the levers measured dead)
+
+All three round-4 levers from the op-3 ignore message ran on their own real runs and measured
+DEAD; the probe code was removed and the tree ends comments-only (every walk byte-identical to
+round 3's merge). (a1) the #754 quieter-lane fetch after the descent's fight_through: BOTH nav
+legs wedged on the same wall face x ≈ −1.45 (give-ups d 14.40 / d 19.77, plus round-3's d 17.9) —
+the courtyard floor band has no west exit toward the shelf; the run died t20693 mid-fetch.
+(b)+(b2) the stall levers: the ledger's ~100-tick stall does not reproduce — the strip duel exits
+~2 tapless taps after the 0.2 drop with #20 already dead by return fire, burst 2 (16.5) landed
+mid-grind (the close print reads health 40.0), and both arms (a one-tap-stall bail, an
+active-shooter re-engage) ran byte-identical-inert. (c) the east-floor detour died EARLIER
+(t8211) on the corner-return leg. The margin is measured: strip exit 40.0/0.5 armour vs the tail
+cost 40.05 — death by 0.05. Round-5 levers (the court trio's 27.5; #24 as an earlier re-pick;
+pinning the grind-target identity) and three live-check requests are in the report and the ignore
+message.
+
+Verification: walkreal_07000006_live 8 passed / 0 failed / 1 ignored, interactables_07000006_live
+5 passed / 0 failed on the final tree.
