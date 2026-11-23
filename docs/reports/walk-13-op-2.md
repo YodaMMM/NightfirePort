@@ -99,6 +99,12 @@ this task's change; walkreal_07000013_live ran inside the sweep green (4 passed,
 not visible to me (no token, credit, context-window or cost figures are exposed in this
 environment; nothing to copy).
 
-## ntfy
+## ntfy failed
 
-(pending — filled after the send attempt)
+All three fallbacks failed. Exact outputs:
+
+- curl: `curl: (28) Connection timed out after 20002 milliseconds` (exit 28).
+- python urllib: the `urlopen(..., timeout=20)` call hung; the wrapper `timeout 25` killed it
+  (exit 124), no response printed.
+- wget: `wget -q -O- --post-data ... https://ntfy.sh/nightfire-yoda-8k3x` hung; the wrapper
+  `timeout 25` killed it (exit 124), no output.
