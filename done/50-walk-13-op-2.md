@@ -26,3 +26,7 @@ claimed-by: sandbox7 at 2026-11-22T23:07Z
 ## Report (done, 2026-11-23T00:01Z)
 
 Closed by the driver: the report is on `s/walk-13-op-2` (docs/reports/walk-13-op-2.md); the worker didn't run finish.sh.
+
+---
+## Report from the worker (done, 2026-11-23T00:08Z)
+
