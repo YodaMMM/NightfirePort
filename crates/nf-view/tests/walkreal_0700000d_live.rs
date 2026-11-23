@@ -406,6 +406,53 @@ fn walk_arrival_to_the_c5_door_at(difficulty: u32, real_damage: bool) {
     // out (the walk-7 "the net is NEGATIVE" precedent).
     let bay_killed = kill_guard_at_present(&mut w, [214.2, -289.4], [6.0, 6.0], "the bay guard #10 (from the strip mouth, ray clear d 64 [probe_0d_ray_stands])", 180);
     eprintln!("[0d] the strip-mouth #10 kill: landed {} pool {:.1}", bay_killed, w.scene.sim.as_ref().unwrap().drones.health.health);
+    // retune-nb-0d-20, THE NORTH-EAST GROUND ARMOUR DETOUR (the round's lever, the 18-12
+    // scan's third armour (205.41, 0.11, -205.31) [L 18-12] — "far north", ground level,
+    // directly under the warehouse start, 23 u north of the route's own blind-strip band).
+    // MEASURED LIVE this round on the direct probe chain [L, the probe_0d_north_armour*
+    // series, each its own roll]: the kind-3 pickup ARMS AT d2 — the x-210 lane north from
+    // the band is OPEN (the band approaches stall on a player-collision wall at z ~-208.9
+    // for x 202-208.5, but x 209.5-213.5 passes north [L]), the pocket settle takes the
+    // touch mid-walk (armour 0 -> 50.0 [L d2]; the scan's fourth armour, the roof penthouse
+    // (147.0, 21.76, -252.77), measured DEAD the same round — its two doors are fakedoors
+    // #517/#520 (147.12, 22.94, -258.12)/(148.27, 22.94, -236.15) with lock ch 200 that has
+    // NO writer in the level's data [D the audit], and every staged exterior ascent fell or
+    // stalled: to y 7.77/11.46/1.04/16.6 and the z -266.8 stall [L the probes]), and the
+    // return lane south rejoin measured OK (the pocket -> east out -> south on x ~210 ->
+    // the band, every leg grounded [L]). The prior twins: at d1 the nav leg took the armour
+    // (34 left back at the strip, one 16.0 on the return) [L 0d-4]; at 00 Agent the take
+    // REFUSED (armour 2.0 -> 2.0, the nav arrival 0.57 dxz off) with #36 46.0 + #22 48.0
+    // during the walk-over [L the 0d run3 note] — the d2 arming is THIS round's own
+    // measurement. The detour rides the band phase (post-wake): the +50 armour absorbs the
+    // ground-band/west-roof fire first [M Player_HandlePain 0x1902c8:84-104], the pool
+    // arrives at the climb intact. NF_0D_NARMOUR=1 arms it (d2 real damage only; unset =
+    // byte-identical).
+    if difficulty == 2 && real_damage
+        && std::env::var("NF_0D_NARMOUR").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) > 0
+    {
+        let armour0 = w.scene.sim.as_ref().unwrap().drones.health.armour;
+        let health0 = w.scene.sim.as_ref().unwrap().drones.health.health;
+        let t0 = w.total_ticks;
+        let lenient0 = w.lenient;
+        w.lenient = true;
+        // OUT: east on the band to the lane mouth, north on the x-210 lane (the wall at
+        // z ~-208.9 ends west of x ~208.5 [L]), west into the pocket.
+        let _ = w.try_walk_to(Wp::new(209.0, 0.5, -227.5).r(1.4), "the north-armour lane mouth");
+        let _ = w.try_walk_to(Wp::new(209.5, 1.03, -212.0).r(1.4), "the north-armour lane north 1");
+        let _ = w.try_walk_to(Wp::new(209.8, 1.03, -206.8).r(1.4), "the north-armour lane north 2");
+        let _ = w.try_walk_to(Wp::new(205.41, 1.13, -205.31).r(1.2), "the north-armour pocket");
+        // The stand: the settle law (the probe's 30-tick settle took the touch inside the
+        // sphere).
+        for _ in 0..40 { w.scene.sim.as_mut().unwrap().step_bond(nf_game::player::Input::default(), false, false, false); w.total_ticks += 1; }
+        // BACK: east out of the pocket, south on the lane, rejoin the band east of the mouth.
+        let _ = w.try_walk_to(Wp::new(209.5, 1.03, -204.5).r(1.2), "the north-armour east out");
+        let _ = w.try_walk_to(Wp::new(210.1, 1.03, -210.65).r(1.4), "the north-armour south 1");
+        let _ = w.try_walk_to(Wp::new(210.5, 1.03, -225.9).r(1.4), "the north-armour south 2");
+        w.lenient = lenient0;
+        let sim = w.scene.sim.as_ref().unwrap();
+        eprintln!("[0d] the north-armour detour: {} ticks armour {armour0:.1} -> {:.1} health {health0:.1} -> {:.1} at {:?}",
+            w.total_ticks - t0, sim.drones.health.armour, health0, sim.drones.health.health, sim.bond.pos);
+    }
     // (the measured-dead strip-mouth deck-duo lever's ledger sits in the comment above)
     // The spawner #32 (skin 0x5000090, the ground band (157.6..163.3, −213..−229)) is NOT
     // taken here any more — level-0d-real-health-crossfire-4 MEASURED the trade: the landed
