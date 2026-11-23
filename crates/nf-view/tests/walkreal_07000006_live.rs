@@ -611,6 +611,22 @@ fn duel_target(w: &mut Walker, label: &str, cap: u32, fixed: Option<usize>) {
                 && t.saturating_sub(last_tap) >= 4;
             let dhp = sim.drones.list[di].health;
             if dhp < hp_watch { eprintln!("[06] duel ({label}): #{di} hp {hp_watch:.1} -> {dhp:.1} at +{t}"); hp_watch = dhp; last_drop = taps; }
+            // walk-06-00agent-4 lever (b), judged on its own real run: the ONE-TAP STALL bail.
+            // When the locked target is a single landed tap from death (hp <= 2.0 — the torso
+            // tap is 2.2 [L the grind traces: every drop in the strip duel is exactly 2.2]) and
+            // the tap stream runs DRY, the player moves on instead of standing in the stream.
+            // Measured on the a1 run's strip duel [L this branch]: #20 (skin 0x500002f) ground
+            // 9.0 -> 0.2 by tap +184, then NO drop for 11+ tapless taps (~50-110 wall ticks)
+            // while his SECOND burst (16.5, ticks 7112-7120, health 51.0 -> 40.0) landed INSIDE
+            // the stall — he died to return fire at hp 0 (the death summary: hp 0) without
+            // another duel drop; the 25-tap blocked-line early-out below never fired (the pick
+            // emptied first). The hp gate keeps the round-2 lesson intact (the 40-TICK window
+            // bailed #11 MID-GRIND at hp 9.0 and #20 at 6.8 [L the lever-a runs] — this arm
+            // only fires at <= 2.0 where any landed tap ends him).
+            if !reload && taps >= 4 && sim.drones.list[di].health <= 2.0 && taps - last_drop > 4 {
+                why = "the one-tap stall";
+                break;
+            }
             // The blocked-line early-out (walk-06-00agent-2): TAPS without a single hp drop mean
             // the rounds meet the cover geometry, not the guard — measured on the balcony tower
             // duel: 206 taps for ZERO damage at #11's patrol post (3.96, −55.0) burned the whole
@@ -1241,9 +1257,16 @@ fn walk_from_the_guardhouse_court_at(w: &mut Walker, cut: bool, difficulty: u32)
     // into the descent band and wedges at the tunnel arch (the 3000-tick give-up at
     // (−1.45, −47.47), d 17.9 short [L this branch's run]), and the return-fire-off crossing
     // of the descent shooters' lane cost 24.8 health (40.0 → 15.2) — WORSE than the baseline's
-    // own strip exit (health 40.0 armour 0.0). A future round needs a quieter lane: the fetch
-    // after the descent's fight_through (the descent shooters answered first), or an east-first
-    // approach to the west shelf, or a return-fire-ON leg. The take idiom itself is proven
+    // own strip exit (health 40.0 armour 0.0). walk-06-00agent-4 round-4 lever (a1), the
+    // QUIETER lane, ALSO MEASURED DEAD on its own real run (the probe code removed; this
+    // comment is the ledger): the fetch attempted AFTER the descent's fight_through, from the
+    // descent's end (4.41, 42.04, −47.26) at health 40.0 armour 0.0 — both staged nav legs
+    // wedged at the SAME wall face: the give-ups at (−1.45, 42.81, −37.03) d 14.40 and
+    // (−0.52, 42.10, −49.39) d 19.77 [L this branch's run], plus round-3's (−1.45, −47.47)
+    // d 17.9 — three wedges on one line x ≈ −1.45, so the courtyard floor band has NO west
+    // exit toward the shelf at all (the lane is geometrically dead, not a shooter problem:
+    // the run cost 27.5+ health to west/south fire while wedged and died t20693 mid-fetch
+    // without reaching the corner). The take idiom itself is proven
     // (the #755 fetch; kind-armour sets the pool flat 50.0, refuses only at pool >= 50 [M
     // Pickup_Handler 0x18e650:220-224]).
     w.walk_nav_to([4.4, 42.0, -48.5], "down the searchlight courtyard", 1.6);
