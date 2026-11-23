@@ -116,3 +116,8 @@ discipline, the #5/#3 lane batch) are in the ignore message. Whole walkreal_0700
 binary at the final tree: 18 passed / 0 failed / 1 ignored (140.1 s, --test-threads=1) — the
 d3 walk is the 1 ignored, the sisters' streams gated untouched by construction (no crates/*/src/
 and no crates/nf-view/tests/common/ files changed; the diff is the walk test file + docs).
+
+retune-nb-16-8 (2026-11-23): session opened. Branch s/retune-nb-16-8 created from origin/master
+(7562f1e70) with s/retune-nb-16-7 merged in first (it was not on master). Target: the
+walk_the_chasers_defeat_completes_the_mission_on_real_damage_00agent walk, next untried lever
+from the retune-nb-16-7 ignore message (skipping the ledger-dead levers). Work in progress.
