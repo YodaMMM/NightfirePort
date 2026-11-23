@@ -494,3 +494,13 @@ Progress:
 - T TRIED and DISPROVEN: the draw settle — the draw finishes before the fight loop opens (switch_state 0 at f27490, 36 ticks after the field flip at f27454 [L the [08 draw] dump]); the round-23 entry binder is not the draw.
 - SHIPPED: diagnostics only (the [08 draw] evidence line, the closing/band_x/dive_win fields in the [08 gates] dump, the definitions for them) — the behavior is byte-identical to the round-23 tree: death t29609 (112.95,13.09,-179.32), 53 hits for 77.0, re-confirmed on this round's sandbox.
 - next levers ledgered in the ignore message: (1) the aggro answer (the launch must ship with a salvo answer: dodge miss >= ~6 on the through-the-gap rounds, or hold the launch until the machine is on the band's far side); (2) the armour entry (fight entry armour 20.0 on this deal — with 50 the salvo blast meets armour); (3) the salvo close band (the miss 0.59 measurement).
+
+## retune-nb-08-25 (2026-11-23)
+
+Task: 08 whole-mission 00 Agent real-damage walk green, round 25. Branch = master 7562f1e70 + s/retune-nb-08-24 merged (7e7a96ef8; the round-24 test-file ledger commit 25bcc2a4e included).
+
+Progress:
+- branch created and pushed; sandbox was reset, redoing setup (clone done, game files downloading).
+- read the 08-24 report + the round-24 verdict comments in walkreal_07000008_live.rs + the ignore message on the 00agent test (its tail carries the round-17 block; rounds 18-24 live in the code comments).
+- ledger for this round: (1) THE AGGRO ANSWER — the launch lever must ship WITH a salvo answer (dodge miss >= ~6 on the through-the-gap w62 rounds via a bigger/earlier side step, or hold the launch until the machine sits on the band's far side); (2) the armour entry; (3) the salvo close band. Round-24 measurement: the dive-window launch FIRED t18 and LANDED 100.4 (hp 598 -> 497.6) but the aggro re-roll killed Bond at t28369 (1240 ticks shallower than shipped t29609).
+- levers in progress; judged on their own real runs.
