@@ -2305,7 +2305,7 @@ pub fn wreck_draw_centres(scene: &scene::Scene) -> Vec<[u32; 3]> {
 
 /// The hit-flash tweak's draw side: the live Destroy leaves whose colour pair is below white
 /// (`Renderer::destroy_tint`).
-fn destroy_tints(scene: &scene::Scene) -> Vec<([u32; 3], [u8; 2])> {
+pub fn destroy_tints(scene: &scene::Scene) -> Vec<([u32; 3], [u8; 2])> {
     let Some(sim) = scene.sim.as_ref() else { return Vec::new() };
     scene.destroy_centres.iter()
         .filter_map(|(c, pl)| sim.drones.props.destroy.iter().find(|d| d.placement == *pl)
@@ -2330,13 +2330,13 @@ pub fn snow_for_into(scene: &scene::Scene, cam: &Camera, out: &mut Vec<scene::Ve
 
 /// The emitter sprites facing the camera, grouped by def texture and blend (`Emitter_Draw` 0x17b708
 /// path A → `psiDrawParticleList` 0x122d50 with def+0x04 bound; `Scene::particle_draws`).
-fn particles_for(scene: &scene::Scene, cam: &Camera) -> Vec<(Option<usize>, bool, Vec<scene::Vertex>)> {
+pub fn particles_for(scene: &scene::Scene, cam: &Camera) -> Vec<(Option<usize>, bool, Vec<scene::Vertex>)> {
     let (right, up) = billboard_axes(cam);
     scene.particle_draws(right, up)
 }
 
 /// The camera's world right/up axes the billboards span.
-fn billboard_axes(cam: &Camera) -> ([f32; 3], [f32; 3]) {
+pub fn billboard_axes(cam: &Camera) -> ([f32; 3], [f32; 3]) {
     let right = cam.right();
     let up = right.cross(cam.dir()).normalize_or_zero();
     (right.to_array(), up.to_array())

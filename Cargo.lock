@@ -1102,6 +1102,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nf-macos"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "glam",
+ "log",
+ "nf-audio",
+ "nf-formats",
+ "nf-game",
+ "nf-view",
+ "pollster",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "nf-net"
 version = "0.0.1"
 
