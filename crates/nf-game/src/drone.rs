@@ -14556,12 +14556,20 @@ pub struct NetBody {
 }
 
 /// The trigger touchers of one human body (single-player Bond, or one MP slot): the stand-in set
-/// (`box_touchers`). The game's own on-foot contact is ported as `game_touchers`; it is not the
-/// shipped set yet: switching broke walk and plate pins on 01/02/05/06/07/08/0a/0b/0d/011/4a that
-/// stand on the box's reach (docs/reports/s-touch-ref-point.md).
+/// (`box_touchers`) unless `TOUCH_LAW_LIVE`. The game's own on-foot contact is ported as
+/// `game_touchers`; it is not the shipped set yet: switching broke walk and plate pins on
+/// 01/02/05/06/07/08/0a/0b/0d/011/4a that stood on the box's reach (docs/reports/s-touch-ref-point.md).
+/// The 01/02/05/06/07 pins are re-pinned on real input and pass with either set
+/// (docs/reports/s-touch-law-a.md); the rest are still open.
 pub fn human_touchers(pos: V3, body: (V3, V3, f32), crouched: bool, hanging: bool, riding: bool) -> Vec<crate::triggers::Toucher> {
-    box_touchers(pos, body, crouched, hanging, riding)
+    if TOUCH_LAW_LIVE { game_touchers(pos, body, crouched, hanging, riding) } else { box_touchers(pos, body, crouched, hanging, riding) }
 }
+
+/// The switch from the stand-in toucher set (`box_touchers`) to the game's own on-foot contact
+/// (`game_touchers`) for every human body. Flipping it changes which triggers fire and when, so it
+/// moves the shared random stream on the levels whose scripts react. Off until every level's pins
+/// pass with it on.
+pub const TOUCH_LAW_LIVE: bool = false;
 
 /// The game's own on-foot trigger contact for one human body.
 ///

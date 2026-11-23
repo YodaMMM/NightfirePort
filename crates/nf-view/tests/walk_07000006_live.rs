@@ -40,17 +40,26 @@ fn the_castle_interior_reaches_the_loadpoint_and_dresses_into_the_party() {
         eprintln!("[arrival] ch185 {}", sim.drones.channels.on(185) as u8);
     }
     // The exit: the LoadPoint trigger #746 (out ch 0x83) — its volume from the parsed trigger.
-    let lp = scene.sim.as_ref().unwrap().drones.triggers.iter()
-        .find(|t| t.out == 0x83)
-        .expect("the LoadPoint trigger (out 0x83) exists").clone();
-    let c = lp.centre();
+    assert!(scene.sim.as_ref().unwrap().drones.triggers.iter().any(|t| t.out == 0x83),
+        "the LoadPoint trigger (out 0x83) exists");
     {
         let sim = scene.sim.as_mut().unwrap();
-        sim.bond.pos = [c[0], c[1] + 1.0, c[2]];
-        // Stand in it (the real path — the player walks into the LoadPoint and the cut-scene takes
-        // over; event 4 disables Bond while it plays).
+        // Walk into it (the real path: the player walks north across the dressing room into the
+        // LoadPoint and the cut-scene takes over; event 4 disables Bond while it plays). The game
+        // has no containment contact [M Trigger_Hit 0x1b1fc8 reads only the walk pick's list], so a
+        // Bond dropped inside the volume touches none of its outward walls; the walk-in crosses
+        // one. The stand-in transit puts Bond on the room floor past the sill (the walkreal
+        // route's landing, walkreal_07000006_live running_jump_over_the_sill).
+        let spot = [35.4f32, 46.0, -60.5];
+        let floor = sim.world.segment(spot, [spot[0], spot[1] - 30.0, spot[2]]).map(|t| spot[1] - 30.0 * t);
+        sim.bond.pos = [spot[0], floor.map_or(spot[1], |f| f + 0.1), spot[2]];
+        sim.bond.vel = [0.0; 3];
+        sim.bond.yaw = 0.0; // face +z, into the room
+        for _ in 0..30 { sim.step_bond(Input::default(), false, false, false); }
+        assert!(!sim.drones.channels.on(0x83), "the LoadPoint is cold at the sill landing");
         for t in 1..=2000u32 {
-            sim.step_bond(Input::default(), false, false, false);
+            let walk = !sim.disabled && !sim.drones.channels.on(0x83) && t < 400;
+            sim.step_bond(Input { forward: if walk { 1.0 } else { 0.0 }, ..Default::default() }, false, false, false);
             if t % 400 == 0 { eprintln!("[dress t{t}] ch83 {} ch2 {} exit {:?}", sim.drones.channels.on(0x83) as u8, sim.drones.channels.on(2) as u8, sim.drones.level_exit); }
             if sim.drones.level_exit.is_some() { break; }
         }

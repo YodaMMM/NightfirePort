@@ -29,6 +29,40 @@ use walker::Walker;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
+/// The hand-off plate ch 0x5C is up (the truck script made it [D stream 8]) and not yet fired.
+fn handoff_plate_up(w: &Walker) -> bool {
+    let sim = w.scene.sim.as_ref().unwrap();
+    !sim.drones.channels.on(0x5c) && sim.drones.triggers.iter().any(|t| u32::from(t.out) == 0x5c && !t.gone)
+}
+
+/// Stand at the gatehouse edge until the plate is up, stand on 120 more ticks, then jump in place
+/// until ch 0x5C fires. The game's standing contact (the walk HITTEST segment, top A = pos + 0.275
+/// [M Player_Collision 0x194df0 default arm]) sits 0.56 under the quad at y 27.05, outside r 0.55;
+/// the reference trace stood inside the quad's footprint for 212 frames with ch 0x5C at 0, jumped
+/// (pad 0x10) and ch 0x5C rose 8 frames later [L tests/traces/05-truck.trace frames 33244-33464].
+/// Returns the fire tick.
+fn stand_then_jump_onto_the_plate(w: &mut Walker) -> Option<u32> {
+    for _ in 0..3600u32 {
+        if handoff_plate_up(w) { break; }
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x5c) { return Some(w.total_ticks); }
+    }
+    for _ in 0..120u32 {
+        w.tick(Default::default(), false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x5c) {
+            assert!(!nf_game::drone::TOUCH_LAW_LIVE,
+                "standing under the plate fired ch 0x5C at t {}; the game's standing contact misses it [L 05-truck.trace]", w.total_ticks);
+            return Some(w.total_ticks);
+        }
+    }
+    for _ in 0..600u32 {
+        let jump = w.scene.sim.as_ref().unwrap().bond.grounded;
+        w.tick(nf_game::player::Input { jump, ..Default::default() }, false);
+        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x5c) { return Some(w.total_ticks); }
+    }
+    None
+}
+
 #[test]
 fn the_walk_to_the_gatehouse_fires_the_handover_window_and_rides_out() {
     let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
@@ -57,15 +91,10 @@ fn the_walk_to_the_gatehouse_fires_the_handover_window_and_rides_out() {
             w.total_ticks);
         assert!(!sim.drones.channels.on(0x5c), "the plate is not up yet [D t 1882]");
     }
-    // Wait at the edge through the window: the plate appears, fires, the hand-over scene
-    // plays (Bond disabled during the cut-scene, then re-placed on the truck bed).
-    let mut fired_at = None;
-    for t in 0..3600u32 {
-        w.tick(Default::default(), false);
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.drones.channels.on(0x5c) { fired_at = Some(w.total_ticks); break; }
-    }
-    let fired_at = fired_at.expect("ch 0x5C fires while Bond stands at the gatehouse edge [D stream 8's window]");
+    // Wait at the edge through the window: the plate appears, Bond jumps into it, it fires, the
+    // hand-over scene plays (Bond disabled during the cut-scene, then re-placed on the truck bed).
+    let fired_at = stand_then_jump_onto_the_plate(&mut w);
+    let fired_at = fired_at.expect("ch 0x5C fires when Bond jumps at the gatehouse edge [D stream 8's window; L 05-truck.trace]");
     eprintln!("[05] ch 0x5C fired at t {fired_at}");
     assert!(fired_at >= 1882 && fired_at <= 2400,
         "the fire lands inside the script's own window (t 1882..2312 [D]), got {fired_at}");
@@ -135,13 +164,8 @@ fn the_standing_ride_still_parks_and_ends_the_level() {
     }
     w.wait(200);
     w.walk_nav_to([98.6, 26.0, 106.5], "to the gatehouse walkway edge", 1.2);
-    let mut fired_at = None;
-    for t in 0..3600u32 {
-        w.tick(Default::default(), false);
-        let sim = w.scene.sim.as_ref().unwrap();
-        if sim.drones.channels.on(0x5c) { fired_at = Some(w.total_ticks); break; }
-    }
-    let fired_at = fired_at.expect("ch 0x5C fires while Bond stands at the gatehouse edge [D stream 8's window]");
+    let fired_at = stand_then_jump_onto_the_plate(&mut w);
+    let fired_at = fired_at.expect("ch 0x5C fires when Bond jumps at the gatehouse edge [D stream 8's window; L 05-truck.trace]");
     eprintln!("[05-standing] ch 0x5C fired at t {fired_at}");
     // The hand-over + the STANDING ride: no crouch input at all. The bed touch ch 0x71 parents
     // Bond and the ride carries him west; the standing rider's own segment reaches the park

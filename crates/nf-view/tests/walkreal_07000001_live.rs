@@ -4030,7 +4030,11 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
     // 3500/200 and 8000/60 do not].
     // s/bond-hitboxes-2: 3000/60 stalled the contact at the hall doorway. Lever: 2000/30 [L the
     // 4-value sweep: 2000/30 and 4000/90 complete; 1000/60, 3000/60 do not].
-    let mut w = walker::with_pause(2000, 30, || walk_to_the_exit(&iso, true));
+    // s/touch-law-a (the game's on-foot trigger contact, drone::TOUCH_LAW_LIVE): 2000/30 lost the
+    // contact to the stairwell guards (the plates fire on the touch law's ticks, not the box's).
+    // Lever: 2000/60 [L the 12-value sweep under the law: 1500/30, 2000/60, 3000/45, 5000/60,
+    // 8000/60 complete; under the stand-in box only 2000/60 and 8000/60 of those 5 do].
+    let mut w = walker::with_pause(2000, 60, || walk_to_the_exit(&iso, true));
     // The exit tick: the hold stands with the full count, the fade level is 0, the request rides.
     {
         let sim = w.scene.sim.as_ref().unwrap();

@@ -93,7 +93,8 @@ fn the_fireplace_walkover_touchonce_fires_ch169_once() {
 /// the trigger's disc wiring.
 ///
 /// The stand: the plate's plane rides 2.4 m above the terrace floor (50.1 [D probe]); its west
-/// edge is reachable from the step top at (98.0, ≈50.98, −87.3), whose capsule contact fires it.
+/// edge is over the step top at (98.0, ≈50.98, −87.3), but it faces up: only a contact from above
+/// it fires it (see the body).
 /// The step ascent is the documented stand-in: from the terrace the walker stops at its base
 /// (97.4, −86.7) and a direct forward walk slides along the step's face and falls (the probe in
 /// this task's report) — the teleport only reaches the spot; the touch is the game's contact path.
@@ -128,11 +129,45 @@ fn the_roof_music_touch_fires_ch138_and_the_music_trigger_is_wired() {
         sim.bond.pos = [98.0, 51.2, -87.3];
         sim.bond.vel = [0.0; 3];
     }
+    // The plate is two up-facing triangles at y 52.542 (plane n (0, 1, 0), d −52.542 [D the
+    // glist's plane records]) lying on a thin rail top at y 52.50 over the drop east of the step
+    // (the port's floor rays: the rail line at z −87.2 from x 96 to 102, the step top 50.0 at
+    // x 98.25, no floor under x ≥ 99). The game's contact is the walk HITTEST segment on the
+    // plane's FRONT side (n·(P − closest) > 0) within r 0.55 [M Intersect_CylGeom 0x109da0,
+    // triggers::cyl_geom_min]: a Bond standing on the step (segment top A = pos + 0.275, 1.3
+    // under the plate) never touches it, jumping or not. A Bond on or over the rail does.
     for _ in 0..90 {
         w.tick(Input::default(), false);
         if ch(&w, 138) { break; }
     }
-    assert!(ch(&w, 138), "the standing contact fires ch 138 [D #443; M Trigger_Hit 0x1b1fc8 mask 8]");
+    if nf_game::drone::TOUCH_LAW_LIVE {
+        assert!(!ch(&w, 138), "standing on the step under the up-facing plate does not touch it [M 0x109da0]");
+        for _ in 0..120 {
+            let jump = w.scene.sim.as_ref().unwrap().bond.grounded;
+            w.tick(Input { jump, ..Default::default() }, false);
+        }
+        assert!(!ch(&w, 138), "a jump on the step does not reach the plate either [M 0x109da0]");
+    }
+    // The stand-in transit onto the rail top over the plate (no route to the rail is pinned; the
+    // touch is the game's contact path). Standing there the segment's low end B = pos + 0.55 − cc
+    // rests about 0.59 over the plate in the port's stand, just outside r; the crouch arm's low
+    // end B = pos + 0.45 − cc [M Player_Collision 0x194df0 case 3] drops it inside r, so the
+    // crouch on the rail fires the plate.
+    {
+        let sim = w.scene.sim.as_mut().unwrap();
+        sim.bond.pos = [99.6, 53.8, -87.35];
+        sim.bond.vel = [0.0; 3];
+    }
+    w.wait(30);
+    let mut crouched = false;
+    for _ in 0..90 {
+        let crouch = !crouched;
+        crouched = true;
+        w.tick(Input { crouch, crouch_held: true, ..Default::default() }, false);
+        if ch(&w, 138) { break; }
+    }
+    let b = w.scene.sim.as_ref().unwrap().bond.pos;
+    assert!(ch(&w, 138), "the crouch on the rail over the plate fires ch 138 [D #443; M Trigger_Hit 0x1b1fc8 mask 8], bond {b:?}");
 }
 
 /// The mask sister: TouchOnce #497 (out ch 9, mask 0x10 = DRONE-only [D params (0,9),(1,16)]) is

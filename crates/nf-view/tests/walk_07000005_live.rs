@@ -80,6 +80,11 @@ fn the_truck_park_announces_the_first_objective_and_exits_to_the_castle() {
         if !sim.disabled && prev_dis && sim.bond.pos[0] < 95.0 { crouch_armed = true; }
         prev_dis = sim.disabled;
         if crouch_armed && !sim.bond.crouched { input.crouch = true; crouch_armed = false; } else { input.crouch = false; }
+        // The hand-off plate ch 0x5C (quad at y 27.05 [D stream 8]) takes a jump: the standing
+        // contact's top A = pos + 0.275 [M Player_Collision 0x194df0] sits 0.56 under it [L
+        // tests/traces/05-truck.trace frames 33244-33464: stood with ch 0x5C at 0, jumped, fired].
+        input.jump = sim.bond.grounded && !sim.drones.channels.on(0x5c)
+            && sim.drones.triggers.iter().any(|t| u32::from(t.out) == 0x5c && !t.gone);
         sim.step_bond(input, false, false, false);
         if t % 500 == 0 {
             eprintln!("[ride t{t}] bond {:?} 0x70 {} obj1 state {}", sim.bond.pos, sim.drones.channels.on(0x70) as u8, sim.drones.mission.states[nf_game::mission::LEVELS.iter().position(|l| l.level == 0x0700_0005).expect("level in the mission table")][0]);

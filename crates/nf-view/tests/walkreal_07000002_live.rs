@@ -1864,6 +1864,15 @@ fn walk_the_castle_all_objectives_real_health_at(difficulty: u32) {
 
 #[test]
 fn walk_the_castle_all_objectives_to_the_exit() {
+    // s/touch-law-a (the game's on-foot trigger contact, drone::TOUCH_LAW_LIVE): with no stop the
+    // walk's fights re-deal under the law and the level exit fired during the geisha-1 captor
+    // approach. Lever: 2000/30 [L under the law 2000/30, 3000/30, 4000/90, 1500/45, 2500/60 complete
+    // and 100/30, 500/30, 1000/30 do not; under the stand-in box 2000/30, 3000/30, 1500/45
+    // complete]. Under the law this walk crosses every plate itself (no driven raise).
+    walker::with_pause(2000, 30, walk_the_castle_all_objectives_to_the_exit_body)
+}
+
+fn walk_the_castle_all_objectives_to_the_exit_body() {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "07000002.bin", false).expect("load 07000002"));
     // The game's standing body (`NDrone2_Collision` 0x140e90, on within 2.0 of the player
@@ -2160,7 +2169,12 @@ fn walk_the_castle_all_objectives_real_health_agent() {
     // Batch 3 (stream-batch-1121d): 2000/30 died in the bunker ambush (shotgun guard #13 at 4.3 u)
     // and missed the ch-0x19 plate. Lever: 3000/60 [L the 8-value sweep: 250/30, 500/30, 1500/45,
     // 3000/60, 4000/90, 6000/60, 8000/60 complete; 2000/30 does not].
-    walker::with_pause(3000, 60, || {
+    // s/touch-law-a (the game's on-foot trigger contact, drone::TOUCH_LAW_LIVE): 3000/60 lost a
+    // captor kill under the law. Lever: 1500/45 [L the 12-value sweep under the law: 1500/45,
+    // 2000/30, 2500/90, 3500/45, 5000/30, 6000/60, 8000/60 complete; 250/30, 500/30, 1000/60,
+    // 3000/60, 4000/90 do not; all six of 1500/45, 2500/90, 3500/45, 5000/30, 6000/60, 8000/60
+    // complete under the stand-in box].
+    walker::with_pause(1500, 45, || {
         walk_the_castle_all_objectives_real_health_at(2);
     })
 }
@@ -2216,7 +2230,12 @@ fn walk_the_castle_all_objectives_real_health_00agent() {
     // armour detour (captain #5 and guard #6 at the geisha-1 room). Lever: 2000/30 plus a 45-tick
     // stop at 13500 [L the 32-value sweep: 2000/30 with 13500/45, with 13000/90, or with 14000/45
     // and 43000/30 complete; every single stop 250-8000 and the other second stops do not].
-    walker::with_pauses(&[(2000, 30), (13500, 45)], || {
+    // s/touch-law-a (the game's on-foot trigger contact, drone::TOUCH_LAW_LIVE): the run parts from
+    // the box's in the garden fight, the pursuers re-deal, and 2000/30 + 13500/45 never reaches the
+    // ch-0x17 plate (Bond wedges at (-33.5, 9.6) coming in from the east). Lever under the law:
+    // 4000/90 [L the 12-value sweep: only 4000/90 completes; it does not under the box].
+    let stops: &[(u32, u32)] = if nf_game::drone::TOUCH_LAW_LIVE { &[(4000, 90)] } else { &[(2000, 30), (13500, 45)] };
+    walker::with_pauses(stops, || {
         walk_the_castle_all_objectives_real_health_at(3);
     })
 }

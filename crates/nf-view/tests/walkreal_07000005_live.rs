@@ -102,6 +102,15 @@ fn walk_to_the_gatehouse_and_ride_the_truck() {
         if !dis && prev_dis && w.scene.sim.as_ref().unwrap().bond.pos[0] < 95.0 { crouch_armed = true; }
         prev_dis = dis;
         input.crouch = if crouch_armed && !w.scene.sim.as_ref().unwrap().bond.crouched { crouch_armed = false; true } else { false };
+        // The hand-off plate ch 0x5C (the truck script's quad at y 27.05 [D stream 8]) takes a
+        // jump: the standing contact's top A = pos + 0.275 [M Player_Collision 0x194df0] sits
+        // 0.56 under it, and the reference trace stood under it with ch 0x5C at 0 until the jump
+        // [L tests/traces/05-truck.trace frames 33244-33464].
+        input.jump = {
+            let sim = w.scene.sim.as_ref().unwrap();
+            sim.bond.grounded && !sim.drones.channels.on(0x5c)
+                && sim.drones.triggers.iter().any(|t| u32::from(t.out) == 0x5c && !t.gone)
+        };
         w.tick(input, false);
         if t % 500 == 0 {
             let sim = w.scene.sim.as_ref().unwrap();

@@ -21,6 +21,20 @@ use nf_game::player::{Bond, Input};
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
+/// The hand-off plate ch 0x5C (the truck script's TouchOnce quad at y 27.05 over the gatehouse
+/// walkway [D script stream 8]) is up and not yet fired.
+fn handoff_plate_up(sim: &nf_view::scene::Sim) -> bool {
+    !sim.drones.channels.on(0x5c)
+        && sim.drones.triggers.iter().any(|t| u32::from(t.out) == 0x5c && !t.gone)
+}
+
+/// The player's input at the gatehouse while the hand-off plate is up: a jump in place. The game's
+/// standing contact (the walk HITTEST segment, top A = pos + 0.275 [M Player_Collision 0x194df0
+/// default arm]) sits 0.56 under the quad, outside r 0.55, so standing never fires it; the
+/// reference trace stood inside the quad's footprint for 212 frames with ch 0x5C at 0, jumped
+/// (pad 0x10) and ch 0x5C rose 8 frames later [L tests/traces/05-truck.trace frames 33244-33464].
+fn gatehouse_jump(sim: &nf_view::scene::Sim) -> bool { handoff_plate_up(sim) && sim.bond.grounded }
+
 /// The real game's parked Bond (player obj+0x30, trace frame 37173, the last 07000005 frame).
 const GAME_PARK: [f32; 3] = [29.885, 37.887, 51.656];
 /// The plate (ch 0x70's TouchOnce quad) the parked Bond must touch [D script stream 6 key 8].
@@ -47,6 +61,7 @@ fn truck_ride_parks_bond_at_the_game_height_and_ends_the_level() {
         if !sim.disabled && prev_dis && sim.bond.pos[0] < 95.0 { crouch_armed = true; }
         prev_dis = sim.disabled;
         if crouch_armed && !sim.bond.crouched { input.crouch = true; crouch_armed = false; } else { input.crouch = false; }
+        input.jump = gatehouse_jump(sim);
         sim.step_bond(input, false, false, false);
         for (ch, at) in first_on.iter_mut() {
             if *at == 0 && sim.drones.channels.on(*ch as u32) { *at = t; }
@@ -100,7 +115,8 @@ fn standing_ride_still_fires_the_parking_plate() {
     sim.bond = Bond::new([100.0, 26.0, 108.0], sim.bond.yaw);
     let mut fired = None;
     for t in 1..=7000u32 {
-        sim.step_bond(Input::default(), false, false, false);
+        let jump = gatehouse_jump(sim);
+        sim.step_bond(Input { jump, ..Default::default() }, false, false, false);
         if fired.is_none() && sim.drones.channels.on(0x70) { fired = Some(t); }
         if sim.drones.level_exit.is_some() { break; }
     }

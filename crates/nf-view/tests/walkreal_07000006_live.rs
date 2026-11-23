@@ -1111,12 +1111,18 @@ fn walk_the_ledge_to_the_party_at(w: &mut Walker, difficulty: u32, stands: bool)
     running_jump_over_the_sill(w);
     w.walk_to(Wp::new(35.4, 44.4, -54.2), "north across the dressing room");
     // The walk-in folds ch 0x83 → the dressing scene; poll in case the volume fired mid-leg.
+    // #746 is a Touch: ch 0x83 is on only while the walk HITTEST touches one of its walls [M
+    // Trigger_Hit 0x1b1fc8; no containment contact], so a landing that crosses the wall and
+    // starts the scene can leave ch 0x83 low again by the time this poll runs. The scene's own
+    // ch 0x02 (its closing event 0xD [2,1], the level's only writer of ch 0x02 [D]) proves
+    // SP #810 ran off ch 0x83.
     let mut scene = false;
     for _ in 0..300 {
-        if w.scene.sim.as_ref().unwrap().drones.channels.on(0x83) { scene = true; break; }
+        let ch = &w.scene.sim.as_ref().unwrap().drones.channels;
+        if ch.on(0x83) || ch.on(0x02) { scene = true; break; }
         w.tick(Input::default(), false);
     }
-    assert!(scene, "the LoadPoint #746 raises ch 0x83 on the walk-in [D #746]");
+    assert!(scene, "the LoadPoint #746 raises ch 0x83 on the walk-in and the dressing scene runs [D #746]");
     // The dressing cut-scene: the game's own skip runs its events (the Cut-scene law).
     w.wait_enabled(3000, "the dressing cut-scene");
     // The objective fold: ch 0x02 (the scene's closing event 0xD [2,1]) → state 4 [M 0x1827d8:55-67].
