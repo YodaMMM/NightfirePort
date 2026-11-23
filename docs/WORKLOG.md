@@ -115,3 +115,14 @@ corner) are in the ignore message.
 
 Verification: walkreal_07000006_live 8 passed / 0 failed / 1 ignored, interactables_07000006_live
 5 passed / 0 failed — the tree ends comments-only (every walk byte-identical to round 2's merge).
+
+### walk-06-00agent-4 progress (2026-11-23, round 4, branch start)
+
+Branch cut from origin/master 7562f1e70 with origin/s/walk-06-00agent-3 merged in first
+(fast-forward, no conflicts). Sandbox was reset, so setup ran from scratch (repo, work-slim,
+ISO, toolchain). Round-4 levers taken from the op-3 ignore message: (a) the west BodyArmour
+#754 fetch on a quieter lane (after the descent's fight_through, east-first, or return-fire
+ON), (b) trimming the #20 re-pick-grind exposure (the duel stalls ~100+ ticks at hp 0.2 while
+#20 deals 32.5), (c) moving the east-floor grenade answer leg before the corner. None is
+ledgered dead; the measured-dead round-3 probes stay skipped. Progress logged as the round
+runs.
