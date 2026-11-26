@@ -3755,6 +3755,9 @@ impl Sim {
             let swing = self.weapons.swing_amount(self.gun.weapon as usize);
             let _ = self.camera_apply_swing(swing, self.zoom);
         }
+        // Bond's anim set (and its shared-stream draws) at the substate handler's place in
+        // `Player_Update` — before `AnimObjectUpdate`'s footsteps below [M 0x193600:173-358].
+        self.advance_bond_anim();
         // Footsteps (`AnimObjectUpdate` 0x1befd8:163-198 [M], player): `BL+0x924` gathers the distance
         // moved (`+= |anim+0xD8|`); past the stride it wraps (fmod) and a step sounds. The stride is
         // 1.65 — EXCEPT while the CLIMB substate (1) runs, where it is 0.4125 and the step is the fixed
@@ -3869,7 +3872,6 @@ impl Sim {
             }
             None => use_key,
         };
-        self.advance_bond_anim();
         self.run(self.bond.pos, self.bond.sphere_centre(), head, look, aim, trigger, input.aiming || input.scope, reload, use_key, stick);
         self.drones.net_bodies = None;
         // `Player_Zoom` (0x1a1a70) — weapon-handling: the game's own zoom, every weapon (no scope-flag
@@ -4478,6 +4480,8 @@ impl Sim {
                     // The FP-model rebuild latches the sight laser from the new record [M Player_SetWeaponAnim
                     // 0x1a9338:21-26 — BLData+0x964 = weapon_data[w]+0x68 & 0x8, on every completed draw].
                     self.gun.laser_on = self.weapons.has_laser_sight(self.gun.weapon as usize);
+                    // bond-anim-rand: view state 3 — next tick's case 3 runs `Player_SetWeaponAnim` [M 0x1a2e38:273].
+                    self.gun.weapon_anim_sets += 1;
                     let (nwi, nt) = (self.clip_slot(self.gun.weapon as usize), self.weapons.ammo_type(self.gun.weapon as usize));
                     if let (Some(&c), Some(&n)) = (self.drones.inventory.clip.get(nwi), self.drones.inventory.carried.get(nt)) { self.gun.clip = c.max(0) as u32; self.gun.spare = n.max(0) as u32; }
                     // fix-reload-hang2: the script lookups use the weapon's OWN record — the game reads
@@ -4521,6 +4525,8 @@ impl Sim {
                     // The FP-model rebuild latches the sight laser from the new record [M Player_SetWeaponAnim
                     // 0x1a9338:21-26 — BLData+0x964 = weapon_data[w]+0x68 & 0x8, on every completed draw].
                     self.gun.laser_on = self.weapons.has_laser_sight(self.gun.weapon as usize);
+                    // bond-anim-rand: view state 3 — next tick's case 3 runs `Player_SetWeaponAnim` [M 0x1a2e38:273].
+                    self.gun.weapon_anim_sets += 1;
                         let (nwi, nt) = (self.clip_slot(self.gun.weapon as usize), self.weapons.ammo_type(self.gun.weapon as usize));
                         if let (Some(&c), Some(&n)) = (self.drones.inventory.clip.get(nwi), self.drones.inventory.carried.get(nt)) { self.gun.clip = c.max(0) as u32; self.gun.spare = n.max(0) as u32; }
                         // Start the draw script (+0xC0) at 1.25x [M case 2 → case 3]. The script lookup
@@ -4593,6 +4599,8 @@ impl Sim {
                     // The FP-model rebuild latches the sight laser from the new record [M Player_SetWeaponAnim
                     // 0x1a9338:21-26 — BLData+0x964 = weapon_data[w]+0x68 & 0x8, on every completed draw].
                     self.gun.laser_on = self.weapons.has_laser_sight(self.gun.weapon as usize);
+                    // bond-anim-rand: view state 3 — next tick's case 3 runs `Player_SetWeaponAnim` [M 0x1a2e38:273].
+                    self.gun.weapon_anim_sets += 1;
                         let (nwi, nt) = (self.clip_slot(self.gun.weapon as usize), self.weapons.ammo_type(self.gun.weapon as usize));
                         if let (Some(&c), Some(&n)) = (self.drones.inventory.clip.get(nwi), self.drones.inventory.carried.get(nt)) { self.gun.clip = c.max(0) as u32; self.gun.spare = n.max(0) as u32; }
                         let draw = self.weapons.draw_script(self.gun.weapon as usize);
@@ -5036,6 +5044,12 @@ impl Sim {
                         // away on the state-3 arm's retarget, as case 4 does.
                         if !refilled && self.gun.clip < p.ammo_per_shot {
                             if let Some(id) = self.no_ammo_request() { self.gun.switch_request = id; }
+                        }
+                        // bond-anim-rand: case 0xc's end writes view state 3 [M 0x1a2e38:536, :550] —
+                        // except the dry arm onto weapon 0x39, which drops straight to state 0
+                        // [M :538-541]; the next tick's case 3 runs `Player_SetWeaponAnim` [M :273].
+                        if refilled || self.gun.clip >= p.ammo_per_shot || self.gun.switch_request != 0x39 {
+                            self.gun.weapon_anim_sets += 1;
                         }
                         let draw = self.weapons.draw_script(self.gun.weapon as usize);
                         if draw != 0 {
@@ -5671,6 +5685,10 @@ impl Sim {
         // The drones' sight points: Bond's seven `Drone_View_Bones` on his posed body
         // (`DroneVision_SeekOpponentLOS` 0x175cb8 → `DroneFunc_GetBonePos` 0x149bd0).
         self.drones.bond_view_bones = self.bond_view_bones();
+        // His hit boxes' frame: the same resolved script list (`bond_local_pose`) — the stance
+        // transitions and the set's layers, as `AnimGetCollData` 0x1c4ac8 builds the palette from
+        // the anim object's current frame.
+        self.drones.bond_pose = self.bond_local_pose();
         // The class byte the AI's `ObjectIsArmed` 0x178768 reads: Bond obj+0xdc+0x62. `Player_WeaponSelect`
         // 0x1a2cc0 copies the request (+0x63) into it at the switch's START (the `weapon_data[+0x64].+0xc4
         // == 0` arm — +0x64 is 0x47 from InitWeapon 0x1a7ef8:137-139), so mid-holster the AI already reads
@@ -9902,10 +9920,15 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 }
             }
         }
+        // The combat / effect draw pools below (tracers, beams, glows, projectiles, swooshes, impacts,
+        // occluders, scan brackets, rain, leaves, satchel digits) are skipped on the front-end map
+        // 0x07000048: it places nothing, Bond owns nothing there and the sim never ticks under the
+        // menus, so no pool slot is ever posed. Every other load builds them as before.
+        let pools = drones.filter(|d| d.level_id != crate::menu::FRONTEND_LEVEL);
         // Bullet tracers: drone bullets draw `GUN_BULLET_TRAIL` (Bullet_update state 0), stretched along their
         // direction by the speed (Control_GetObjMatrix scale 1, 1, speed); a pool of slots, hidden when unused.
         // Slot TRACER_SLOTS is the gadget beam (fix-laser-beam: the Laser/Stunner's per-shot beam draw).
-        if let (Some(_), Some(&(tmap, tobj))) = (drones, level.by_hash.get(&0x0200_0123)) {
+        if let (Some(_), Some(&(tmap, tobj))) = (pools, level.by_hash.get(&0x0200_0123)) {
             // Pool-slot replay (level-load-time): slot 0 decodes, slots 1..N replay it (identical
             // identity-matrix geometry; only the attachment index and `tracer` slot differ).
             let tplacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
@@ -9951,7 +9974,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 (TRACER_SLOTS + 7, 0x0200_05cd), (TRACER_SLOTS + 8, 0x0200_026e),
                 // goggles: the night-sight beam sprite 0x2000131 [M 0x1a65d8:151-155].
                 (NIGHT_BEAM_SLOT, 0x0200_0131)] {
-                if drones.is_some() {
+                if pools.is_some() {
                     if let Some(&(bmap, bobj)) = level.by_hash.get(&hash) {
                         let binst = Instance { map: bmap, object: bobj, matrix: anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]), placement: level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default() };
                         add_instance(level, &binst, Layer::Effect, Some((0, Some(attachments.len() as u32))), &mut groups, None, None, None, None, [1.0; 3], &room_cels, u32::MAX, u32::MAX);
@@ -9962,7 +9985,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         }
         // goggles: the body-glow pool (GLOW_GUARDS × the main object + 15 children) and the
         // x-ray-only placed objects. Both draw only while the sim says so (`frame_state`).
-        if drones.is_some() {
+        if pools.is_some() {
             let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
             let pl0 = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
             if let (Some(&(mm, mo)), Some(&(cm, co))) = (level.by_hash.get(&nf_game::body_glow::MAIN_GFX), level.by_hash.get(&nf_game::body_glow::CHILD_GFX)) {
@@ -10025,13 +10048,13 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         let proj_slots = GRENADE_SLOTS + TRACER_SLOTS + PLAYER_BULLET_SLOTS;
         crate::phase_mark("b5b view models (sleeves/FP)", t); t = std::time::Instant::now();
         let mut proj_meshes: Vec<u32> = Vec::new();
-        if drones.is_some() {
+        if pools.is_some() {
             for w in 1..0x73usize {
                 let m = placed_weapons.projectile_mesh(w);
                 if m != 0 && !proj_meshes.contains(&m) && level.by_hash.contains_key(&m) { proj_meshes.push(m); }
             }
         }
-        if let Some(wd) = drones.and_then(|d| d.weapons.as_ref()) {
+        if let Some(wd) = pools.and_then(|d| d.weapons.as_ref()) {
             for w in 1..0x73usize {
                 let m = wd.projectile_mesh(w);
                 if m != 0 && !proj_meshes.contains(&m) && level.by_hash.contains_key(&m) { proj_meshes.push(m); }
@@ -10055,7 +10078,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // rocket-swoosh: the ribbon segments (`Swoosh_Create` 0x18d8e8 sets the object's gfx from the hash —
         // 0x2000918 `SwooshStart` / 0x2000481 `Swoosh`, a 0.15-wide tube along local −z [D 07000008 bounds]).
         // One pool per mesh the level resolves; `frame_state` poses the k-th live segment of that mesh.
-        if drones.is_some() {
+        if pools.is_some() {
             for mesh in [0x0200_0918u32, 0x0200_0481] {
                 let Some(&(smap, sobject)) = level.by_hash.get(&mesh) else { continue };
                 let pident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
@@ -10093,7 +10116,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // 200-node decal FIFO (`DList_Init(0x3496e0, 0x60, 200)` 0x1cf268) and 32 casing objects
         // (`Bullet_InitCasingLists` 0x12fd48); debris are unbounded per-impact objects (≤ 6, ≤ ~54 ticks) —
         // the port caps the draw slots.
-        if let Some(dc) = drones {
+        if let Some(dc) = pools {
             if let Some(surf) = &dc.surfaces {
                 let mut decal_meshes: Vec<u32> = surf.effects.iter().map(|r| r.decal).filter(|m| *m != 0).collect();
                 let mut debris_meshes: Vec<u32> = surf.effects.iter().map(|r| r.debris_mesh).filter(|m| *m != 0).collect();
@@ -10170,7 +10193,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // 1200-tick countdown (0x17eba0), drawn at `obj+0x30` with no rotation. One Effect pool per
         // level archive that resolves the mesh, 4 slots (the game caps nothing; clouds are rare).
         crate::phase_mark("b5d impact pools (decal/casing/debris/gas)", t); t = std::time::Instant::now();
-        if drones.is_some() {
+        if pools.is_some() {
             if let Some(&(m, o)) = level.by_hash.get(&0x0200_0273) {
                 let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
                 let cplacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
@@ -10183,7 +10206,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         }
         // fix-microcam-brackets: the Micro-Camera's target brackets — `HUD_UpdateCameraPane` 0x1a12d8 creates one
         // one-frame object per candidate drone at its root with gfx "DroneScan" 0x02000832 (Effect kind 6).
-        if drones.is_some() {
+        if pools.is_some() {
             if let Some(&(m, o)) = level.by_hash.get(&DRONE_SCAN) {
                 let ident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
                 let splacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
@@ -10204,7 +10227,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // the same placement `Drones` builds its weather from — elsewhere the 128 slots were dead weight.
         let rains = level.maps.iter().flat_map(|m| m.placements.iter())
             .any(|p| p.flags & 0xff == 0xdf && p.params.iter().find(|(i, _)| *i == 0).is_some_and(|&(_, v)| v as u8 == 1));
-        if drones.is_some() && rains {
+        if pools.is_some() && rains {
             // The second pass (0x02000039 `smoke_1_dust` per drop, viewer rotation) is level-gated:
             // GameState+12 − 0x07000009 < 3 [M DrawDrops 0x18cb90] — only 09..0b carry its pool.
             let second = drones.is_some_and(|d| matches!(d.level_id.wrapping_sub(0x0700_0009), 0..=2));
@@ -10234,7 +10257,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // obj+0x106 = 0xff, which `Leaf_Update` spends at cost 0). One Effect pool per 0x2b
         // generator (its cel fixes the tint), `LEAF_SLOTS` slots each; only levels that place a
         // generator get one (07000004 ×2, 07000041 ×1 [D main-map 0x2b placements]).
-        if drones.is_some() {
+        if pools.is_some() {
             if let (Some(mm), Some(&(lm, lo))) = (level.main_map(), level.by_hash.get(&LEAF_MESH)) {
                 let lident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
                 let lplacement = level.maps[mm].placements.first().cloned().unwrap_or_default();
@@ -10258,7 +10281,7 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
         // `SatchelDigits[sec%10]` [L SatchelDigits @0x2bed90 = 0x2000791..0x200079a], linked to the
         // satchel's cel. The port pools them as Effect kinds 4 (tens) / 5 (units): 2 slots per digit
         // mesh (the first two stuck satchels draw).
-        if drones.is_some() {
+        if pools.is_some() {
             let dplacement = level.maps[level.main_map().unwrap_or(0)].placements.first().cloned().unwrap_or_default();
             let dident = anim::quat_trans_to_mat([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
             for digit in 0..10u32 {
@@ -12113,8 +12136,8 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                     // beam, datum → end, stretched like the tripbomb beam below (the same −z mesh);
                     // view-only in first person [M: `BLData+0x950 == 0`]. Slot +6 the dot at
                     // hit + normal·0.01, its z on the normal, scale 1 + d²/MAX_VIEW_CONE (2000) capped
-                    // at 4 with d = datum → end [M ll. 189-205; L 0x30d0fc]. The flicker (Rand_FRand
-                    // on the size byte) is not drawn yet. goggles: night sight swaps the beam's gfx
+                    // at 4 with d = datum → end [M ll. 189-205; L 0x30d0fc]. The beam's alpha flicker is in the colour pass (laser_alpha); the dot has no random
+                    // (fixed tweak 0x40,0,0 [M ll. 189-205]). goggles: night sight swaps the beam's gfx
                     // to 0x2000131 "lazer" (NIGHT_BEAM_SLOT) [M 0x1a65d8:151-155] — same matrix.
                     let far = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, -10000.0, 0.0, 1.0]];
                     let Some(s) = self.sim.as_ref() else { return far };
@@ -13736,6 +13759,23 @@ pub fn build(level: &Level, cels_only: bool, skeletons: &HashMap<u8, Skeleton>, 
                 let Some(slot) = att.tracer.filter(|s| (GLOW_SLOT_BASE..GLOW_SLOT_BASE + GLOW_GUARDS * 16).contains(s)) else { continue };
                 let Some(t) = glow.get((slot - GLOW_SLOT_BASE) / 16) else { continue };
                 if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { c[3] = t.alpha as f32 / 255.0; }
+            }
+        }
+        // The laser sight beam's alpha byte obj+0x106: `Player_LaserPointer` random-walks it every frame
+        // (ordinary view Rand_Rand(9) − 4 clamped 0x10..0x30, night sight (a + 0x3f + Rand_FRand(128))/2)
+        // [M 0x1a65d8:150-171], and `View_SetupRenderModes_Tweak` 0x1e5888:47-49 hands it to the draw as
+        // the alpha factor. The dot keeps its own byte.
+        if let Some(s) = self.sim.as_ref() {
+            if s.laser_sight.is_some() {
+                // `psiSetTweakARGB` 0x124770 makes the factor byte/255 [M], but drawn at /255 the port's beam is
+                // far fainter than the game's and /128 matches [L 2026-11-26 PCSX2 05 SG5 semi vs port,
+                // audits/live-1126-sg5]: the missing 2x is likely in the beam mesh's own texel/vertex alpha
+                // (PS2 0x80 = 1.0) [S]. Open: the same check on the muzzle flash and body glow (both /255).
+                let alpha = (s.laser_alpha as f32 / 128.0).min(1.0);
+                for (a, att) in self.attachments.iter().enumerate() {
+                    if !att.tracer.is_some_and(|t| t == TRACER_SLOTS + 5 || t == NIGHT_BEAM_SLOT) { continue; }
+                    if let Some(c) = cols.get_mut((l.col_att + a as u32) as usize) { c[3] = alpha; }
+                }
             }
         }
         // Bond's muzzle flash alpha: `Draw_MuzzleFlash` writes the object's alpha byte (`obj+0x106`) on
@@ -15773,17 +15813,61 @@ impl Sim {
     /// Bond's single-player anim object, once per tick after his movement (`Player_SSWalk` 0x192310 /
     /// `Player_SSCrouch` 0x1924c0 call `AnimSetUpdate` with `BLData+0x18` forward; the stance
     /// change at the end of the tick plays the transition [M 0x190630]). Only the walk substate
-    /// (crouch included — the port's `crouched`) runs the set; MP bodies have their own clocks.
+    /// (crouch included — the port's `crouched`) and the zero-g substate 9 (`Player_ZeroG`
+    /// 0x192ab0:201-205) run the set; MP bodies have their own clocks.
+    ///
+    /// bond-anim-rand: the same update makes the game's shared-stream draws for Bond's anim set and
+    /// `Player_Update`'s own timer, in `Player_Update` 0x193600's order — each a `Rand_Random`
+    /// 0x1e36f0 whose value nothing keeps, so only the count reaches `drones.rng`:
+    /// 1. one per `Player_ChangeSubState` into 0 / 4 / 8 / 9 this tick (`Bond::anim_set_inits`,
+    ///    `AnimSetInit` 0x1c6a48:48);
+    /// 2. the set update's own (`MpBodyAnim::take_rand_draws`: the hold's end + every
+    ///    `AnimSetUpdate` that finds `GlbAnimList != 1` on the set — every walking tick, and the
+    ///    fade ticks after a change into or out of idle);
+    /// 3. `BLData+0x93c` (`Bond::rand_timer`) [M 0x193600:169, :354-357];
+    /// 4. last tick's view-state-3 entries (`Gun::weapon_anim_sets`): `Player_WeaponRecoil` →
+    ///    `Player_SetWeaponAnimObj` case 3 → `Player_SetWeaponAnim` runs after the anim update
+    ///    [M 0x193600:411-412, 0x1a2e38:273] and rebuilds the set.
+    /// None of it runs while the player update is off (`disabled`: `BLData+0x94a != 1` returns
+    /// first [M 0x193600:80-88]); a dead Bond (`obj+0xf4` 2/3) runs no substate arm and no timer
+    /// count [M :131-169, :316-319].
     pub fn advance_bond_anim(&mut self) {
-        if self.mp.is_some() || self.bond.substate != nf_game::player::SS_WALK { return; }
-        let Some(sets) = self.mp_anim_sets.as_ref() else { return };
-        let inp = nf_game::mp::body_anim::MpBodyInput {
-            alive: self.drones.health.health > 0.0, weapon: self.gun.weapon, class: 999, crouch: self.bond.crouched,
-            fwd: self.bond.local[1], strafe: self.bond.local[0], aim: None, sp: true,
-        };
-        let scripts = &self.scripts;
-        let lens = |id: u32| scripts.get(&id).map(|s| (s.length, s.looping));
-        self.bond_anim.tick(sets, &lens, &inp);
+        let inits = std::mem::take(&mut self.bond.anim_set_inits);
+        let reset = std::mem::take(&mut self.bond.anim_set_reset);
+        let weapon_sets = std::mem::take(&mut self.gun.weapon_anim_sets);
+        if self.mp.is_some() { return; }
+        let alive = self.drones.health.health > 0.0 && !self.drones.death.active;
+        for _ in 0..inits { self.drones.rng.random(); }
+        if reset { self.bond_anim.sp_substate_set(self.bond.crouched); }
+        if self.disabled { return; }
+        let sub = self.bond.substate;
+        if let Some(sets) = self.mp_anim_sets.as_ref().filter(|_| sub == nf_game::player::SS_WALK || sub == nf_game::player::SS_ZEROG_9) {
+            let inp = nf_game::mp::body_anim::MpBodyInput {
+                alive, weapon: self.gun.weapon, class: 999, crouch: self.bond.crouched && sub == nf_game::player::SS_WALK,
+                fwd: self.bond.local[1], strafe: self.bond.local[0], aim: None, sp: true,
+            };
+            let scripts = &self.scripts;
+            let lens = |id: u32| scripts.get(&id).map(|s| (s.length, s.looping));
+            self.bond_anim.tick(sets, &lens, &inp);
+        }
+        for _ in 0..self.bond_anim.take_rand_draws() { self.drones.rng.random(); }
+        if alive { self.bond.rand_timer = self.bond.rand_timer.wrapping_sub(1); }
+        if self.bond.rand_timer < 1 {
+            self.bond.rand_timer = ((self.drones.rng.random() & 0x3ff) + 0xff) as i16;
+        }
+        for _ in 0..weapon_sets {
+            self.bond_anim.sp_weapon_set();
+            for _ in 0..self.bond_anim.take_rand_draws() { self.drones.rng.random(); }
+        }
+    }
+
+    /// Bond's single-player local pose from his script list (`bond_anim`), as the root translation
+    /// the layers carry; None outside the walk substate, in MP, or without the skin / an empty list.
+    pub fn bond_local_pose(&self) -> Option<nf_game::anim::Pose> {
+        if self.mp.is_some() || self.bond.substate != nf_game::player::SS_WALK { return None; }
+        let skin = self.skins.get(&nf_game::player::player_skin_hash(self.level))?;
+        let skel = self.skeletons.get(&skin.skeleton)?;
+        self.body_local_pose(&self.bond_anim, skel, skin)
     }
 
     /// Bond's seven `Drone_View_Bones` world points (`nf_game::drone::DRONE_VIEW_BONES`): his posed

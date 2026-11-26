@@ -855,7 +855,8 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage() {
     // Batch 3 (stream batch 1121d): with the 543 sidestep decay on 12's legs (see the w2 kit) the
     // no-stop walk died t5720 on 12's lower floor. Lever 3000/60 [L the 8-value sweep: 2000/60,
     // 3000/60, 4000/60 complete; 1/60, 1/90, 100/60, 1/200, 1/400 die].
-    walker::with_pause(3000, 60, || walker::with_real_damage_head_hunting(||
+    // Stream batch 1126: lever 250/30 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(250, 30, || walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
                 walk_spawn_to_the_lower_floor_load_point_at(1)))))
@@ -878,7 +879,8 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
     // game's any-killer arm for a prop-0x53 civilian [M DroneFunc_OnInitDeath 0x145bd0]) before
     // the armour take. A 90-tick stand after the intro re-rolls the fight [L the 8-value sweep:
     // 1/60, 1/90, 100/60, 1/400 complete; 1/30, 50/30 die t41498, 1/200 misses the 545 E, 1/700 wedges].
-    walker::with_pause(1, 90, || walker::with_real_damage_head_hunting(||
+    // Stream batch 1126: lever 1/45 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(1, 45, || walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
                 walk_spawn_to_the_lower_floor_load_point_at(2)))))
@@ -928,10 +930,11 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
     // dest past the last node [M 0x159668]) re-deal this walk's fights. A 90-tick stand after the
     // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 90/200 passed.
     walker::set_post_intro_wait(90);
-    walker::with_real_damage_head_hunting(||
+    // Stream batch 1126: lever 1/90 [L the lever sweep on the joined tree; no stop dies t603].
+    walker::with_pause(1, 90, || walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
-                walk_spawn_to_the_lower_floor_load_point_at(3))))
+                walk_spawn_to_the_lower_floor_load_point_at(3)))))
 }
 
 /// The armour room's doorway stand (see its first call site): any guard on Bond's floor within 7

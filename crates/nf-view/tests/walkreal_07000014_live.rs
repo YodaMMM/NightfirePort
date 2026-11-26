@@ -1264,6 +1264,9 @@ fn walk_the_infiltration_to_the_delta_exit() {
 #[test]
 /// UN-IGNORED 2026-11-13: green on master c94c1043e (the ignored-walk sweep).
 fn walk_the_infiltration_to_the_delta_exit_real_damage_agent() {
+    // bond-anim-rand: Bond's anim-set draws shift the stream; a 200-tick stand after the intro
+    // re-rolls this walk green (of 30/200/400/700 swept, 200/400/700 pass).
+    walker::set_post_intro_wait(200);
     // The lane-fight + path-clear laws (opt-in, this level's sister only — set inside the body
     // behind the difficulty gate; see the body comment for the measured deaths).
     with_agent_path_clear(|| walk_the_infiltration_to_the_delta_exit_at(2));
@@ -2273,7 +2276,11 @@ fn walk_the_infiltration_to_the_delta_exit_real_damage() {
     // Batch 3 (5e9460adb): 1000/60 dies on Rook's close (t40510); lever 20000/60 [L the
     // 20-value sweep: 1000/45, 1000/90, 2000-39000/60 complete; 900/60, 1100/60, 500/60 and
     // every 1000/60 two-stop run die].
-    walker::with_pause(20000, 60, || {
+    // s/nb-scan-live (ChooseCombatMove no longer returns 0x5E on the scan's bit 2, the stream
+    // moves): 20000/60 dies t29712 at the escape-touch leg (-34.87,1.07,26.46); lever 15000/60
+    // [L the 9-value sweep: 5000/60 and 15000/60 complete; 1000, 2000, 10000, 25000, 28000 /60
+    // and 20000/30, 20000/90 die].
+    walker::with_pause(15000, 60, || {
         walker::with_real_damage(walk_the_infiltration_to_the_delta_exit);
     })
 }
@@ -2794,7 +2801,10 @@ fn walk_the_tripbomb_route_pick_up_place_and_shoot_it() {
             ("the row west 3 (the sill head)", Wp::new(-37.33, 1.20, 33.61).r(0.4)),
             ("down to the catwalk head", Wp::new(-38.6, 0.55, 33.2).r(0.5)),
             ("the catwalk west", Wp::new(-41.5, 0.6, 33.2).r(0.8)),
-            ("the 0.40 lane south", Wp::new(-42.25, 0.5, 28.92).r(1.0)),
+            // s/aimfire-route-2 (aim-fire entries drop the chase route): the 1.0 radius let the
+            // walk stop at z 29.91, 11.995 u from the bomb. The end point moved 0.5 south so the
+            // stop lands past 12 u; the 12 u floor below is unchanged.
+            ("the 0.40 lane south", Wp::new(-42.25, 0.5, 28.42).r(1.0)),
         ] {
             let ok = w.try_walk_to(wp, label);
             eprintln!("[014-trip] retreat {label}: ok {ok} bond {:?}", w.scene.sim.as_ref().unwrap().bond.pos);

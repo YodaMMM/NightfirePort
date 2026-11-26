@@ -193,9 +193,12 @@ fn the_wall_gun_burst_scatters_and_draws_in_the_game_order() {
     // bond-hitboxes-2 re-pin: the rounds test Bond's 16 body boxes (was the cylinder). The
     // draw positions are the same; the round at draw 11693 now passes between his boxes (the
     // pattern lists damaging shots only), so the twelve start one shot later, at 12153.
+    // stream-batch-1126 re-pin: every draw moved -1 as a block (damage and gaps identical): one
+    // fewer shared draw upstream of the burst on the joined tree (AimCrouchFire's sniper arm and
+    // the anim-set draws); the turret's own law did not move.
     assert_eq!(measured, &[
-        (24000, 12153), (24000, 12607), (24000, 13067), (24000, 13521),
-        (24000, 13981), (24000, 14435), (24000, 14895), (24000, 15349),
-        (24000, 15809), (24000, 16263), (24000, 16723), (24000, 17177),
+        (24000, 12152), (24000, 12606), (24000, 13066), (24000, 13520),
+        (24000, 13980), (24000, 14434), (24000, 14894), (24000, 15348),
+        (24000, 15808), (24000, 16262), (24000, 16722), (24000, 17176),
     ], "the burst's damage/draw pattern matches the game-ordered stream");
 }

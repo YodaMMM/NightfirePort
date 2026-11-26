@@ -1920,7 +1920,8 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_agent() {
     // Batch 3 (guard aim bone, burst latch, wall push joined): 2200/45 died on the roof at (3.93,58.07,41.16)
     // t17742. Lever: 2600/45 [port 12-value sweep at 5e9460adb: 2600/45, 2000/45, 2200/30, 1000/60, 3500/200
     // complete; 2600/45 ends with the most health, 28.4].
-    walker::with_pause(2600, 45, || {
+    // Stream batch 1126: lever 2000/30 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(2000, 30, || {
         walker::with_real_damage(|| {
             let mut w = load_fresh_at(2);
             w.dmg.lane_fights = true;
@@ -2019,7 +2020,10 @@ fn walk_fresh_spawn_to_the_mission_end_real_damage_00agent() {
     // Batch 3 (guard aim bone, burst latch, wall push joined): 2000/30 died on the roof at (-7.23,58.07,18.67)
     // t17983. Lever: 2200/30 [port 12-value sweep at 5e9460adb: 2200/30, 2000/60, 1800/30, 1500/60, 6000/60
     // complete; 2200/30 ends with the most health, 41.5].
-    walker::with_pause(2200, 30, || {
+    // s/touch-mesh-contact (the standing box stays off the 0x645 beams): the dome grid no longer
+    // trips ch 0x0D/0x0E on this pass (the beams are overhead, past the walk HITTEST's reach) and
+    // 2200/30 died on the roof t17439. Lever: 1800/30 [port 13-value sweep: 1800/30, 4000/60 complete].
+    walker::with_pause(1800, 30, || {
         walker::with_real_damage(|| {
             let mut w = load_fresh_at(3);
             w.dmg.lane_fights = true;

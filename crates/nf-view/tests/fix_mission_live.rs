@@ -167,7 +167,10 @@ fn the_07000001_exit_works_end_to_end() {
     // Batch 3 (stream-batch-1121d): at 1000/60 the escort hid (state 0x1e) beside the meet-room door
     // and never reached the plate. Lever: 3000/60 [L the 8-value sweep: 3000/60 and 8000/60
     // complete; 500/30, 1000/60, 1500/45, 4000/90, 6000/60 do not (the ambush kills the contact)].
-    walker::with_pause(3000, 60, || {
+    // s/timers-2 (the escort's hide exit waits the game's 2 s, with its one-arm latch): 3000/60 no
+    // longer reaches the plate (restart exit 0x07000001). Lever: 1000/60 [L the sweep: 1000/60 and
+    // 8000/60 complete; 500/30 does not].
+    walker::with_pause(1000, 60, || {
         let Some(iso) = iso() else { eprintln!("NF_ISO not set — skipping"); return };
         let mut scene = load(&iso, "07000001.bin");
         // Play the intro (no skip): Bond is disabled until the script hands control back.

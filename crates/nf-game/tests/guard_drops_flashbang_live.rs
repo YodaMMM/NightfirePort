@@ -512,8 +512,9 @@ fn a_flashed_guard_killed_after_drops_nothing_more() {
         loop_handle: 0,
     });
     for _ in 0..320u32 { sim.tick(&d, &p); }
-    assert!(matches!(sim.list[gi].state, state::DEATH_ANIM | state::DEAD | state::FADE | state::FADE_FAST),
-        "the frag killed the stunned guard, state {:#x}", sim.list[gi].state);
+    // DEATH_BY_EXPLOSION 0x45 is the frag's own death state (the blow-back death anim on the joined stream).
+    assert!(matches!(sim.list[gi].state, state::DEATH_ANIM | state::DEATH_BY_EXPLOSION | state::DEAD | state::FADE | state::FADE_FAST),
+        "the frag killed the stunned guard, state {:#x} health {} pos {:?} blast {:?}", sim.list[gi].state, sim.list[gi].health, sim.list[gi].pos, blast);
     // The deaths add exactly ONE pickup: one yard guard's stun EXPIRES during the frag fuse (the
     // recover clock `DroneFunc_RecoverTime` 0x147188 ran out on this stream — batch-3's blast-spot
     // search proved recovery dominates the fuse at every lethal offset, so "kill them all stunned"

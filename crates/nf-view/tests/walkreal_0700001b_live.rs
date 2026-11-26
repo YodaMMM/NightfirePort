@@ -2220,6 +2220,11 @@ fn the_first_wave_kill_raises_the_launch_order_real_damage() {
 /// plays the same route on real health.
 #[test]
 fn walk_arrival_to_drakes_defeat() {
+    // s/bond-anim-rand (Bond's anim-set draws on the shared stream): the no-stop walk left k6/k8
+    // unlatched (missiles 6 and 8 launched, the stuck guard at t8758). Lever: a 30-tick stop at
+    // tick 300 [L the sweep on that tree: 300/30, 3000/60, 6000/60 complete; 1000/30, 2000/30,
+    // 5000/30, 8000/30 miss console 1].
+    walker::with_pause(300, 30, || {
     let iso = iso();
     let mut w = Walker::new(nf_view::load(&iso, "0700001b.bin", false).unwrap());
     w.wait_enabled(3000, "the shuttle arrival");
@@ -2254,6 +2259,7 @@ fn walk_arrival_to_drakes_defeat() {
         .unwrap_or_else(|| panic!("ch {c} was written on the walk"));
     assert!(t(0x0b) < t(100),
         "obj 2's completion channel 0x0b lands before the mission-end ch 100 [D 0x06000a20 t600/t720] ({} vs {})", t(0x0b), t(100));
+    })
 }
 
 #[test]
@@ -2675,7 +2681,12 @@ fn walk_arrival_to_drakes_defeat_on_real_health() {
     // s/walks-1121-1b-astro (the astronaut strafe re-arm at the game's 120 + Rand(300)): lever
     // 6000/60 [L the sweep on that tree: 5900/60, 5950/60, 6000/60, 6000/90, 6100/60 complete;
     // 700/45 and ten other stops 300-5000, 6000/45, 6050/60 die].
-    walker::with_pause(6000, 60, || {
+    // s/bond-anim-rand (Bond's anim-set draws on the shared stream): 6000/60 died at t8204 in the
+    // k1 wave fight. Lever: 300/30 [L the 16-value sweep on that tree: only 300/30 completes;
+    // 300/30 + 6000/60 dies to Drake; 500/30, 1000/30, 2000/30, 4000/30, 5900/60, 5950/60,
+    // 6000/90, 6100/60, 6800/45, 7000/60, 7200/60, 7400/30, 8000/45 miss console 1, 5000/60 console 7].
+    // Stream batch 1126: lever 1000/30 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(1000, 30, || {
         walk_arrival_to_drakes_defeat_on_real_health_at(1);
     })
 }

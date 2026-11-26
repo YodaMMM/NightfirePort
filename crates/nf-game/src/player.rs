@@ -619,6 +619,23 @@ pub struct Bond {
     /// 0x1907b4 with NO stops, 0 skips the outer `0 < param_2`, > 0x10 jumps past). Drained by
     /// the Sim into `drones.audio` next to the `sfx_out` drain.
     pub substate_stops: Vec<u32>,
+    /// bond-anim-rand: the `Player_ChangeSubState` 0x190630 calls into 0 / 4 / 8 / 9 since the Sim
+    /// last drained this — each builds a fresh anim set (`PlayerAnimSetInitNormal` 0x18fcd8 /
+    /// `Crouch` 0x18fea0 → `AnimSetAppend` 0x1c07b8 → `AnimSetInit` 0x1c6a48), whose `Rand_Random`
+    /// [M 0x1c6a48:48] steps the shared stream. The port's crouch is the walk with `crouched`, so
+    /// the `Player_HandleJump` crouch / `Player_SSCrouch` stand toggles count here too [M 0x190630
+    /// cases 0 and 4]. The other substates build no set [M 0x190630:41-74].
+    pub anim_set_inits: u32,
+    /// bond-anim-rand: a counted change that is NOT the stand from the crouch — the Sim resets
+    /// Bond's anim list to a fresh set with no transition (`MpBodyAnim::sp_substate_set`).
+    pub anim_set_reset: bool,
+    /// bond-anim-rand: `BLData+0x93c` (s16), `Player_Update` 0x193600's own timer: decremented on
+    /// every live tick of the walk-and-substate path [M :169], and below 1 it is refilled from the
+    /// shared stream, `(Rand_Random() & 0x3ff) + 0xff` [M :354-357] — 255..1278 ticks. 992 at the
+    /// level start [L ee_start_05.bin BL 0x16cf0f0 +0x93c = 0x3e0, the snapshot the port's
+    /// stream starts from]. `Player_StandAtNewPosition` writes 0 [M 0x190d88:103] (the game's
+    /// first tick refills it before the snapshot).
+    pub rand_timer: i16,
 }
 
 impl Bond {
@@ -650,6 +667,9 @@ impl Bond {
             jump_locked: false,
             jump_refused: false,
             substate_stops: Vec::new(),
+            anim_set_inits: 0,
+            anim_set_reset: false,
+            rand_timer: 0x3e0,
             void_fall: false,
             land_step: false,
             land_countdown: 0,
@@ -1392,6 +1412,13 @@ impl Bond {
         if matches!(new, 1..=3 | 5..=0x10) {
             self.substate_stops.extend_from_slice(&[0x12, 0x3d, 0xf0]);
         }
+        // bond-anim-rand: cases 0 / 4 / 8 / 9 build a fresh anim set (one `Rand_Random`)
+        // [M 0x190630:41-63]. From the crouch into 0 it is the stand with its transition — the
+        // anim list follows `crouched` itself; every other counted change resets it plainly.
+        if matches!(new, SS_WALK | 4 | SS_ZEROG_8 | SS_ZEROG_9) {
+            self.anim_set_inits += 1;
+            if !(self.crouched && new == SS_WALK) { self.anim_set_reset = true; }
+        }
         // The port folds the game's crouch substate 4 into the walk (substate 0 + `crouched`), so
         // a change OUT of the crouch is any change while `crouched` is set: `ChangeSubState(0)`
         // from 4 stands Bond with the crouch→stand transition and the lockout [M 0x190630 case 0:
@@ -1823,8 +1850,8 @@ impl Bond {
     /// drains at 5/s from 100 and the underwater fade `+0x8C4` rises; above it (any cel — the −500
     /// default is far below every head) the air refills at 20/s. At `air < 1.0` every 30 ticks (`GameState % (FRAME_RATE·0.5) == 0`):
     /// `Player_HandlePain(0x40000000 = 2.0, type 7)` [M 0x191a70:136-143, disasm 0x191d9c] — the drown
-    /// damage the caller applies. The breath loop sounds (0x60c surfaced / the underwater loop on
-    /// `+0x89C`) and the HUD air pane are not ported this pass.
+    /// damage the caller applies. The breath loop sounds (the dive loop on `+0x89C`, the 0x60c
+    /// surface gasp) play view-side (nf-view scene.rs); the HUD air pane is draw-side.
     fn monitor_air(&mut self, ctx: &LadderCtx) {
         // The game's refill branch runs for ANY cel (including the −500 default) when the head is above
         // `cel+0x90` [M 0x191a70:98-111] — air refills on dry land too. The head is the standing eye
@@ -1943,6 +1970,7 @@ impl Bond {
             self.crouched = true;
             self.cc = CROUCH_ROOT_HEIGHT;
             self.stance_change();
+            self.anim_set_inits += 1; // `ChangeSubState(4)` → `PlayerAnimSetInitCrouch` [M 0x190630:51-52]
         } else if self.crouched && self.lockout == 0 && !self.head_bump && headroom(world)
             // options-census: the stand condition follows the Crouch option [M Player_SSCrouch
             // 0x1924c0:84-105] — Toggle (byte +0x04 != 0) stands on a press edge of action 8
@@ -1951,6 +1979,7 @@ impl Bond {
             self.crouched = false;
             self.cc = ROOT_HEIGHT;
             self.stance_change();
+            self.anim_set_inits += 1; // `ChangeSubState(0)` → `PlayerAnimSetInitNormal` [M 0x1924c0:102-103, 0x190630:42-43]
         } else if !self.crouched && self.jump == 0 && input.jump && self.grounded_history != 0 && !self.head_bump && self.jump_locked {
             self.jump_refused = true;
         } else if !self.crouched && self.jump == 0 && input.jump && self.grounded_history != 0 && !self.head_bump && headroom(world) {
@@ -3502,6 +3531,33 @@ mod tests {
         assert_eq!(c.lockout, 0, "a non-walk substate change arms no lockout");
         c.change_substate(SS_WALK);
         assert!(!c.crouched && c.lockout == 0, "the climb exit hands back a standing walk, no lockout");
+    }
+
+    /// bond-anim-rand: the anim-set inits `Player_ChangeSubState` 0x190630 makes — cases 0 / 4 /
+    /// 8 / 9 build a set (`AnimSetInit`'s one `Rand_Random` [M 0x1c6a48:48]); every other substate
+    /// builds none [M :41-74]. The crouch toggles are cases 4 and 0: the `Player_HandleJump` press
+    /// and the `Player_SSCrouch` stand each count one, with no plain reset (the anim list follows
+    /// `crouched` through the transition).
+    #[test]
+    fn substate_changes_count_the_anim_set_inits() {
+        let w = room();
+        let mut b = Bond::stand_at(&w, [0.0, 0.0, 0.0], 0.0);
+        for s in [SS_CLIMB, SS_GRAPPLE, SS_SWIM, SS_WIRE, SS_CREEP, SS_ZIPLINE] {
+            b.change_substate(s);
+        }
+        assert_eq!((b.anim_set_inits, b.anim_set_reset), (0, false), "no set for 1/2/3/6/7/0xF");
+        for s in [SS_WALK, SS_ZEROG_8, SS_ZEROG_9] { b.change_substate(s); }
+        assert_eq!((b.anim_set_inits, b.anim_set_reset), (3, true));
+        b.change_substate(SS_WALK);
+        b.anim_set_inits = 0;
+        b.anim_set_reset = false;
+        b.tick(&w, &Input { crouch: true, ..Default::default() });
+        assert!(b.crouched);
+        assert_eq!((b.anim_set_inits, b.anim_set_reset), (1, false), "the crouch press: ChangeSubState(4)");
+        for _ in 0..70 { b.tick(&w, &Input::default()); }
+        b.tick(&w, &Input { crouch: true, ..Default::default() });
+        assert!(!b.crouched);
+        assert_eq!((b.anim_set_inits, b.anim_set_reset), (2, false), "the stand: ChangeSubState(0) from 4");
     }
 
     #[test]

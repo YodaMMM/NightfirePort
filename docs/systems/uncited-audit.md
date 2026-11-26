@@ -198,8 +198,9 @@ greps over `work/decomp/ACTION.ELF/`; where the decompile looked incomplete the 
 - **Acceptance:** (a) event-9 test pins the camera orbit params; (b) census-driven.
 
 ### Runners-up (behind the top 10)
-- **DROUTE_Nearest dest pull-back** (`AINetwork_AlterDestFor_DROUTE_Nearest` 0x156088): drones
-  chasing a target behind cover fail/stick instead of closing to the nearest reachable point.
+- **DROUTE_Nearest dest pull-back** (`AINetwork_AlterDestFor_DROUTE_Nearest` 0x156088): PORTED
+  (`Route::alter_dest_nearest`, nav.rs) — a fallback-goal route's destination moves to the last
+  node's boundary crossing, 1.0 short.
 - **CivilianMissionWait** (0x15dbb0, state 0x17): mission civilians must pause at wait-channel
   route nodes (CivilianMission msg 0x22 [M 0x15d860 case 0x22]); the port has no msg 0x22 —
   they walk through.

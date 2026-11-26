@@ -3206,7 +3206,10 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage() {
     walker::set_post_intro_wait(30);
     // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): the no-stop walk died at (-13.41,7.39,-94.81) t6100.
     // Lever: 2000/30 [L the 2-value sweep: only 2000/30 completes].
-    walker::with_pause(2000, 30, || walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(1)));
+    // s/bond-anim-rand (Bond's anim-set draws on the shared stream): 2000/30 went red. Lever:
+    // 1500/30 [L the 8-value sweep on that tree: 1500/30, 1000/60, 2000/60, 4000/30, 6000/60
+    // complete; 2500/30 and 3000/30 die at t15107 / t15058 to the pit squad, 500/30 sticks at #596].
+    walker::with_pause(1500, 30, || walker::with_real_damage_head_hunting(|| walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(1)));
 }
 
 /// The Agent-difficulty sister (real-health-agent-difficulty-16-1b-41-4a): the same walked
@@ -3263,7 +3266,11 @@ fn walk_the_chasers_defeat_completes_the_mission_on_real_damage_agent() {
     // moved and Bond died at t19492 in the last chaser fight (#14 / #15 at 2-4 u) under the
     // 1600/30 stop. Lever: the batch's other green value, a 30-tick stop at tick 3500 [L the
     // 18-run sweep: every 1600/30 + second stop died; 3500/30 and 3400/30 alone complete].
-    walker::with_real_damage_head_hunting(|| walker::with_pause(1500, 45, || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2)));
+    // s/bond-anim-rand (Bond's anim-set draws on the shared stream): 1500/45 went red. Lever:
+    // 3500/30 [L the 8-value sweep on that tree: 3500/30 and 500/30 complete; 1600/30, 1000/45,
+    // 2000/45, 2500/45, 3000/60, 1500/90 die (t3126-t14531, the pocket or the pit squad)].
+    walker::with_real_damage_head_hunting(|| // Stream batch 1126: lever 500/30 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(500, 30, || walk_the_chasers_defeat_completes_the_mission_on_real_damage_at(2)));
 }
 
 /// The 00 Agent sister (real-health-00agent-16-1b-41-4a): the same walked chaser mission on

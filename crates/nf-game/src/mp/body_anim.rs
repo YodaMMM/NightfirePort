@@ -171,6 +171,15 @@ pub struct MpBodyAnim {
     weapon: Option<u8>,
     class: u32,
     next_stamp: u32,
+    /// bond-anim-rand: the shared-stream `Rand_Random` 0x1e36f0 calls this body's set code made
+    /// in single player (`sp`) and the Sim has not yet taken (`take_rand_draws`) — one per
+    /// `AnimSetInit` 0x1c6a48 the set code itself runs (the transition hold's end, 0x192310:34-44 /
+    /// 0x1924c0:34-44 → `PlayerAnimSetInitNormal`/`Crouch` → `AnimSetAppend` 0x1c07b8 →
+    /// `AnimSetInit`:48) and one per `AnimSetUpdate` 0x1c0938 call that finds `GlbAnimList != 1`
+    /// scripts on the set's tag (:213-221). The values are discarded (they only seed `set+0x2c`,
+    /// which nothing reads), so the count is all the stream needs. Never counted for MP bodies
+    /// (draw-only clocks, not the sim's stream).
+    rand_draws: u32,
 }
 
 impl Default for MpBodyAnim {
@@ -182,6 +191,7 @@ impl MpBodyAnim {
         MpBodyAnim {
             layers: Vec::new(), phase: SET_PHASE_INIT, rate: 0.0, aim: [0.0; 2], crouch: false, hold: 0, dead: false,
             slot: -1, debounce: 0, strafe_dir: 0xff, set_walk: 0, set_strafe: 0, weapon: None, class: 0, next_stamp: 1,
+            rand_draws: 0,
         }
     }
 
@@ -189,6 +199,36 @@ impl MpBodyAnim {
     pub fn slot(&self) -> i8 { self.slot }
     /// The strafe direction (`set+0x2f`: 0 none, 1 left, 2 right, 0xff unset).
     pub fn strafe_dir(&self) -> u8 { self.strafe_dir }
+
+    /// bond-anim-rand: the shared-stream draws made since the last call (see `rand_draws`).
+    pub fn take_rand_draws(&mut self) -> u32 { std::mem::take(&mut self.rand_draws) }
+
+    /// The number of playing scripts on the set's tag — what `AnimListBuild(obj, 0x200, set+0x20,
+    /// 0, 1)` leaves in `GlbAnimList` [M 0x1c0fc0 bit 0x200: `script+0x80 == tag`, no fade or
+    /// stop filter]. The walk layer is two scripts (the walk and its synced run, both tagged
+    /// [M 0x1c0938:176-200]).
+    pub fn tagged_scripts(&self) -> usize {
+        self.layers.iter().filter(|l| l.tagged).map(|l| if matches!(l.kind, LayerKind::Walk { .. }) { 2 } else { 1 }).sum()
+    }
+
+    /// bond-anim-rand, SP: `Player_SetWeaponAnim` 0x1a9338:28 → `PlayerAnimSetInit` 0x195b90
+    /// (`AnimSetDeleteAll` + the stance's `PlayerAnimSetInitNormal`/`Crouch` → `AnimSetAppend` →
+    /// `AnimSetInit`, ONE `Rand_Random` [M 0x1c6a48:48]). Every script is deleted, the transition
+    /// included — the hold (`BLData+0x960`) is not touched [M 0x1a9338, 0x195b90: no +0x960 write]
+    /// and keeps counting down with nothing left to stop.
+    pub fn sp_weapon_set(&mut self) {
+        self.rebuild();
+        self.rand_draws += 1;
+    }
+
+    /// bond-anim-rand, SP: `Player_ChangeSubState` 0x190630 into 0 / 8 / 9 from a substate that is
+    /// not the crouch: `AnimSetDeleteAll` + a fresh set, no transition, no hold [M :34-63] (the
+    /// draw is the caller's — the Bond side counts the change). The set's stance is `crouch`.
+    pub fn sp_substate_set(&mut self, crouch: bool) {
+        self.rebuild();
+        self.hold = 0;
+        self.crouch = crouch;
+    }
 
     /// `AnimSetInit` 0x1c6a48 (every script deleted, the slot/dir reset, the distance 0.37).
     fn rebuild(&mut self) {
@@ -261,10 +301,13 @@ impl MpBodyAnim {
             self.class = inp.class;
             self.rebuild();
         } else if self.weapon != Some(inp.weapon) {
-            // Player_SetWeaponAnim 0x1a9338 → PlayerAnimSetInit on every weapon set.
+            // Player_SetWeaponAnim 0x1a9338 → PlayerAnimSetInit on every weapon set. SP: the
+            // rebuild is `sp_weapon_set`, called by the Sim at the game's own SetWeaponAnim point
+            // (view state 3, the tick after the swap) — an id change alone (`Player_WeaponNone`
+            // 0x1a9858, the variant swap's state 8) rebuilds nothing [M].
             self.weapon = Some(inp.weapon);
             self.class = inp.class;
-            if self.hold == 0 { self.rebuild(); }
+            if self.hold == 0 && !inp.sp { self.rebuild(); }
         }
         // SSWalk / SSCrouch: the transition hold.
         if self.hold > 0 {
@@ -273,6 +316,9 @@ impl MpBodyAnim {
             if stopped || self.hold == 1 {
                 self.hold = 0;
                 self.rebuild();
+                // SP: the hold's end runs `PlayerAnimSetInitNormal`/`Crouch` → `AnimSetInit`'s
+                // `Rand_Random` [M 0x192310:34-44, 0x1924c0:34-44, 0x1c6a48:48].
+                if inp.sp { self.rand_draws += 1; }
             }
         }
         if self.hold == 0 { self.set_update(sets, lens, inp.fwd, inp.strafe, inp.sp); }
@@ -297,6 +343,50 @@ impl MpBodyAnim {
         let t = p2.abs().min(FWD_MAX) / FWD_MAX;
         let (new_slot, blend) = if t <= 0.0002 { (0i8, 0.0) } else { (1i8, t) };
         if self.debounce > 0 { self.debounce -= 1; }
+        if sp && new_slot != self.slot && self.debounce == 0 {
+            self.debounce = SLOT_DEBOUNCE;
+            let old = self.slot;
+            self.slot = new_slot;
+            {
+                // SP follows the game's fade rule [M 0x1c0938:139-151]: only a change into or out
+                // of idle fades the tagged scripts, and only those not already fading (flag
+                // 0x400000, set with 0x100000 by this same loop) restart their 8-tick fade.
+                if old == 0 || new_slot == 0 {
+                    for l in self.layers.iter_mut().filter(|l| l.tagged && l.fade >= 0) {
+                        l.fade = -1;
+                        l.clock = BLEND_OUT;
+                        l.blend_len = BLEND_OUT;
+                    }
+                }
+                if new_slot == 0 {
+                    self.append(LayerKind::Idle(set.idle), 1.0, lens, false, true);
+                } else {
+                    if old != 0 {
+                        let w = self.set_walk;
+                        self.layers.retain(|l| l.stamp != w);
+                    }
+                    self.set_walk = self.append(LayerKind::Walk { walk: set.walk, run: set.run, run_weight: 0.0 }, 1.0, lens, true, true);
+                }
+                // The slot change ends in `AnimObjectUpdate(obj)` [M 0x1c0938:202] — one extra
+                // script tick + `AnimFrameResolve` before the count below (a fade-out the change
+                // started is one tick shorter on the count than the per-tick update alone gives).
+                self.script_tick(lens);
+                self.resolve();
+            }
+        }
+        if sp {
+            // The run weight [M :204-212], then the count: `GlbAnimList == 1` resets the walk
+            // distance, anything else draws `Rand_Random` [M :213-221].
+            if self.slot != 0 {
+                let w = self.set_walk;
+                if let Some(l) = self.layers.iter_mut().find(|l| l.stamp == w) {
+                    if let LayerKind::Walk { run_weight, .. } = &mut l.kind { *run_weight = blend; }
+                }
+            }
+            if self.tagged_scripts() == 1 { self.phase = SET_PHASE_INIT; } else { self.rand_draws += 1; }
+            // Single player returns here, before the overlay [M 0x1c0938:222-224].
+            return;
+        }
         if new_slot != self.slot && self.debounce == 0 {
             self.debounce = SLOT_DEBOUNCE;
             let old = self.slot;
@@ -430,6 +520,32 @@ mod tests {
     }
     fn inp(fwd: f32, strafe: f32) -> MpBodyInput {
         MpBodyInput { alive: true, weapon: 2, class: 1, crouch: false, fwd, strafe, aim: None, sp: false }
+    }
+
+    /// bond-anim-rand: the SP set's `Rand_Random` count per tick [M 0x1c0938:139-221] — none
+    /// standing (the idle alone on the tag), one per walking tick (the walk + run), and after a
+    /// stop seven (the walk pair's 8-tick fade, one tick of it taken by the change's own
+    /// `AnimObjectUpdate` :202). A weapon set is one (`AnimSetInit` 0x1c6a48:48).
+    #[test]
+    fn sp_set_draws_per_tick() {
+        let s = sets();
+        let mut a = MpBodyAnim::new();
+        let sp = |fwd: f32| MpBodyInput { alive: true, weapon: 2, class: 999, crouch: false, fwd, strafe: 0.0, aim: None, sp: true };
+        let mut run = |a: &mut MpBodyAnim, fwd: f32, n: usize| -> Vec<u32> {
+            (0..n).map(|_| { a.tick(&s, &lens, &sp(fwd)); a.take_rand_draws() }).collect()
+        };
+        assert_eq!(run(&mut a, 0.0, 10), vec![0; 10]);
+        assert_eq!(run(&mut a, 0.05, 12), vec![1; 12]);
+        let stop = run(&mut a, 0.0, 12);
+        assert_eq!(stop, [vec![1; 7], vec![0; 5]].concat(), "the stop's fade");
+        assert_eq!(a.tagged_scripts(), 1);
+        a.sp_weapon_set();
+        assert_eq!(a.take_rand_draws(), 1);
+        assert_eq!(run(&mut a, 0.0, 5), vec![0; 5], "the fresh set's idle");
+        // An MP body never counts.
+        let mut m = MpBodyAnim::new();
+        for k in 0..30 { m.tick(&s, &lens, &inp(if k > 10 { 0.05 } else { 0.0 }, 0.0)); }
+        assert_eq!(m.take_rand_draws(), 0);
     }
 
     #[test]

@@ -1004,6 +1004,11 @@ pub fn warm_exit_save(sim: &scene::Sim) -> nf_game::player::RamSave {
         .with_difficulty(sim.drones.difficulty)
 }
 
+/// The front-end map's archive (`menu::FRONTEND_LEVEL`, 07000048.bin): the menus' 2D container.
+pub fn is_front_end_archive(archive: &str) -> bool {
+    archive.len() >= 8 && u32::from_str_radix(&archive[..8], 16).is_ok_and(|c| c == menu::FRONTEND_LEVEL)
+}
+
 fn load_impl(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game::player::RamSave>, dev: bool, give: &[u8], mp: bool, mp_settings: Option<nf_game::mp::MpSettings>, difficulty: u32, bonus: u64) -> Result<scene::Scene> {
     load_impl_gc(iso_path, archive, all, save, dev, give, mp, mp_settings, difficulty, bonus, false)
 }
@@ -1073,7 +1078,14 @@ fn load_impl_gc(iso_path: &str, archive: &str, all: bool, save: Option<&nf_game:
     phase_mark("03 level+levelbin parse, skeletons, 07F sequences", t); t = std::time::Instant::now();
     // The level's own sleeve, before any merge lends foreign ones (see the substitution below).
     let own_sleeve = SLEEVES.iter().copied().find(|h| level.by_hash.contains_key(h));
-    merge_weapon_models(&iso, &read, &archive[..8], &mut level)?;
+    // The front-end map (0x07000048) skips the merge: it places no character, no pickup and no
+    // world instance [D 07000048: 0 placements drawn], Bond owns no weapon there and the sim never
+    // ticks under the menus (`fe.is_none()` gate), so no draw ever reads a merged weapon mesh. Its
+    // code sorts after every story archive, so the merge cloned 44 maps from 8 archives
+    // (4.4M triangles, ~1 s and ~1.3 GB peak per front-end load) for nothing.
+    if !is_front_end_archive(archive) {
+        merge_weapon_models(&iso, &read, &archive[..8], &mut level)?;
+    }
     phase_mark("04 weapon-models merge", t); t = std::time::Instant::now();
 
     // The dev view models (folded 190-fix-dev2): each level archive ships only its own weapons'
@@ -4886,7 +4898,10 @@ impl App {
         } else {
             // The page's aux loop [M 0x21c858:338]: stop when the page has no aux, (re)start when
             // the playing code differs from the page's.
-            let aux = menu::aux_movie_for(fe.page_id());
+            // A phase-2 resolve to a real level closes the front end below in this same call: no
+            // page backdrop starts behind a briefing (it opened the list's loop for one frame).
+            let closing = fe.flow.phase2_resolved.is_some_and(|r| r != menu::FRONTEND_LEVEL);
+            let aux = if closing { 0 } else { menu::aux_movie_for(fe.page_id()) };
             // A skipped attract (the Enter skip ends it inside the FrontEnd, not through the
             // finished poll above) leaves the trailer's player here: its 0x50 arm restarts the
             // menu-music pair the same way the natural end does [M 0x20a1f0:34-39].
@@ -8835,6 +8850,16 @@ pub fn mission_movie_glue(fe: &mut menu::FrontEnd, slot: &mut Option<movie::Play
         }
         return true;
     }
+    if fe.flow.movie_pending && fe.flow.movie_code != 0 && fe.flow.get_state() == menu::ST_MAPLOAD {
+        // State 6 has popped (the movie ended or was skipped) and phase 2 has not run yet:
+        // case 6 stops the movie on the pop [M 0x1c98c8:150 psiStopBackgroundMovie]. Without
+        // this the decode-ahead arm below kept the skipped briefing's player (and its audio)
+        // alive, or re-opened the same code, until the level was up.
+        if slot.as_ref().is_some_and(|p| !p.is_looping()) {
+            if let Some(p) = slot.take() { let c = p.code(); p.stop(); eprintln!("movie: stopped {c:08x} (state 6 popped)"); }
+        }
+        return true;
+    }
     if fe.flow.movie_pending {
         // A movie-wrapped load is on its way: the looping page backdrop yields the single
         // player slot to it [M psiStartBackgroundMovie replaces the playing movie].
@@ -9280,6 +9305,9 @@ mod headless_app_harness {
             h.key(KeyCode::ArrowDown);
             let skipped = h.pump(8.0, |a| a.async_load.is_some() && a.fe.is_none());
             assert!(skipped, "ArrowDown did not skip the young briefing (the game's action 0x19 skips at once [M 0x1c98c8:145-149])");
+            // The skip stops the movie with its audio: case 6 calls psiStopBackgroundMovie on the
+            // pop [M 0x1c98c8:150]; the player (decoder + audio stream) is gone before the level runs.
+            assert!(h.app.movie.is_none(), "the skipped briefing's player (and its audio) outlived the skip");
             let loaded = h.pump(20.0, |a| a.level_code == 0x0700_0005 && a.async_load.is_none() && a.fe.is_none());
             assert!(loaded, "the skip never resolved the level load");
 

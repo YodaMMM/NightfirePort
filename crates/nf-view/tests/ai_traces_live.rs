@@ -349,7 +349,9 @@ fn ai_05_truck() {
     // stream's: reverting the ChooseCombatMove option-list fix alone [M 0x150c18:163-164] moves
     // the divergence to 5803, the rest is the later joins' draws. The open item is unchanged:
     // which idle the game plays there and whether it carries root motion.
-    pin(&segs[0], &[(2, 5781, "pos"), (0, 1342, ""), (12, 0, ""), (13, 5508, "")]);
+    // Stream batch 1126: drone 2 matches the WHOLE trace again ("full") - the idle pick moved with the
+    // joined stream's draws and no longer walks him off the spot; the pin takes the gain.
+    pin(&segs[0], &[(2, usize::MAX, "full"), (0, 1342, ""), (12, 0, ""), (13, 5508, "")]);
     for i in 4..=10 { pin(&segs[0], &[(i, 2168, "")]); }
 }
 

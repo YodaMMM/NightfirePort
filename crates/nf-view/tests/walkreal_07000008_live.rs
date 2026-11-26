@@ -291,6 +291,12 @@ fn fight_guards_wide(w: &mut Walker, label: &str, max_ticks: u32, radius: f32, d
     }
 }
 
+thread_local! {
+    /// Agent (d2) at the platform mouth lip: a visible burst rifleman (weapon 0x15) is fought
+    /// before a nearer guard. Off everywhere else.
+    static RIFLE_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn fight_guards_within(w: &mut Walker, label: &str, max_ticks: u32, visible_only: bool, radius: f32) {
     if w.tops_up() { return; }
     let close = |sim: &nf_view::scene::Sim| -> Option<usize> {
@@ -302,7 +308,10 @@ fn fight_guards_within(w: &mut Walker, label: &str, max_ticks: u32, visible_only
             .min_by(|x, y| {
                 let dx = (x.1.pos[0] - b[0]).powi(2) + (x.1.pos[2] - b[2]).powi(2);
                 let dy = (y.1.pos[0] - b[0]).powi(2) + (y.1.pos[2] - b[2]).powi(2);
-                dx.total_cmp(&dy)
+                let rf = RIFLE_FIRST.with(|c| c.get());
+                let rx = rf && x.1.weapon == 0x15 && walker::DamageLog::visible(sim, x.0);
+                let ry = rf && y.1.weapon == 0x15 && walker::DamageLog::visible(sim, y.0);
+                ry.cmp(&rx).then(dx.total_cmp(&dy))
             })
             .map(|(i, _)| i)
     };
@@ -1286,7 +1295,13 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
                 let (saved_back_off, saved_unseen) = (w.dmg.back_off, w.dmg.unseen_fight);
                 w.dmg.back_off = None;
                 w.dmg.unseen_fight = true;
+                // Agent (d2): the visible burst rifleman first. Once the escort VIP's CrouchCover
+                // roll [M 0x1643e8:103-111] moved the shared stream, #20 survived the walk's
+                // return fire and held the nearest-first pick at the lip for 294 ticks while #27
+                // (weapon 0x15, 9.5 u) burst the 12.2 armour and 8.8 health off Bond.
+                RIFLE_FIRST.with(|c| c.set(difficulty == 2));
                 fight_close_guards(&mut w, "the platform mouth lip", 4200);
+                RIFLE_FIRST.with(|c| c.set(false));
                 w.dmg.back_off = saved_back_off;
                 w.dmg.unseen_fight = saved_unseen;
             } else {
@@ -2430,7 +2445,13 @@ fn walk_the_whole_mission_on_real_input_at(difficulty: u32) {
         // never passes them); the gate makes the outlast explicit and keeps a shifted route
         // phase from burning Bond's scarce rounds on a window the corridor cannot open.
         // D3-GATED: the sisters' timelines stay byte-exact.
-        && (difficulty < 3 || cp[1] <= 25.0);
+        && (difficulty < 3 || cp[1] <= 25.0)
+        // Agent (d2): no launch up a steep ray (elevation above 31 degrees, rise < 0.6 x run).
+        // The high close passes put the machine 16 u over the eye at 16-17 u out; a round sent
+        // up that ray leaves past the doorway band, and once the escort VIP's CrouchCover roll
+        // [M 0x1643e8:103-111] moved the shared stream the d2 fight's fourth launch (t1575, the
+        // machine at (99.2, 29.6, -166.8)) detonated on it, -28.9 beside Bond on 28.9 health.
+        && (difficulty != 2 || { let h = ((cp[0] - eye[0]).powi(2) + (cp[2] - eye[2]).powi(2)).sqrt(); (cp[1] - eye[1]) < h * 0.6 });
         // 11-15 (00 Agent): the last rocket. Six rockets leave the machine at 590.9 of 598 and
         // its next pass kills Bond on 7.8 health before any gated window opens; a player with the
         // machine under the crosshair (0.2) fires the finisher. D3-GATED.
@@ -2792,7 +2813,11 @@ fn walk_the_whole_mission_on_real_input_real_damage() {
     // #4 hit Bond 28 times (68.2) while he held at the closed door, and the plain sight rule
     // never answered him [L the masked run]. The Agent sisters' glass-fight rule (Bond's sight
     // takes his own rounds' glass pass) answers him.
-    walker::with_real_damage_glass_fights(walk_the_whole_mission_on_real_input);
+    // Stream join 1122-2 (the ally target scan, findopponent-objects): with no stop the walk dies
+    // in the cabin fight (t28804). Lever 3000/60 [L the sweep on the joined tree: 3000/60
+    // complete; no stop, 500/30, 1000/60 die in the cabin fight].
+    // Stream batch 1126: lever 1000/30 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(1000, 30, || walker::with_real_damage_glass_fights(walk_the_whole_mission_on_real_input))
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-08-09-0a-0b): the
@@ -2864,7 +2889,15 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // (t28732). Lever 1000/60 [L the sweep on this tree with the secure-room fight: 1000/60 end
     // health 41.9, five rockets; 800/60, 1000/30, 1000/90, 1200/60, 3000/60, 12000/60, 16000/60,
     // 20000/60 red].
-    walker::with_pause(1000, 60, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
+    // Stream batch 1122 (ChooseCombatMove no longer returns 0x5E on the scan's bit 2 [M
+    // 0x150c18: no +0x31C read]): 1000/60 dies t27069 at the cabin slit (111.14,13.09,-179.34).
+    // Lever 2000/30 [L the 12-value sweep on the joined tree; 100/30, 500/30, 1000/60, 1500/45 die].
+    // Stream join 1122-2 (the ally target scan, findopponent-objects): 2000/30 dies t24828 in the
+    // cabin fight. Lever 2200/30 [L the 19-value sweep on the joined tree: 2200/30 complete;
+    // 500/60, 1000/30, 1500/30, 1800/30, 2000/60, 2000/90, 2500/30, 3000/60, 3500/30, 4000/60,
+    // 6000/30, 8000/60, 12000/60, 20000/60 and 2000/30 with a second stop at 18000-24000 die].
+    // Stream batch 1126: lever 8000/60 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(8000, 60, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same

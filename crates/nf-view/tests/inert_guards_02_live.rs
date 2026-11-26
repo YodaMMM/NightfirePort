@@ -122,33 +122,39 @@ fn the_guards_wake_from_their_zone_pads_and_take_damage() {
     let si = sim.drones.list.iter().position(|d| d.placement == 447).unwrap();
     // Re-place Bond 5 units off the guard's current position at his own height (the woken guard
     // patrols — aim at the live box), clear of any cover between.
-    let gp = sim.drones.list[si].pos;
-    teleport(&mut sim, [gp[0] + 5.0, gp[1] + 0.2, gp[2]]);
-    let from = [sim.bond.pos[0], sim.bond.pos[1] + 1.5, sim.bond.pos[2]];
     let hp0 = sim.drones.list[si].health;
-    {
-        let data = nf_game::drone::Data {
-            tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
-            world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
-            skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
-            hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
-            surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
-            ai_points: &sim.ai_points,
-        };
-        let boxes = sim.drones.list[si].hit_boxes(&data);
-        let torso = boxes.iter().find(|b| b.part == 4).expect("the torso box");
-        let chest = [torso.m[3][0], torso.m[3][1], torso.m[3][2]];
-        eprintln!("DBG from {:?} chest {:?} seg {:?}", from, chest, sim.world.segment(from, chest));
-        assert!(sim.world.segment(from, chest).is_none(), "the eye→torso ray is blocked — move the shot point");
-        let dv = [chest[0] - from[0], chest[1] - from[1], chest[2] - from[2]];
-        let l = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
-        let dir = [dv[0] / l, dv[1] / l, dv[2] / l];
-        sim.drones.player_bullets.push(nf_game::drone::PlayerBullet {
-            pos: from, dir, speed: 4.0, travelled: 0.0, range: 80.0, damage: 3.5, weapon: 2,
-            first: true, dead: false, bounces: 0, homing: false, target: None, target_copter: false, gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0, from_turret: None,
-        });
+    // Up to five aimed rounds, re-placed on the guard each time: a round flies while he may be
+    // mid-crouch or stepping (on the 1126 joined stream the first one missed his low torso box);
+    // the pin is that a woken guard CAN be hurt.
+    for _shot in 0..5 {
+        let gp = sim.drones.list[si].pos;
+        teleport(&mut sim, [gp[0] + 5.0, gp[1] + 0.2, gp[2]]);
+        let from = [sim.bond.pos[0], sim.bond.pos[1] + 1.5, sim.bond.pos[2]];
+        {
+            let data = nf_game::drone::Data {
+                tables: &sim.tables, props: &sim.props, scripts: &sim.scripts, weapons: &sim.weapons,
+                world: &sim.world, level: sim.level, sequences: &sim.seqs, skins: &sim.skins,
+                skeletons: &sim.skeletons, nav: &sim.nav, covers: &sim.covers, tuning: &sim.tuning,
+                hitboxes: &sim.hitboxes, volumes: &sim.volumes, sfx: sim.sfx.as_ref(), models: &sim.models,
+                surfaces: sim.surfaces.as_ref(), voices: sim.voices.as_deref(), difficulty: sim.drones.difficulty,
+                ai_points: &sim.ai_points,
+            };
+            let boxes = sim.drones.list[si].hit_boxes(&data);
+            let torso = boxes.iter().find(|b| b.part == 4).expect("the torso box");
+            let chest = [torso.m[3][0], torso.m[3][1], torso.m[3][2]];
+            eprintln!("DBG from {:?} chest {:?} seg {:?}", from, chest, sim.world.segment(from, chest));
+            assert!(sim.world.segment(from, chest).is_none(), "the eye→torso ray is blocked — move the shot point");
+            let dv = [chest[0] - from[0], chest[1] - from[1], chest[2] - from[2]];
+            let l = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
+            let dir = [dv[0] / l, dv[1] / l, dv[2] / l];
+            sim.drones.player_bullets.push(nf_game::drone::PlayerBullet {
+                pos: from, dir, speed: 4.0, travelled: 0.0, range: 80.0, damage: 3.5, weapon: 2,
+                first: true, dead: false, bounces: 0, homing: false, target: None, target_copter: false, gravity: false, guided_cam: false, snd: 0, swoosh: None, born: 0, from_turret: None,
+            });
+        }
+        for _ in 0..40 { step(&mut sim, Default::default()); }
+        if sim.drones.list[si].health < hp0 { break; }
     }
-    for _ in 0..40 { step(&mut sim, Default::default()); }
     assert!(sim.drones.list[si].health < hp0,
         "the awake terrace guard took no damage (health {} after the shot) — the invincible-enemy symptom",
         sim.drones.list[si].health);

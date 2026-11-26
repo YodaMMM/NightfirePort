@@ -209,6 +209,11 @@ fn the_05_one_second_gate_holds_then_opens() {
 #[test]
 fn the_0c_voice_5_6_observer_takes_the_alert_without_sight() {
     let mut w = walker::Walker::new(nf_view::load(&iso(), "0700000c.bin", false).expect("load 0700000c"));
+    w.wait(2); // the spawner's pick lands on t1
+    // A quiet start: the 0c spawner's shared-stream pick (placement #333 or #464) put #464 on the floor on the
+    // 1126 joined stream, and from (60.7, 9.7, -146.9) it sees the spawn (range 40 x (2 x 0.66 + 1) [M 0x175af0])
+    // and alerts the level by t83. This fixture pins a calm level, so #464 is taken off the floor.
+    for d in w.scene.sim.as_mut().unwrap().drones.list.iter_mut().filter(|d| d.placement == 464) { d.present = false; d.enabled = false; }
     w.wait_enabled(6000, "level start");
     w.wait(120);
     let (s, o, other) = {

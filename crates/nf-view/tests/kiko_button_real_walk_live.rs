@@ -328,7 +328,11 @@ fn the_07000016_real_walk_reaches_the_kiko_death_button_and_the_cinema_clears_th
         // wheel to an owned firearm (the real player's move, Input only) before every target.
         assert!(w.switch_to_armed("the pit squad"), "the pit squad: an owned firearm is on the wheel");
         w.aim_part_yaw = true; // the part-yaw aim (walker.rs `aim_part_yaw`): the pit squad's leaning AimStandFire heads
-        assert!(w.shoot(i, "the pit squad"), "the pit squad member #{i} dies to Bond's fire");
+        let mut dead = w.shoot(i, "the pit squad");
+        // A long first fight can empty the clip (the far member at 27 u took most of it): a player
+        // takes the fallen members' dropped guns off the pit floor and finishes the squad.
+        if !dead { w.resupply("the pit squad"); dead = w.switch_to_armed("the pit squad") && w.shoot(i, "the pit squad"); }
+        assert!(dead, "the pit squad member #{i} dies to Bond's fire");
     }
     tick_until(&mut w, 600, "the pit squad's deaths raise ch 0xbf [D mux #611]", |s| s.drones.channels.on(0xbf));
 

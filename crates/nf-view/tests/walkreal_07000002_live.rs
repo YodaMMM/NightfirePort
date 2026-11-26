@@ -2160,7 +2160,8 @@ fn walk_the_castle_all_objectives_real_health_agent() {
     // Batch 3 (stream-batch-1121d): 2000/30 died in the bunker ambush (shotgun guard #13 at 4.3 u)
     // and missed the ch-0x19 plate. Lever: 3000/60 [L the 8-value sweep: 250/30, 500/30, 1500/45,
     // 3000/60, 4000/90, 6000/60, 8000/60 complete; 2000/30 does not].
-    walker::with_pause(3000, 60, || {
+    // Stream batch 1126: lever 500/30 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(500, 30, || {
         walk_the_castle_all_objectives_real_health_at(2);
     })
 }
@@ -2216,7 +2217,13 @@ fn walk_the_castle_all_objectives_real_health_00agent() {
     // armour detour (captain #5 and guard #6 at the geisha-1 room). Lever: 2000/30 plus a 45-tick
     // stop at 13500 [L the 32-value sweep: 2000/30 with 13500/45, with 13000/90, or with 14000/45
     // and 43000/30 complete; every single stop 250-8000 and the other second stops do not].
-    walker::with_pauses(&[(2000, 30), (13500, 45)], || {
+    // Stream batch 1122 (the combat move choice without the 0x5E arm, fallback-goal routes pulled
+    // back from the AI boundary, and the other joined guard rules): 2000/30 + 13500/45 died at
+    // the bunker door (-56.58,5.43,1.02) t23560. Lever: the same two stops plus a 60-tick stop at
+    // 20000 [L the sweep: 15 single stops 100-12000 do not; 2000/30 + 13500/45 + 20000/60 completes].
+    // Stream batch 1126: stops 2000/30, 11000/60, 26000/30 [L the stop sweep on the joined tree: the old
+    // 13500/45 + 20000/60 died at the geisha-1 save; 11000/60 then 26000/30 completes].
+    walker::with_pauses(&[(2000, 30), (11000, 60), (26000, 30)], || {
         walk_the_castle_all_objectives_real_health_at(3);
     })
 }

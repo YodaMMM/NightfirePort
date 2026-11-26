@@ -64,6 +64,12 @@ pub struct Gun {
     /// The anim-script toggle (`AnimProcessScriptCmds` 0x1c1b38 case 1) can flip it outside the
     /// draw path — the port does not port that command (no scripted user known); [S] noted.
     pub laser_on: bool,
+    /// bond-anim-rand: view-state-3 entries (`+0xf4 = 3`: `Player_WeaponSelect` 0x1a2cc0:35, case
+    /// 2/0xe's tail 0x1a2e38:268, case 0xc's end :536/:550) whose `Player_SetWeaponAnim` has not
+    /// run yet. The game runs it in case 3 on the NEXT `Player_SetWeaponAnimObj` call [M 0x1a2e38
+    /// case 3:273] — `PlayerAnimSetInit` 0x195b90 → a fresh anim set and its one `Rand_Random`
+    /// [M 0x1c6a48:48]. The Sim drains it after Bond's anim update the following tick.
+    pub weapon_anim_sets: u32,
     /// weapon-handling: the running reload was started by the reload key (branch A — +0xA4 from
     /// frame 0) rather than by the empty-clip auto-reload (branch B — frame 6 for +0x68 & 0x1000).
     pub reload_by_key: bool,
@@ -497,7 +503,7 @@ pub fn reload_ticks(start: u32, reload: u32, flags68: u32, script_len: &impl Fn(
 
 impl Gun {
     /// Bond's start on 07000005 (`Player_InitWeapon`): weapon 2 with 7 in the clip and 41 spare [L].
-    pub fn new(weapon: u8, clip: u32, spare: u32) -> Gun { Gun { weapon, clip, spare, timer: 0.0, pending: 0, held: false, reload_state: 0, reload_ticks: 0, reload_loop_restarted: false, switch_request: weapon, saved_weapon: weapon, prev_weapon: 0, prev_gadget: 0, switch_state: 0, fire_state: false, latch: false, alt_fire_toggle: 0, twin_skip: vec![0i8; 0x72], laser_on: false, reload_by_key: false, refire_blocked: false, dry: false } }
+    pub fn new(weapon: u8, clip: u32, spare: u32) -> Gun { Gun { weapon, clip, spare, timer: 0.0, pending: 0, held: false, reload_state: 0, reload_ticks: 0, reload_loop_restarted: false, switch_request: weapon, saved_weapon: weapon, prev_weapon: 0, prev_gadget: 0, switch_state: 0, fire_state: false, latch: false, alt_fire_toggle: 0, twin_skip: vec![0i8; 0x72], laser_on: false, weapon_anim_sets: 0, reload_by_key: false, refire_blocked: false, dry: false } }
 
     /// One tick with the trigger (action 9) `pressed` (no reload key, gun idle).
     pub fn update(&mut self, pressed: bool, p: GunParams) -> bool { self.update_with(pressed, false, false, p) }

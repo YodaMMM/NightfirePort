@@ -422,6 +422,10 @@ fn alarm_switch_refuses_the_player_use() {
         "no nav route to the alarm switch");
     w.wait(5);
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x61), "the alarm is off before the use");
+    // The pin is the player's use only: take the level's guards off the floor so no alarm runner
+    // reaches #619 during the 260-tick window (on the joined stream one did, and ch 0x61 rose
+    // from the guard's own press, which the game allows).
+    for d in w.scene.sim.as_mut().unwrap().drones.list.iter_mut() { d.present = false; d.enabled = false; }
     // E the switch from its wedge front (the use sphere is 1.0 at head+look [M 0x1a5170]; the
     // switch stands 0.6 off the wedge — in range where the walk settles).
     w.walk_to(Wp::at(-15.65, 0.4, -13.6, Act::Use { use_ticks: 240 }), "E the alarm switch");

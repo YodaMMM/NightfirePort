@@ -65,7 +65,17 @@ fn rescue(w: &mut Walker, enable: u8, rescue_ch: u8) {
         let sim = w.scene.sim.as_ref().unwrap();
         sim.drones.list[gi].captor.expect("captor bound")
     };
-    let shot = w.shoot(captor, "the captor guard");
+    // A bounded shot: 0x4A's captor stands behind glass, and an unbounded shoot (10800 ticks)
+    // flanks Bond round the whole map; on that walk the geisha herself can die, and a dead
+    // hostage is never saved (her Hostage UPDATE no longer runs) [M 0x15cb78:24-36]. 500 ticks
+    // stays under the walker's 540-tick flank trigger and is ample for the exposed 0x49 captor
+    // (2.9 m, killed at once).
+    let shot = w.shoot_bounded(captor, "the captor guard", 500);
+    {
+        let sim = w.scene.sim.as_ref().unwrap();
+        let g = &sim.drones.list[gi];
+        assert!(g.present && g.health > 0.0, "the geisha is alive when her captor falls (state {:#x})", g.state);
+    }
     if !shot {
         // 0x4A's captor stands behind glass the walker's shot cannot open — drive the save through
         // the game's own trigger instead: the Hostage UPDATE saves when the captor's health ≤ 0

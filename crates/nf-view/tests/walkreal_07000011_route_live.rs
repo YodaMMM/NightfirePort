@@ -23,7 +23,9 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 
 #[test]
 fn the_office_floor_route_reaches_the_07000012_exit() {
-    let mut w = Walker::new(nf_view::load(&iso(), "07000011.bin", false).expect("load 07000011"));
+    // Stream batch 1126: lever 1500/60 [L the lever sweep on the joined tree; with no stop a guard bump
+    // walks Bond off connector 1's flights (bottom y 29.48)].
+    let mut w = walker::with_pause(1500, 60, || Walker::new(nf_view::load(&iso(), "07000011.bin", false).expect("load 07000011")));
     {
         let sim = w.scene.sim.as_ref().unwrap();
         assert_eq!(sim.level, 0x0700_0011);

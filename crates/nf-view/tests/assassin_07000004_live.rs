@@ -288,15 +288,22 @@ fn the_release_reads_the_hand_back_bond_and_she_flips_away() {
 fn her_ranged_rounds_cost_what_the_games_do() {
     let iso = iso();
     let mut scene = nf_view::load_with_carry_difficulty(&iso, "07000004.bin", false, None, 1).expect("load 07000004");
-    let hp = 100.0f32;
+    // Per HIT, from the sim's own hit records (`Drones::player_hits`): two of her rounds can land
+    // on the same tick, so a per-tick health delta reads 2 x 1.25 = 2.5 for one tick.
     let (mut ranged, mut sword) = (Vec::new(), Vec::new());
+    let mut seen = scene.sim.as_ref().unwrap().drones.player_hits.len();
     for _ in 0..6000u32 {
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
         let sim = scene.sim.as_mut().unwrap();
         let n = sim.drones.list.iter().find(|d| d.present && d.dtype == 0xf).expect("the assassin [D]");
         assert_eq!(n.weapon, 0x14, "her held weapon is 0x14 [L anim+0x62 / the round's weapon]");
-        let h = sim.drones.health.health;
-        if h < hp { if n.state == kiko::NINJA_SWORD { sword.push(hp - h) } else { ranged.push(hp - h) } }
+        let sword_now = n.state == kiko::NINJA_SWORD;
+        // Inside `DroneFiring_TooClose_Distance` the round costs x TooClose_Damage [the shared
+        // player_hit_damage rule]; the [L] samples were all at 5.0-6.2 u, so a close round is
+        // scaled back to the base cost before the pin.
+        let close = if n.dist < sim.tuning.DroneFiring_TooClose_Distance { sim.tuning.DroneFiring_TooClose_Damage } else { 1.0 };
+        for &(_, _, lost) in &sim.drones.player_hits[seen..] { if sword_now { sword.push(lost) } else { ranged.push(lost / close) } }
+        seen = sim.drones.player_hits.len();
         // Bond stays alive for the whole exchange.
         sim.drones.health.health = 100.0;
         if ranged.len() >= 4 { break; }

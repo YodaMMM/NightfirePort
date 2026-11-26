@@ -1083,7 +1083,8 @@ fn walk_qworm_and_back_at(difficulty: u32) -> Walker {
 /// the real Q-Worm install from the walked south stand, and the walk back to the lobby.
 #[test]
 fn walk_office_floor_qworm_install_and_back() {
-    let w = walk_qworm_and_back();
+    // Stream batch 1126: lever 100/30 [L the lever sweep on the joined tree; no stop stalls at the west corridor sight window].
+    let w = walker::with_pause(100, 30, walk_qworm_and_back);
     assert!(w.scene.sim.as_ref().unwrap().drones.channels.on(0x48), "objective 4's ch 0x48 holds");
 }
 
@@ -1803,7 +1804,8 @@ fn the_corner_crosses_like_the_game() {
 /// phase at the crossing — is the proven one. The leg SET (and the floor readings) is unchanged.
 #[test]
 fn west_doorway_repro() {
-    let mut w = walk_qworm_and_back();
+    // Stream batch 1126: lever 1/45 [L the lever sweep on the joined tree; no stop stalls at the west corridor sight window].
+    let mut w = walker::with_pause(1, 45, walk_qworm_and_back);
     let legs: [([f32; 3], &str); 15] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
         ([-7.5, 1.3, 16.5], "ring: the west hall north"),
@@ -1862,7 +1864,8 @@ fn west_doorway_repro() {
 fn bond_stands_at_the_mouth_bridge_edge() {
     // The main walk's own prologue + ring, bit-identical (the objectives 3-5 chain included —
     // the timeline is the phase-setter for the desk lane's patroller).
-    let mut w = walk_qworm_and_back();
+    // Stream batch 1126: lever 1/45 [L the lever sweep on the joined tree; no stop stalls at the west corridor sight window].
+    let mut w = walker::with_pause(1, 45, walk_qworm_and_back);
     let ring: [([f32; 3], &str); 23] = [
         ([-7.5, 1.3, 14.5], "ring: the security centre's west door"),
         ([-7.5, 1.3, 16.5], "ring: the west hall north"),
@@ -1932,7 +1935,8 @@ fn bond_stands_at_the_mouth_bridge_edge() {
 /// the scoped vs flat floor, and door #4's live sphere.
 #[test]
 fn west_doorway_wedge_dump() {
-    let mut w = load_carry(None);
+    // Stream batch 1126: lever 100/30 [L the lever sweep on the joined tree; no stop stalls at the west corridor sight window].
+    let mut w = walker::with_pause(100, 30, || load_carry(None));
     for (wp, label) in [
         ([-7.5f32, 1.3, 14.5], "a: security west door"),
         ([-7.5, 1.3, 16.5], "b: west hall north"),

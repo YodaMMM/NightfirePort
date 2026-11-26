@@ -11,17 +11,18 @@ use nf_view::scene::Scene;
 
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
-struct Run { scene: Scene, section: i32 }
+struct Run { scene: Scene, section: i32, quiet: bool }
 
 impl Run {
     fn load(level: &str) -> Option<Run> {
         let path = iso()?;
-        Some(Run { scene: nf_view::load(&path, level, false).expect("load"), section: 0 })
+        Some(Run { scene: nf_view::load(&path, level, false).expect("load"), section: 0, quiet: false })
     }
 
     /// One tick; the section jumps it queued.
     fn tick(&mut self) -> Vec<(i32, bool)> {
         let sim = self.scene.sim.as_mut().unwrap();
+        if self.quiet { for d in sim.drones.list.iter_mut().filter(|d| d.team == 1) { d.present = false; d.enabled = false; } }
         sim.drones.iop_section = self.section;
         sim.step_bond(Default::default(), false, false, false);
         let mut got = Vec::new();
@@ -126,6 +127,10 @@ fn the_0a_channel_48_trigger_latches_too() {
 #[test]
 fn the_0c_yard_trigger_and_turbine_zone() {
     let Some(mut r) = Run::load("0700000c.bin") else { eprintln!("NF_ISO not set — skipping"); return };
+    // The volumes and zones are the pin, so the level's enemy guards stay off the floor: the yard
+    // guard's combat entry and the spawn pick at the start (#464 on the 1126 stream sees the spawn
+    // and starts the combat set) would take the attack arm instead.
+    r.quiet = true;
     r.ticks(40);
     assert!(r.ticks(40).is_empty(), "section 0 is in the stealth set");
     r.place([4.99, 13.27, -222.5]);

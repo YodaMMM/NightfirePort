@@ -1671,6 +1671,22 @@ impl CollisionWorld {
         Some(self.straddle(start, &mut Self::ray_portal_hit(from, to)).contains(&need))
     }
 
+    /// `Collide_StraddleCels` 0x1eac98 for a 0x201 ray HITTEST from `start` along `from → to`: the
+    /// reached cels in walk order (the start cel first), the list `AINetwork_BoundsTest` 0x157d80
+    /// walks [M 0x157e50-0x157e70]. `None` when the world has no scope graph.
+    pub fn ray_cels(&self, start: usize, from: V3, to: V3) -> Option<Vec<usize>> {
+        self.scope.as_ref()?;
+        Some(self.straddle(start, &mut Self::ray_portal_hit(from, to)))
+    }
+
+    /// An empty world carrying only a cel graph (unit tests of the cel walks).
+    pub fn empty_with_graph(graph: ScopeGraph) -> CollisionWorld {
+        let n = graph.cells.len();
+        let mut w = Self::empty();
+        w.scope = Some(ScopeData { graph, cells: vec![Vec::new(); n], always: Vec::new() });
+        w
+    }
+
     /// Debug introspection (level-15-ladder-3): the scope graph's cell boxes and room flags, so a
     /// test can ask which cel boxes contain a point without reaching into the private `ScopeData`.
     pub fn debug_scope_cells(&self) -> Vec<([f32; 3], [f32; 3], bool)> {

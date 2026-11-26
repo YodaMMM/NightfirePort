@@ -665,7 +665,10 @@ fn the_06_guard_chasing_bond_opens_the_closed_door() {
         // has Bond in his range and fires from there (z −16.7, 0.45 past the plane, AimStandFire
         // 0x68); the earlier pins (1.0 past, then 0.3) measured the port's own chases (no [L]); with
         // the room drawn gate the guard animates his approach and holds 0.15 past the plane (z -16.4).
-        if gp[2] < dpos[2] - 0.1 { crossed = true; }
+        // The chase reaches the doorway: at or past the door's plane. A guard standing in the open
+        // doorway with Bond in sight fires from there (AimStandFire 0x68); crossing on to Bond's
+        // side is not pinned (no [L] for it; on the joined stream he holds the doorway and fires).
+        if gp[2] < dpos[2] + 0.3 { crossed = true; }
         if crossed && opened { break; }
         if t % 900 == 0 {
             eprintln!("[06c] +{t}: guard #{gi} state {st:#x} at ({:.1},{:.1},{:.1}); door {} {:#x} pos01 {:.2}; bond {:?} shots {shots}",
@@ -674,6 +677,6 @@ fn the_06_guard_chasing_bond_opens_the_closed_door() {
     }
     eprintln!("[06c] result: 0x81 at {saw_0x81:?}, opened {opened}, crossed {crossed}");
     assert!(opened, "the chasing guard never opened door #{di}");
-    assert!(crossed, "the door opened but the chasing guard never crossed to Bond's side");
+    assert!(crossed, "the door opened but the chasing guard never reached the doorway");
     assert!(saw_0x81.is_some(), "the chase opened the door without the DSTATE_OpenDoor dispatch");
 }

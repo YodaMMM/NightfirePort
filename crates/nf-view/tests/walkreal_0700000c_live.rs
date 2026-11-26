@@ -485,7 +485,8 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage() {
                 // Batch 3 (stream batch 1121d): 3000/60 died t10510 on the west ledge (#20/#39 rifle
                 // rounds); lever 2000/60 [L the 8-value sweep: 2000/60, 2500/90, 4000/90, 1500/45,
                 // 6000/60, 8000/60 complete; 1000/60, 3000/200 die].
-                walker::walker::with_pause(2000, 60, || walker::walker::with_real_damage(|| walker::with_strip_p2k_shot(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1))))
+                walker::// Stream batch 1126: lever 1000/30 [L the lever sweep on the joined tree; the previous lever died].
+                walker::with_pause(1000, 30, || walker::walker::with_real_damage(|| walker::with_strip_p2k_shot(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(1))))
             })
         })
     });
@@ -536,7 +537,12 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
     // drone #1's 34.0 at 6.1 u, then #13's rifle. Lever 2000/60 [L the 8-value sweep: 2000/60,
     // 6000/60, 8000/60 complete; 1000/60, 1500/45 wedge on the deck south, 2500/90, 3000/60,
     // 4000/90 die].
-    walker::walker::with_pause(2000, 60, || walker::with_yard_aimed_stands(|| {
+    // Stream batch 1122 (ChooseCombatMove no longer returns 0x5E on the scan's bit 2 [M
+    // 0x150c18: no +0x31C read]): 2000/60 wedges on the deck south (51.17,1.73,-162.12). Lever
+    // 5000/60 [L the 12-value sweep: 5000/60, 7000/60, 10000/60 complete; 1000/60, 1500/45,
+    // 2000/30, 2000/60, 2600/45, 3000/60, 4000/45, 6000/60, 8000/60 wedge or die].
+    walker::// Stream batch 1126: lever 1500/60 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(1500, 60, || walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(2))
     }));
 }
@@ -551,7 +557,8 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_00agent()
     // 100-4100 ticks x 30-200: only 600/90 completes; most die at the display ground t2982-4798,
     // the rest at the warehouse plates or the west ledge, and 150/60, 300/60, 400/30, 500/30,
     // 1000/60, 1000/200, 1100/45, 2400/60 wedge on the deck south].
-    walker::walker::with_pause(600, 90, || walker::with_yard_aimed_stands(|| {
+    walker::// Stream batch 1126: lever 700/120 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(700, 120, || walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(3))
     }));
 }

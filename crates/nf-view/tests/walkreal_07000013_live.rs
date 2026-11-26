@@ -1553,7 +1553,8 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out() {
     // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 30/90/400/700/1100 passed.
     walker::set_post_intro_wait(30);
     let iso = iso();
-    walk_the_warm_chain(&iso, false, 3);
+    // Stream batch 1126: lever 500/30 [L the lever sweep on the joined tree; no stop misses the door's open window].
+    walker::with_pause(500, 30, || walk_the_warm_chain(&iso, false, 3));
 }
 
 /// The same chain on REAL damage (level-13-chain-difficulty): no health top-up for any walker
@@ -1710,7 +1711,8 @@ fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_agent() {
 #[test]
 fn walk_the_warm_chain_to_the_front_entrance_and_out_real_damage_operative() {
     let iso = iso();
-    walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 1));
+    // Stream batch 1126: lever 500/30 [L the lever sweep on the joined tree; no stop dies].
+    walker::with_pause(500, 30, || walker::with_real_damage(|| walk_the_warm_chain(&iso, true, 1)));
 }
 
 /// walk-13-flaky: the d3 walk's route flags must not reach the sister walks that libtest runs

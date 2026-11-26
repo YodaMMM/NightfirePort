@@ -129,7 +129,9 @@ fn the_west_office_civilian_spawns_on_his_plate_and_walks_his_gait_while_drawn()
     assert!(!w.scene.sim.as_ref().unwrap().drones.channels.on(0x84), "ch 0x84 is still off before the plate");
     assert!(!w.scene.sim.as_ref().unwrap().drones.list[gi].present, "#695 is still held before the plate");
     // The stand that phases the spawn draw onto #695 (see the header), then plate #713.
-    w.wait(3);
+    // stream-batch-1126 re-time: 3 -> 17 [L the 0-50 stand grid on the joined tree: 17 and 20 draw #695;
+    // the rest draw #690 / #694 / #696].
+    w.wait(17);
     w.walk_to(Wp::new(-16.6, 0.4, 17.4).r(0.6), "the west offices' north corridor (plate #713)");
     w.wait(30);
     {

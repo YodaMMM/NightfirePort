@@ -42,6 +42,11 @@ fn iso() -> String { std::env::var("NF_ISO").expect("NF_ISO") }
 /// the farthest point reached).
 fn walk(lv: &str, skin: u32, start: [f32; 2]) -> (usize, f32, [f32; 3]) {
     let mut w = nf_view::load(&iso(), &format!("{lv}.bin"), false).map(walker::Walker::new).expect("load");
+    w.wait(2); // the spawner's pick lands on t1
+    // A quiet start: the 0c spawner's shared-stream pick (placement #333 or #464) put #464 on the floor on the
+    // 1126 joined stream, and from (60.7, 9.7, -146.9) it sees the spawn (range 40 x (2 x 0.66 + 1) [M 0x175af0])
+    // and alerts the level by t83. This fixture pins a calm level, so #464 is taken off the floor.
+    for d in w.scene.sim.as_mut().unwrap().drones.list.iter_mut().filter(|d| d.placement == 464 && lv == "0700000c") { d.present = false; d.enabled = false; }
     if !w.wait_enabled(6000, "level start") { panic!("{lv}: never enabled"); }
     w.wait(120); // the level's first second settles (spawners, scripts) — the sweep's own settle
     let di = w.scene.sim.as_ref().unwrap().drones.list.iter().position(|d| {

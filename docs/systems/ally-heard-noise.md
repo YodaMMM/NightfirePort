@@ -15,21 +15,29 @@ CombatNoSight 0x5c every tick. This document is the game's rule set; the port fo
   the PlrStat/dead/in-vehicle gates) sits behind `if (*(char *)(drone + 0x44) != 2)`
   [M 0x1424e0:101-121]. A team-2 drone falls through to the object walks:
   - a walk of the control objects for class 0x3b whose short `+0xf4` is in (0,4) with the
-    direction pitch in [−0.5235988, +0.17453294] [M 0x1424e0:124-146] — *not ported*: the port
-    has no per-object class model for that kind; the gondola repro never involves it;
+    direction pitch in [−0.5235988, +0.17453294] [M 0x1424e0:124-146]: no range, no sight
+    test, no budget; the first hit is the opponent and the function returns. Class 0x3b is the
+    helicopter alone (`Copter_Create` 0x17d340:62 is the ELF's only store of it). On the disc
+    only 07000008 has both a team-2 drone and a copter: once ch 5 opens the Hind's flight, the
+    ally takes it whenever its pitch from her sits in the band. Ported (`opp_copter`, keyed by
+    the copter's placement);
   - re-validation of the current opponent [M 0x1424e0:148-190]: `NDrone2_CanSeeObject(…, 5, 0)`
     against `+0x170`; a drone-class opponent additionally re-checks the alive filter
     (+0x4f8 & 0x600 == 0, & 0x100, health +0xac > 0, obj class ≠ 0x11, +0xfe & 1 == 0)
-    [M 0x1424e0:155-166]; fail → `SetOpponent(0)` and the scan;
+    [M 0x1424e0:155-166], a class-0x3b one drops once `+0xf4 > 3` [M :176-177]; fail →
+    `SetOpponent(0)` and the scan;
   - the drone-list scan [M 0x1424e0:210-268]: from the rotating cursor `+0x2c0` (start = the
     node after it), skipping self and the current opponent's node, the first node whose drone
     is team 1 (`+0x44 == 1`), passes the same alive filter, and is within the squared range —
     800² (640000.0) when there was no opponent to re-validate, `+0x1a0²` (the engage range)
     when there was [M 0x1424e0:191-209, 251-255] — and whose `NDrone2_CanSeeObject(…, 5, 0)`
-    passes, wins `SetOpponent`. ONE candidate per tick reaches the LOS check: the per-frame
-    sight counter `DAT_00299092` (bumped by every `CanSeeObjectFrom` LOS call
-    [M 0x176f18:53]) against the value captured at FindOpponent's entry stops the walk
-    [M 0x1424e0:259-262]; the cursor remembers where it stopped.
+    passes, wins `SetOpponent`. The range is the engage range only when a held opponent
+    SURVIVED re-validation (a dropped one leaves 800²), and only a surviving opponent's node is
+    skipped. The per-frame sight counter `DAT_00299092` (bumped by every `CanSeeObjectFrom`
+    LOS call [M 0x176f18:68/:94]) is compared at EVERY visited node with the value captured at
+    FindOpponent's ENTRY [M disasm 0x142554, 0x143144-0x14314c], so once any probe ran in the
+    call (the held re-validation included) the walk stops at the node it is on. The walk does
+    not wrap: reaching the list's end parks the cursor at the head [M :245-247].
 
 `NDrone2_CanSeeObject(drone, obj, 5, 0)` 0x1785e0 → `DroneVision_CanSeeObjectFrom`
 0x176f18: for class-2/3 targets the point is `DroneFunc_GetBonePos(obj, 5)` (the head bone)
@@ -130,8 +138,12 @@ anim 0x21 + timer C = 60 ticks [M :15-28]; UPDATE and TIMER_C return to Attack 0
 - `look_for_opponent` (the `EnemyLookForOpponent` fold) lets a team-2 drone with a visible
   drone opponent sight-enter Attack (prop 0x3c, seen, the 0x20 alert-bit gate) and keeps
   refusing team 2 without one and team 3 (the 09/0a exception is not ported — existing gap).
-- Not ported (documented gaps): FindOpponent's class-0x3b control-object arm (no object-class
-  model); the 0x4f8 & 0x800 gate; MoveToObject routed at the drone opponent (the port's
+- The close probe [M 0x175af0:24-30] runs for team 2 too, at the drone's own opponent (a
+  drone's head, or the copter's obj+0x30 with its own shapes off the ray): under 2.0 with a
+  sight range a clear ray is visibility 1.0 and spends one budget probe.
+- Not ported (documented gaps): the 0x4f8 & 0x800 gate; a drone round striking the copter's
+  parts (the port's copter hit chains take Bond's rounds only, so the ally's shots at the Hind
+  do it no damage); MoveToObject routed at the drone opponent (the port's
   combat route stays Bond-node-keyed — a stationary ally at the gondola mouth never walks it;
   the guards' own chase is untouched).
 

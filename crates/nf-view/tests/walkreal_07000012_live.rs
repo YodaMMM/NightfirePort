@@ -202,6 +202,9 @@ fn walk_spawn_to_the_shaft_exit() {
 /// own cover law, not a cheat: no health, armour, ammo or position writes.
 #[test]
 fn walk_spawn_to_the_shaft_exit_real_damage() {
+    // bond-anim-rand: Bond's anim-set draws shift the stream; a 30-tick stand after the intro
+    // re-rolls this walk green (of 30/200/400/700 swept, 30 and 200 pass).
+    walker::set_post_intro_wait(30);
     walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(walk_spawn_to_the_shaft_exit))
 }

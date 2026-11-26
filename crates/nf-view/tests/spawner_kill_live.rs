@@ -511,7 +511,13 @@ fn tower2_stairwell_the_kill_channel_keeps_the_drawn_guard() {
     // 07000005 tests use). The freeze clears the guard's enabled (obj+0xF0 |= 0x10|0x20
     // [M 0x149dd0:8-15]), so he is no longer drawn — exactly the game's undrawn arm.
     scene.sim.as_mut().unwrap().drones.npc_enabled = true;
-    scene.sim.as_mut().unwrap().bond.yaw = std::f32::consts::PI; // face away from the guard
+    // Bond leaves for the spawn step's spot (far, facing away): the guard is out of view whatever
+    // way his sidestep dodge rolls (a step toward Bond kept him inside the frustum's slack at 1 unit).
+    {
+        let sim = scene.sim.as_mut().unwrap();
+        sim.bond.pos = [-30.0, 48.0, 40.0];
+        sim.bond.yaw = 0.0;
+    }
     let mut removed = false;
     for _ in 0..40u32 {
         scene.sim.as_mut().unwrap().step_bond(Default::default(), false, false, false);
