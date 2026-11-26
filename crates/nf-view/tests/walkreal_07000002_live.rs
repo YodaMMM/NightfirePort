@@ -646,7 +646,8 @@ fn walk_the_castle_all_objectives_real_health() {
     // s/bond-hitboxes-2 (the rounds test Bond's 16 body boxes): the no-stop walk never crossed the
     // doorway sensor (ch 0x81). Lever: 2000/30 [L the 4-value sweep: 2000/30 and 3000/60 complete;
     // 1000/60 does not].
-    walker::with_pause(2000, 30, || walk_the_castle_all_objectives_real_health_at(1))
+    // Sight scope fix 1126: lever 1/45 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(1, 45, || walk_the_castle_all_objectives_real_health_at(1))
 }
 
 /// The walk body at `difficulty` (1 Operative = the plain load's replay parity; 2 Agent rides the
@@ -2223,7 +2224,8 @@ fn walk_the_castle_all_objectives_real_health_00agent() {
     // 20000 [L the sweep: 15 single stops 100-12000 do not; 2000/30 + 13500/45 + 20000/60 completes].
     // Stream batch 1126: stops 2000/30, 11000/60, 26000/30 [L the stop sweep on the joined tree: the old
     // 13500/45 + 20000/60 died at the geisha-1 save; 11000/60 then 26000/30 completes].
-    walker::with_pauses(&[(2000, 30), (11000, 60), (26000, 30)], || {
+    // Sight scope fix 1126: third stop 26000/30 -> 22000/30 [L the stop sweep; 26000/30 died].
+    walker::with_pauses(&[(2000, 30), (11000, 60), (22000, 30)], || {
         walk_the_castle_all_objectives_real_health_at(3);
     })
 }

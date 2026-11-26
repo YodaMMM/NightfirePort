@@ -12956,7 +12956,12 @@ impl Drone {
         };
         if !cels_ok { return (false, false); }
         let (a, b) = if bones.is_some() { (from, eye) } else { (eye, from) };
-        (d.world.line_of_sight_scoped(player.cel, a, b, crate::world::LOS_GUARD_VISION) && !body(a, b), true)
+        // The scope is the TARGET's own linked cel, obj+0x20 [M 0x176f18:52 `iStack_60 = *(target +
+        // 0x20)`, passed to Collide_LineOfSight at :70] = `Player::obj_cel` (the movement relink), not
+        // the room lookup `Player::cel`: at 0x0700000c's spawn the two differ (relinked 91, room 212) and
+        // the room scope let spawner pick #464 see Bond through the wall the game's scope tests [L PCSX2
+        // 11-26: the game's #464 never engages from that spawn]. A snapshot without obj_cel keeps cel.
+        (d.world.line_of_sight_scoped(player.obj_cel.or(player.cel), a, b, crate::world::LOS_GUARD_VISION) && !body(a, b), true)
     }
 
     /// The drone's `obj+0x20` relink (see `obj_cel`): the first call links by `build_FindCel`

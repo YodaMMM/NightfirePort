@@ -542,7 +542,8 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_agent() {
     // 5000/60 [L the 12-value sweep: 5000/60, 7000/60, 10000/60 complete; 1000/60, 1500/45,
     // 2000/30, 2000/60, 2600/45, 3000/60, 4000/45, 6000/60, 8000/60 wedge or die].
     walker::// Stream batch 1126: lever 1500/60 [L the lever sweep on the joined tree; the previous lever died].
-    walker::with_pause(1500, 60, || walker::with_yard_aimed_stands(|| {
+    // Sight scope fix 1126: lever 5000/60 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(5000, 60, || walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(2))
     }));
 }
@@ -558,7 +559,8 @@ fn walk_the_whole_mission_from_the_start_to_the_0d_handoff_real_damage_00agent()
     // the rest at the warehouse plates or the west ledge, and 150/60, 300/60, 400/30, 500/30,
     // 1000/60, 1000/200, 1100/45, 2400/60 wedge on the deck south].
     walker::// Stream batch 1126: lever 700/120 [L the lever sweep on the joined tree; the previous lever died].
-    walker::with_pause(700, 120, || walker::with_yard_aimed_stands(|| {
+    // Sight scope fix 1126: lever 5000/60 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(5000, 60, || walker::with_yard_aimed_stands(|| {
         walker::walker::with_real_damage(|| walk_the_whole_mission_from_the_start_to_the_0d_handoff_at(3))
     }));
 }

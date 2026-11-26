@@ -128,8 +128,7 @@ fn the_0a_channel_48_trigger_latches_too() {
 fn the_0c_yard_trigger_and_turbine_zone() {
     let Some(mut r) = Run::load("0700000c.bin") else { eprintln!("NF_ISO not set — skipping"); return };
     // The volumes and zones are the pin, so the level's enemy guards stay off the floor: the yard
-    // guard's combat entry and the spawn pick at the start (#464 on the 1126 stream sees the spawn
-    // and starts the combat set) would take the attack arm instead.
+    // guard's combat entry would take the attack arm instead.
     r.quiet = true;
     r.ticks(40);
     assert!(r.ticks(40).is_empty(), "section 0 is in the stealth set");

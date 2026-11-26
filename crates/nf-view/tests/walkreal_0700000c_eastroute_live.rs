@@ -56,7 +56,8 @@ fn the_ground_route_crosses_to_the_east_side() {
     // "the ledge to the arc" leg overshoots the band's east edge into the measured fall (y
     // 2.01 at (8.99,-222.09), +114 ticks [L this branch's run]). The post-ride mid-ledge stops
     // are that same measured lever, so this test opts in like its real-damage sister.
-    let mut w = walker::with_strip_rd_post_ride(|| walker::with_strip_p2k_shot(|| walk_spawn_to_the_band(&iso)));
+    // Sight scope fix 1126: lever 100/30 [L the lever sweep on the joined tree; no stop stalls at the west ledge diagonal].
+    let mut w = walker::walker::with_pause(100, 30, || walker::with_strip_rd_post_ride(|| walker::with_strip_p2k_shot(|| walk_spawn_to_the_band(&iso))));
     // Start: the band west end (the whole walk's leg-10 spot, floor 10.34 [D probe door4]) -
     // REACHED by the game's own route on real input: the shared prologue replays the main
     // walk's legs 1-9c verbatim (spawn -> the laser hinge burn -> the vent drop -> the

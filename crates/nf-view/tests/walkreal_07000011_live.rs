@@ -931,7 +931,8 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_00agent() {
     // intro re-rolls it green: of the stands 30/90/200/400/700/1100 swept, 90/200 passed.
     walker::set_post_intro_wait(90);
     // Stream batch 1126: lever 1/90 [L the lever sweep on the joined tree; no stop dies t603].
-    walker::with_pause(1, 90, || walker::with_real_damage_head_hunting(||
+    // Sight scope fix 1126: lever 100/30 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(100, 30, || walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
                 walk_spawn_to_the_lower_floor_load_point_at(3)))))

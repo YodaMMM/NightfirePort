@@ -10,8 +10,8 @@ use nf_game::music::Cmd;
 fn iso() -> Option<String> { std::env::var("NF_ISO").ok() }
 
 // The updaters are fed their events directly (`engage`, `set_channel`), so the level's enemy guards
-// are taken off the floor every tick: a spawner's shared-stream pick can put a guard in sight of the
-// spawn (0700000c's #464 on the 1126 joined stream) and start the combat music before the pin.
+// are taken off the floor every tick, so a guard's own combat entry never starts the combat set before
+// the pin (the updaters, not the guards, are under test).
 fn step(sim: &mut nf_view::scene::Sim) {
     for d in sim.drones.list.iter_mut().filter(|d| d.team == 1) { d.present = false; d.enabled = false; }
     sim.step_bond(Default::default(), false, false, false);

@@ -2817,7 +2817,8 @@ fn walk_the_whole_mission_on_real_input_real_damage() {
     // in the cabin fight (t28804). Lever 3000/60 [L the sweep on the joined tree: 3000/60
     // complete; no stop, 500/30, 1000/60 die in the cabin fight].
     // Stream batch 1126: lever 1000/30 [L the lever sweep on the joined tree; the previous lever died].
-    walker::with_pause(1000, 30, || walker::with_real_damage_glass_fights(walk_the_whole_mission_on_real_input))
+    // Sight scope fix 1126: lever 1/45 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(1, 45, || walker::with_real_damage_glass_fights(walk_the_whole_mission_on_real_input))
 }
 
 /// Agent-difficulty sister of `..._real_damage` (real-health-agent-difficulty-08-09-0a-0b): the
@@ -2897,7 +2898,8 @@ fn walk_the_whole_mission_on_real_input_real_damage_agent() {
     // 500/60, 1000/30, 1500/30, 1800/30, 2000/60, 2000/90, 2500/30, 3000/60, 3500/30, 4000/60,
     // 6000/30, 8000/60, 12000/60, 20000/60 and 2000/30 with a second stop at 18000-24000 die].
     // Stream batch 1126: lever 8000/60 [L the lever sweep on the joined tree; the previous lever died].
-    walker::with_pause(8000, 60, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
+    // Sight scope fix 1126: lever 1/45 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(1, 45, || walker::with_real_damage_glass_fights(|| walk_the_whole_mission_on_real_input_at(2)))
 }
 
 /// 00 Agent-difficulty sister of `..._real_damage` (real-health-00agent-08-09-0a-0b): the same

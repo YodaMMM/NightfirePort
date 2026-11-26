@@ -4052,7 +4052,8 @@ fn the_exit_fade_starts_on_the_exit_tick_runs_the_games_300_frames_then_the_leve
     // 500/60 ended in the restart exit. Lever: 1000/60 [L the 8-value sweep: 100/30, 1000/60,
     // 1500/45, 2000/30, 3000/60, 6000/60 complete; 4000/90 does not].
     // Stream batch 1126: lever 1/45 [L the lever sweep on the joined tree; the previous lever died].
-    let mut w = walker::with_pause(1, 45, || walk_to_the_exit(&iso, true));
+    let mut w = // Sight scope fix 1126: lever 100/30 [L the lever sweep on the joined tree; the previous lever died].
+    walker::with_pause(100, 30, || walk_to_the_exit(&iso, true));
     // The exit tick: the hold stands with the full count, the fade level is 0, the request rides.
     {
         let sim = w.scene.sim.as_ref().unwrap();

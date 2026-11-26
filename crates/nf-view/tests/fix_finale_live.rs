@@ -83,7 +83,8 @@ fn carry(on: &[u32]) -> RamSave {
 #[test]
 fn the_07000016_kiko_death_button_defeat_completes_the_final_mission() {
     let iso = iso();
-    let mut w = Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).expect("load 07000016"));
+    // Sight scope fix 1126: lever 750/60 [L the lever sweep on the joined tree; no stop, pit squad #14 outlives the fight].
+    let mut w = walker::with_pause(750, 60, || Walker::new(nf_view::load_with_carry(&iso, "07000016.bin", false, Some(&carry(&[0x47, 0x48, 0x4a, 0x54, 0xce, 0x4b]))).expect("load 07000016")));
     w.wait_enabled(3000, "Bond is free after the intro");
     {
         let sim = w.scene.sim.as_mut().unwrap();
