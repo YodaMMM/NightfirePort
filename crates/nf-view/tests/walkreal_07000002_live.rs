@@ -2225,7 +2225,8 @@ fn walk_the_castle_all_objectives_real_health_00agent() {
     // Stream batch 1126: stops 2000/30, 11000/60, 26000/30 [L the stop sweep on the joined tree: the old
     // 13500/45 + 20000/60 died at the geisha-1 save; 11000/60 then 26000/30 completes].
     // Sight scope fix 1126: third stop 26000/30 -> 22000/30 [L the stop sweep; 26000/30 died].
-    walker::with_pauses(&[(2000, 30), (11000, 60), (22000, 30)], || {
+    // Nav target cel 1126: stops 2000/60, 11000/60, 20000/30 [L the stop sweep on the nav-cel tree].
+    walker::with_pauses(&[(2000, 60), (11000, 60), (20000, 30)], || {
         walk_the_castle_all_objectives_real_health_at(3);
     })
 }

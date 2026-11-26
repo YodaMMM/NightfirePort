@@ -829,7 +829,8 @@ fn walk_spawn_to_the_lower_floor_load_point_at(difficulty: u32) {
 /// The plain Operative walk (the topped-up allowance; the load is the replay-parity path).
 #[test]
 fn walk_spawn_to_the_lower_floor_load_point() {
-    walk_spawn_to_the_lower_floor_load_point_at(1)
+    // Nav target cel 1126: lever 250/30 [L the lever sweep on the nav-cel tree; no stop stalls].
+    walker::with_pause(250, 30, || walk_spawn_to_the_lower_floor_load_point_at(1))
 }
 
 /// Real damage, Operative: the whole walked chain (07000011 spawn → the stairwell descent → the
@@ -880,7 +881,9 @@ fn walk_spawn_to_the_lower_floor_load_point_real_damage_agent() {
     // the armour take. A 90-tick stand after the intro re-rolls the fight [L the 8-value sweep:
     // 1/60, 1/90, 100/60, 1/400 complete; 1/30, 50/30 die t41498, 1/200 misses the 545 E, 1/700 wedges].
     // Stream batch 1126: lever 1/45 [L the lever sweep on the joined tree; the previous lever died].
-    walker::with_pause(1, 45, || walker::with_real_damage_head_hunting(||
+    // Nav target cel 1126: stops 1/45 + 1500/90 [L the two-stop sweep; one stop stalls at the top-flight east door
+    // or misses the armour-ring take].
+    walker::with_pauses(&[(1, 45), (1500, 90)], || walker::with_real_damage_head_hunting(||
         walker::with_real_damage_unseen_fights(||
             walker::with_real_damage(||
                 walk_spawn_to_the_lower_floor_load_point_at(2)))))

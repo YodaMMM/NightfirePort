@@ -21931,7 +21931,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             self.target.pos = player.pos;
             self.target.stamp = frame;
             self.target.nodes = d.nav.paths.iter().enumerate().map(|(pi, p)| {
-                if p.kind & 0xd == 0 { d.nav.target_nodes_in(d.world, pi, player.pos, 0.0, player.cel) } else { Default::default() }
+                // The target CelPos carries the target's own obj+0x20 [M AINetwork_SetupRouteToObject
+                // 0x158948:69-85, `*(target + 0x20)` into the CelPos that NodesForPosition searches].
+                if p.kind & 0xd == 0 { d.nav.target_nodes_in(d.world, pi, player.pos, 0.0, player.obj_cel.or(player.cel)) } else { Default::default() }
             }).collect();
         }
         // frame-cost-1122: both per-link tables are zeroed in place (the same all-zero shape the
