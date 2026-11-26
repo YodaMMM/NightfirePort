@@ -19925,7 +19925,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
             // game takes hidden pickups: the AR drop's invisible 0x1B grenade pile (`DroneWeap_DropWeapon`
             // 0x17a2a0 creates it with obj+0xF0 |= 0x10) is collected walking over the drop. The state-2
             // wait above still gates the respawn-hidden pickups (0x10 is set WITH state 2 there).
-            if alive && !self.mp_shared_pickups && p.touches(d.world, player.cel, player.pos, player.sph) {
+            // The take ray's cel is the player's own obj+0x20 [M 0x18e148:211-213 `*(*piVar9 + 0x20)`],
+            // the movement relink (`obj_cel`), not the room lookup.
+            if alive && !self.mp_shared_pickups && p.touches(d.world, player.obj_cel.or(player.cel), player.pos, player.sph) {
                 self.take_pickup(d, k, frame, false);
                 continue;
             }
@@ -23598,9 +23600,9 @@ fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
                     self.lost_latch = true;
                     self.sight_latch = false;
                     // `*(obj+0xc)+0x20 == player+0x20`: the drone stands in Bond's cel [M 0x13f550:41;
-                    // obj+0x20 = the cel, docs/fields/obj-tag.md:19]. The drone's cel is the world's
-                    // containing cell for its position [S stand-in: the port does not relink drones].
-                    let same_cel = d.world.find_cel(dr.pos) == player.cel;
+                    // obj+0x20 = the cel, docs/fields/obj-tag.md:19]: both linked cels, the drone's
+                    // relinked `obj_cel` and Bond's `obj_cel` (the room lookup only when unlinked).
+                    let same_cel = dr.obj_cel.or_else(|| d.world.find_cel(dr.pos)) == player.obj_cel.or(player.cel);
                     dr.lost_sight_talk(d.level, same_cel, rng);
                 }
             }

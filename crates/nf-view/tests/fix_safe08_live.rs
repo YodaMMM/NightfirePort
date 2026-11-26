@@ -515,5 +515,9 @@ fn the_safe_pickups_take_after_the_safe_opens() {
     let rocket = sim.drones.pickups.iter().enumerate()
         .find(|(_, p)| !p.gone && p.weapon == 0x2c && p.kind == 0
             && (p.centre()[0] - 162.59).abs() < 0.3 && (p.centre()[2] + 116.78).abs() < 0.3);
-    assert!(rocket.is_some(), "the script-spawned rocket rests at the safe's lower shelf [D 0x060009E2 s1 keys]");
+    // With the take ray scoped by Bond's linked cel (obj+0x20, as 0x18e148:211-213 passes it) the
+    // shell no longer blocks it and the rocket is taken from the doorway with the briefcase, as the note
+    // above expected of the game; either way it was spawned at the shelf.
+    let rocket_taken = sim.drones.taken.iter().any(|(_, t)| matches!(t, nf_game::pickup::Taken::Weapon { weapon: 0x2c }));
+    assert!(rocket.is_some() || rocket_taken, "the script-spawned rocket rests at the safe's lower shelf or was taken from it [D 0x060009E2 s1 keys]");
 }
