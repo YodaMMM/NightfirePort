@@ -971,6 +971,21 @@ fn winding_plane(t: &[V3; 3]) -> [f32; 4] {
     [n[0], n[1], n[2], -dot(n, t[0])]
 }
 
+/// The identity matrix a static cel with the `Ident` flag uses (see [`cel_ident`]).
+const CEL_IDENT: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+
+/// Whether a static placement's cel carries the identity flag (cel+0x3c bit 0x8000000), set by
+/// `parseentity_fixup_entity` 0x1d00c0: kinds 0x8017/0x8018/0x8019 when the cel's rotation (+0x60)
+/// and translation (+0x70) both equal the zero vector, and always for 0xc023/0xc047 [M].
+/// `Collide_Intersect` 0x1ebaa8 then tests the stored geometry with no matrix at all.
+fn cel_ident(p: &nf_formats::placement::Placement) -> bool {
+    match p.flags & 0xffff {
+        0xc023 | 0xc047 => true,
+        0x8017 | 0x8018 | 0x8019 => p.rotation == [0.0; 3] && p.translation == [0.0; 3],
+        _ => false,
+    }
+}
+
 /// An object-space plane record (n, d) moved into world space by the rigid placement `m` (rows =
 /// the basis, row 3 = the translation, the `transform` convention): n' = R·n, d' = d − n'·T.
 /// A NaN record (degenerate) stays NaN.
@@ -1567,7 +1582,8 @@ impl CollisionWorld {
             // The 0x1000-flagged objects (the player-missile cage) never block the actor capsule [M
             // Collide_Pick 0x1eb320 — the cel flags 0x1000 skip for queries with HITTEST+0x98 bit 0x20].
             if level.maps[inst.map].objects[inst.object].flags & 0x1000 != 0 {
-                missile.push_flags(c.triangles_with_material().into_iter().map(|(t, m)| (t.map(|p| transform(&inst.matrix, p)), m)), node_pass);
+                let cel_m = if cel_ident(&inst.placement) { &CEL_IDENT } else { &inst.matrix };
+                missile.push_flags(c.triangles_with_material().into_iter().map(|(t, m)| (t.map(|p| transform(cel_m, p)), m)), node_pass);
                 continue;
             }
             if graph.is_some() {
@@ -1582,8 +1598,17 @@ impl CollisionWorld {
             // (the flight's door stops ride it), so the aim query needs the per-instance flag.
             stat_aim_pick.push(inst.placement.flags & 0x8000 != 0);
             let pushed = stat_aim_pick.len() - 1;
-            stat.push_kept(c.triangles_with_material().into_iter().map(|(t, m)| (t.map(|p| transform(&inst.matrix, p)), m)), node_pass);
-            stat.set_tail_planes(&c.triangles_with_planes().into_iter().map(|(_, _, n, d)| plane_world(&inst.matrix, n, d)).collect::<Vec<_>>());
+            // The cel's identity flag (cel+0x3c bit 0x8000000): `Collide_Intersect` 0x1ebaa8 reads
+            // it as `Ident` and then tests the stored geometry with NO matrix at all (no
+            // RotTransMatrix, no RotPreTransVec of the spine, the push used as is). The flag is
+            // set by `parseentity_fixup_entity` 0x1d00c0 for the kinds 0x8017/0x8018/0x8019 when
+            // the cel's rotation (+0x60) and translation (+0x70) both equal the zero vector, and
+            // always for 0xc023/0xc047 [M]. Transforming those through `object_matrix` instead
+            // (its sinf(pi/2) diagonal is 1.0000002) moved every plane ~1e-5 at |p| ~ 50 [L 16 ring
+            // kerb landing push 0.0065899 game vs 0.0065792 through the matrix, 0.0065903 without].
+            let cel_m = if cel_ident(&inst.placement) { &CEL_IDENT } else { &inst.matrix };
+            stat.push_kept(c.triangles_with_material().into_iter().map(|(t, m)| (t.map(|p| transform(cel_m, p)), m)), node_pass);
+            stat.set_tail_planes(&c.triangles_with_planes().into_iter().map(|(_, _, n, d)| plane_world(cel_m, n, d)).collect::<Vec<_>>());
             // The folded hurt planes' object-hit pairs (level-05-basin-floor-4): the sim
             // delivers these when the capsule contacts the run (`Level::folded_hurt` is the
             // static fold's own filter — one source, no drift).
