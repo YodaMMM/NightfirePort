@@ -54,19 +54,26 @@ fn the_missile_room_walk_across_the_slab_band_meets_no_wall() {
     eprintln!("settle: pos {:?} cel {:?} grounded {}", sim.bond.pos, sim.bond.cel, sim.bond.grounded);
     assert!(sim.bond.pos[1] > 40.0, "Bond stands on the missile room floor (got {:?})", sim.bond.pos);
     let forward = Input { forward: 1.0, ..Input::default() };
+    // The floor lip at z −114.41 (a riser whose top edge sits at the floor height) holds the walk
+    // for a while before Bond rides up it to y ≈ 43.75: in the game the same placement and walk
+    // took ~35 frames at the lip in one run and 60-90+ in two others, crossing z −117.11 → −118.11
+    // between frames 60 and 70 in the fastest [L PCSX2 07000008, audits/live-1127-08slab]. So the
+    // lip's hold time is not pinned; what is pinned is that the slab FACE (z −118.0) holds nothing:
+    // once Bond reaches z −117.0 he is past −118.1 within the walk's own pace (1 u ≈ 10 ticks).
     let mut max_y = f32::NEG_INFINITY;
-    for t in 0..90 {
+    let (mut at_face, mut past) = (None, None);
+    for t in 0..240 {
         sim.step_bond(forward, false, false, false);
         max_y = max_y.max(sim.bond.pos[1]);
-        if t == 65 {
-            eprintln!("crossing tick: pos {:?}", sim.bond.pos);
-            assert!(sim.bond.pos[2] < -118.1,
-                "walking north crosses the slab face (z −118.0 [D probe]) at the walk's own pace — \
-                 the invisible wall stopped the walk [M Player_Collision 0x194df0 scopes the pass \
-                 to obj+0x20's cel; Collide_Pick 0x1eb320 walks the straddled cels' own lists] \
-                 (got z {:.2} y {:.2})", sim.bond.pos[2], sim.bond.pos[1]);
-        }
+        if at_face.is_none() && sim.bond.pos[2] < -117.0 { at_face = Some(t); }
+        if past.is_none() && sim.bond.pos[2] < -118.1 { past = Some(t); eprintln!("crossing tick {t}: pos {:?}", sim.bond.pos); break; }
     }
+    let (Some(f), Some(p)) = (at_face, past) else {
+        panic!("walking north never crossed the slab face (z −118.0 [D probe]) in 240 ticks (face {at_face:?}, past {past:?}, pos {:?})", sim.bond.pos)
+    };
+    assert!(p - f <= 15,
+        "the slab face holds the walk {} ticks — the invisible wall [M Player_Collision 0x194df0 scopes \
+         the pass to obj+0x20's cel; Collide_Pick 0x1eb320 walks the straddled cels' own lists]", p - f);
     eprintln!("crossing max y {max_y:.3}");
     // The pre-fix flat pass not only stopped Bond at the face — it squeezed him UP it (y 43.75 →
     // 44.17) and over the top. The crossing must stay on the level floor.
@@ -148,12 +155,13 @@ fn the_scoped_capsule_disagrees_with_the_flat_one_at_the_slab_face() {
         "the shared world still carries the exterior slabs (the flat push shoves the spine on south) [D probe: cell 15's tris z −125.0..−118.0 inside the room] (got {:?})", flat);
     assert!(scoped[2].abs() < 0.01,
         "Bond's own cel's lists carry no wall at the slab face [M Collide_Pick 0x1eb320 per-cel lists] (got {:?})", scoped);
-    // Sister: the scoped query against the room's OWN west wall still pushes — attribution, not a
-    // blanket cull.
-    let wa = [157.5, a[1], -114.5];
-    let wb = [153.8, a[1], -114.5];
-    let (wscop, _) = sim.world.capsule_push_scoped(Some(cell), wa, wb, 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
-    eprintln!("west scoped push {:?}", wscop);
-    assert!(wscop[0] > 0.01,
-        "the room's real west wall still collides through the scoped query (got {:?})", wscop);
+    // Sister: the scoped query against a wall of the room's OWN cel still pushes (attribution,
+    // not a blanket cull). A standing spine at x 154.3, z -114.5 meets the room's wall there
+    // (push x about -0.18). The old horizontal spine ended ON a plane, the knife edge where
+    // |v| -> 0 gives the zero push [M 0x109da0 `fVar30 == 0.0`]; it read 0.55 only through the
+    // placement matrix's 1.0000002 scale (identity cels skip the matrix, `World::cel_ident`).
+    let (wscop, _) = sim.world.capsule_push_scoped(Some(cell), [154.3, a[1], -114.5], [154.3, b[1], -114.5], 0.55, false, [1.0e9, 1.0e9, 1.0e9]);
+    eprintln!("own-wall scoped push {:?}", wscop);
+    assert!(wscop.iter().map(|v| v * v).sum::<f32>().sqrt() > 0.01,
+        "a wall of Bond's own cel still collides through the scoped query (got {:?})", wscop);
 }
