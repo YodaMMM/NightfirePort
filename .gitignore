@@ -45,3 +45,8 @@ crates/nf-android/android/local.properties
 *.aab
 *.jks
 *.keystore
+
+# macOS app bundle & packaging outputs (never commit)
+macos/NightfirePort.app/
+*.dmg
+.DS_Store

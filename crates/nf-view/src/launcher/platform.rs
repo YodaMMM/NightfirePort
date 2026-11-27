@@ -170,7 +170,24 @@ pub fn pick_iso(owner: Option<*mut std::ffi::c_void>, start: Option<&Path>) -> O
         let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
         Some(PathBuf::from(std::ffi::OsString::from_wide(&buf[..n])))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = owner;
+        let loc = start
+            .map(|s| {
+                let escaped = applescript_escape(&s.display().to_string());
+                format!(" default location (POSIX file \"{escaped}\")")
+            })
+            .unwrap_or_default();
+        let script = format!(
+            "POSIX path of (choose file of type {{\"iso\", \"bin\", \"public.iso-image\"}} with prompt \"Select your 007: Nightfire disc image\"{loc})"
+        );
+        let out = Command::new("osascript").args(["-e", &script]).output().ok()?;
+        if !out.status.success() { return None; }
+        let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!p.is_empty()).then(|| PathBuf::from(p))
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let _ = owner;
         let mut cmd = Command::new("zenity");
@@ -183,6 +200,14 @@ pub fn pick_iso(owner: Option<*mut std::ffi::c_void>, start: Option<&Path>) -> O
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn applescript_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\r', " ")
+        .replace('\n', " ")
+}
+
 /// True once the process `pid` shows a window (Windows); elsewhere None (unknown).
 pub fn game_window_up(pid: u32) -> Option<bool> {
     #[cfg(windows)]
@@ -191,7 +216,7 @@ pub fn game_window_up(pid: u32) -> Option<bool> {
     { let _ = pid; None }
 }
 
-/// Shows a fatal launcher error where a GUI user can see it (a message box on Windows; stderr elsewhere).
+/// Shows a fatal launcher error where a GUI user can see it (MessageBox on Windows, alert on macOS, stderr elsewhere).
 pub fn fatal(msg: &str) {
     #[cfg(windows)]
     {
@@ -199,7 +224,13 @@ pub fn fatal(msg: &str) {
         // MB_OK | MB_ICONERROR
         unsafe { win::MessageBoxW(std::ptr::null_mut(), text.as_ptr(), cap.as_ptr(), 0x10) };
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let escaped = applescript_escape(msg);
+        let script = format!("display alert \"NightfirePort\" message \"{escaped}\" as critical");
+        let _ = Command::new("osascript").args(["-e", &script]).status();
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     let _ = msg;
 }
 
@@ -210,6 +241,13 @@ mod tests {
     fn open_file_name_matches_the_win32_layout() {
         // sizeof(OPENFILENAMEW) on x64 (commdlg.h, _WIN32_WINNT >= 0x0500) — the dialog refuses a wrong lStructSize.
         assert_eq!(std::mem::size_of::<super::win::OpenFileNameW>(), 152);
+    }
+
+    #[test]
+    fn applescript_escape_neutralizes_quotes_and_newlines() {
+        let escaped = super::applescript_escape("a\"b\\c\nd");
+        assert_eq!(escaped, "a\\\"b\\\\c d");
+        assert_ne!(escaped, "a\"b\\c\nd");
     }
 
     #[test]

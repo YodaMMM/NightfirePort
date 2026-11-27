@@ -44,7 +44,7 @@ pub fn version_line() -> String {
     format!("{v} (commit {})", crate::replay::git_hash())
 }
 
-/// Windows' version string (`Microsoft Windows [Version 10.0.19045.5371]`), else the OS family.
+/// Windows' version string (`Microsoft Windows [Version 10.0.19045.5371]`), macOS's `sw_vers`, else the OS family.
 pub fn os_line() -> String {
     #[cfg(windows)]
     {
@@ -52,6 +52,26 @@ pub fn os_line() -> String {
         if let Ok(o) = std::process::Command::new("cmd").args(["/c", "ver"]).creation_flags(0x0800_0000).output() {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
             if !s.is_empty() { return s; }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let name = std::process::Command::new("sw_vers").arg("-productName").output().ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        let ver = std::process::Command::new("sw_vers").arg("-productVersion").output().ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        let build = std::process::Command::new("sw_vers").arg("-buildVersion").output().ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        if let (Some(n), Some(v)) = (name, ver) {
+            if !n.is_empty() && !v.is_empty() {
+                return match build.filter(|b| !b.is_empty()) {
+                    Some(b) => format!("{n} {v} ({b})"),
+                    None => format!("{n} {v}"),
+                };
+            }
         }
     }
     std::env::consts::OS.to_string()
@@ -330,18 +350,24 @@ pub fn open_url(url: &str) -> Result<(), String> {
     {
         std::process::Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", url]).spawn().map(|_| ()).map_err(|e| e.to_string())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         std::process::Command::new("xdg-open").arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
     }
 }
 
-/// Shows `file` selected in Explorer (so the player can drag it into the form).
+/// Shows `file` selected in Explorer (Windows), Finder (macOS), or its folder elsewhere.
 pub fn reveal(file: &Path) {
     if no_open() { return; }
     #[cfg(windows)]
     { let _ = std::process::Command::new("explorer.exe").arg(format!("/select,{}", file.display())).spawn(); }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    { let _ = std::process::Command::new("open").args(["-R"]).arg(file).spawn(); }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     { if let Some(d) = file.parent() { let _ = std::process::Command::new("xdg-open").arg(d).spawn(); } }
 }
 
